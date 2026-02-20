@@ -1,0 +1,40 @@
+{
+  "provider": "openai-gpt4o-mini",
+  "temperature": 0.5,
+  "max_predict_tokens": 2048,
+  "format": "json",
+  "timeout": 300,
+
+  "database": {
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_timeout": 30
+  },
+
+  "inference_weights": {
+    "vector_similarity": 4,
+    "topic_overlap": 2,
+    "intent_overlap": 3,
+    "activation_score": 3,
+    "outcome_relevance": 2,
+    "semantic_boost": 2
+  },
+
+  "default_limit": 3,
+  "min_salience_threshold": 5,
+  "prefilter_candidates": 50,
+  "hnsw_ef_search": 100,
+  "inactivity_timeout": 600,
+
+  "freshness_decay_rate": 0.05,
+  "reconsolidation_boost": 0.2,
+
+  "decay_interval_seconds": 1800,
+  "episodic_decay_rate": 0.05,
+  "semantic_decay_rate": 0.03,
+
+  "comments": {
+    "freshness_decay_rate": "Base decay rate (λ) for exponential freshness decay in hours. High salience episodes decay slower: effective_decay = λ × (1 - salience). Lower λ = slower decay overall.",
+    "reconsolidation_boost": "Salience boost applied when episode is retrieved. New salience = min(1.0, old_salience + boost). Simulates memory reconsolidation."
+  }
+}

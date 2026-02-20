@@ -1,0 +1,13 @@
+{
+  "provider": "rx580",
+  "temperature": 0.3,
+  "max_predict_tokens": 512,
+  "keep_alive": "5m",
+  "timeout": 120,
+  "max_retries": 1,
+  "min_gist_confidence": 5,
+  "attention_span_minutes": 30,
+  "max_gists": 8,
+  "gist_similarity_threshold": 0.7,
+  "max_gists_per_type": 2
+}

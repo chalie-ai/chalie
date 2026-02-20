@@ -1,0 +1,36 @@
+{
+  "default_archetype": "explorer",
+  "archetypes": {
+    "explorer": {
+      "curiosity": 0.7,
+      "assertiveness": 0.6,
+      "warmth": 0.6,
+      "playfulness": 0.4,
+      "skepticism": 0.5,
+      "emotional_intensity": 0.4
+    }
+  },
+  "reinforcement": {
+    "emotion_weight": 0.6,
+    "reward_weight": 0.4,
+    "signal_history_size": 20
+  },
+  "baseline_drift": {
+    "rate": 0.005,
+    "reinforcement_threshold": 10,
+    "max_drift_per_day": 0.02,
+    "direction_consistency_min": 0.7,
+    "variance_max": 0.15
+  },
+  "coherence": {
+    "relational_constraints": [
+      {"a": "assertiveness", "b": "warmth", "type": "floor_ratio", "a_threshold": 0.75, "b_floor": 0.35, "nudge": 0.05},
+      {"a": "skepticism", "b": "warmth", "type": "floor_ratio", "a_threshold": 0.75, "b_floor": 0.35, "nudge": 0.05},
+      {"a": "assertiveness", "b": "skepticism", "type": "ceiling_pair", "threshold": 0.75, "target": 0.7}
+    ]
+  },
+  "voice_mapper": {
+    "high_threshold": 0.65,
+    "low_threshold": 0.35
+  }
+}

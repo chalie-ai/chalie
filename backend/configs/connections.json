@@ -1,0 +1,79 @@
+{
+  "_comment": "Environment variables take precedence: env vars > .env file > JSON values below",
+  "_env_vars": {
+    "postgresql": "POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DATABASE, POSTGRES_USERNAME, POSTGRES_PASSWORD",
+    "redis": "REDIS_HOST, REDIS_PORT",
+    "ollama": "OLLAMA_HOST",
+    "rest_api": "REST_API_HOST, REST_API_PORT, API_KEY"
+  },
+
+  "redis": {
+    "host": "localhost",
+    "port": 6379,
+    "topics": {
+      "chat_history": "llm-chat",
+      "prompt_queue": "prompt-queue",
+      "memory_chunker": "memory-chunker-queue",
+      "episodic_memory": "episodic-memory-queue",
+      "output_queue": "output-queue"
+    },
+    "queues": {
+      "prompt_queue": {
+        "name": "prompt-queue",
+        "timeout": 600
+      },
+      "memory_chunker_queue": {
+        "name": "memory-chunker-queue",
+        "timeout": 600
+      },
+      "episodic_memory_queue": {
+        "name": "episodic-memory-queue",
+        "timeout": 600
+      },
+      "semantic_consolidation_queue": {
+        "name": "semantic_consolidation_queue",
+        "max_retries": 3,
+        "retry_delay": 5,
+        "timeout": 600
+      },
+      "act_queue": {
+        "name": "act-queue",
+        "timeout": 600
+      },
+      "tool_queue": {
+        "name": "tool-queue",
+        "timeout": 600
+      }
+    },
+    "events": {
+      "encode_event": "event_bus:encode_event",
+      "update_policy": "event_bus:update_policy",
+      "handle_action": "event_bus:handle_action",
+      "interaction_logged": "event_bus:interaction_logged"
+    }
+  },
+
+  "postgresql": {
+    "_comment_creds": "Default credentials for local development only. Change in production.",
+    "host": "localhost",
+    "port": 5432,
+    "database": "chalie",
+    "username": "postgres",
+    "password": "postgres",
+    "_comment_pool": "Connection pooling: 5 workers × 8 connections = 40 max (PostgreSQL limit is 100)",
+    "pool_size": 3,
+    "max_overflow": 5,
+    "pool_timeout": 30
+  },
+
+  "ollama": {
+    "_comment": "Optional - can be configured via OLLAMA_HOST environment variable",
+    "host": "http://localhost:11434"
+  },
+
+  "rest_api": {
+    "_comment": "Optional - can be configured via REST_API_HOST, REST_API_PORT, API_KEY environment variables. API key is generated at first login.",
+    "host": "0.0.0.0",
+    "port": 8080
+  }
+}

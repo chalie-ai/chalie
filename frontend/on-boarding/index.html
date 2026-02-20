@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chalie Onboarding</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div id="accountPhase" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h1>Create Master Account</h1>
+                    <p>Your gateway to the Chalie dashboard.</p>
+                </div>
+
+                <div class="warning-box">
+                    <h3>⚠ Critical — Read Before Continuing</h3>
+                    <p>This is your Master Account. It is the only credential that controls access to the Chalie dashboard and system configuration.</p>
+                    <p>There is no password recovery. If you forget your username or password, you will be permanently locked out. All cognitive memory and configuration will be inaccessible.</p>
+                    <p>Write your credentials down and store them somewhere safe before continuing.</p>
+                </div>
+
+                <form id="accountForm">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="accountUsername" autocomplete="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="accountPassword" minlength="8" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm Password</label>
+                        <input type="password" id="accountConfirmPassword" minlength="8" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Create Account</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="loginPhase" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h1>Login to Continue</h1>
+                    <p>Your master account was already created.</p>
+                </div>
+
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="loginUsername" autocomplete="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="loginPassword" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Login</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="setupPhase" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h1>Welcome to Chalie</h1>
+                    <p>Set up your first LLM provider to get started.</p>
+                </div>
+
+                <div class="platform-tabs">
+                    <button class="platform-tab active" data-platform="ollama">Ollama</button>
+                    <button class="platform-tab" data-platform="anthropic">Anthropic</button>
+                    <button class="platform-tab" data-platform="openai">OpenAI</button>
+                    <button class="platform-tab" data-platform="gemini">Gemini</button>
+                </div>
+
+                <p class="platform-desc" id="platformDesc"></p>
+
+                <form id="setupForm">
+                    <div class="form-group">
+                        <label>Provider Name</label>
+                        <input type="text" id="setupName" placeholder="e.g. My Ollama" required>
+                    </div>
+                    <div class="form-group" id="setupHostGroup">
+                        <label>Host</label>
+                        <input type="text" id="setupHost" value="http://localhost:11434">
+                        <button type="button" class="btn btn-secondary" id="testConnectionBtn">Test Connection</button>
+                        <span id="connectionStatus"></span>
+                    </div>
+                    <div class="form-group" id="setupApiKeyGroup">
+                        <label>API Key</label>
+                        <input type="password" id="setupApiKey" placeholder="sk-...">
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <input type="text" id="setupModel" placeholder="e.g. qwen3:8b" list="modelSuggestions">
+                        <datalist id="modelSuggestions"></datalist>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary" id="setupSubmitBtn">Save Provider</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="completionPhase" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h1>Chalie is Ready</h1>
+                    <p>Your LLM provider has been configured.</p>
+                </div>
+
+                <div class="completion-cards">
+                    <div class="completion-card">
+                        <div class="completion-icon">💬</div>
+                        <h3>Chalie</h3>
+                        <p>Start chatting with your AI assistant</p>
+                        <button class="btn btn-primary" id="gotoChalieBtn">Start Chatting</button>
+                    </div>
+                    <div class="completion-card">
+                        <div class="completion-icon">⚙️</div>
+                        <h3>Dashboard</h3>
+                        <p>Manage providers & cognition jobs</p>
+                        <button class="btn btn-primary" id="gotoDashboardBtn">Go to Dashboard</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+.idea
+.DS_Store
+node_modules/
+*.log
+interface/icons/icon-192.png
+interface/icons/icon-512.png
+interface/icons/icon-maskable-512.png

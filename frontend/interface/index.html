@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chalie</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.0/css/all.min.css" integrity="sha512-9xKTRVabjVeZmc+GUW8GgSmcREDunMM+Dt/GrzchfN8tkwHizc5RP4Ok/MXFFy5rIjJjzhndFScTceq5e6GvVQ==" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#5b9bd5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Chalie">
+  <link rel="apple-touch-icon" href="/icons/icon.png">
+  <link rel="icon" type="image/png" href="/icons/icon.png">
+</head>
+<body>
+  <!-- Ambient background -->
+  <canvas id="ambientCanvas"></canvas>
+  <div id="grainOverlay"></div>
+
+  <!-- Connection lost banner -->
+  <div id="connectionBanner" class="connection-banner hidden">
+    <span>Connection lost</span>
+    <span class="connection-banner__dot"></span>
+    <span>Retrying...</span>
+  </div>
+
+  <!-- Presence bar -->
+  <header class="presence-bar">
+    <div class="presence-bar__left">
+      <div class="presence-dot" data-state="resting">
+        <div class="presence-dot__inner"></div>
+      </div>
+      <span class="presence-label">Chalie</span>
+    </div>
+    <div class="presence-bar__right">
+      <!-- Audio player controls (hidden by default) -->
+      <div id="audioPlayer" class="audio-player hidden">
+        <button id="audioPlayPause" class="btn-icon" aria-label="Play/Pause">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </button>
+        <span id="audioTime" class="audio-time">0:00</span>
+        <button id="audioClose" class="btn-icon btn-icon--small" aria-label="Close player">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <button id="installBtn" class="btn-icon hidden" aria-label="Install Chalie" title="Install app">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+      </button>
+      <button id="settingsBtn" class="btn-icon" aria-label="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/>
+          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Conversation spine -->
+  <main class="conversation-spine" id="conversationSpine">
+    <!-- Speech forms and cards are appended here -->
+  </main>
+
+  <!-- Input dock -->
+  <footer class="input-dock">
+    <div class="input-dock__inner">
+      <button id="micBtn" class="btn-action btn-action--mic hidden" aria-label="Record voice">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+          <line x1="12" y1="19" x2="12" y2="23"></line>
+          <line x1="8" y1="23" x2="16" y2="23"></line>
+        </svg>
+      </button>
+      <textarea id="messageInput" class="input-dock__textarea" placeholder="Talk to Chalie..." rows="1"></textarea>
+      <button id="sendBtn" class="btn-action btn-action--send" aria-label="Send message" disabled>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+    <div id="micError" class="input-dock__mic-error hidden">Mic access denied — type your message instead.</div>
+  </footer>
+
+  <!-- Recording overlay -->
+  <div id="recordingOverlay" class="recording-overlay hidden">
+    <div class="recording-overlay__indicator">
+      <div class="recording-overlay__pulse"></div>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+        <line x1="12" y1="19" x2="12" y2="23"></line>
+        <line x1="8" y1="23" x2="16" y2="23"></line>
+      </svg>
+    </div>
+    <p class="recording-overlay__label">Listening...</p>
+    <button id="stopRecordingBtn" class="btn-action btn-action--stop" aria-label="Stop recording">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+      </svg>
+    </button>
+  </div>
+
+  <!-- PWA install dialog -->
+  <dialog id="pwaInstallDialog" class="pwa-dialog">
+    <div class="pwa-dialog__content">
+      <button class="pwa-dialog__close btn-icon" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+      <div class="pwa-dialog__icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+      </div>
+      <h2 class="pwa-dialog__title">Install Chalie</h2>
+      <p class="pwa-dialog__desc">
+        You can use Chalie right here in your browser — no download needed.
+        Install the app to get <strong>push notifications</strong> and a native home screen experience.
+      </p>
+      <div class="pwa-dialog__actions">
+        <button id="pwaInstallBtn" class="btn-install">Install App</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Login dialog -->
+  <dialog id="loginDialog" class="api-key-dialog">
+    <div class="api-key-dialog__content">
+      <h2 class="api-key-dialog__title">Welcome back</h2>
+      <p class="api-key-dialog__desc">Enter your credentials to continue.</p>
+      <div class="api-key-dialog__field">
+        <label for="loginUsername" class="api-key-dialog__label">Username</label>
+        <input type="text" id="loginUsername" class="api-key-dialog__input" placeholder="Your username" autocomplete="username">
+      </div>
+      <div class="api-key-dialog__field">
+        <label for="loginPassword" class="api-key-dialog__label">Password</label>
+        <input type="password" id="loginPassword" class="api-key-dialog__input" placeholder="Your password" autocomplete="current-password">
+      </div>
+      <div class="api-key-dialog__actions">
+        <button id="loginSubmitBtn" class="btn-primary">Login</button>
+      </div>
+      <p id="loginStatus" class="api-key-dialog__status"></p>
+    </div>
+  </dialog>
+
+  <!-- API Key dialog -->
+  <dialog id="apiKeyDialog" class="api-key-dialog">
+    <div class="api-key-dialog__content">
+      <h2 class="api-key-dialog__title">Welcome to Chalie</h2>
+      <p class="api-key-dialog__desc">Enter your backend host and API key to connect.</p>
+      <div class="api-key-dialog__field">
+        <label for="hostInput" class="api-key-dialog__label">Backend Host</label>
+        <input type="text" id="hostInput" class="api-key-dialog__input" placeholder="http://localhost:8080 or https://example.com" autocomplete="off">
+      </div>
+      <div class="api-key-dialog__field">
+        <label for="apiKeyInput" class="api-key-dialog__label">API Key</label>
+        <div class="api-key-dialog__input-wrap">
+          <input type="password" id="apiKeyInput" class="api-key-dialog__input" placeholder="Your API key" autocomplete="off">
+          <button id="toggleKeyVisibility" class="btn-icon btn-icon--small" aria-label="Toggle visibility">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="api-key-dialog__actions">
+        <button id="testConnectionBtn" class="btn-secondary">Test Connection</button>
+        <button id="saveKeyBtn" class="btn-primary" disabled>Save &amp; Connect</button>
+      </div>
+      <p id="apiKeyStatus" class="api-key-dialog__status"></p>
+    </div>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

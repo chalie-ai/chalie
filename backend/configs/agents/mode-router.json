@@ -1,0 +1,52 @@
+{
+  "base_scores": {
+    "RESPOND": 0.40,
+    "CLARIFY": 0.30,
+    "ACT": 0.20,
+    "ACKNOWLEDGE": 0.10,
+    "IGNORE": -0.50
+  },
+
+  "weights": {
+    "respond.warmth_boost": 0.20,
+    "respond.fact_density": 0.15,
+    "respond.gist_density": 0.10,
+    "respond.question_warm": 0.15,
+    "respond.cold_penalty": 0.15,
+    "respond.greeting_penalty": 0.20,
+    "respond.feedback_penalty": 0.15,
+
+    "clarify.cold_boost": 0.25,
+    "clarify.question_no_facts": 0.20,
+    "clarify.new_topic_question": 0.10,
+    "clarify.cold_question": 0.05,
+    "clarify.warm_penalty": 0.20,
+
+    "act.question_moderate_context": 0.20,
+    "act.interrogative_gap": 0.15,
+    "act.implicit_reference": 0.15,
+    "act.very_cold_penalty": 0.10,
+    "act.warm_facts_penalty": 0.10,
+    "act.tool_relevance_strong": 0.60,
+    "act.tool_relevance_moderate": 0.35,
+    "act.tool_relevance_weak": 0.15,
+
+    "acknowledge.greeting": 0.80,
+    "acknowledge.positive_feedback": 0.55,
+    "acknowledge.question_penalty": 0.30,
+
+    "ignore.empty_input": 1.00
+  },
+
+  "tiebreaker_base_margin": 0.20,
+  "tiebreaker_min_margin": 0.08,
+
+  "_comment": "Stability bands for mode entropy monitoring (informational only)",
+  "healthy_ranges": {
+    "RESPOND": [0.50, 0.75],
+    "CLARIFY": [0.08, 0.20],
+    "ACT": [0.05, 0.15],
+    "ACKNOWLEDGE": [0.03, 0.12],
+    "IGNORE": [0.00, 0.02]
+  }
+}

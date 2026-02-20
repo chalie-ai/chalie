@@ -1,0 +1,10 @@
+{
+  "provider": "rx580",
+  "temperature": 0.1,
+  "max_predict_tokens": 512,
+  "timeout": 360,
+  "format": "json",
+  "ttl_minutes": 1440,
+  "max_facts_per_topic": 50,
+  "min_confidence": 0.5
+}

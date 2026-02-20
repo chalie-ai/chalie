@@ -1,0 +1,26 @@
+requests>=2.32.5
+rq>=2.6.1
+redis>=6.4.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.25
+pgvector>=0.3.7
+ollama>=0.1.0
+sentence-transformers>=3.0.0
+python-dotenv>=1.0.0
+flask>=3.0.0
+flask-cors>=4.0.0
+scikit-learn>=1.5.0
+numpy>=1.24.0
+pytest>=8.0.0
+pytest-mock>=3.12.0
+fakeredis>=2.21.0
+anthropic>=0.39.0
+openai>=1.0.0
+google-generativeai>=0.8.0
+mcp @ git+https://github.com/modelcontextprotocol/python-sdk.git@v1.26.0
+uvicorn>=0.27.0
+starlette>=0.36.0
+trafilatura>=2.0.0
+psutil>=5.9.0
+pywebpush>=2.0.0
+docker>=7.0.0
