@@ -30,6 +30,8 @@ class WorkerManager:
         self.service_definitions: List[Tuple[str, 'worker_func']] = []
         self.running = True
         self.health_monitor = None  # Initialized in run() after imports
+        self._tool_scanner = None           # ToolScannerThread, set before run()
+        self._tool_scanner_registry = None  # ToolRegistryService reference
 
     def register_worker(self, worker_id: str, worker_type: str, queue: 'PromptQueue'):
         self.worker_definitions.append((worker_id, worker_type, queue))
@@ -157,6 +159,10 @@ class WorkerManager:
             logging.info("[Manager] Starting Worker Manager")
             self.spawn_all_workers()
 
+            # Start hot-reload tool scanner (daemon thread, in-process)
+            if self._tool_scanner is not None:
+                self._tool_scanner.start(self._tool_scanner_registry)
+
             try:
                 health_check_counter = 0
                 while self.running:
@@ -173,6 +179,98 @@ class WorkerManager:
                 pass
             finally:
                 self.shutdown_all()
+
+
+class ToolScannerThread:
+    """
+    Daemon thread that scans backend/tools/ every TOOL_SCANNER_INTERVAL_SECONDS (default 30)
+    for new tool directories and registers them without a restart.
+
+    Runs in the main process to allow direct calls to manager.spawn_service().
+    """
+
+    DEFAULT_INTERVAL = 30
+
+    def __init__(self, manager: WorkerManager, tools_dir):
+        self._manager = manager
+        self._tools_dir = tools_dir
+        self._interval = int(os.environ.get("TOOL_SCANNER_INTERVAL_SECONDS", self.DEFAULT_INTERVAL))
+        self._registry = None
+
+    def start(self, registry):
+        self._registry = registry
+        registry.set_on_tool_registered(self._on_tool_registered)
+        import threading
+        t = threading.Thread(target=self._scan_loop, name="tool-scanner", daemon=True)
+        t.start()
+        logging.info(f"[ToolScanner] Started (interval={self._interval}s)")
+
+    def _on_tool_registered(self, tool_name: str):
+        """Callback fired by _build_worker after a successful build. Spawns cron worker if needed."""
+        tool = self._registry.tools.get(tool_name)
+        if not tool:
+            return
+        trigger = tool["manifest"].get("trigger", {})
+        if trigger.get("type") != "cron":
+            return
+
+        worker_id = f"tool-{tool_name}-service"
+        existing = self._manager.processes.get(worker_id)
+        if existing and existing.is_alive():
+            return
+
+        tool_config = {
+            "name": tool_name,
+            "schedule": trigger["schedule"],
+            "prompt": trigger["prompt"],
+            "image": tool["image"],
+            "sandbox": tool.get("sandbox", {}),
+            "dir": tool["dir"],
+            "manifest": tool["manifest"],
+        }
+        worker_func = self._registry.create_cron_worker(tool_config)
+        self._manager.register_service(worker_id, worker_func)
+        self._manager.spawn_service(worker_id, worker_func)
+        logging.info(f"[ToolScanner] Spawned cron worker: {worker_id}")
+
+    def _scan_loop(self):
+        import time as _time
+        _time.sleep(self._interval)  # Initial delay — startup build already ran
+        while True:
+            try:
+                self._scan_once()
+            except Exception as e:
+                logging.error(f"[ToolScanner] Scan error: {e}")
+            _time.sleep(self._interval)
+
+    def _scan_once(self):
+        import json as _json
+        from pathlib import Path
+        if not self._tools_dir.exists():
+            return
+
+        known = set(self._registry.tools.keys())
+        building = {n for n, s in self._registry.get_all_build_statuses().items()
+                    if s.get("status") == "building"}
+        locked = set(self._registry._install_locks)
+
+        for entry in sorted(self._tools_dir.iterdir()):
+            if not entry.is_dir() or entry.name.startswith(("_", ".")):
+                continue
+            if not (entry / "manifest.json").exists() or not (entry / "Dockerfile").exists():
+                continue
+            try:
+                with open(entry / "manifest.json") as f:
+                    tool_name = _json.load(f).get("name", "").strip()
+            except Exception:
+                continue
+            if not tool_name or tool_name in known or tool_name in building or tool_name in locked:
+                continue
+            logging.info(f"[ToolScanner] Discovered new tool '{tool_name}', starting build")
+            try:
+                self._registry.register_tool_async(entry)
+            except Exception as e:
+                logging.warning(f"[ToolScanner] Build start failed for '{tool_name}': {e}")
 
 
 if __name__ == "__main__":
@@ -396,5 +494,14 @@ if __name__ == "__main__":
             logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
     except Exception as e:
         logging.warning(f"[Consumer] Tool cron registration failed: {e}")
+
+    # Wire up hot-reload tool scanner
+    try:
+        from pathlib import Path
+        scanner = ToolScannerThread(manager=manager, tools_dir=registry.tools_dir)
+        manager._tool_scanner = scanner
+        manager._tool_scanner_registry = registry
+    except Exception as e:
+        logging.warning(f"[Consumer] Tool scanner setup failed: {e}")
 
     manager.run()
