@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: chalie
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chalie}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: chalie
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: chalie
+      POSTGRES_USERNAME: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chalie}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REST_API_HOST: 0.0.0.0
+      REST_API_PORT: 8080
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-changeme-in-production-use-a-long-random-string}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - backend_data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: chalie-fe
+    depends_on:
+      - backend
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_data:

@@ -1,0 +1,23 @@
+# Environment & secrets
+.env
+*.key
+backend/.env
+backend/.key
+backend/data/
+backend/configs/generated/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Editor & OS
+.idea/
+.vscode/
+.DS_Store
+.claude/
+Claude.md
+
+# Frontend build artifacts (none currently, vanilla JS)
+node_modules/

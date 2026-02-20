@@ -1,0 +1,337 @@
+# System Architecture
+
+## Overview
+
+Chalie is a human-in-the-loop cognitive assistant that combines memory consolidation, semantic reasoning, and proactive assistance. The system processes user prompts through a chain of workers and services, enriching conversations with memory chunks and generating episodic memories for future use.
+
+## Core Architecture
+
+### System Type
+- **Synthetic cognitive brain** using LLMs to replicate human brain functions
+- **Tech Stack**: Python backend, PostgreSQL + pgvector, Redis, Ollama (configurable LLMs), Bootstrap 5 frontend
+- **Core Pattern**: Worker-based architecture with Redis queue, service-oriented design
+
+### Communication Pattern
+1. User sends message → POST to `/chat` with text
+2. Backend processes: Mode router selects mode → mode-specific LLM generates response
+3. Response delivered: Via SSE stream (status → message → done events)
+4. Authentication: API key via `Authorization: Bearer <key>` header
+
+## Code Organization
+
+```
+backend/
+├── services/          # Business logic (memory, orchestration, routing, embeddings)
+├── workers/           # Async workers (digest, memory chunking, consolidation)
+├── listeners/         # Input handlers (direct REST API)
+├── api/               # REST API blueprints (conversation, memory, proactive, privacy, system)
+├── configs/           # Configuration files (connections.json, agent configs, generated/)
+├── migrations/        # Database migrations
+├── prompts/           # LLM prompt templates (mode-specific)
+├── tools/             # MCP server and skill implementations
+├── tests/             # Test suite
+└── consumer.py        # Main supervisor process
+```
+
+Frontend UI located separately:
+```
+frontend/
+└── interface/         # Web UI (HTML/CSS/JS, Bootstrap 5, dark theme)
+```
+
+**IMPORTANT**: All UI code must exist under `/interface/` and nowhere else.
+
+## Key Services
+
+### Core Services (`backend/services/`)
+
+#### Routing & Decision Making
+- **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker
+- **`routing_decision_service.py`** — Routing decision audit trail (PostgreSQL)
+- **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
+- **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
+
+#### Response Generation
+- **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
+- **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
+
+#### Memory System
+- **`context_assembly_service.py`** — Unified retrieval from all 5 memory layers with weighted budget allocation
+- **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
+- **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
+- **`user_trait_service.py`** — Per-user trait management with category-specific decay
+- **`episodic_storage_service.py`** — PostgreSQL CRUD for episodic memories
+- **`semantic_storage_service.py`** — PostgreSQL CRUD for semantic concepts
+- **`gist_storage_service.py`** — Redis-backed short-term memory with deduplication
+
+#### Autonomous Behavior
+- **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle
+- **`autonomous_actions/`** — Decision routing, communication, reflection with multiple gates
+- **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
+
+#### Tool Integration
+- **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
+- **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement
+- **`trust_evaluation_service.py`** — 5-axis trust scoring for tool outputs
+- **`sovereignty_service.py`** — Checks whether to delegate based on specialist EV
+
+#### Identity & Learning
+- **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
+- **`tuition_service.py`** — Learning from delegation outcomes (success → decision rules, failure → critique)
+- **`governance_service.py`** — System health monitoring and parameter adjustment
+
+#### Infrastructure
+- **`database_service.py`** — PostgreSQL connection pool and migrations
+- **`redis_client_service.py`** — Redis connection handling
+- **`config_service.py`** — Environment and JSON file config (precedence: env > .env > json)
+- **`output_service.py`** — Output queue management for responses
+
+#### Session & Conversation
+- **`topic_conversation_service.py`** — File-based conversation persistence
+- **`session_service.py`** — Tracks user sessions and topic changes
+
+### Innate Skills (`backend/services/innate_skills/`)
+
+5 built-in cognitive skills for the ACT loop:
+- **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
+- **`memorize_skill.py`** — Store gists and facts (<50ms)
+- **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
+- **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
+- **`delegate_skill.py`** — External specialist consultation (async)
+
+## Worker Processes (`backend/workers/`)
+
+### Queue Workers
+- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue memory job
+- **Memory Chunker Worker** — Enriches exchanges with memory chunks via LLM
+- **Episodic Memory Worker** — Builds episodes from sequences of exchanges
+- **Semantic Consolidation Worker** — Extracts concepts + relationships from episodes
+
+### Services/Daemons
+- **REST API Worker** — Flask REST API on port 8080
+- **Cognitive Drift Engine** — Generates spontaneous thoughts during worker idle
+- **Decay Engine** — Periodic memory decay cycle
+- **Routing Stability Regulator** — Single authority for router weight mutation
+- **Routing Reflection** — Idle-time peer review of routing decisions
+- **Topic Stability Regulator** — Adaptive tuning of topic classification parameters
+
+## Data Flow Pipeline
+
+### User Input → Response Pipeline
+```
+[User Input]
+  → [Consumer] → [Prompt Queue] → [Digest Worker]
+    ├─ Classification (embedding-based, deterministic)
+    ├─ Context Assembly (retrieve from all 5 memory layers)
+    ├─ Mode Routing (deterministic ~5ms mathematical router)
+    ├─ Mode-Specific LLM Generation
+    │  └─ If ACT: action loop → re-route → terminal response
+    └─ Enqueue Memory Chunking Job
+      → [Memory Chunker Queue] → [Memory Chunker Worker]
+        → [Conversation JSON] (enriched)
+      → [Episodic Memory Queue] → [Episodic Memory Worker]
+        → PostgreSQL Episodes Table
+        → [Semantic Consolidation Queue] → [Semantic Consolidation Worker]
+          → PostgreSQL Concepts Table
+```
+
+### Background Processes
+```
+[Routing Stability Regulator] ← reads routing_decisions (24h cycle)
+    → adjusts configs/generated/mode_router_config.json
+
+[Routing Reflection Service] ← reads reflection-queue (idle-time)
+    → writes routing_decisions.reflection → feeds pressure to regulator
+
+[Decay Engine] → runs every 1800s (30min)
+    ├─ Episodic decay (salience-weighted)
+    ├─ Semantic decay (strength-weighted)
+    └─ User trait decay (category-specific)
+
+[Cognitive Drift Engine] → during worker idle
+    ├─ Seed selection (weighted random)
+    ├─ Spreading activation (depth 2, decay 0.7/level)
+    └─ LLM synthesis → stores as drift gist
+```
+
+## Key Architectural Decisions
+
+### Deterministic Mode Router
+- **Decoupled**: Mode selection (mathematical, ~5ms) separate from response generation (LLM, ~2-15s)
+- **Signals**: ~17 observable signals from context + NLP (context warmth, question marks, greeting patterns, etc.)
+- **Scores**: Each mode gets weighted composite score; highest wins
+- **Tie-breaker**: Small LLM (qwen3:4b) for ambiguous cases
+- **Self-leveling**: Router naturally shifts toward RESPOND as memory accumulates
+
+### Single Authority for Weight Mutation
+- **Routing Stability Regulator** is the only service that modifies router weights
+- Other services log "pressure signals" but don't mutate state
+- Updates bounded: max ±0.02/day, 48h cooldown per parameter
+- **Closed-loop control**: Verifies adjustments work before persisting
+
+### Mode-Specific Prompts
+- Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT) has its own focused prompt template
+- Replaces old approach: single combined prompt with mode selection embedded
+- Focused scope prevents elaboration and improves consistency
+
+### 5-Layer Memory Hierarchy
+- **Working Memory** (Redis, 4 turns, 24h TTL) — Current conversation
+- **Gists** (Redis, 30min TTL) — Compressed exchange summaries
+- **Facts** (Redis, 24h TTL) — Atomic key-value assertions
+- **Episodes** (PostgreSQL + pgvector) — Narrative units with decay
+- **Concepts** (PostgreSQL + pgvector) — Knowledge nodes and relationships
+- **User Traits** (PostgreSQL) — Personal facts with category-specific decay
+
+Each layer optimized for its timescale; all integrated via context assembly.
+
+### Configuration Precedence
+```
+Environment variables > .env file > JSON config files > hardcoded defaults
+```
+
+See `PROVIDERS_SETUP.md` for provider configuration.
+
+### Thread-Safe Worker State
+- `WorkerManager` maintains shared dictionary via `multiprocessing.Manager()`
+- Workers use `WorkerBase._update_shared_state` to merge per-worker metrics
+- Avoids global locks, keeps worker pool lightweight
+
+### Topic Confidence Reinforcement
+- Topic confidence updated via bounded reinforcement formula
+- `new = current + (new_confidence - current) * 0.5`
+- Ensures gradual adaptation without oscillation
+
+### Error Resilience
+- All workers catch JSON decode errors from LLM responses
+- Log meaningful messages instead of crashing
+- Return status strings for graceful degradation
+
+## Safety & Constraints
+
+### Hard Boundaries
+- **Prompt hierarchy** immutable (marked as "authoritative and final")
+- **Skill registry** fixed at startup (no runtime skill registration)
+- **Data scope** parameterized by topic (no cross-topic leakage)
+- **Speaker confidence** gates trait storage (unknown speakers = 0.3 penalty)
+
+### Operational Limits
+- **ACT loop**: 60s cumulative timeout, ~7 max iterations
+- **Fatigue budget**: 2.5 activation units per 30min
+- **Per-concept cooldown**: 60min (prevents circular rumination)
+- **Delegation rate**: 1 per topic per 30min
+
+### Anti-Manipulation
+- **Identity isolation**: 6 vectors with coherence constraints
+- **No vulnerability simulation**: Explicitly forbidden
+- **Exponential backoff**: System retreats on silence (opposite of dependency)
+- **No flattery optimization**: Soul axiom: "Never optimize by misleading"
+
+## Configuration Files
+
+### Primary Configuration
+- **`configs/connections.json`** — Redis & PostgreSQL endpoints
+- **`configs/agents/*.json`** — LLM settings (model, temperature, timeout)
+- **`configs/generated/mode_router_config.json`** — Learned router weights (generated)
+
+### Provider Configuration
+- Stored in PostgreSQL `providers` table (not JSON files)
+- Runtime configurable via REST API (`/api/providers`)
+- Supports: Ollama, Anthropic, OpenAI, Google Gemini
+
+See `PROVIDERS-SETUP.md` for detailed setup instructions.
+
+## REST API
+
+### Main Endpoints
+- **`POST /chat`** — Send message, get SSE streaming response
+- **`GET /chat/<conversation_id>`** — Get conversation history
+- **`GET /providers`** — List configured LLM providers
+- **`POST /providers`** — Register new provider
+- **`GET /memory/search`** — Search memories
+- **`GET /system/health`** — System health check
+
+See API blueprints in `backend/api/` for full reference.
+
+## Testing Strategy
+
+### Test Markers
+- `@pytest.mark.unit` — No external dependencies (fast)
+- `@pytest.mark.integration` — Requires PostgreSQL/Redis (slower)
+
+### Test Organization
+```
+backend/tests/
+├── test_services/         # Service unit tests
+├── test_workers/          # Worker integration tests
+└── fixtures/              # Shared test fixtures
+```
+
+Run all tests: `pytest`
+Run only unit: `pytest -m unit`
+Run with verbose: `pytest -v`
+
+## Development Workflow
+
+### Setup
+```bash
+cd backend
+pip install -r requirements.txt
+source .venv/bin/activate
+cp .env.example .env
+```
+
+### Local Development (without Docker)
+```bash
+# Terminal 1: PostgreSQL + Redis
+# (ensure postgres + redis running locally)
+
+# Terminal 2: Consumer (all workers)
+python consumer.py
+
+# Terminal 3: Test/debug
+python -c "from api import create_app; app = create_app(); app.run()"
+```
+
+### Docker Development
+```bash
+docker-compose build
+docker-compose up -d
+docker-compose logs -f backend
+```
+
+## Deployment Notes
+
+- **No Telemetry**: Zero external calls except to configured LLM/voice providers
+- **Local First**: All data stored locally unless external providers configured
+- **Encryption**: API keys and provider credentials encrypted in PostgreSQL
+- **CORS**: Defaults to localhost, restrict before production
+- **Default Password**: PostgreSQL password is `chalie` — **change in production**
+
+## Future Roadmap
+
+### Planned (Priority 1)
+- **Strategic multi-session planning**: Goal stack + cross-session task tracking
+- **User memory transparency API**: Direct REST endpoints for memory inspection
+
+### Planned (Priority 2)
+- **Cross-topic pattern mining**: Behavioral prediction, sequence rules
+- **Active error detection**: Pre-delivery validation against known facts
+- **Negative memory mechanism**: Store "X is FALSE" assertions
+
+### Planned (Priority 3)
+- **Formal hypothesis testing**: A/B evaluation of alternatives
+- **Sandboxed computation**: Math evaluation and code execution skill
+- **Memory versioning**: Track how beliefs change over time
+
+## Glossary
+
+- **Mode Router**: Deterministic mathematical function selecting engagement mode from observable signals
+- **Tie-Breaker**: Small LLM consulted when top 2 modes are within effective margin
+- **Routing Signals**: Observable features collected from Redis and NLP analysis (~5ms)
+- **Router Confidence**: Normalized gap between top 2 scores — measures routing certainty
+- **Pressure Signal**: Metric logged by monitors, consumed by the single regulator
+- **Context Warmth**: Signal (0.0-1.0) measuring how much context is available for current topic
+- **Drift Gist**: Spontaneous thought stored during idle periods (DMN)
+- **Episode**: Narrative memory unit with intent, context, action, emotion, outcome, salience
+- **Concept**: Knowledge node with strength decay and spreading activation
+- **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment

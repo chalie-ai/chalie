@@ -1,0 +1,11 @@
+{
+  "provider": "rx580",
+  "check_interval": 60,
+  "max_sessions_per_day": 20,
+  "cooldown_per_topic": 300,
+  "observation_dedup_ttl": 86400,
+  "temperature": 0.3,
+  "max_predict_tokens": 512,
+  "format": "json",
+  "keep_alive": "5m"
+}

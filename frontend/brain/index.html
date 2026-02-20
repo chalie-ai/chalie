@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chalie Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.0/css/all.min.css" integrity="sha512-9xKTRVabjVeZmc+GUW8GgSmcREDunMM+Dt/GrzchfN8tkwHizc5RP4Ok/MXFFy5rIjJjzhndFScTceq5e6GvVQ==" crossorigin="anonymous" referrerpolicy="no-referrer">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <img src="/icons/icon.png" class="logo-img" alt="Chalie">
+                <span class="logo-badge">Dashboard</span>
+            </div>
+            <nav class="tabs" id="mainTabs">
+                <button class="tab active" data-tab="providers">Providers</button>
+                <button class="tab" data-tab="cognition">Cognition</button>
+                <button class="tab" data-tab="voice">Voice</button>
+                <button class="tab" data-tab="embodiment">Embodiment</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main" id="mainContent" style="display:none">
+        <!-- Providers Tab -->
+        <div class="tab-panel active" id="tab-providers">
+            <div class="panel-header">
+                <h2>LLM Providers</h2>
+                <button class="btn btn-primary" id="addProviderBtn">+ Add Provider</button>
+            </div>
+            <div id="providersList" class="providers-list">
+                <div class="loading">Loading providers...</div>
+            </div>
+        </div>
+
+        <!-- Cognition Tab -->
+        <div class="tab-panel" id="tab-cognition">
+            <div class="panel-header">
+                <h2>Cognition Jobs</h2>
+                <p class="panel-desc">Assign each cognitive job to an LLM provider. Changes auto-save.</p>
+            </div>
+            <div id="cognitionList" class="cognition-list">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Voice Tab -->
+        <div class="tab-panel" id="tab-voice">
+            <div class="panel-header">
+                <h2>Voice Configuration</h2>
+                <p class="panel-desc">Configure optional Text-to-Speech and Speech-to-Text servers.</p>
+            </div>
+            <div id="voiceConfig" class="voice-config">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Embodiment Tab -->
+        <div class="tab-panel" id="tab-embodiment">
+            <div class="panel-header">
+                <h2>Embodiment</h2>
+                <div class="panel-header-actions">
+                    <input type="search" id="toolSearch" placeholder="Search skills…" class="search-input">
+                    <button class="btn btn-primary" id="addToolBtn">+ Add Tool</button>
+                </div>
+            </div>
+
+            <!-- Recommended Section -->
+            <div class="embodiment-section" id="recommendedSection">
+                <div class="section-header">
+                    <span class="section-title">Recommended</span>
+                    <a href="#" class="section-link" id="browseMarketplaceBtn">Browse marketplace →</a>
+                </div>
+                <div class="tools-grid tools-grid--recommended" id="recommendedGrid">
+                    <div class="tool-card tool-card--marketplace">
+                        <div class="tool-card__header">
+                            <div class="tool-card__icon">🌦</div>
+                            <div><div class="tool-card__name">Weather</div><div class="tool-card__category">productivity</div></div>
+                        </div>
+                        <p class="tool-card__desc">Real-time weather forecasts and alerts based on your location.</p>
+                        <div class="tool-card__footer">
+                            <span class="tool-card__status --marketplace">Marketplace</span>
+                            <button class="tool-card__btn --primary" disabled>Coming soon</button>
+                        </div>
+                    </div>
+                    <div class="tool-card tool-card--marketplace">
+                        <div class="tool-card__header">
+                            <div class="tool-card__icon">📅</div>
+                            <div><div class="tool-card__name">Calendar</div><div class="tool-card__category">productivity</div></div>
+                        </div>
+                        <p class="tool-card__desc">Read and write Google Calendar events on your behalf.</p>
+                        <div class="tool-card__footer">
+                            <span class="tool-card__status --marketplace">Marketplace</span>
+                            <button class="tool-card__btn --primary" disabled>Coming soon</button>
+                        </div>
+                    </div>
+                    <div class="tool-card tool-card--marketplace">
+                        <div class="tool-card__header">
+                            <div class="tool-card__icon">🔍</div>
+                            <div><div class="tool-card__name">Web Search</div><div class="tool-card__category">research</div></div>
+                        </div>
+                        <p class="tool-card__desc">Search the web and retrieve summaries of results in real time.</p>
+                        <div class="tool-card__footer">
+                            <span class="tool-card__status --marketplace">Marketplace</span>
+                            <button class="tool-card__btn --primary" disabled>Coming soon</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Installed Tools Section -->
+            <div class="embodiment-section">
+                <div class="section-header">
+                    <span class="section-title">Installed</span>
+                </div>
+                <div id="toolsGrid" class="tools-grid">
+                    <div class="loading">Loading skills…</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Login Modal -->
+    <div class="modal-overlay hidden" id="loginModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2>Dashboard Login</h2>
+                <p>Enter your master account credentials.</p>
+            </div>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="loginUsername" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="loginPassword" autocomplete="current-password" required>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Login</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Provider Form Modal (Add/Edit) -->
+    <div class="modal-overlay hidden" id="providerModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2 id="providerModalTitle">Add Provider</h2>
+                    <button type="button" class="btn-close" id="closeProviderModal">✕</button>
+                </div>
+            </div>
+            <div class="platform-tabs" id="editPlatformTabs">
+                <button class="platform-tab active" data-platform="ollama">Ollama</button>
+                <button class="platform-tab" data-platform="anthropic">Anthropic</button>
+                <button class="platform-tab" data-platform="openai">OpenAI</button>
+                <button class="platform-tab" data-platform="gemini">Gemini</button>
+            </div>
+            <p class="platform-desc" id="editPlatformDesc"></p>
+            <form id="providerForm">
+                <input type="hidden" id="editProviderId">
+                <div class="form-group">
+                    <label>Provider Name</label>
+                    <input type="text" id="editName" placeholder="e.g. My Ollama" required>
+                </div>
+                <div class="form-group" id="editHostGroup">
+                    <label>Host</label>
+                    <input type="text" id="editHost" value="http://localhost:11434">
+                    <button type="button" class="btn btn-secondary" id="editTestConnectionBtn">Test Connection</button>
+                    <span id="editConnectionStatus"></span>
+                </div>
+                <div class="form-group" id="editApiKeyGroup">
+                    <label>API Key</label>
+                    <input type="password" id="editApiKey" placeholder="Leave blank to keep existing key">
+                </div>
+                <div class="form-group">
+                    <label>Model</label>
+                    <input type="text" id="editModel" placeholder="e.g. qwen3:8b" list="editModelSuggestions">
+                    <datalist id="editModelSuggestions"></datalist>
+                </div>
+                <div id="testResult" class="test-result hidden"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelProviderBtn">Cancel</button>
+                    <button type="button" class="btn btn-secondary" id="testProviderBtn">Test Connection</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay hidden" id="deleteModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2>Delete Provider</h2>
+                <p id="deleteModalDesc">Are you sure you want to delete this provider?</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
+                <button class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Install Tool Modal -->
+    <div class="modal-overlay hidden" id="installModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2>Install Tool</h2>
+                    <button class="btn-close" id="closeInstallModal">✕</button>
+                </div>
+            </div>
+            <div class="platform-tabs" id="installMethodTabs">
+                <button class="platform-tab active" data-install-method="git">Git URL</button>
+                <button class="platform-tab" data-install-method="zip">Upload ZIP</button>
+            </div>
+            <div id="installGitPanel">
+                <div class="form-group">
+                    <label>Repository URL</label>
+                    <input type="url" id="installGitUrl" placeholder="https://github.com/user/tool-repo">
+                </div>
+            </div>
+            <div id="installZipPanel" class="hidden">
+                <div class="form-group">
+                    <label>ZIP File</label>
+                    <input type="file" id="installZipFile" accept=".zip">
+                </div>
+            </div>
+            <div id="installProgress" class="install-progress hidden"></div>
+            <div id="installError" class="form-error hidden"></div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" id="cancelInstallBtn">Cancel</button>
+                <button class="btn btn-primary" id="installBtn">Install</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool Settings Modal -->
+    <div class="modal-overlay hidden" id="toolSettingsModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2 id="toolSettingsTitle">Tool Settings</h2>
+                    <button class="btn-close" id="closeToolSettingsModal">✕</button>
+                </div>
+            </div>
+            <div id="toolSettingsForm"></div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" id="cancelToolSettingsBtn">Cancel</button>
+                <button class="btn btn-primary" id="saveToolSettingsBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

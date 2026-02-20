@@ -1,0 +1,11 @@
+{
+  "_comment": "RESPOND mode: Full conversational response with qwen3-coder:30b for quality",
+  "provider": "openai-gpt4o-mini",
+  "temperature": 0.5,
+  "max_predict_tokens": 2048,
+  "timeout": 180,
+  "format": "json",
+  "min_gist_confidence": 7,
+  "attention_span_minutes": 30,
+  "max_gists": 8
+}

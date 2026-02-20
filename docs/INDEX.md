@@ -1,0 +1,159 @@
+# Chalie Documentation Index
+
+Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
+
+## Getting Started
+
+**New to Chalie?** Start here:
+1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, deployment instructions
+
+## Setup & Configuration
+
+**Setting up Chalie for the first time?** Follow these guides in order:
+1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini)
+
+## Understanding the System
+
+**Want to understand how Chalie works?** Read these in order:
+1. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — Complete system architecture, services, workers, data flow
+2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed step-by-step flow of prompt processing
+3. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Deterministic mode router and decision flow
+4. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
+5. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for Redis and PostgreSQL
+
+## Tools & Extensions
+
+**Building tools to extend Chalie's capabilities?**
+- **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, sandbox constraints, examples
+
+## User Interface
+
+**Building or modifying the web interface?**
+- **[03-WEB-INTERFACE.md](03-WEB-INTERFACE.md)** — Web UI requirements, layout, functionality
+
+## Quick Reference
+
+### File Organization
+```
+docs/
+├── INDEX.md                          ← You are here
+├── 01-QUICK-START.md                 ← Getting started
+├── 02-PROVIDERS-SETUP.md             ← LLM provider configuration
+├── 03-WEB-INTERFACE.md               ← Web UI specification
+├── 04-ARCHITECTURE.md                ← System architecture
+├── 05-WORKFLOW.md                    ← Request processing pipeline
+├── 06-WORKERS.md                     ← Worker processes overview
+├── 07-COGNITIVE-ARCHITECTURE.md      ← Mode router & cognition
+├── 08-DATA-SCHEMAS.md                ← Data structures
+└── 09-TOOLS.md                       ← Tools system & creation guide
+```
+
+### Important Project Files (Not in docs/)
+- **`CLAUDE.md`** — Project instructions for Claude Code (development guidance)
+- **`README.md`** — Root-level project overview (mirrors 01-QUICK-START.md)
+- **`docker-compose.yml`** — Service definitions and port mappings
+- **`.env.example`** — Configuration template with defaults
+
+### Key Directories
+- **`backend/`** — Python backend (services, workers, API, configs, migrations)
+- **`frontend/interface/`** — Web UI code (HTML, CSS, JavaScript)
+- **`backend/prompts/`** — LLM prompt templates (mode-specific)
+- **`backend/configs/`** — Configuration files and schemas
+- **`backend/migrations/`** — Database migration scripts
+
+## Common Tasks
+
+### Deploying Chalie
+1. Clone repository
+2. Copy `.env.example` to `.env`
+3. Run `docker-compose build && docker-compose up -d`
+4. Configure providers via REST API (see 02-PROVIDERS-SETUP.md)
+5. Open http://localhost:8081/ in browser
+
+### Understanding a Specific Component
+- **Memory system?** → See 04-ARCHITECTURE.md "5-Layer Memory Hierarchy"
+- **How routing works?** → See 07-COGNITIVE-ARCHITECTURE.md
+- **Data flow?** → See 05-WORKFLOW.md or 04-ARCHITECTURE.md "Data Flow Pipeline"
+- **Worker responsibilities?** → See 06-WORKERS.md
+- **Tools & extensions?** → See 09-TOOLS.md
+
+### Configuring a New LLM Provider
+1. Read 02-PROVIDERS-SETUP.md
+2. Use REST API (`POST /providers`) to register provider
+3. Optionally assign to specific jobs (`PUT /providers/jobs/{job_name}`)
+
+### Building/Modifying the Web UI
+1. Read 03-WEB-INTERFACE.md for requirements
+2. All code goes in `frontend/interface/` (HTML, CSS, JS)
+3. UI communicates with backend via REST API at `/chat`
+
+### Adding New Services or Workers
+1. Create file in `backend/services/` or `backend/workers/`
+2. Register in `backend/consumer.py`
+3. Document in 06-WORKERS.md
+4. Add tests in `backend/tests/`
+
+### Creating a New Tool
+1. Read 09-TOOLS.md for architecture and requirements
+2. Create `backend/tools/tool_name/` directory
+3. Add `manifest.json` (metadata, parameters, trigger type)
+4. Add `Dockerfile` (container image definition)
+5. Implement tool logic in your language of choice
+6. Configure via REST API (`PUT /tools/<name>/config`)
+
+## Architecture Quick Facts
+
+- **Language**: Python 3.9+
+- **Databases**: PostgreSQL (+ pgvector extension), Redis
+- **Frontend**: Vanilla JavaScript with Bootstrap 5
+- **LLM Support**: Ollama, Anthropic, OpenAI, Google Gemini
+- **Port**: Backend API on 8080, Frontend on 8081
+- **Configuration**: env vars > .env file > JSON files > hardcoded defaults
+- **Worker Pattern**: Queue-based (Redis) with multiple worker types
+- **Safety**: Deterministic routing, single authority for learning, bounded parameter updates
+
+## Key Concepts
+
+### Mode Routing
+Chalie selects one of 5 engagement modes for each user message:
+- **RESPOND** — Give a substantive answer
+- **CLARIFY** — Ask a clarifying question
+- **ACKNOWLEDGE** — Brief social response
+- **ACT** — Execute internal actions (memory, reasoning)
+- **IGNORE** — No response needed
+
+Mode is selected by a fast mathematical router (~5ms) based on observable signals, then the LLM generates a response in that mode-specific style.
+
+### Memory Hierarchy
+Information flows through 5 layers with different timescales:
+1. **Working Memory** (4 turns, 24h) → Current conversation
+2. **Gists** (30min) → Compressed exchange summaries
+3. **Facts** (24h) → Atomic assertions
+4. **Episodes** (permanent, decaying) → Narrative memories
+5. **Concepts** (permanent, decaying) → Knowledge graph
+
+### Autonomy
+Chalie can generate spontaneous thoughts during idle periods via the Cognitive Drift Engine (Default Mode Network). Thoughts go through three gates (quality, timing, engagement) before being sent to users.
+
+### Safety Boundaries
+- Prompts are immutable (marked as "authoritative")
+- Skills are fixed at startup (no runtime registration)
+- Data scoped by topic (no cross-topic leakage)
+- Hard timeouts on all operations
+- All external actions are async and audited
+
+## Support & Development
+
+- **Issues**: Check GitHub issues or project backlog
+- **Contributing**: Create feature branch, add tests, follow existing patterns
+- **Questions**: Review relevant documentation section, check `.context.md` for recent work
+
+## Document Status
+
+**Last Updated**: 2026-02-19
+
+All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
+
+**Recent Additions**:
+- 09-TOOLS.md: Comprehensive tools system documentation
+- Updated 08-DATA-SCHEMAS.md: Removed outdated file-based storage references

@@ -1,0 +1,16 @@
+{
+  "name": "Chalie",
+  "short_name": "Chalie",
+  "description": "Ambient intelligence AI assistant",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a2d42",
+  "theme_color": "#5b9bd5",
+  "lang": "en",
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "/icons/icon.png", "sizes": "500x500", "type": "image/png", "purpose": "any" }
+  ]
+}
