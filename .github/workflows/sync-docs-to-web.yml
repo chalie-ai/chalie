@@ -1,0 +1,38 @@
+name: Sync docs to chalie-web
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'docs/**'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Chalie
+        uses: actions/checkout@v4
+
+      - name: Checkout chalie-web
+        uses: actions/checkout@v4
+        with:
+          repository: chalie-ai/chalie-web
+          token: ${{ secrets.CHALIE_WEB_TOKEN }}
+          path: chalie-web
+
+      - name: Sync docs folder
+        run: |
+          rsync -av --delete docs/ chalie-web/src/docs/
+
+      - name: Commit and push
+        working-directory: chalie-web
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/docs/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync docs from Chalie"
+            git push origin main
+          else
+            echo "No changes to commit"
+          fi
