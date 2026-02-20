@@ -112,8 +112,29 @@ class _CronToolWorker:
                     "language": raw_telemetry.get("language", ""),
                 }
 
-                payload = {"params": {}, "settings": settings, "telemetry": flattened_telemetry}
+                # Load persisted tool state from Redis (survives container restarts)
+                tool_state = {}
+                state_key = f"tool_cron_state:{self.tool_name}"
+                try:
+                    from services.redis_client import RedisClientService as _RCS
+                    _state_redis = _RCS.create_connection()
+                    state_json = _state_redis.get(state_key)
+                    if state_json:
+                        tool_state = json.loads(state_json)
+                except Exception:
+                    pass
+
+                payload = {"params": {"_state": tool_state}, "settings": settings, "telemetry": flattened_telemetry}
                 result = ToolContainerService().run(self.image, payload, sandbox_config=self.sandbox)
+
+                # Persist returned state back to Redis (7-day TTL)
+                if isinstance(result, dict) and "_state" in result:
+                    try:
+                        from services.redis_client import RedisClientService as _RCS
+                        _state_redis = _RCS.create_connection()
+                        _state_redis.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
+                    except Exception as e:
+                        _log.warning(f"[TOOL CRON] {self.tool_name}: failed to persist state: {e}")
 
                 # Extract text and html from formalized contract output
                 result_text = ""
@@ -282,6 +303,7 @@ class ToolRegistryService:
         self._build_status: Dict[str, dict] = {}  # name -> {status, error}
         self._install_locks: Set[str] = set()      # names currently being installed
         self._lock = threading.Lock()              # protects build_status, install_locks, and tools mutations
+        self._on_tool_registered = None  # Optional[callable] set by consumer for cron worker spawning
 
         try:
             from services.config_service import ConfigService
@@ -548,7 +570,9 @@ class ToolRegistryService:
         card_config = output_config.get("card", {})
         card_enabled = card_config.get("enabled", False)
 
-        # If card is enabled, render and cache it
+        # If card is enabled, render and enqueue it.
+        # Path A: tool returned inline HTML → render_tool_html()
+        # Path B: tool returned a dict with no HTML → template-based render()
         if card_enabled and result_html:
             try:
                 from services.card_renderer_service import CardRendererService
@@ -565,6 +589,23 @@ class ToolRegistryService:
                         return output
             except Exception as e:
                 logger.warning(f"[TOOL REGISTRY] Card render failed for {tool_name}: {e}")
+        elif card_enabled and not result_html and isinstance(result, dict):
+            # Template-based rendering: loads card/template.html + card/styles.css
+            # and compiles Mustache against the raw result dict.
+            try:
+                from services.card_renderer_service import CardRendererService
+                from services.output_service import OutputService
+                card_data = CardRendererService().render(
+                    tool_name, result, card_config, tool["dir"]
+                )
+                if card_data:
+                    OutputService().enqueue_card(topic, card_data, {})
+                    if not synthesize:
+                        output = f"[TOOL:{tool_name}] (card displayed, cost: {elapsed_ms}ms) [/TOOL]"
+                        self._log_outcome(tool_name, success, topic, elapsed_ms)
+                        return output
+            except Exception as e:
+                logger.warning(f"[TOOL REGISTRY] Template card render failed for {tool_name}: {e}")
 
         # Otherwise, return text response (possibly synthesized by frontal cortex)
         token_estimate = len(result_text) // 4
@@ -752,6 +793,13 @@ class ToolRegistryService:
 
             logger.info(f"[TOOL REGISTRY] Async build completed for '{tool_name}'")
 
+            # Notify consumer so it can spawn cron workers for newly registered tools
+            if self._on_tool_registered:
+                try:
+                    self._on_tool_registered(tool_name)
+                except Exception as cb_err:
+                    logger.warning(f"[TOOL REGISTRY] on_tool_registered callback failed: {cb_err}")
+
         except Exception as e:
             logger.error(f"[TOOL REGISTRY] Async build failed for '{tool_name}': {e}")
             with self._lock:
@@ -787,6 +835,10 @@ class ToolRegistryService:
             return dict(self._build_status)
 
     # ── Public API ──────────────────────────────────────────────────
+
+    def set_on_tool_registered(self, callback):
+        """Called by consumer to register a hook for post-build cron worker spawning."""
+        self._on_tool_registered = callback
 
     def get_tool_names(self) -> List[str]:
         return list(self.tools.keys())
