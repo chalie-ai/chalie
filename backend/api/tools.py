@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 tools_bp = Blueprint("tools", __name__)
 
 
+def _normalize_config_schema(schema_dict: dict) -> list:
+    """Convert config_schema dict to normalized array format.
+
+    Input: {"field_name": {"description": "...", "secret": True, ...}, ...}
+    Output: [{"key": "field_name", "label": "...", "secret": True, ...}, ...]
+    """
+    result = []
+    for key, value in schema_dict.items():
+        if isinstance(value, dict):
+            result.append({
+                "key": key,
+                "label": value.get("description", key),
+                "secret": value.get("secret", False),
+                "placeholder": value.get("default", ""),
+                "hint": value.get("description", ""),
+            })
+    return result
+
+
 @tools_bp.route("/tools/install", methods=["POST"])
 @require_session
 def install_tool():
@@ -364,6 +383,13 @@ def list_tools():
         # 1. Active tools in registry (connected/available/system)
         for name in sorted(registry.tools.keys()):
             tool = registry.tools[name]
+            tool_dir = Path(tool["dir"])
+
+            # Ghost check: verify tool directory still exists on disk
+            if not tool_dir.exists():
+                logger.debug(f"[REST API] Skipping ghost tool '{name}': directory not found at {tool_dir}")
+                continue
+
             manifest = tool["manifest"]
             trigger = manifest.get("trigger", {})
 
@@ -371,6 +397,10 @@ def list_tools():
             icon = manifest.get("icon", "⚙")
 
             schema_dict = manifest.get("config_schema", {})
+            # Handle array format by converting to dict
+            if isinstance(schema_dict, list):
+                schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
+
             stored_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
 
             has_secret_fields = any(v.get("secret", False) for v in schema_dict.values())
@@ -381,16 +411,7 @@ def list_tools():
             else:
                 status = "available"
 
-            config_schema_array = [
-                {
-                    "key": k,
-                    "label": v.get("description", k),
-                    "secret": v.get("secret", False),
-                    "placeholder": v.get("default", ""),
-                    "hint": v.get("description", ""),
-                }
-                for k, v in schema_dict.items()
-            ]
+            config_schema_array = _normalize_config_schema(schema_dict)
 
             result.append({
                 "name": name,
@@ -434,16 +455,10 @@ def list_tools():
                         description = manifest.get("description", "")
                         category = manifest.get("category", "")
                         schema_dict = manifest.get("config_schema", {})
-                        config_schema = [
-                            {
-                                "key": k,
-                                "label": v.get("description", k),
-                                "secret": v.get("secret", False),
-                                "placeholder": v.get("default", ""),
-                                "hint": v.get("description", ""),
-                            }
-                            for k, v in schema_dict.items()
-                        ]
+                        # Handle array format
+                        if isinstance(schema_dict, list):
+                            schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
+                        config_schema = _normalize_config_schema(schema_dict)
                     except Exception:
                         pass
 
@@ -484,16 +499,10 @@ def list_tools():
                         description = manifest.get("description", "")
                         category = manifest.get("category", "")
                         schema_dict = manifest.get("config_schema", {})
-                        config_schema = [
-                            {
-                                "key": k,
-                                "label": v.get("description", k),
-                                "secret": v.get("secret", False),
-                                "placeholder": v.get("default", ""),
-                                "hint": v.get("description", ""),
-                            }
-                            for k, v in schema_dict.items()
-                        ]
+                        # Handle array format
+                        if isinstance(schema_dict, list):
+                            schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
+                        config_schema = _normalize_config_schema(schema_dict)
                     except Exception:
                         pass
 
@@ -507,6 +516,58 @@ def list_tools():
                     "status": "disabled",
                     "config_schema": config_schema,
                     "last_error": None,
+                })
+                processed_names.add(name)
+
+        # 4. Filesystem scan for missed tools (safety net)
+        # Find any tools in tools/ that have manifest.json + Dockerfile but weren't processed
+        if tools_dir.exists():
+            for tool_dir in sorted(tools_dir.iterdir()):
+                if not tool_dir.is_dir():
+                    continue
+                if tool_dir.name in processed_names:
+                    continue
+                if tool_dir.name.startswith("_") or tool_dir.name.startswith("."):
+                    continue
+
+                manifest_path = tool_dir / "manifest.json"
+                dockerfile_path = tool_dir / "Dockerfile"
+
+                # Only include if both manifest and Dockerfile exist
+                if not (manifest_path.exists() and dockerfile_path.exists()):
+                    continue
+
+                name = tool_dir.name
+                manifest = {}
+                icon = "⚙"
+                description = ""
+                category = ""
+                config_schema = []
+
+                try:
+                    with open(manifest_path, "r") as f:
+                        manifest = json.load(f)
+                    icon = manifest.get("icon", "⚙")
+                    description = manifest.get("description", "")
+                    category = manifest.get("category", "")
+                    schema_dict = manifest.get("config_schema", {})
+                    # Handle array format
+                    if isinstance(schema_dict, list):
+                        schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
+                    config_schema = _normalize_config_schema(schema_dict)
+                except Exception:
+                    pass
+
+                result.append({
+                    "name": name,
+                    "display_name": name.replace("_", " ").title(),
+                    "icon": icon,
+                    "description": description,
+                    "category": category,
+                    "trigger_type": manifest.get("trigger", {}).get("type", ""),
+                    "status": "error",
+                    "config_schema": config_schema,
+                    "last_error": "Tool failed to load at startup",
                 })
                 processed_names.add(name)
 

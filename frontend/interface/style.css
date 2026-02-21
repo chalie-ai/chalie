@@ -412,11 +412,8 @@ body {
 /* Active form — the newest Chalie message gets a single clean accent edge.
    One color, one glow. Not a rainbow. Think arc reactor, not LED strip. */
 .speech-form--active {
-  border-color: rgba(138, 92, 255, 0.30);
-  box-shadow:
-    0 2px 16px rgba(0, 0, 0, 0.40),
-    0 0 20px rgba(138, 92, 255, 0.07),
-    0 0 1px rgba(138, 92, 255, 0.30);
+  border-color: rgba(138, 92, 255, 0.15);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
 }
 
 /* Thin top-edge highlight — like light catching a glass panel edge */
@@ -427,7 +424,7 @@ body {
   left: 16px;
   right: 16px;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(138, 92, 255, 0.50), rgba(0, 240, 255, 0.30), transparent);
+  background: linear-gradient(90deg, transparent, rgba(138, 92, 255, 0.25), rgba(0, 240, 255, 0.15), transparent);
   border-radius: 1px;
 }
 
@@ -1381,6 +1378,13 @@ body {
   overflow: hidden;
   margin: 6px 0;
   max-width: 480px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-left: 3px solid var(--accent-primary);
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  padding: 2px;
 }
 
 .tool-result-card__header {

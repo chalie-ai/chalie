@@ -356,6 +356,12 @@ class ToolRegistryService:
                     future.result()
                 except Exception as e:
                     logger.warning(f"[TOOL REGISTRY] Failed to load tool '{dir_name}': {e}")
+                    # Track failure in build_status so it appears with error status in list_tools()
+                    with self._lock:
+                        self._build_status[dir_name] = {
+                            "status": "error",
+                            "error": str(e)
+                        }
 
         if self.tools:
             names = ", ".join(sorted(self.tools.keys()))
@@ -895,9 +901,28 @@ class ToolRegistryService:
         return result
 
     def get_tool_config_schema(self, tool_name: str) -> dict:
-        """Return config_schema from a tool's manifest, or empty dict."""
+        """Return config_schema from a tool's manifest, or empty dict.
+
+        Handles both dict and array formats:
+        - Dict: {"field_name": {schema}} (normal)
+        - Array: [{"key": "field_name", ...}] (legacy, converted to dict)
+        """
         tool = self.tools.get(tool_name)
-        return tool["manifest"].get("config_schema", {}) if tool else {}
+        if not tool:
+            return {}
+
+        schema = tool["manifest"].get("config_schema", {})
+
+        # Convert array format to dict for backward compatibility
+        if isinstance(schema, list):
+            result = {}
+            for item in schema:
+                if isinstance(item, dict) and "key" in item:
+                    key = item["key"]
+                    result[key] = item
+            return result
+
+        return schema if isinstance(schema, dict) else {}
 
     def get_tool_prompt_summaries(self) -> str:
         """

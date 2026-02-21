@@ -678,7 +678,7 @@ class ChalieApp {
     let t = 0;
     const animate = () => {
       this._drawAmbientFrame(ctx, canvas, t);
-      t += 0.0008;
+      t += 0.0012;
       requestAnimationFrame(animate);
     };
     animate();
@@ -699,23 +699,23 @@ class ChalieApp {
     const orbs = [
       // Large violet field — dominates top-left — this IS the brand color
       { cx: 0.22, cy: 0.20, r: 0.70, color: [100, 60, 220], alpha: 0.08,
-        dx: 0.05, dy: 0.04, sx: 1.0,  sy: 0.75, rBreath: 0.04, phase: 0.0  },
+        dx: 0.07, dy: 0.06, sx: 1.0,  sy: 0.75, rBreath: 0.06, phase: 0.0  },
       // Magenta — lower-right — warm human counterpoint
       { cx: 0.78, cy: 0.65, r: 0.55, color: [180, 30, 140], alpha: 0.06,
-        dx: 0.04, dy: 0.05, sx: 0.85, sy: 1.1,  rBreath: 0.04, phase: 2.4  },
+        dx: 0.06, dy: 0.07, sx: 0.85, sy: 1.1,  rBreath: 0.06, phase: 2.4  },
       // Cyan accent — top-right — the "technology" color, small and precise
       { cx: 0.80, cy: 0.15, r: 0.30, color: [0, 180, 220],  alpha: 0.05,
-        dx: 0.06, dy: 0.03, sx: 0.95, sy: 1.05, rBreath: 0.03, phase: 1.5  },
+        dx: 0.08, dy: 0.05, sx: 0.95, sy: 1.05, rBreath: 0.05, phase: 1.5  },
       // Deep indigo anchor — bottom — grounds the composition
       { cx: 0.40, cy: 0.90, r: 0.50, color: [60, 40, 140],  alpha: 0.06,
-        dx: 0.03, dy: 0.06, sx: 1.10, sy: 0.90, rBreath: 0.04, phase: 4.2  },
+        dx: 0.05, dy: 0.08, sx: 1.10, sy: 0.90, rBreath: 0.06, phase: 4.2  },
     ];
 
     for (const orb of orbs) {
       const x = w * (orb.cx + orb.dx * Math.sin(t * orb.sx + orb.phase));
       const y = h * (orb.cy + orb.dy * Math.cos(t * orb.sy + orb.phase * 0.7));
       const r = m * orb.r * (1 + orb.rBreath * Math.sin(t * 0.5 + orb.phase));
-      const a = orb.alpha * (0.85 + 0.15 * Math.cos(t * 0.3 + orb.phase));
+      const a = orb.alpha * (0.75 + 0.25 * Math.cos(t * 0.3 + orb.phase));
 
       const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
       const [cr, cg, cb] = orb.color;
