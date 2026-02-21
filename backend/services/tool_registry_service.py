@@ -445,6 +445,7 @@ class ToolRegistryService:
         return {
             "lat": loc.get("lat"),
             "lon": loc.get("lon"),
+            "location_name": raw_telemetry.get("location_name", ""),
             "city": city,
             "country": country,
             "time": raw_telemetry.get("local_time", ""),

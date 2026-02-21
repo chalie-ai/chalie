@@ -7,6 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 import json
+import re
 import time
 import logging
 from services import ConfigService, FrontalCortexService, OrchestratorService, PromptQueue, SessionService
@@ -25,6 +26,7 @@ from services.mode_router_service import ModeRouterService, collect_routing_sign
 from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
+from services.context_relevance_service import ContextRelevanceService
 from .memory_chunker_worker import memory_chunker_worker
 
 # Global session service instance (shared across worker invocations)
@@ -44,6 +46,17 @@ _orchestrator = None
 
 # Global thread conversation service
 _thread_conv_service = None
+
+# Global context relevance service
+_context_relevance_service = None
+
+
+def get_context_relevance_service():
+    """Get or create global ContextRelevanceService instance."""
+    global _context_relevance_service
+    if _context_relevance_service is None:
+        _context_relevance_service = ContextRelevanceService()
+    return _context_relevance_service
 
 
 def get_orchestrator():
@@ -209,7 +222,7 @@ def classify_prompt(text, existing_topics, recent_topic, gist_context, world_sta
     return json.loads(response), classification_time
 
 
-def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None):
+def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None):
     """
     Generate response for a terminal mode (RESPOND, CLARIFY, ACKNOWLEDGE).
 
@@ -219,6 +232,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
         act_history_context: Optional act_history string from a preceding ACT loop.
             When present, the LLM can reference tool results in its response.
         thread_id: Thread ID for working memory + world state context.
+        signals: Routing signals dict for context relevance computation.
 
     Returns:
         dict: {mode, modifiers, response, generation_time, actions, confidence}
@@ -236,6 +250,19 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
         logging.warning(f"[Mode:{mode}] Config {config_name}.json not found, using base config: {e}")
         config = cortex_config
 
+    # Compute context inclusion map using relevance service
+    inclusion_map = None
+    try:
+        context_relevance_service = get_context_relevance_service()
+        inclusion_map = context_relevance_service.compute_inclusion_map(
+            mode=mode,
+            signals=signals or {},
+            classification=classification,
+            returning_from_silence=returning_from_silence,
+        )
+    except Exception as e:
+        logging.warning(f"[Mode:{mode}] Context relevance computation failed: {e}, proceeding without inclusion_map")
+
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
@@ -246,6 +273,8 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
         chat_history=chat_history,
         act_history=act_history_context or "(none)",
         thread_id=thread_id,
+        returning_from_silence=returning_from_silence,
+        inclusion_map=inclusion_map,
     )
 
     # Router decided the mode, not the LLM
@@ -331,6 +360,19 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
     while True:
         iteration_start = time.time()
 
+        # Compute context inclusion map for ACT mode
+        act_inclusion_map = None
+        try:
+            context_relevance_service = get_context_relevance_service()
+            act_inclusion_map = context_relevance_service.compute_inclusion_map(
+                mode='ACT',
+                signals=signals or {},
+                classification=classification,
+                returning_from_silence=False,
+            )
+        except Exception as e:
+            logging.warning(f"[MODE:ACT] Context relevance computation failed: {e}")
+
         # Generate action plan via ACT-specific prompt
         response_data = cortex_service.generate_response(
             system_prompt_template=act_prompt,
@@ -339,6 +381,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
             chat_history=chat_history,
             act_history=act_loop.get_history_context(),
             relevant_tools=relevant_tools,
+            inclusion_map=act_inclusion_map,
         )
 
         actions = response_data.get('actions', [])
@@ -461,6 +504,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
         thread_conv_service, cortex_config, cortex_prompt_map, metadata,
         act_history_context=act_history_for_respond,
         thread_id=thread_id,
+        signals=signals,
     )
 
     # Enqueue tool outputs for background experience assimilation
@@ -481,7 +525,8 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
 
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, fact_store, metadata=None, context_warmth=1.0,
-                       pre_routing_result=None, relevant_tools=None, thread_id=None):
+                       pre_routing_result=None, relevant_tools=None, thread_id=None,
+                       returning_from_silence=False):
     """
     Main routing + generation function.
 
@@ -565,6 +610,8 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             topic, text, selected_mode, classification,
             thread_conv_service, cortex_config, cortex_prompt_map, metadata,
             thread_id=thread_id,
+            returning_from_silence=returning_from_silence,
+            signals=signals,
         )
 
     # Store response
@@ -1321,6 +1368,83 @@ def _log_cycle_event(event_type: str, payload: dict, topic: str):
         pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Immediate Identity Promotion (IIP)
+#
+# Deterministic regex patterns for detecting explicit name statements.
+# Written synchronously (before any LLM call) to Redis + Postgres so the name
+# is available within the same request cycle. Target: <5ms. No LLM, no embeddings.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Capture group: one or two tokens, each allowing Unicode letters, apostrophes, hyphens.
+# [^\W\d_] = any Unicode letter (standard re module — no external packages).
+# Accepts any case — casing is normalised on write.
+_IIP_NAME_CAPTURE = (
+    r"([^\W\d_](?:[^\W\d_]|['\-]){0,39}"
+    r"(?:\s+[^\W\d_](?:[^\W\d_]|['\-]){0,39})?)"
+)
+
+_IIP_PATTERNS = [
+    re.compile(r"\bcall me\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
+    re.compile(r"\bmy name is\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
+    re.compile(r"\bi go by\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
+    re.compile(r"\byou can call me\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
+    re.compile(r"\bi'?m known as\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
+    re.compile(r"\brefer to me as\s+" + _IIP_NAME_CAPTURE, re.IGNORECASE),
+]
+
+_IIP_STOPWORDS = frozenset([
+    'a', 'an', 'the', 'i', 'me', 'my', 'we', 'you', 'your', 'he', 'she',
+    'they', 'it', 'this', 'that', 'here', 'there', 'done', 'fine', 'good',
+    'okay', 'ok', 'sure', 'yes', 'no', 'maybe', 'later', 'anything',
+    'something', 'nothing', 'everything',
+])
+
+
+def _run_iip_hook(text: str, database_service) -> None:
+    """
+    Detect explicit name statements and write to Redis + Postgres synchronously.
+
+    Deterministic regex only — no LLM, no embedding. Target: <5ms. Never raises.
+    Preserves user's mixed-case input (McDonald, O'Brien); only title-cases
+    when input is all-lowercase.
+    """
+    try:
+        matched_name = None
+        for pattern in _IIP_PATTERNS:
+            m = pattern.search(text)
+            if m:
+                candidate = m.group(1).strip()
+                # Reject stopwords (case-insensitive) and single-char matches
+                if candidate.lower() not in _IIP_STOPWORDS and len(candidate) >= 2:
+                    matched_name = candidate.title() if candidate.islower() else candidate
+                    break
+
+        if not matched_name:
+            return
+
+        from services.identity_state_service import IdentityStateService
+        IdentityStateService().set_field(
+            'name', matched_name, confidence=0.95, provisional=False
+        )
+
+        from services.user_trait_service import UserTraitService
+        UserTraitService(database_service).store_trait(
+            trait_key='name',
+            trait_value=matched_name,
+            confidence=0.95,
+            category='core',
+            source='explicit',
+            is_literal=True,
+            user_id='primary',
+            speaker_confidence=1.0,
+        )
+        logging.info(f"[IIP] Promoted name='{matched_name}' → Redis + Postgres")
+
+    except Exception as e:
+        logging.warning(f"[IIP] Hook failed (non-fatal): {e}")
+
+
 def _try_proactive_engagement_correlation(text: str, topic: str):
     """
     Check if the user is responding to a proactive message and score engagement.
@@ -1438,6 +1562,14 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 3a: Immediate commit - append user turn to working memory (keyed by thread_id)
     working_memory.append_turn(thread_id, 'user', text)
 
+    # IIP: Immediate Identity Promotion — synchronous, before any LLM call
+    # Detects explicit name statements and writes to Redis + Postgres immediately.
+    try:
+        from services.database_service import get_shared_db_service
+        _run_iip_hook(text, get_shared_db_service())
+    except Exception as _iip_e:
+        logging.debug(f"[IIP] Skipped: {_iip_e}")
+
     # Step 3b: Immediate commit - log user input event (pre-classification)
     if interaction_log:
         interaction_log.log_event(
@@ -1535,18 +1667,20 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Step 6: Classify the prompt with deterministic embedding-based classifier
     topic_classifier = get_topic_classifier()
-    classification_result = topic_classifier.classify(text, recent_topic=recent_topic)
+    classification_result = topic_classifier.classify(text, recent_topic=recent_topic, thread_id=thread_id)
 
     # Extract for compatibility with handle_classification
     classification = {
         'topic': classification_result['topic'],
         'confidence': int(classification_result['confidence'] * 10),
         'similar_topic': '',
-        'topic_update': ''
+        'topic_update': '',
+        'context_warmth': context_warmth,
     }
     classification_time = classification_result['classification_time']
 
     # Store user message embedding for proactive relevance scoring (256-dim, matches drift engine)
+    msg_embedding = None
     try:
         from services.embedding_service import EmbeddingService
         emb_service = EmbeddingService()
@@ -1597,12 +1731,72 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     if context_topic and topic != context_topic:
         gist_storage.store_cold_start_gists(topic)
 
+    # Step 7d: Focus auto-inference and distraction check
+    try:
+        from services.focus_session_service import FocusSessionService
+        focus_service = FocusSessionService()
+
+        # Count consecutive exchanges on current topic for auto-inference
+        try:
+            from services.redis_client import RedisClientService
+            _redis = RedisClientService.create_connection()
+            _streak_key = f"topic_streak:{thread_id}"
+            _streak_raw = _redis.get(_streak_key)
+            _streak_data = json.loads(_streak_raw) if _streak_raw else {}
+
+            if _streak_data.get('topic') == topic:
+                _streak_count = _streak_data.get('count', 0) + 1
+            else:
+                _streak_count = 1
+
+            _redis.setex(_streak_key, 7200, json.dumps({'topic': topic, 'count': _streak_count}))
+
+            # Auto-infer focus after consecutive exchanges on same topic
+            focus_service.maybe_infer_focus(thread_id, topic, _streak_count)
+        except Exception as _se:
+            logging.debug(f"[DIGEST] Topic streak tracking failed: {_se}")
+
+        # Distraction check if focus is active and message embedding available
+        try:
+            if msg_embedding is not None:
+                distraction = focus_service.check_distraction(thread_id, msg_embedding)
+                if distraction.get('is_distraction'):
+                    logging.info(
+                        f"[DIGEST] Focus distraction detected: "
+                        f"similarity={distraction['similarity_to_focus']:.3f} "
+                        f"to '{distraction['focus_description'][:50]}'"
+                    )
+                    # Store as routing signal for potential CLARIFY nudge
+                    signals_extra = {'focus_distraction': True,
+                                     'focus_similarity': distraction['similarity_to_focus']}
+                else:
+                    signals_extra = {}
+            else:
+                signals_extra = {}
+        except Exception as _de:
+            logging.debug(f"[DIGEST] Distraction check failed: {_de}")
+            signals_extra = {}
+    except Exception as _fe:
+        logging.debug(f"[DIGEST] Focus services failed: {_fe}")
+        signals_extra = {}
+
     # Step 8: Cache this topic as the most recent
     recent_topic_service.set_recent_topic(topic)
 
     # Step 9: Track session and check for episode generation
     session_service = get_session_service()
     session_service.set_thread(thread_id)
+
+    # Returning-from-silence detection — must be BEFORE track_classification()
+    # updates last_activity_time so the gap is measured against prior activity.
+    _session_silence = session_service.is_returning_from_silence(threshold_seconds=2700)
+    _boundary_returning = classification_result.get('just_reset_from_silence', False)
+    # silence_seconds > 0 means returning; keep raw value for future tiered-warmth use
+    silence_seconds = _session_silence if _session_silence > 0 else (2700.0 if _boundary_returning else 0.0)
+    returning_from_silence = silence_seconds > 0
+    if returning_from_silence:
+        logging.info(f"[DIGEST] Returning from silence: {silence_seconds:.0f}s gap detected")
+
     is_new_topic = classification.get('is_new_topic', False)
     session_service.track_classification(topic, is_new_topic, time.time())
 
@@ -1633,13 +1827,40 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as e:
         logging.debug(f"[DIGEST] Tool relevance scoring failed: {e}")
 
-    # Step 9c: Intent classification (~5ms, deterministic, no LLM)
+    # Step 9c: Compute memory_confidence before intent classifier
+    # Use same FOK formula as mode_router_service.py collect_routing_signals()
+    from services.redis_client import RedisClientService
+    redis_conn = RedisClientService.create_connection(decode_responses=True)
+    raw_fok = redis_conn.get(f"fok:{topic}") if topic else None
+    fok = float(raw_fok) if raw_fok else 0.0
+    fok_score = min(1.0, fok / 5.0)
+
+    gist_count = sum(1 for g in gists if g.get('type') != 'cold_start') if gists else 0
+    facts = fact_store.get_all_facts(topic) if topic else []
+    fact_count = len(facts)
+    density_score = min(1.0, (gist_count + fact_count) / 6.0)
+
+    memory_confidence = (
+        0.4 * fok_score
+        + 0.4 * context_warmth
+        + 0.2 * density_score
+    )
+    if classification_result.get('is_new_topic', False):
+        memory_confidence *= 0.7
+    memory_confidence = round(memory_confidence, 3)
+
+    # Get working memory turn count
+    working_memory_turns = len(wm_turns) if wm_turns else 0
+
+    # Step 9d: Intent classification (~5ms, deterministic, no LLM)
     intent_classifier = get_intent_classifier()
     intent = intent_classifier.classify(
         text=text,
         topic=topic,
         context_warmth=context_warmth,
         tool_relevance=tool_relevance,
+        memory_confidence=memory_confidence,
+        working_memory_turns=working_memory_turns,
     )
     logging.info(
         f"[DIGEST] Intent: type={intent['intent_type']}, needs_tools={intent['needs_tools']}, "
@@ -1812,6 +2033,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     pre_routing_result=routing_result,
                     relevant_tools=_relevant,
                     thread_id=thread_id,
+                    returning_from_silence=returning_from_silence,
                 )
         else:
             # ── Normal path (no tools needed, or low intent confidence) ──
@@ -1822,6 +2044,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 metadata=metadata, context_warmth=context_warmth,
                 relevant_tools=_relevant,
                 thread_id=thread_id,
+                returning_from_silence=returning_from_silence,
             )
 
         # Add response to exchange data

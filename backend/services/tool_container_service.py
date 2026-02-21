@@ -125,6 +125,12 @@ class ToolContainerService:
 
             # Cap output at 20KB
             raw = container.logs(stdout=True, stderr=False)[:20000]
+
+            # Always surface container stderr to backend logs for debugging
+            stderr_raw = container.logs(stdout=False, stderr=True).decode("utf-8", errors="replace")[:800]
+            if stderr_raw.strip():
+                logger.info(f"[CONTAINER] {image_tag} stderr: {stderr_raw.strip()}")
+
             try:
                 return json.loads(raw)
             except (json.JSONDecodeError, ValueError) as e:
@@ -135,3 +141,4 @@ class ToolContainerService:
                 container.remove(force=True)
             except Exception:
                 pass
+

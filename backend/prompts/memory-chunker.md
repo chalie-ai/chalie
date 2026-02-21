@@ -58,7 +58,15 @@ You only extract state from observed interaction.
       "value": "<concrete value>",
       "confidence": 5
     }
-  ]
+  ],
+
+  "communication_style": {
+    "verbosity": 0,
+    "directness": 0,
+    "formality": 0,
+    "abstraction_level": 0,
+    "confidence": 0
+  }
 }
 
 # Scoring Rules
@@ -84,6 +92,16 @@ You only extract state from observed interaction.
 - Maximum 5 facts per exchange
 - If no facts, return an empty array
 - Facts overlap with user_traits on purpose: traits describe the person, facts describe the world
+
+# Communication Style Detection
+- Analyse the user's message style across four dimensions (1–10 scale):
+  - `verbosity`: 1 = very terse (single words/short phrases), 10 = very verbose (long detailed paragraphs)
+  - `directness`: 1 = very indirect/hedged, 10 = very direct/assertive
+  - `formality`: 1 = very casual/colloquial, 10 = very formal/professional
+  - `abstraction_level`: 1 = highly concrete/specific, 10 = highly abstract/conceptual
+- `confidence`: 0–10, how confident you are the style is detectable in this exchange (0 = not enough signal)
+- Score 0 across all dimensions if the exchange is too short or ambiguous to detect style
+- This captures how the user communicates, not what they say
 
 # Rules
 - Do not invent information

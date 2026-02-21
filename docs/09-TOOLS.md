@@ -133,6 +133,7 @@ Required fields:
 
   "output": {
     "synthesize": true,
+    "ephemeral": false,
     "card": {
       "enabled": true,
       "title": "Card Title",
@@ -159,6 +160,7 @@ The `output` section controls how the tool's result is displayed:
 {
   "output": {
     "synthesize": true,
+    "ephemeral": false,
     "card": {
       "enabled": true,
       "title": "Weather in {{location}}",
@@ -170,6 +172,7 @@ The `output` section controls how the tool's result is displayed:
 ```
 
 - **`synthesize`**: If `true`, the framework rewrites `text` in Chalie's voice. If `false`, `text` is hidden.
+- **`ephemeral`**: If `true`, the tool's output is never assimilated into episodic memory and is excluded from action-completion verification. Use for tools whose output is transient by nature (e.g., current weather). Defaults to `false`.
 - **`card.enabled`**: If `true`, the framework renders the `html` field as a UI card.
 - **`card.title`**: Default card title (can be overridden by tool's `title` in output JSON)
 - **`card.accent_color`**: Accent color for the card (CSS color string)

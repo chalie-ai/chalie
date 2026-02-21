@@ -1,28 +1,20 @@
 """
-Scheduler Service — Background poller for scheduled items.
+Scheduler Service — Background poller for scheduled items in PostgreSQL.
 
-Polls SQLite database (src/data/scheduler.db) every 60 seconds. Fires due items through
-the digest pipeline — frontal cortex handles tone and framing naturally.
+Polls scheduled_items table every 60 seconds. Fires due items through
+the prompt queue — frontal cortex handles tone and framing naturally.
 
-Uses system local time (not UTC) to stay in sync with Chalie regardless of system clock offset.
-Pattern: follows cognitive_drift_engine.py (while True + time.sleep).
+Uses FOR UPDATE SKIP LOCKED to prevent double-firing with multiple workers.
 Entry point: scheduler_worker(shared_state=None) registered in consumer.py.
 """
 
-import calendar
-import sqlite3
 import logging
 import time
-import uuid
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SCHEDULER]"
-
-_DATA_DIR = Path(__file__).parent.parent / "data"
-_DB_PATH = _DATA_DIR / "scheduler.db"
 _POLL_INTERVAL = 60  # seconds
 
 
@@ -31,115 +23,115 @@ def scheduler_worker(shared_state=None):
     logging.basicConfig(level=logging.INFO)
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
+    next_tick = time.monotonic() + _POLL_INTERVAL
     while True:
         try:
-            time.sleep(_POLL_INTERVAL)
+            now = time.monotonic()
+            sleep_secs = max(0, next_tick - now)
+            time.sleep(sleep_secs)
+            next_tick += _POLL_INTERVAL
             _poll_and_fire()
         except KeyboardInterrupt:
             logger.info(f"{LOG_PREFIX} Shutting down")
             break
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Poll cycle error: {e}")
-            time.sleep(10)
+            next_tick = time.monotonic() + _POLL_INTERVAL
 
 
 def _poll_and_fire():
-    """Check for due items and fire them through the prompt queue."""
+    """Poll for due items and fire them through the prompt queue."""
     try:
-        conn = _get_db()
-        now = datetime.now()
+        from services.database_service import get_shared_db_service
 
-        # Find all pending items with due_at <= now
-        cursor = conn.execute(
-            """SELECT id, type, message, due_at, recurrence, status, created_at, last_fired_at
-               FROM scheduled_items
-               WHERE status = 'pending' AND due_at <= ?
-               ORDER BY due_at""",
-            (now.isoformat(),)
-        )
-        rows = cursor.fetchall()
+        db = get_shared_db_service()
+        now = datetime.now(timezone.utc)
 
-        if not rows:
-            conn.close()
-            return
-
-        logger.info(f"{LOG_PREFIX} {len(rows)} due item(s) to fire")
-
-        # Fire each due item
-        fired_ids = []
-        for row in rows:
-            item = {
-                "id": row[0],
-                "type": row[1],
-                "message": row[2],
-                "due_at": row[3],
-                "recurrence": row[4],
-                "status": row[5],
-                "created_at": row[6],
-                "last_fired_at": row[7],
-            }
-            try:
-                _fire_item(item, now)
-                fired_ids.append(item["id"])
-            except Exception as e:
-                logger.error(f"{LOG_PREFIX} Failed to fire item {item.get('id')}: {e}")
-
-        # Update statuses and add recurrence items
-        for fired_id in fired_ids:
-            conn.execute(
-                "UPDATE scheduled_items SET status = 'fired', last_fired_at = ? WHERE id = ?",
-                (now.isoformat(), fired_id)
+        # Check for overdue items (potential stall warning)
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            overdue_threshold = now - timedelta(minutes=5)
+            cursor.execute(
+                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < %s",
+                (overdue_threshold,)
             )
+            overdue_count = cursor.fetchone()[0]
+            if overdue_count > 0:
+                logger.warning(
+                    f"{LOG_PREFIX} {overdue_count} item(s) overdue by >5min — possible stall"
+                )
 
-        # Handle recurrences
-        for fired_id in fired_ids:
-            cursor = conn.execute(
-                """SELECT id, type, message, due_at, recurrence, status, created_at, last_fired_at
-                   FROM scheduled_items WHERE id = ?""",
-                (fired_id,)
-            )
-            row = cursor.fetchone()
-            if row:
-                item = {
-                    "id": row[0],
-                    "type": row[1],
-                    "message": row[2],
-                    "due_at": row[3],
-                    "recurrence": row[4],
-                    "status": row[5],
-                    "created_at": row[6],
-                    "last_fired_at": row[7],
-                }
-                next_item = _create_recurrence(item, now)
-                if next_item:
-                    conn.execute(
-                        """INSERT INTO scheduled_items (id, type, message, due_at, recurrence, status, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (next_item["id"], next_item["type"], next_item["message"],
-                         next_item["due_at"], next_item["recurrence"], next_item["status"],
-                         next_item["created_at"])
-                    )
-                    logger.info(
-                        f"{LOG_PREFIX} Recurrence created for {item['id']}: "
-                        f"next due {next_item['due_at']}"
+        # Atomic claim: lock rows (SKIP LOCKED = safe with multiple workers)
+        # LIMIT 100 prevents long transaction locks / prompt queue floods
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, item_type, message, due_at, recurrence,
+                       window_start, window_end, topic, created_by_session
+                FROM scheduled_items
+                WHERE status = 'pending' AND due_at <= %s
+                ORDER BY due_at
+                LIMIT 100
+                FOR UPDATE SKIP LOCKED
+            """, (now,))
+            rows = cursor.fetchall()
+
+            cols = [
+                "id", "item_type", "message", "due_at", "recurrence",
+                "window_start", "window_end", "topic", "created_by_session"
+            ]
+
+            for row in rows:
+                item = dict(zip(cols, row))
+                try:
+                    _fire_item(item)
+                    cursor.execute(
+                        "UPDATE scheduled_items SET status='fired', last_fired_at=%s WHERE id=%s",
+                        (now, item["id"])
                     )
 
-        conn.commit()
-        conn.close()
+                    if item["recurrence"]:
+                        next_item = _build_recurrence(item, now)
+                        if next_item:
+                            cursor.execute("""
+                                INSERT INTO scheduled_items
+                                  (id, item_type, message, due_at, recurrence,
+                                   window_start, window_end, status, topic, created_by_session, created_at)
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s)
+                            """, (
+                                next_item["id"],
+                                next_item["item_type"],
+                                next_item["message"],
+                                next_item["due_at"],
+                                next_item["recurrence"],
+                                next_item.get("window_start"),
+                                next_item.get("window_end"),
+                                next_item["topic"],
+                                next_item["created_by_session"],
+                                now
+                            ))
+
+                except Exception as e:
+                    logger.error(f"{LOG_PREFIX} Failed to fire {item['id']}: {e}")
+                    cursor.execute(
+                        "UPDATE scheduled_items SET status='failed' WHERE id=%s",
+                        (item["id"],)
+                    )
+
+            conn.commit()
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Poll and fire error: {e}")
 
 
-def _fire_item(item: dict, now: datetime):
+def _fire_item(item: dict):
     """Enqueue a due item on the prompt-queue for frontal cortex processing."""
     from services.prompt_queue import PromptQueue
     from services.client_context_service import ClientContextService
 
     message = item.get("message", "")
-    source = item.get("type", "reminder")  # 'reminder' or 'task'
+    source = item.get("item_type", "reminder")
 
-    # Get client context (timezone, location) for accurate rendering
     client_context_text = ClientContextService().format_for_prompt()
 
     queue = PromptQueue(queue_name="prompt-queue")
@@ -148,7 +140,7 @@ def _fire_item(item: dict, now: datetime):
         "metadata": {
             "source": source,
             "destination": "web",
-            "scheduled_at": item.get("due_at", now.isoformat()),
+            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat(),
             "scheduled_message": message,
             "topic": item.get("topic", "general"),
             "client_context": client_context_text,
@@ -158,35 +150,59 @@ def _fire_item(item: dict, now: datetime):
     logger.info(f"{LOG_PREFIX} Fired {source} '{item.get('id')}': {message[:80]}")
 
 
-def _create_recurrence(item: dict, fired_at: datetime) -> dict:
-    """Create a new pending item for a recurring schedule. Returns None if one-time."""
+def _build_recurrence(item: dict, fired_at: datetime) -> dict:
+    """
+    Build the next occurrence for a recurring schedule.
+    Returns new row dict with fresh 8-char hex id, or None if one-time.
+    """
+    import uuid
+
     recurrence = item.get("recurrence")
     if not recurrence:
         return None
 
     try:
-        due_at = datetime.fromisoformat(item["due_at"])
-        # Strip timezone info if present — use system local time
-        if due_at.tzinfo is not None:
-            due_at = due_at.replace(tzinfo=None)
+        due_at = item["due_at"]
+        if isinstance(due_at, str):
+            due_at = datetime.fromisoformat(due_at)
+
+        # Ensure timezone-aware (convert naive to UTC if needed)
+        if due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=timezone.utc)
+
     except Exception:
         return None
 
-    next_due = _calculate_next_due(due_at, recurrence)
+    next_due = _calculate_next_due(due_at, recurrence, item.get("window_start"), item.get("window_end"), fired_at)
     if next_due is None:
         return None
 
-    new_item = dict(item)
-    new_item["id"] = uuid.uuid4().hex[:8]
-    new_item["due_at"] = next_due.isoformat()
-    new_item["status"] = "pending"
-    new_item["last_fired_at"] = None
-    new_item["created_at"] = fired_at.isoformat()
-    return new_item
+    return {
+        "id": uuid.uuid4().hex[:8],
+        "item_type": item.get("item_type", "reminder"),
+        "message": item.get("message", ""),
+        "due_at": next_due,
+        "recurrence": recurrence,
+        "window_start": item.get("window_start"),
+        "window_end": item.get("window_end"),
+        "topic": item.get("topic"),
+        "created_by_session": item.get("created_by_session"),
+    }
 
 
-def _calculate_next_due(due_at: datetime, recurrence: str) -> datetime:
-    """Calculate next due datetime for a recurrence rule."""
+def _calculate_next_due(
+    due_at: datetime,
+    recurrence: str,
+    window_start: str = None,
+    window_end: str = None,
+    fired_at: datetime = None
+) -> datetime:
+    """
+    Calculate next due datetime for a recurrence rule.
+    Handles hourly windows and drift prevention.
+    """
+    import calendar
+
     if recurrence == "daily":
         return due_at + timedelta(days=1)
 
@@ -199,7 +215,6 @@ def _calculate_next_due(due_at: datetime, recurrence: str) -> datetime:
         if month > 12:
             month = 1
             year += 1
-        # Clamp to last valid day (e.g. Jan 31 → Feb 28)
         last_day = calendar.monthrange(year, month)[1]
         day = min(due_at.day, last_day)
         return due_at.replace(year=year, month=month, day=day)
@@ -210,35 +225,40 @@ def _calculate_next_due(due_at: datetime, recurrence: str) -> datetime:
             next_dt += timedelta(days=1)
         return next_dt
 
+    elif recurrence == "hourly":
+        next_dt = due_at + timedelta(hours=1)
+
+        # If window_start/window_end set, enforce the window
+        if window_start and window_end:
+            start_hour, start_min = map(int, window_start.split(":"))
+            end_hour, end_min = map(int, window_end.split(":"))
+
+            # Cascade prevention: loop up to 48 times to find next valid hour within window
+            for _ in range(48):
+                next_hour = next_dt.hour
+                next_min = next_dt.minute
+
+                # Check if within window
+                current_time = (next_hour, next_min)
+                window_start_time = (start_hour, start_min)
+                window_end_time = (end_hour, end_min)
+
+                if window_start_time <= current_time < window_end_time:
+                    # Within window, return this time
+                    return next_dt
+
+                # Outside window: advance to next day's window_start
+                if current_time >= window_end_time:
+                    # Past end of window, advance to tomorrow's start
+                    next_dt = (next_dt + timedelta(days=1)).replace(
+                        hour=start_hour, minute=start_min
+                    )
+                else:
+                    # Before window_start, jump to window_start today
+                    next_dt = next_dt.replace(hour=start_hour, minute=start_min)
+            # Fallback if loop completes without finding a valid slot
+            return None
+
+        return next_dt
+
     return None
-
-
-# ── SQLite Database ────────────────────────────────────────────────
-
-def _get_db():
-    """Open database connection and initialize schema."""
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(str(_DB_PATH))
-    # Enable WAL mode for safe concurrent access
-    conn.execute("PRAGMA journal_mode=WAL")
-
-    # Initialize schema
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS scheduled_items (
-            id            TEXT PRIMARY KEY,
-            type          TEXT NOT NULL DEFAULT 'reminder',
-            message       TEXT NOT NULL,
-            due_at        TEXT NOT NULL,
-            recurrence    TEXT,
-            status        TEXT NOT NULL DEFAULT 'pending',
-            created_at    TEXT DEFAULT (datetime('now')),
-            last_fired_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_status_due ON scheduled_items(status, due_at)
-    """)
-    conn.commit()
-
-    return conn

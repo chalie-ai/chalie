@@ -102,8 +102,8 @@ class CardRendererService:
         html = re.sub(r'src\s*=\s*["\']?javascript:[^"\'>\s]*["\']?', "", html, flags=re.IGNORECASE)
         html = re.sub(r'src\s*=\s*["\']?data:[^"\'>\s]*["\']?', "", html, flags=re.IGNORECASE)
 
-        # 7. Strip dangerous tags
-        for tag in ["iframe", "form", "input", "object", "embed", "base"]:
+        # 7. Strip dangerous tags (iframe allowed for YouTube embeds)
+        for tag in ["form", "input", "object", "embed", "base"]:
             html = re.sub(f"<{tag}[^>]*>.*?</{tag}>", "", html, flags=re.DOTALL | re.IGNORECASE)
             html = re.sub(f"<{tag}[^>]*/?>", "", html, flags=re.IGNORECASE)
 
@@ -157,6 +157,12 @@ class CardRendererService:
 
             # Sanitize HTML (strip scripts, on* attributes, etc.)
             rendered_html = self._sanitize_html(rendered_html)
+
+            # Guard: if the rendered HTML has no visible text (e.g. empty results loop),
+            # return None so no empty card frame is shown.
+            if not re.sub(r'<[^>]+>', '', rendered_html).strip():
+                logger.debug(f"[CARD] Template rendered no visible content for {tool_name}, skipping card")
+                return None
 
             # Scope and sanitize CSS
             scope_id = str(uuid.uuid4())[:8]

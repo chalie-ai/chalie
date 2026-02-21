@@ -13,9 +13,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Tools whose output is inherently ephemeral — never worth reflecting on
-EPHEMERAL_TOOLS = {'weather', 'date_time', 'geo_location'}
-INNATE_SKILLS = {'recall', 'memorize', 'introspect', 'associate'}
+INNATE_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule'}
+
+
+def _is_ephemeral_tool(tool_name: str) -> bool:
+    """Return True if the tool declares output.ephemeral=true in its manifest."""
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        manifest = ToolRegistryService().get_tool_full_description(tool_name)
+        if manifest:
+            return manifest.get('output', {}).get('ephemeral', False)
+    except Exception:
+        pass
+    return False
 
 
 def _enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
@@ -32,7 +42,7 @@ def _enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
             action_type = action.get('action_type', '')
             if action_type in INNATE_SKILLS:
                 continue
-            if action_type in EPHEMERAL_TOOLS:
+            if _is_ephemeral_tool(action_type):
                 continue
             result_str = str(action.get('result', ''))
             if len(result_str) < 50:
@@ -341,11 +351,11 @@ def tool_worker(job_data: dict) -> str:
         relevant_tools_list = context_snapshot.get('relevant_tools', []) or []
         expected_action_tools = [
             t['name'] for t in relevant_tools_list
-            if t.get('type') == 'tool' and t['name'] not in EPHEMERAL_TOOLS
+            if t.get('type') == 'tool' and not _is_ephemeral_tool(t['name'])
         ]
         if expected_action_tools:
             action_tool_used = any(
-                r.get('action_type', '') not in EPHEMERAL_TOOLS
+                not _is_ephemeral_tool(r.get('action_type', ''))
                 and r.get('action_type', '') not in INNATE_SKILLS
                 and r.get('status') == 'success'
                 for r in act_loop.act_history

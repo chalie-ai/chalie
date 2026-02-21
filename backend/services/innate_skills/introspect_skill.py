@@ -39,6 +39,11 @@ def handle_introspect(topic: str, params: dict) -> str:
     state["recall_failure_rate"] = _get_recall_failure_rate(topic)
     state["tool_details"] = _get_tool_details()
 
+    # Cross-feature signals (Phase 5)
+    state["active_goals_count"] = _get_active_goals_count()
+    state["focus_active"] = _get_focus_active(params.get('thread_id', topic))
+    state["communication_style"] = _get_communication_style()
+
     return _format_state(state, topic)
 
 
@@ -237,6 +242,53 @@ def _get_tool_details() -> dict:
         return {}
 
 
+def _get_active_goals_count() -> int:
+    """Get count of active + progressing goals."""
+    try:
+        from services.goal_service import GoalService
+        from services.database_service import DatabaseService, get_merged_db_config
+
+        db_config = get_merged_db_config()
+        db_service = DatabaseService(db_config)
+        try:
+            service = GoalService(db_service)
+            return len(service.get_active_goals(limit=50))
+        finally:
+            db_service.close_pool()
+    except Exception as e:
+        logger.debug(f"[INTROSPECT] active goals count failed: {e}")
+        return 0
+
+
+def _get_focus_active(thread_id: str) -> bool:
+    """Check if a focus session is active for this thread."""
+    try:
+        from services.focus_session_service import FocusSessionService
+        focus = FocusSessionService().get_focus(thread_id)
+        return focus is not None
+    except Exception as e:
+        logger.debug(f"[INTROSPECT] focus active check failed: {e}")
+        return False
+
+
+def _get_communication_style() -> dict:
+    """Get detected communication style dimensions."""
+    try:
+        from services.user_trait_service import UserTraitService
+        from services.database_service import DatabaseService, get_merged_db_config
+
+        db_config = get_merged_db_config()
+        db_service = DatabaseService(db_config)
+        try:
+            service = UserTraitService(db_service)
+            return service.get_communication_style()
+        finally:
+            db_service.close_pool()
+    except Exception as e:
+        logger.debug(f"[INTROSPECT] communication style failed: {e}")
+        return {}
+
+
 def _get_recall_failure_rate(topic: str) -> float:
     """
     Get per-topic recall failure rate from procedural memory.
@@ -279,6 +331,16 @@ def _format_state(state: Dict, topic: str) -> str:
     lines.append(f"  topic_age: {state['topic_age']}")
     lines.append(f"  partial_match_signal: {state['partial_match_signal']}")
     lines.append(f"  recall_failure_rate: {state['recall_failure_rate']}")
+
+    # Cross-feature signals
+    lines.append(f"  active_goals_count: {state.get('active_goals_count', 0)}")
+    lines.append(f"  focus_active: {state.get('focus_active', False)}")
+    comm_style = state.get('communication_style', {})
+    if comm_style:
+        style_str = ", ".join(f"{k}={v}" for k, v in comm_style.items())
+        lines.append(f"  communication_style: {{{style_str}}}")
+    else:
+        lines.append("  communication_style: (not detected yet)")
 
     if state["recent_modes"]:
         lines.append(f"  recent_modes: {state['recent_modes']}")

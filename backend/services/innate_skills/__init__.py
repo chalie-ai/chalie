@@ -12,6 +12,11 @@ from services.innate_skills.recall_skill import handle_recall
 from services.innate_skills.memorize_skill import handle_memorize
 from services.innate_skills.introspect_skill import handle_introspect
 from services.innate_skills.associate_skill import handle_associate
+from services.innate_skills.scheduler_skill import handle_scheduler
+from services.innate_skills.autobiography_skill import handle_autobiography
+from services.innate_skills.goal_skill import handle_goal
+from services.innate_skills.focus_skill import handle_focus
+from services.innate_skills.list_skill import handle_list
 
 
 def register_innate_skills(dispatcher) -> None:
@@ -26,6 +31,11 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["memorize"] = lambda topic, action: handle_memorize(topic, action)
     dispatcher.handlers["introspect"] = lambda topic, action: handle_introspect(topic, action)
     dispatcher.handlers["associate"] = lambda topic, action: handle_associate(topic, action)
+    dispatcher.handlers["schedule"] = lambda topic, action: handle_scheduler(topic, action)
+    dispatcher.handlers["autobiography"] = lambda topic, action: handle_autobiography(topic, action)
+    dispatcher.handlers["goal"] = lambda topic, action: handle_goal(topic, action)
+    dispatcher.handlers["focus"] = lambda topic, action: handle_focus(topic, action)
+    dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)
@@ -48,7 +58,3 @@ def register_innate_skills(dispatcher) -> None:
             )
     except Exception as e:
         logging.warning(f"[INNATE SKILLS] Tool registry failed to load: {e}")
-
-    # Add "reminder" alias for "scheduler" tool (issue #3 — backward compatibility)
-    if "scheduler" in dispatcher.handlers:
-        dispatcher.handlers["reminder"] = dispatcher.handlers["scheduler"]

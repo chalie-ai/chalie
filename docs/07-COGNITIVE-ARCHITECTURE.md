@@ -73,7 +73,7 @@ The router naturally shifts behavior as memory accumulates:
 
 ## Innate Skills (Action Types)
 
-The ACT loop uses 5 innate cognitive skills. All are non-LLM operations (fast, sub-cortical).
+The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, sub-cortical).
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
@@ -81,6 +81,9 @@ The ACT loop uses 5 innate cognitive skills. All are non-LLM operations (fast, s
 | `memorize` | memory | <50ms | Store gists (short-term) and/or facts (medium-term) |
 | `introspect` | perception | <100ms | Self-examination: context_warmth, FOK signal, recall_failure_rate, skill stats, world state |
 | `associate` | cognition | <500ms | Spreading activation from seed concepts through semantic graph |
+| `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
+| `autobiography` | narrative | <500ms | Retrieve synthesized user narrative covering identity, relationship arc, values, patterns, active threads |
+| `list` | lists | <50ms | Create and manage deterministic lists (shopping, to-do, chores); add/remove/check items, view, history |
 | `delegate` | delegation | variable | External specialist consultation (Phase 1: empty registry) |
 
 ### Backward Compatibility Aliases
@@ -97,11 +100,18 @@ The ACT loop uses 5 innate cognitive skills. All are non-LLM operations (fast, s
 
 ## Decision Flow
 
-### Step 1: Classification (same as before)
+### Step 1: Classification
 ```
-User Input → Topic Classifier (embedding-based, deterministic)
-  → {topic, confidence, similar_topic}
+User Input → Topic Classifier (embedding-based)
+  → Generate embedding (L2-normalised, 768-dim)
+  → AdaptiveBoundaryDetector.update(embedding, best_similarity)
+      ├─ Cold start (< 5 msgs): static 0.55 threshold
+      └─ Active: NEWMA + Transient Surprise → Leaky Accumulator
+           → is_boundary? → create new topic : match existing
+  → {topic, confidence, switch_score, is_new_topic, boundary_diagnostics}
 ```
+
+**Boundary diagnostics** logged per classification: `acc=` (accumulator), `bound=` (dynamic threshold), `newma=` (drift signal), `surprise=` (similarity-drop signal).
 
 ### Step 2: Context Assembly (same as before)
 ```

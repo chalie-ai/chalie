@@ -6,28 +6,31 @@
    1. Design Tokens
    -------------------------------------------------------------------------- */
 :root {
-  /* Ambient palette — soft welcoming blues */
-  --sand: #a8c8e8;
-  --dusk-blue: #5b9bd5;
-  --violet: #7aaed4;
-  --amber: #4a90c4;
+  /* Radiant palette — restrained neon. Color is signal, not decoration. */
+  --accent-primary: #8A5CFF;
+  --accent-secondary: #FF2FD1;
+  --accent-tertiary: #00F0FF;
+  --sand: #FF2FD1;
+  --dusk-blue: #00F0FF;
+  --violet: #8A5CFF;
+  --amber: #B07CFF;
 
-  /* UI colors */
-  --bg-deep: #1a2d42;
-  --bg-surface: rgba(120, 170, 220, 0.10);
-  --bg-surface-user: rgba(91, 155, 213, 0.18);
-  --bg-surface-chalie: rgba(160, 210, 245, 0.12);
-  --bg-surface-card: rgba(120, 170, 220, 0.08);
-  --text-primary: #edf4fa;
-  --text-secondary: rgba(237, 244, 250, 0.72);
-  --text-tertiary: rgba(237, 244, 250, 0.45);
-  --border-subtle: rgba(120, 180, 230, 0.18);
-  --border-card: rgba(120, 180, 230, 0.24);
+  /* UI colors — surfaces stay dark. Let the canvas provide atmosphere. */
+  --bg-deep: #0A0F1F;
+  --bg-surface: rgba(255, 255, 255, 0.03);
+  --bg-surface-user: rgba(138, 92, 255, 0.07);
+  --bg-surface-chalie: rgba(255, 255, 255, 0.025);
+  --bg-surface-card: rgba(255, 255, 255, 0.03);
+  --text-primary: #eae6f2;
+  --text-secondary: rgba(234, 230, 242, 0.58);
+  --text-tertiary: rgba(234, 230, 242, 0.30);
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-card: rgba(255, 255, 255, 0.10);
 
   /* Status colors */
-  --success: #6ec47f;
-  --error: #e06c6c;
-  --warning: #d4a15e;
+  --success: #34d399;
+  --error: #fb7185;
+  --warning: #fbbf24;
 
   /* Spacing */
   --space-xs: 4px;
@@ -79,9 +82,11 @@ body {
   font-size: var(--font-size-base);
   line-height: var(--line-height);
   color: var(--text-primary);
-  background: var(--bg-deep);
+  background: #06080e;
   overflow-x: hidden;
   min-height: 100vh;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* --------------------------------------------------------------------------
@@ -101,7 +106,8 @@ body {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  opacity: 0.03;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 256px 256px;
@@ -166,10 +172,10 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--space-lg);
-  background: rgba(26, 45, 66, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(6, 8, 14, 0.60);
+  backdrop-filter: blur(24px) saturate(120%);
+  -webkit-backdrop-filter: blur(24px) saturate(120%);
+  border-bottom: 1px solid rgba(138, 92, 255, 0.08);
 }
 
 .presence-bar__left {
@@ -185,33 +191,38 @@ body {
 }
 
 #settingsBtn {
-  color: var(--text-primary);
-  background: rgba(120, 170, 220, 0.12);
-  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-sm);
+  transition: all 220ms ease;
 }
 
 #settingsBtn:hover {
-  background: rgba(120, 170, 220, 0.22);
-  border-color: rgba(120, 180, 230, 0.4);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(138, 92, 255, 0.25);
+  box-shadow: 0 0 12px rgba(138, 92, 255, 0.08);
 }
 
 /* Install prompt button */
 #installBtn {
-  background: rgba(91, 155, 213, 0.12);
-  border: 1px solid rgba(91, 155, 213, 0.3);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-sm);
+  transition: all 220ms ease;
 }
 #installBtn:hover {
-  background: rgba(91, 155, 213, 0.22);
-  border-color: rgba(91, 155, 213, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(138, 92, 255, 0.25);
+  box-shadow: 0 0 12px rgba(138, 92, 255, 0.08);
 }
 #installBtn:not(.hidden) {
-  animation: installPulse 2s ease-in-out 3;
+  animation: installPulse 2.5s ease-in-out 3;
 }
 @keyframes installPulse {
   0%, 100% { box-shadow: none; }
-  50%       { box-shadow: 0 0 0 4px rgba(91, 155, 213, 0.2); }
+  50%       { box-shadow: 0 0 0 3px rgba(138, 92, 255, 0.12); }
 }
 
 /* --------------------------------------------------------------------------
@@ -245,6 +256,7 @@ body {
 .presence-dot[data-state="resting"] .presence-dot__inner {
   animation: breathe 4s ease-in-out infinite;
   background: var(--sand);
+  box-shadow: 0 0 8px currentColor;
 }
 
 @keyframes breathe {
@@ -256,6 +268,7 @@ body {
 .presence-dot[data-state="processing"] .presence-dot__inner {
   animation: pulse 1.5s ease-in-out infinite;
   background: var(--dusk-blue);
+  box-shadow: 0 0 8px currentColor;
 }
 
 @keyframes pulse {
@@ -271,19 +284,20 @@ body {
 
 @keyframes glow {
   0%, 100% { box-shadow: 0 0 4px var(--violet); }
-  50% { box-shadow: 0 0 16px var(--violet), 0 0 32px rgba(122, 174, 212, 0.3); }
+  50% { box-shadow: 0 0 16px var(--violet), 0 0 32px rgba(138, 92, 255, 0.3); }
 }
 
 /* Retrieving memory — ripple */
 .presence-dot[data-state="retrieving_memory"] .presence-dot__inner {
   animation: ripple 2s ease-out infinite;
   background: var(--dusk-blue);
+  box-shadow: 0 0 8px currentColor;
 }
 
 @keyframes ripple {
-  0% { box-shadow: 0 0 0 0 rgba(91, 155, 213, 0.4); }
-  70% { box-shadow: 0 0 0 12px rgba(91, 155, 213, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(91, 155, 213, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0.4); }
+  70% { box-shadow: 0 0 0 12px rgba(0, 240, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0); }
 }
 
 /* Planning — shimmer */
@@ -323,6 +337,7 @@ body {
 .presence-dot[data-state="still_working"] .presence-dot__inner {
   animation: pulse 1.5s ease-in-out infinite;
   background: var(--dusk-blue);
+  box-shadow: 0 0 8px currentColor;
 }
 
 /* Error state */
@@ -344,24 +359,36 @@ body {
   flex-direction: column;
   gap: var(--space-xl);
   min-height: 100vh;
+  mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
+}
+
+:focus-visible {
+  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline-offset: 2px;
 }
 
 /* --------------------------------------------------------------------------
    8. Speech Forms
    -------------------------------------------------------------------------- */
+/* Speech forms — dark panels, thin luminous edges.
+   Resting state is near-invisible. Color is earned. */
 .speech-form {
+  position: relative;
   padding: var(--space-lg);
   border-radius: var(--radius-md);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: formEntry var(--duration-slow) var(--ease-out) both;
-  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
+  animation: formEntry 200ms var(--ease-out) both;
+  transition: border-color 400ms ease, box-shadow 400ms ease;
 }
 
 @keyframes formEntry {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -370,16 +397,38 @@ body {
 }
 
 .speech-form--user {
-  background: var(--bg-surface-user);
-  border-color: rgba(74, 144, 196, 0.2);
+  background: rgba(138, 92, 255, 0.05);
+  border-color: rgba(138, 92, 255, 0.12);
   align-self: flex-end;
   max-width: 85%;
 }
 
 .speech-form--chalie {
-  background: var(--bg-surface-chalie);
+  background: rgba(255, 255, 255, 0.02);
   align-self: flex-start;
   max-width: 90%;
+}
+
+/* Active form — the newest Chalie message gets a single clean accent edge.
+   One color, one glow. Not a rainbow. Think arc reactor, not LED strip. */
+.speech-form--active {
+  border-color: rgba(138, 92, 255, 0.30);
+  box-shadow:
+    0 2px 16px rgba(0, 0, 0, 0.40),
+    0 0 20px rgba(138, 92, 255, 0.07),
+    0 0 1px rgba(138, 92, 255, 0.30);
+}
+
+/* Thin top-edge highlight — like light catching a glass panel edge */
+.speech-form--active::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(138, 92, 255, 0.50), rgba(0, 240, 255, 0.30), transparent);
+  border-radius: 1px;
 }
 
 .speech-form__text {
@@ -394,7 +443,18 @@ body {
   margin-top: var(--space-md);
   font-size: var(--font-size-sm);
   color: var(--text-tertiary);
+  justify-content: flex-start;
+}
+
+.speech-form--user .speech-form__meta {
   justify-content: flex-end;
+}
+
+.speech-form__timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+  letter-spacing: 0.01em;
 }
 
 .speech-form__topic {
@@ -679,9 +739,7 @@ body {
   right: 0;
   z-index: 100;
   padding: var(--space-md) var(--space-lg);
-  background: linear-gradient(to top, rgba(26, 45, 66, 0.95) 60%, rgba(26, 45, 66, 0));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: linear-gradient(to top, rgba(6, 8, 14, 0.92) 50%, transparent);
 }
 
 .input-dock__inner {
@@ -690,10 +748,18 @@ body {
   display: flex;
   align-items: flex-end;
   gap: var(--space-sm);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--radius-lg);
   padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-md);
+  backdrop-filter: blur(20px) saturate(130%);
+  -webkit-backdrop-filter: blur(20px) saturate(130%);
+  transition: border-color 220ms ease, box-shadow 220ms ease;
+}
+
+.input-dock__inner:focus-within {
+  border-color: rgba(138, 92, 255, 0.20);
+  box-shadow: 0 0 16px rgba(138, 92, 255, 0.06);
 }
 
 .input-dock__textarea {
@@ -773,13 +839,22 @@ body {
 }
 
 .btn-action--send {
-  background: var(--dusk-blue);
-  color: var(--bg-deep);
+  background: var(--accent-primary);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(138, 92, 255, 0.25);
+  transition: all 220ms ease;
 }
 
 .btn-action--send:hover:not(:disabled) {
-  background: #6daee0;
-  transform: scale(1.05);
+  background: #9B6FFF;
+  transform: translateY(-1px);
+  box-shadow: 0 0 20px rgba(138, 92, 255, 0.40);
+}
+
+.btn-action--send:active:not(:disabled) {
+  transform: translateY(0);
+  background: #7A4DE6;
+  box-shadow: 0 0 8px rgba(138, 92, 255, 0.30);
 }
 
 .btn-action--send:disabled {
@@ -816,8 +891,8 @@ body {
 }
 
 .btn-primary {
-  background: var(--dusk-blue);
-  color: var(--bg-deep);
+  background: var(--accent-primary);
+  color: #ffffff;
   border: none;
   padding: var(--space-sm) var(--space-lg);
   border-radius: var(--radius-sm);
@@ -825,11 +900,12 @@ body {
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--duration-fast);
+  transition: all 220ms ease;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #6daee0;
+  background: #9B6FFF;
+  box-shadow: 0 0 12px rgba(138, 92, 255, 0.15);
 }
 
 .btn-primary:disabled {
@@ -840,18 +916,18 @@ body {
 .btn-secondary {
   background: transparent;
   color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   padding: var(--space-sm) var(--space-lg);
   border-radius: var(--radius-sm);
   font-family: var(--font-family);
   font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--duration-fast);
+  transition: all 220ms ease;
 }
 
 .btn-secondary:hover {
-  border-color: var(--text-tertiary);
+  border-color: rgba(138, 92, 255, 0.25);
   color: var(--text-primary);
 }
 
@@ -887,9 +963,9 @@ body {
   align-items: center;
   justify-content: center;
   gap: var(--space-lg);
-  background: rgba(26, 45, 66, 0.92);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: rgba(3, 4, 8, 0.90);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
   animation: fadeIn var(--duration-normal) var(--ease-out);
 }
 
@@ -952,21 +1028,22 @@ body {
 }
 
 .api-key-dialog::backdrop {
-  background: rgba(26, 45, 66, 0.85);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(3, 4, 8, 0.80);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .api-key-dialog__content {
-  background: rgba(30, 50, 72, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border-subtle);
+  background: rgba(12, 14, 24, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--radius-md);
   padding: var(--space-xl);
   width: 100%;
   max-width: 400px;
   margin: auto;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.60);
 }
 
 .api-key-dialog__title {
@@ -1060,23 +1137,24 @@ body {
 }
 
 .pwa-dialog::backdrop {
-  background: rgba(26, 45, 66, 0.85);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(3, 4, 8, 0.80);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .pwa-dialog__content {
   position: relative;
-  background: rgba(30, 50, 72, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border-subtle);
+  background: rgba(12, 14, 24, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--radius-md);
   padding: var(--space-xl);
   width: 100%;
   max-width: 400px;
   margin: auto;
   text-align: center;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.60);
 }
 
 .pwa-dialog__close {
@@ -1093,9 +1171,9 @@ body {
   height: 64px;
   margin: 0 auto var(--space-lg);
   border-radius: var(--radius-md);
-  background: rgba(91, 155, 213, 0.15);
-  border: 1px solid rgba(91, 155, 213, 0.25);
-  color: var(--dusk-blue);
+  background: rgba(138, 92, 255, 0.10);
+  border: 1px solid rgba(138, 92, 255, 0.20);
+  color: var(--accent-primary);
 }
 
 .pwa-dialog__title {
@@ -1273,53 +1351,40 @@ body {
    -------------------------------------------------------------------------- */
 @supports not (backdrop-filter: blur(1px)) {
   .speech-form--chalie {
-    background: rgba(35, 60, 85, 0.9);
+    background: rgba(10, 12, 22, 0.95);
   }
 
   .speech-form--user {
-    background: rgba(45, 75, 105, 0.9);
+    background: rgba(16, 14, 30, 0.95);
   }
 
   .presence-bar {
-    background: rgba(26, 45, 66, 0.95);
+    background: rgba(6, 8, 14, 0.98);
   }
 
   .input-dock {
-    background: rgba(26, 45, 66, 0.95);
+    background: rgba(6, 8, 14, 0.98);
   }
 
   .recording-overlay {
-    background: rgba(26, 45, 66, 0.97);
+    background: rgba(3, 4, 8, 0.98);
   }
 
   .connection-banner {
-    background: rgba(60, 30, 30, 0.95);
+    background: rgba(40, 20, 20, 0.95);
   }
 }
 
 /* Tool Result Card */
 .tool-result-card {
-  background: rgba(255, 255, 255, 0.06);
-  border-left: 3px solid var(--accent, #5b9bd5);
   border-radius: 12px;
-  padding: 14px 16px;
+  overflow: hidden;
   margin: 6px 0;
   max-width: 480px;
 }
 
 .tool-result-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  opacity: 0.7;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.tool-result-card__title {
-  font-weight: 600;
+  display: none;
 }
 
 .tool-result-card__body {

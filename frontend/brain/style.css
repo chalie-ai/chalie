@@ -6,27 +6,45 @@
 }
 
 :root {
-    --bg: #0f0f11;
-    --surface: #1a1a1f;
-    --surface-hover: #222228;
-    --border: #2a2a32;
-    --text: #e8e8ed;
-    --text-muted: #888896;
-    --accent: #6366f1;
-    --accent-hover: #818cf8;
-    --success: #22c55e;
-    --error: #ef4444;
-    --warning: #f59e0b;
+    --bg: #06080e;
+    --surface: rgba(255, 255, 255, 0.03);
+    --surface-hover: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.07);
+    --text: #eae6f2;
+    --text-muted: rgba(234, 230, 242, 0.50);
+    --accent: #8A5CFF;
+    --accent-hover: #9B6FFF;
+    --success: #34d399;
+    --error: #fb7185;
+    --warning: #fbbf24;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 body {
-    background: var(--bg);
+    background: #06080e;
     color: var(--text);
     font-family: var(--font);
     min-height: 100vh;
     font-size: 14px;
     line-height: 1.5;
+    position: relative;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(80, 50, 180, 0.05) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 20% 80%, rgba(80, 50, 180, 0.03) 0%, transparent 60%);
+    animation: ambient-breathe 20s ease-in-out infinite;
+}
+
+@keyframes ambient-breathe {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.06); opacity: 1; }
 }
 
 /* Header */
@@ -61,7 +79,7 @@ body {
 }
 
 .logo-badge {
-    background: rgba(99, 102, 241, 0.15);
+    background: rgba(138, 92, 255, 0.10);
     color: var(--accent);
     padding: 2px 8px;
     border-radius: 4px;
@@ -95,7 +113,7 @@ body {
 
 .tab.active {
     color: var(--text);
-    background: rgba(99, 102, 241, 0.12);
+    background: rgba(138, 92, 255, 0.08);
 }
 
 /* Main */
@@ -149,11 +167,13 @@ body {
 
 .btn-primary {
     background: var(--accent);
-    color: #fff;
+    color: #ffffff;
+    transition: all 220ms ease;
 }
 
 .btn-primary:hover {
     background: var(--accent-hover);
+    box-shadow: 0 0 12px rgba(138, 92, 255, 0.15);
 }
 
 .btn-secondary {
@@ -167,13 +187,14 @@ body {
 }
 
 .btn-danger {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: rgba(251, 113, 133, 0.15);
+    color: #fb7185;
+    border: 1px solid rgba(251, 113, 133, 0.3);
+    transition: all 220ms ease;
 }
 
 .btn-danger:hover {
-    background: rgba(239, 68, 68, 0.25);
+    background: rgba(251, 113, 133, 0.25);
 }
 
 .btn-close {
@@ -257,8 +278,8 @@ body {
 }
 
 .badge-gemini {
-    background: rgba(59, 130, 246, 0.12);
-    color: #60a5fa;
+    background: rgba(34, 211, 238, 0.12);
+    color: #22d3ee;
 }
 
 .provider-actions {
@@ -320,8 +341,8 @@ body {
 }
 
 .badge-8b {
-    background: rgba(99, 102, 241, 0.12);
-    color: #818cf8;
+    background: rgba(138, 92, 255, 0.12);
+    color: #9E74FF;
 }
 
 .badge-4b {
@@ -349,7 +370,8 @@ body {
 
 .provider-select:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
 }
 
 .save-indicator {
@@ -465,8 +487,8 @@ body {
 }
 
 .platform-tab.active {
-    background: rgba(99, 102, 241, 0.12);
-    border-color: rgba(99, 102, 241, 0.4);
+    background: rgba(138, 92, 255, 0.08);
+    border-color: rgba(138, 92, 255, 0.30);
     color: var(--accent-hover);
 }
 
@@ -503,7 +525,8 @@ body {
 
 .form-group input[type="text"],
 .form-group input[type="password"],
-.form-group select {
+.form-group select,
+.form-group textarea {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
@@ -511,16 +534,24 @@ body {
     color: var(--text);
     padding: 8px 12px;
     font-size: 13px;
+    font-family: var(--font);
     transition: border-color 0.15s;
 }
 
-.form-group input:focus,
-.form-group select:focus {
-    outline: none;
-    border-color: var(--accent);
+.form-group textarea {
+    resize: vertical;
 }
 
-.form-group input::placeholder {
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
     color: var(--text-muted);
 }
 
@@ -821,7 +852,7 @@ body {
 }
 
 .tool-card__status.--available {
-    background: rgba(99, 102, 241, 0.15);
+    background: rgba(138, 92, 255, 0.10);
     color: var(--accent);
 }
 
@@ -836,7 +867,7 @@ body {
 }
 
 .tool-card__status.--building {
-    background: rgba(99, 102, 241, 0.15);
+    background: rgba(138, 92, 255, 0.10);
     color: var(--accent);
     display: flex;
     align-items: center;
@@ -942,7 +973,8 @@ body {
 
 .search-input:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
 }
 
 .search-input::placeholder {
@@ -954,7 +986,7 @@ body {
     font-size: 13px;
     color: var(--accent);
     padding: 12px;
-    background: rgba(99, 102, 241, 0.08);
+    background: rgba(138, 92, 255, 0.06);
     border-radius: 6px;
     display: flex;
     align-items: center;

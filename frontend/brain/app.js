@@ -1089,19 +1089,32 @@ async function openToolSettings(name) {
         for (const [key, fieldDef] of Object.entries(schema)) {
             const value = config[key] || '';
             const isSecret = fieldDef.secret;
+            const isMultiline = fieldDef.multiline;
             const hint = fieldDef.hint || '';
 
-            formHtml += `
-                <div class="form-group">
-                    <label>${escapeHtml(fieldDef.label || key)}</label>
-                    <input type="${isSecret ? 'password' : 'text'}"
-                           id="config_${key}"
-                           value="${escapeHtml(value)}"
-                           placeholder="${escapeHtml(fieldDef.placeholder || '')}"
-                           data-secret="${isSecret}">
-                    ${hint ? `<p class="form-hint">${escapeHtml(hint)}</p>` : ''}
-                </div>
-            `;
+            if (isMultiline) {
+                formHtml += `
+                    <div class="form-group">
+                        <label>${escapeHtml(fieldDef.label || key)}</label>
+                        <textarea id="config_${key}"
+                                  rows="5"
+                                  placeholder="${escapeHtml(fieldDef.placeholder || '')}">${escapeHtml(value)}</textarea>
+                        ${hint ? `<p class="form-hint">${escapeHtml(hint)}</p>` : ''}
+                    </div>
+                `;
+            } else {
+                formHtml += `
+                    <div class="form-group">
+                        <label>${escapeHtml(fieldDef.label || key)}</label>
+                        <input type="${isSecret ? 'password' : 'text'}"
+                               id="config_${key}"
+                               value="${escapeHtml(value)}"
+                               placeholder="${escapeHtml(fieldDef.placeholder || '')}"
+                               data-secret="${isSecret}">
+                        ${hint ? `<p class="form-hint">${escapeHtml(hint)}</p>` : ''}
+                    </div>
+                `;
+            }
         }
 
         if (!formHtml) {
@@ -1125,6 +1138,11 @@ async function saveToolSettings() {
     inputs.forEach(inp => {
         const key = inp.id.replace('config_', '');
         config[key] = inp.value;
+    });
+    const textareas = document.querySelectorAll('#toolSettingsForm textarea[id^="config_"]');
+    textareas.forEach(ta => {
+        const key = ta.id.replace('config_', '');
+        config[key] = ta.value;
     });
 
     try {

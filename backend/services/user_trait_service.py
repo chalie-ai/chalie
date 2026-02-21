@@ -24,14 +24,15 @@ CONFIDENCE_LABELS = {
 # Category-specific decay configuration
 # base_decay: per decay cycle (30min), floor: minimum confidence before deletion eligibility
 CATEGORY_DECAY = {
-    'core':         {'base_decay': 0.01, 'floor': 0.3},
-    'relationship': {'base_decay': 0.01, 'floor': 0.25},
-    'physical':     {'base_decay': 0.015, 'floor': 0.2},
-    'preference':   {'base_decay': 0.02, 'floor': 0.1},
-    'general':      {'base_decay': 0.02, 'floor': 0.1},
+    'core':               {'base_decay': 0.01, 'floor': 0.3},
+    'relationship':       {'base_decay': 0.01, 'floor': 0.25},
+    'physical':           {'base_decay': 0.015, 'floor': 0.2},
+    'preference':         {'base_decay': 0.02, 'floor': 0.1},
+    'general':            {'base_decay': 0.02, 'floor': 0.1},
+    'communication_style': {'base_decay': 0.005, 'floor': 0.2},  # very slow — behavioral patterns are stable
 }
 
-MAX_TRAITS_IN_PROMPT = 6
+MAX_TRAITS_IN_PROMPT = 8
 INJECTION_THRESHOLD = 0.3
 
 
@@ -188,6 +189,7 @@ class UserTraitService:
         prompt: str = "",
         user_id: str = 'primary',
         speaker_confidence: float = 1.0,
+        injection_threshold: float = INJECTION_THRESHOLD,
     ) -> str:
         """
         Get user traits formatted for prompt injection.
@@ -222,7 +224,7 @@ class UserTraitService:
                       AND confidence > %s
                       AND is_literal = true
                     ORDER BY confidence DESC
-                """, (user_id, INJECTION_THRESHOLD))
+                """, (user_id, injection_threshold))
                 core_traits = cursor.fetchall()
 
                 remaining_slots = MAX_TRAITS_IN_PROMPT - len(core_traits)
@@ -242,7 +244,7 @@ class UserTraitService:
                               AND embedding IS NOT NULL
                             ORDER BY embedding <=> %s::vector
                             LIMIT %s
-                        """, (user_id, INJECTION_THRESHOLD, prompt_embedding, remaining_slots))
+                        """, (user_id, injection_threshold, prompt_embedding, remaining_slots))
                         contextual_traits = cursor.fetchall()
 
                 elif remaining_slots > 0:
@@ -256,7 +258,7 @@ class UserTraitService:
                           AND is_literal = true
                         ORDER BY confidence DESC
                         LIMIT %s
-                    """, (user_id, INJECTION_THRESHOLD, remaining_slots))
+                    """, (user_id, injection_threshold, remaining_slots))
                     contextual_traits = cursor.fetchall()
 
                 cursor.close()
@@ -269,7 +271,7 @@ class UserTraitService:
                 lines = ["## Known About User"]
                 for trait_key, trait_value, confidence, category in all_traits:
                     effective_confidence = confidence * speaker_confidence
-                    if effective_confidence <= INJECTION_THRESHOLD:
+                    if effective_confidence <= injection_threshold:
                         continue
                     label = self._confidence_label(effective_confidence)
                     # Title-case the key for readability
@@ -284,6 +286,54 @@ class UserTraitService:
         except Exception as e:
             logger.debug(f"[USER_TRAITS] Failed to get traits for prompt: {e}")
             return ""
+
+    def get_communication_style(
+        self,
+        user_id: str = 'primary',
+        threshold: float = 0.3,
+    ) -> dict:
+        """
+        Get the user's detected communication style dimensions.
+
+        Queries the latest communication_style trait (stored as JSON value),
+        returning a dict of dimension → score.
+
+        Args:
+            user_id: User identifier
+            threshold: Minimum confidence to include
+
+        Returns:
+            dict with keys: verbosity, directness, formality, abstraction_level (1-10 scale)
+            Empty dict if no style detected.
+        """
+        import json as _json
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT trait_value, confidence
+                    FROM user_traits
+                    WHERE user_id = %s
+                      AND trait_key = 'communication_style'
+                      AND category = 'communication_style'
+                      AND confidence > %s
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                """, (user_id, threshold))
+                row = cursor.fetchone()
+                cursor.close()
+
+                if not row:
+                    return {}
+
+                value_str, confidence = row
+                try:
+                    return _json.loads(value_str)
+                except Exception:
+                    return {}
+        except Exception as e:
+            logger.debug(f"[USER_TRAITS] get_communication_style failed: {e}")
+            return {}
 
     def apply_decay(self) -> dict:
         """

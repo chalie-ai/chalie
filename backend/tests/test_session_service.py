@@ -104,3 +104,60 @@ class TestSessionService:
         assert 'start_time' in data
         assert data['topic'] == 'topic-a'
         assert len(data['exchanges']) == 1
+
+
+class TestIsReturningFromSilence:
+
+    def test_returns_zero_before_any_activity(self):
+        """No prior activity → is_returning_from_silence returns 0.0."""
+        svc = SessionService()
+        assert svc.is_returning_from_silence() == 0.0
+
+    def test_returns_zero_for_short_gap(self):
+        """100s gap (below 2700s threshold) → returns 0.0."""
+        svc = SessionService()
+        svc.last_activity_time = time.time() - 100
+        assert svc.is_returning_from_silence() == 0.0
+
+    def test_returns_gap_at_threshold(self):
+        """2700s gap → returns approximately 2700.0 (a positive float)."""
+        svc = SessionService()
+        svc.last_activity_time = time.time() - 2700
+        result = svc.is_returning_from_silence(threshold_seconds=2700)
+        assert result > 0
+        assert isinstance(result, float)
+
+    def test_must_be_called_before_track_classification(self):
+        """
+        Verify that calling track_classification updates last_activity_time,
+        so is_returning_from_silence must be called before it.
+        """
+        svc = SessionService()
+        # Set up an old activity time
+        old_time = time.time() - 5000
+        svc.last_activity_time = old_time
+
+        # Before track_classification: should detect silence
+        gap = svc.is_returning_from_silence(threshold_seconds=2700)
+        assert gap > 0
+
+        # After track_classification: last_activity_time is updated to now
+        svc.track_classification("topic-a", False, time.time())
+
+        # Now gap is near 0 — no silence detected
+        gap_after = svc.is_returning_from_silence(threshold_seconds=2700)
+        assert gap_after == 0.0
+
+    def test_thread_backed_reads_redis(self):
+        """When thread_id is set, reads last_activity from Redis thread hash."""
+        from unittest.mock import MagicMock, patch
+
+        svc = SessionService()
+        svc._thread_id = "test-thread"
+        svc._redis = MagicMock()
+
+        # Simulate 3000s gap stored in Redis
+        svc._redis.hget.return_value = str(time.time() - 3000)
+
+        result = svc.is_returning_from_silence(threshold_seconds=2700)
+        assert result > 0

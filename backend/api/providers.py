@@ -331,6 +331,14 @@ def assign_job_provider(job_name):
         provider_id = data["provider_id"]
         service = get_provider_service()
         assignment = service.set_job_assignment(job_name, provider_id)
+
+        # Invalidate provider cache so workers pick up the new assignment
+        try:
+            from services.provider_cache_service import ProviderCacheService
+            ProviderCacheService.invalidate()
+        except Exception as e:
+            logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
         return jsonify({"assignment": assignment}), 200
     except ValueError as e:
         logger.warning(f"[REST API] Provider validation error: {e}")

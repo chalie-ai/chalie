@@ -95,6 +95,12 @@ class TopicClassifierService:
             self.W_SEMANTIC = weights['w_semantic']
             self.W_FRESHNESS = weights['w_freshness']
             self.W_SALIENCE = weights['w_salience']
+            self._boundary_params = {
+                'accumulator_leak_rate': weights.get('accumulator_leak_rate', 0.4),
+                'accumulator_boundary_base': weights.get('accumulator_boundary_base', 2.5),
+                'newma_window_fast': weights.get('newma_window_fast', 4),
+                'newma_window_slow': weights.get('newma_window_slow', 18),
+            }
 
             logger.info(
                 f"[TOPIC CLASSIFIER] Loaded adaptive weights: "
@@ -114,19 +120,21 @@ class TopicClassifierService:
             self.W_SEMANTIC = self.DEFAULT_W_SEMANTIC
             self.W_FRESHNESS = self.DEFAULT_W_FRESHNESS
             self.W_SALIENCE = self.DEFAULT_W_SALIENCE
+            self._boundary_params = {}
 
-    def classify(self, message_text: str, recent_topic: str = None) -> Dict:
+    def classify(self, message_text: str, recent_topic: str = None, thread_id: str = None) -> Dict:
         """
         Classify message into existing topic or create new one.
 
         Two-stage process:
-        1. Check if ANY topic exceeds similarity threshold
+        1. Check if ANY topic exceeds similarity threshold (via AdaptiveBoundaryDetector)
         2. If yes: rank top-k candidates by switch_score
         3. If no: create new topic
 
         Args:
             message_text: User's message
             recent_topic: Name of the recently-active topic (gets similarity bonus)
+            thread_id: Thread identifier for per-conversation adaptive state
 
         Returns:
             {
@@ -134,7 +142,8 @@ class TopicClassifierService:
                 'confidence': float,       # Similarity to chosen topic (0-1)
                 'switch_score': float,     # Combined switching cost
                 'is_new_topic': bool,      # Whether a new topic was created
-                'classification_time': float
+                'classification_time': float,
+                'boundary_diagnostics': dict  # Adaptive detector signals
             }
         """
         start_time = time.time()
@@ -170,7 +179,9 @@ class TopicClassifierService:
                 'confidence': 1.0,
                 'switch_score': 0.0,
                 'is_new_topic': True,
-                'classification_time': classification_time
+                'classification_time': classification_time,
+                'boundary_diagnostics': {},
+                'just_reset_from_silence': False,
             }
 
         # Stage 1: Calculate similarities to all topics
@@ -196,7 +207,47 @@ class TopicClassifierService:
         logger.info(f"[TOPIC CLASSIFIER] Calculated {len(similarities)} similarities in {similarity_time:.3f}s"
                      f"{f' (recency bonus applied to {recent_topic})' if recent_topic else ''}")
 
-        if best_similarity < self.SWITCH_THRESHOLD:
+        # Adaptive boundary detection
+        boundary_diagnostics = {}
+        is_new_topic_boundary = False
+        _just_reset_from_silence = False
+        if thread_id:
+            try:
+                from services.adaptive_boundary_detector import AdaptiveBoundaryDetector
+
+                # Fetch focus modifier to raise boundary during active focus sessions
+                focus_modifier = 0.0
+                try:
+                    from services.focus_session_service import FocusSessionService
+                    focus_modifier = FocusSessionService().get_boundary_modifier(thread_id)
+                except Exception:
+                    pass
+
+                detector = AdaptiveBoundaryDetector(
+                    thread_id=thread_id,
+                    regulator_params=getattr(self, '_boundary_params', {}),
+                    focus_modifier=focus_modifier,
+                )
+                result = detector.update(current_embedding, best_similarity)
+                detector.save_state()
+                is_new_topic_boundary = result.is_boundary
+                _just_reset_from_silence = result.just_reset_from_silence
+                boundary_diagnostics = {
+                    'acc': round(result.accumulator, 3),
+                    'bound': round(result.boundary, 3),
+                    'newma': round(result.newma_signal, 3),
+                    'surprise': round(result.surprise_signal, 3),
+                    'confidence': round(result.confidence, 3),
+                }
+            except Exception as e:
+                logger.warning(f"[TOPIC CLASSIFIER] AdaptiveBoundaryDetector failed, "
+                               f"falling back to static threshold: {e}")
+                is_new_topic_boundary = best_similarity < self.SWITCH_THRESHOLD
+        else:
+            # No thread_id — use legacy static threshold
+            is_new_topic_boundary = best_similarity < self.SWITCH_THRESHOLD
+
+        if is_new_topic_boundary:
             # No plausible match - create new topic
             topic_name = self._generate_topic_name(message_text)
             self._create_topic(topic_name, current_embedding, current_salience)
@@ -204,7 +255,9 @@ class TopicClassifierService:
             classification_time = time.time() - start_time
             logger.info(
                 f"[TOPIC CLASSIFIER] New topic '{topic_name}' "
-                f"(best_sim={best_similarity:.3f} < threshold={self.SWITCH_THRESHOLD}) "
+                f"(best_sim={best_similarity:.3f}, "
+                f"{'adaptive' if thread_id else 'static'}: "
+                f"{'acc=' + str(boundary_diagnostics.get('acc', '')) + ' bound=' + str(boundary_diagnostics.get('bound', '')) if thread_id and boundary_diagnostics else 'threshold=' + str(self.SWITCH_THRESHOLD)}) "
                 f"in {classification_time:.3f}s"
             )
 
@@ -213,7 +266,9 @@ class TopicClassifierService:
                 'confidence': best_similarity,
                 'switch_score': 1.0 - best_similarity,
                 'is_new_topic': True,
-                'classification_time': classification_time
+                'classification_time': classification_time,
+                'boundary_diagnostics': boundary_diagnostics,
+                'just_reset_from_silence': _just_reset_from_silence,
             }
 
         # Stage 2: Rank top-k candidates by switch_score
@@ -270,7 +325,9 @@ class TopicClassifierService:
             'confidence': best_sim,
             'switch_score': best_switch_score,
             'is_new_topic': False,
-            'classification_time': classification_time
+            'classification_time': classification_time,
+            'boundary_diagnostics': boundary_diagnostics,
+            'just_reset_from_silence': _just_reset_from_silence,
         }
 
     def _normalize(self, embedding: np.ndarray) -> np.ndarray:

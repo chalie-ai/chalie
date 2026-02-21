@@ -119,5 +119,7 @@ class TestTopicClassifier:
             mock_embed.return_value = _random_unit_vector()
             result = svc.classify("Hello world")
 
-        expected_keys = {'topic', 'confidence', 'switch_score', 'is_new_topic', 'classification_time'}
+        expected_keys = {'topic', 'confidence', 'switch_score', 'is_new_topic',
+                         'classification_time', 'boundary_diagnostics',
+                         'just_reset_from_silence'}
         assert expected_keys == set(result.keys())

@@ -15,7 +15,18 @@ You do NOT:
 
 ────────────────────────────────
 
+{{identity_context}}
+
+{{onboarding_nudge}}
+
 {{user_traits}}
+
+{{communication_style}}
+
+{{active_goals}}
+
+(Lists shown below are read-only context. You CANNOT add, remove, or modify list items in RESPOND mode.)
+{{active_lists}}
 
 ## Client Context
 
@@ -34,6 +45,8 @@ You do NOT:
 
 ## Current Message
 {{original_prompt}}
+
+{{focus}}
 
 {{working_memory}}
 
