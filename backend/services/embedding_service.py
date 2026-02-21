@@ -30,6 +30,18 @@ def _get_st_model(model_name: str = 'all-mpnet-base-v2'):
     return _st_model
 
 
+# Singleton EmbeddingService instance
+_embedding_service_instance = None
+
+
+def get_embedding_service() -> 'EmbeddingService':
+    """Get or create the EmbeddingService singleton."""
+    global _embedding_service_instance
+    if _embedding_service_instance is None:
+        _embedding_service_instance = EmbeddingService()
+    return _embedding_service_instance
+
+
 class EmbeddingService:
     """Unified embedding service using sentence-transformers (no external service required)."""
 

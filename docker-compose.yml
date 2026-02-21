@@ -37,9 +37,12 @@ services:
       REST_API_PORT: 8080
       SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-changeme-in-production-use-a-long-random-string}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      HF_HUB_OFFLINE: "1"
     volumes:
       - backend_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/tools:/app/tools
+      - ./backend/tools_disabled:/app/tools_disabled
     restart: unless-stopped
 
   frontend:

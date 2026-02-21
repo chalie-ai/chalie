@@ -81,7 +81,6 @@ class ToolContainerService:
         json_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
         mem = sandbox_config.get("memory", "256m")
         network = sandbox_config.get("network", "bridge")
-        writable = sandbox_config.get("writable", False)
 
         run_kwargs = dict(
             command=json_b64,
@@ -92,9 +91,9 @@ class ToolContainerService:
             security_opt=["no-new-privileges"],
             cap_drop=["ALL"],
             pids_limit=64,
+            read_only=True,
+            tmpfs={"/tmp": "size=64m", "/var/tmp": "size=64m"},
         )
-        if not writable:
-            run_kwargs["read_only"] = True
 
         container = self.client.containers.run(image_tag, **run_kwargs)
 

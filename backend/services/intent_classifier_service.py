@@ -175,7 +175,6 @@ class IntentClassifierService:
         fact_count: int = 0,
         gist_count: int = 0,
         procedural_stats: Optional[Dict] = None,
-        tool_relevance: Optional[Dict] = None,
         memory_confidence: float = 1.0,
         working_memory_turns: int = 0,
     ) -> Dict[str, Any]:
@@ -189,7 +188,8 @@ class IntentClassifierService:
             fact_count: Number of facts available
             gist_count: Number of gists available
             procedural_stats: Optional ranked skills from procedural memory
-            tool_relevance: Optional dict from ToolRelevanceService.score_relevance()
+            memory_confidence: Pre-computed memory confidence score
+            working_memory_turns: Number of turns in working memory
 
         Returns:
             Structured intent dict
@@ -202,35 +202,12 @@ class IntentClassifierService:
         # Intent type classification
         intent_type = self._classify_type(text, tokens)
 
-        # Tool hints from embedding-based relevance (replaces regex TOOL_HINT_PATTERNS)
-        tool_hints = []
-        tool_relevance_score = 0.0
-        if tool_relevance:
-            tool_relevance_score = tool_relevance.get('max_relevance_score', 0.0)
-            tool_hints = [
-                item['name'] for item in tool_relevance.get('relevant_tools', [])
-                if item.get('score', 0) >= 0.25
-            ]
-
         # Complexity estimation
-        complexity = self._estimate_complexity(text, tokens, tool_hints)
-
-        # Memory sufficiency check
-        memory_sufficient = self._check_memory_sufficient(
-            intent_type, context_warmth, fact_count, gist_count,
-            tool_hints, procedural_stats, tool_relevance_score
-        )
-
-        # Needs tools?
-        needs_tools = self._needs_tools(
-            intent_type, tool_hints, memory_sufficient, complexity, context_warmth,
-            tool_relevance_score, memory_confidence=memory_confidence,
-            working_memory_turns=working_memory_turns
-        )
+        complexity = self._estimate_complexity(text, tokens)
 
         # Confidence
         confidence = self._calculate_confidence(
-            intent_type, tool_hints, context_warmth, token_count
+            intent_type, context_warmth, token_count
         )
 
         # Register detection
@@ -244,10 +221,8 @@ class IntentClassifierService:
 
         result = {
             'intent_type': intent_type,
-            'needs_tools': needs_tools,
-            'tool_hints': tool_hints,
             'complexity': complexity,
-            'memory_sufficient': memory_sufficient,
+            'memory_sufficient': True,
             'confidence': confidence,
             'register': register,
             'is_cancel': is_cancel,
@@ -256,9 +231,9 @@ class IntentClassifierService:
         }
 
         logger.info(
-            f"[INTENT] {intent_type} | needs_tools={needs_tools} | "
+            f"[INTENT] {intent_type} | "
             f"complexity={complexity} | confidence={confidence:.2f} | "
-            f"tools={tool_hints} | {classification_time*1000:.1f}ms"
+            f"{classification_time*1000:.1f}ms"
         )
 
         return result
@@ -284,107 +259,21 @@ class IntentClassifierService:
             return 'continuation'
         return 'statement'
 
-    def _estimate_complexity(self, text: str, tokens: list, tool_hints: list) -> str:
+    def _estimate_complexity(self, text: str, tokens: list) -> str:
         """Estimate effort needed to answer."""
         token_count = len(tokens)
 
         if token_count > COMPLEXITY_LONG_THRESHOLD:
             return 'complex'
-        if len(tool_hints) > 1:
-            return 'complex'
         if COMPLEXITY_MULTI_CLAUSE.search(text):
             return 'moderate'
-        if token_count > 15 or tool_hints:
+        if token_count > 15:
             return 'moderate'
         return 'simple'
-
-    def _check_memory_sufficient(
-        self,
-        intent_type: str,
-        context_warmth: float,
-        fact_count: int,
-        gist_count: int,
-        tool_hints: list,
-        procedural_stats: Optional[Dict],
-        tool_relevance_score: float = 0.0,
-    ) -> bool:
-        """Check if the question can be answered from memory alone."""
-        # Greetings, feedback, continuations — always memory-sufficient
-        if intent_type in ('greeting', 'feedback', 'continuation', 'empty'):
-            return True
-
-        # Strong tool relevance overrides memory
-        if tool_relevance_score > 0.55:
-            return False
-
-        # Explicit delegation request overrides memory
-        if 'delegate' in tool_hints:
-            return False
-
-        # High warmth + available facts → memory sufficient
-        if context_warmth > 0.6 and fact_count >= 2:
-            return True
-
-        # Procedural memory: if recall has high success rate for this topic
-        if procedural_stats:
-            recall_stats = procedural_stats.get('recall', {})
-            if recall_stats.get('success_rate', 0) > 0.7 and recall_stats.get('attempts', 0) > 5:
-                return True
-
-        # Moderate warmth with gists
-        if context_warmth > 0.4 and gist_count >= 3:
-            return True
-
-        return False
-
-    def _needs_tools(
-        self,
-        intent_type: str,
-        tool_hints: list,
-        memory_sufficient: bool,
-        complexity: str,
-        context_warmth: float = 0.0,
-        tool_relevance_score: float = 0.0,
-        memory_confidence: float = 1.0,
-        working_memory_turns: int = 0,
-    ) -> bool:
-        """Determine if this prompt likely needs tool use.
-
-        Embedding relevance is the sole authority — regex pattern matching
-        no longer gates tool dispatch.
-        Also considers low recall confidence on genuine questions.
-        """
-        # Embedding relevance is the sole authority
-        if tool_relevance_score > 0.35:
-            return True
-
-        # Social/empty intents never need tools
-        if intent_type in ('greeting', 'feedback', 'empty'):
-            return False
-
-        # Secondary signal: low recall confidence on a genuine question
-        if (memory_confidence < 0.20
-            and intent_type in ('question', 'command')
-            and not memory_sufficient
-            and not self._is_opinion_question(tool_hints)
-            and working_memory_turns < 2):  # avoid re-ACT on follow-ups
-            return True
-
-        return False
-
-    def _is_opinion_question(self, tool_hints: list) -> bool:
-        """
-        Detect if query is subjective/opinion-based where no tool provides objective answer.
-        Opinion questions: "is this good?", "do you think?", "is it worth?"
-        """
-        # Simple heuristic: check for subjective qualifiers in tool_hints
-        opinion_markers = {'good', 'bad', 'worth', 'think', 'opinion', 'believe', 'suggest'}
-        return any(marker in ' '.join(tool_hints).lower() for marker in opinion_markers)
 
     def _calculate_confidence(
         self,
         intent_type: str,
-        tool_hints: list,
         context_warmth: float,
         token_count: int,
     ) -> float:
@@ -394,8 +283,6 @@ class IntentClassifierService:
         # Clear type signals boost confidence
         if intent_type in ('greeting', 'feedback', 'empty'):
             confidence += 0.3
-        if intent_type == 'command' and tool_hints:
-            confidence += 0.25
         if intent_type == 'question':
             confidence += 0.1
 
@@ -408,10 +295,6 @@ class IntentClassifierService:
             confidence -= 0.1
         if token_count > 50:
             confidence -= 0.1
-
-        # Explicit tool hints increase confidence
-        if tool_hints:
-            confidence += 0.1
 
         return max(0.1, min(1.0, confidence))
 

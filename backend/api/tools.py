@@ -4,6 +4,7 @@ Tools blueprint — /tools endpoints for listing tools and managing their config
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -186,6 +187,13 @@ def install_tool():
                     "error": f"Manifest missing required fields: {', '.join(sorted(missing))}"
                 }), 400
 
+            # Warn if documentation field is missing (non-fatal)
+            if not manifest.get('documentation'):
+                logging.warning(
+                    f"[TOOLS API] Tool '{manifest.get('name', 'unknown')}' installed without "
+                    f"'documentation' field. Capability profiles will use 'description' as fallback."
+                )
+
             tool_name = manifest.get("name", "").strip()
 
             # Validate tool name format
@@ -276,9 +284,9 @@ def disable_tool(tool_name: str):
         # Move to tools_disabled
         disabled_path = tools_disabled_dir / tool_name
         if disabled_path.exists():
-            shutil.rmtree(disabled_path, ignore_errors=True)
+            shutil.rmtree(str(disabled_path))
 
-        shutil.move(str(tool_path), str(disabled_path))
+        os.rename(str(tool_path), str(disabled_path))
         logger.info(f"[TOOLS API] Disabled tool: {tool_name}")
 
         # Unregister from registry
@@ -315,9 +323,9 @@ def enable_tool(tool_name: str):
         # Move back to tools
         tool_path = tools_dir / tool_name
         if tool_path.exists():
-            shutil.rmtree(tool_path, ignore_errors=True)
+            shutil.rmtree(str(tool_path))
 
-        shutil.move(str(disabled_path), str(tool_path))
+        os.rename(str(disabled_path), str(tool_path))
         logger.info(f"[TOOLS API] Enabled tool: {tool_name}")
 
         # Trigger async rebuild

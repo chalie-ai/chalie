@@ -36,31 +36,34 @@ def _get_vapid_keys():
 
     cached = redis.get(VAPID_KEYS_KEY)
     if cached:
-        return json.loads(cached)
+        keys = json.loads(cached)
+        # Old keys stored in PEM format are incompatible with py_vapid's from_string()
+        if keys.get('private', '').startswith('-----'):
+            logger.warning("[Push] Cached VAPID key in PEM format, regenerating")
+            redis.delete(VAPID_KEYS_KEY)
+        else:
+            return keys
 
     # Generate new VAPID key pair (P-256 / prime256v1)
     from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.hazmat.primitives import serialization
 
     private_key = ec.generate_private_key(ec.SECP256R1())
 
-    # PEM-encoded private key (for pywebpush)
-    priv_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode('utf-8')
+    # Raw 32-byte private scalar as URL-safe base64 (py_vapid's from_string() expects this)
+    priv_raw = private_key.private_numbers().private_value.to_bytes(32, 'big')
+    priv_b64 = base64.urlsafe_b64encode(priv_raw).decode('ascii').rstrip('=')
 
     # Uncompressed EC point → unpadded URL-safe base64 (for applicationServerKey)
+    from cryptography.hazmat.primitives import serialization
     pub_bytes = private_key.public_key().public_bytes(
         encoding=serialization.Encoding.X962,
         format=serialization.PublicFormat.UncompressedPoint,
     )
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode('ascii').rstrip('=')
 
-    keys = {'public': pub_b64, 'private': priv_pem}
+    keys = {'public': pub_b64, 'private': priv_b64}
     redis.set(VAPID_KEYS_KEY, json.dumps(keys))
-    logger.info("[Push] Generated and stored new VAPID keys")
+    logger.info("[Push] Generated and stored new VAPID keys (raw base64 format)")
     return keys
 
 
@@ -140,6 +143,24 @@ def send_push_to_all(title, body, tag='chalie-drift', removed_by=None, removes=N
 
         payload = json.dumps(payload_dict)
 
+        # Convert raw base64 private scalar to PEM — pywebpush 2.x requires PEM
+        import base64
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import serialization
+
+        priv_b64 = keys['private']
+        if priv_b64.startswith('-----'):
+            pem_key = priv_b64
+        else:
+            padded = priv_b64 + '=' * (4 - len(priv_b64) % 4)
+            priv_bytes = base64.urlsafe_b64decode(padded)
+            private_key_obj = ec.derive_private_key(int.from_bytes(priv_bytes, 'big'), ec.SECP256R1())
+            pem_key = private_key_obj.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            ).decode('ascii')
+
         stale = []
         for raw_sub in subscriptions:
             sub = json.loads(raw_sub)
@@ -147,7 +168,7 @@ def send_push_to_all(title, body, tag='chalie-drift', removed_by=None, removes=N
                 webpush(
                     subscription_info=sub,
                     data=payload,
-                    vapid_private_key=keys['private'],
+                    vapid_private_key=pem_key,
                     vapid_claims={'sub': 'mailto:chalie@localhost'},
                 )
             except WebPushException as e:

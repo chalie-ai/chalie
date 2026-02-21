@@ -395,6 +395,8 @@ class ChalieApp {
     this._driftSource.addEventListener('delegate_followup', handler);
     this._driftSource.addEventListener('response', handler);
     this._driftSource.addEventListener('card', handler);
+    this._driftSource.addEventListener('reminder', handler);
+    this._driftSource.addEventListener('task', handler);
 
     this._driftSource.onerror = () => {
       // EventSource auto-reconnects; nothing to do

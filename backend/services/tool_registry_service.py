@@ -178,15 +178,13 @@ class _CronToolWorker:
                 full_prompt = f"{self.prompt_template}\n\n--- Tool Data ---\n{result_text}"
 
                 from services.prompt_queue import PromptQueue
-                queue = PromptQueue(queue_name="prompt-queue")
-                queue.enqueue({
-                    "prompt": full_prompt,
-                    "metadata": {
-                        "source": f"cron_tool:{self.tool_name}",
-                        "tool_name": self.tool_name,
-                        "destination": "web",
-                        "priority": result.get("priority", "normal"),
-                    }
+                from workers.digest_worker import digest_worker
+                queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+                queue.enqueue(full_prompt, {
+                    "source": f"cron_tool:{self.tool_name}",
+                    "tool_name": self.tool_name,
+                    "destination": "web",
+                    "priority": result.get("priority", "normal"),
                 })
 
                 _log.info(f"[TOOL CRON] {self.tool_name} executed and enqueued (priority={result.get('priority', 'normal')})")
@@ -439,6 +437,13 @@ class ToolRegistryService:
             logger.warning(
                 f"[TOOL REGISTRY] Tool name '{manifest.get('name')}' "
                 f"doesn't match directory '{dir_name}' — using manifest name"
+            )
+
+        # Warn (not error) if documentation field is missing
+        if not manifest.get('documentation'):
+            logger.warning(
+                f"[TOOL REGISTRY] Tool '{manifest.get('name', dir_name)}' has no 'documentation' field. "
+                f"Add 'documentation' for richer capability profiles."
             )
 
     def _build_telemetry(self, raw_telemetry: dict) -> dict:
@@ -799,6 +804,16 @@ class ToolRegistryService:
                 self._install_locks.discard(tool_name)
 
             logger.info(f"[TOOL REGISTRY] Async build completed for '{tool_name}'")
+
+            # Build capability profile for the newly registered tool
+            try:
+                from services.tool_profile_service import ToolProfileService
+                profile_service = ToolProfileService()
+                manifest = self.tools[tool_name]['manifest']
+                profile_service.build_profile(tool_name, manifest)
+                logger.info(f"[TOOL REGISTRY] Built capability profile for {tool_name}")
+            except Exception as profile_err:
+                logger.warning(f"[TOOL REGISTRY] Profile build failed for {tool_name}: {profile_err}")
 
             # Notify consumer so it can spawn cron workers for newly registered tools
             if self._on_tool_registered:

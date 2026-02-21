@@ -135,6 +135,7 @@ class FrontalCortexService:
         act_history: str = "",
         assembled_context: dict = None,
         relevant_tools: list = None,
+        selected_tools: list = None,
         thread_id: str = None,
         returning_from_silence: bool = False,
         inclusion_map: dict = None,
@@ -169,6 +170,7 @@ class FrontalCortexService:
             act_history,
             assembled_context=assembled_context,
             relevant_tools=relevant_tools,
+            selected_tools=selected_tools,
             thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             inclusion_map=inclusion_map,
@@ -284,6 +286,7 @@ class FrontalCortexService:
         act_history: str = "",
         assembled_context: dict = None,
         relevant_tools: list = None,
+        selected_tools: list = None,
         thread_id: str = None,
         returning_from_silence: bool = False,
         inclusion_map: dict = None,
@@ -374,9 +377,9 @@ class FrontalCortexService:
             available_skills = ''
         result = result.replace('{{available_skills}}', available_skills)
 
-        # Available tools (dynamic, from tool registry — filtered when relevant_tools provided)
+        # Available tools (dynamic, from tool registry — filtered when selected_tools or relevant_tools provided)
         if _include('available_tools'):
-            available_tools = self._get_available_tools(relevant_tools=relevant_tools)
+            available_tools = self._get_available_tools(selected_tools=selected_tools, relevant_tools=relevant_tools)
         else:
             available_tools = ''
         result = result.replace('{{available_tools}}', available_tools)
@@ -864,45 +867,56 @@ class FrontalCortexService:
         """Specialists have been removed. Returns empty string."""
         return ""
 
-    def _get_available_tools(self, relevant_tools: list = None) -> str:
+    def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
         """
-        Get tool summaries from the tool registry for ACT prompt injection.
+        Get tool profiles for ACT prompt injection.
 
-        When relevant_tools is provided (from ToolRelevanceService), only injects
-        those tools (max 5) instead of all registered tools.
-
-        Returns:
-            Formatted tool list or "(no tools loaded)"
+        When selected_tools is provided (from CognitiveTriageService), injects
+        full profiles for those specific tools from tool_capability_profiles table.
+        Falls back to manifest-based summaries if profiles unavailable.
         """
-        max_injection = self.config.get('act_max_tool_injection', 5)
-
         try:
             from services.tool_registry_service import ToolRegistryService
             registry = ToolRegistryService()
 
-            if relevant_tools:
-                # Filter to only relevant tool names (exclude innate skills)
+            # Prefer triage-selected tools (Wave 2)
+            tool_names = None
+            if selected_tools:
+                tool_names = [t for t in selected_tools if t in registry.tools]
+            elif relevant_tools:
                 tool_names = [
                     item['name'] for item in relevant_tools
                     if item.get('type') == 'tool' and item['name'] in registry.tools
-                ][:max_injection]
+                ][:5]
 
-                if tool_names:
-                    lines = []
-                    for name in tool_names:
-                        manifest = registry.tools[name]['manifest']
-                        desc = manifest.get('description', name)
-                        params = manifest.get('parameters', {})
-                        param_names = list(params.keys())
-                        param_str = f" ({', '.join(param_names)})" if param_names else ""
-                        lines.append(f"- {name}{param_str}: {desc}")
-                    return "\n".join(lines)
+            if tool_names:
+                # Try to get rich profiles first
+                try:
+                    from services.tool_profile_service import ToolProfileService
+                    profiles = ToolProfileService().get_profiles_for_tools(tool_names)
+                    if profiles:
+                        lines = []
+                        for p in profiles:
+                            name = p.get('tool_name', '')
+                            summary = p.get('short_summary', '')
+                            lines.append(f"- {name}: {summary}")
+                        return "\n".join(lines)
+                except Exception:
+                    pass
 
-            # Fallback: all tools
+                # Fallback to manifest-based summaries
+                lines = []
+                for name in tool_names:
+                    manifest = registry.tools[name]['manifest']
+                    desc = manifest.get('description', name)
+                    params = manifest.get('parameters', {})
+                    param_str = f" ({', '.join(list(params.keys()))})" if params else ""
+                    lines.append(f"- {name}{param_str}: {desc}")
+                return "\n".join(lines)
+
+            # No selected tools — return all registered tools
             summaries = registry.get_tool_prompt_summaries()
-            if summaries:
-                return summaries
-            return "(no tools loaded)"
+            return summaries if summaries else "(no tools loaded)"
         except Exception as e:
             logging.debug(f"Tool registry not available for prompt: {e}")
             return "(no tools loaded)"

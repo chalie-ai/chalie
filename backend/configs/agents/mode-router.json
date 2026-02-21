@@ -15,7 +15,6 @@
     "respond.cold_penalty": 0.15,
     "respond.greeting_penalty": 0.20,
     "respond.feedback_penalty": 0.15,
-    "respond.tool_needed_penalty": 0.50,
 
     "clarify.cold_boost": 0.25,
     "clarify.question_no_facts": 0.20,
@@ -28,12 +27,8 @@
     "act.implicit_reference": 0.15,
     "act.very_cold_penalty": 0.10,
     "act.warm_facts_penalty": 0.10,
-    "act.tool_relevance_strong": 0.60,
-    "act.tool_relevance_moderate": 0.35,
-    "act.tool_relevance_weak": 0.15,
     "act.memory_confidence_very_low": 0.20,
     "act.memory_confidence_low": 0.10,
-    "act.intent_needs_tools": 0.45,
 
     "acknowledge.greeting": 0.80,
     "acknowledge.positive_feedback": 0.55,

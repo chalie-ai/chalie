@@ -35,9 +35,6 @@ def _make_config():
             'act.implicit_reference': 0.15,
             'act.very_cold_penalty': 0.10,
             'act.warm_facts_penalty': 0.10,
-            'act.tool_relevance_strong': 0.60,
-            'act.tool_relevance_moderate': 0.35,
-            'act.tool_relevance_weak': 0.15,
             'acknowledge.greeting': 0.80,
             'acknowledge.positive_feedback': 0.55,
             'acknowledge.question_penalty': 0.30,
@@ -67,7 +64,6 @@ def _make_signals(**overrides):
         'explicit_feedback': None,
         'information_density': 0.8,
         'implicit_reference': False,
-        'tool_relevance_score': 0.0,
     }
     base.update(overrides)
     return base
@@ -102,20 +98,6 @@ class TestModeRouter:
         signals = _make_signals(greeting_pattern=True)
         result = router.route(signals, "Hey")
         assert result['mode'] == 'ACKNOWLEDGE'
-
-    def test_tool_relevance_selects_act(self):
-        """Strong tool relevance score should favour ACT."""
-        router = ModeRouterService(_make_config())
-        signals = _make_signals(
-            context_warmth=0.5,
-            has_question_mark=True,
-            interrogative_words=True,
-            tool_relevance_score=0.60,
-            fact_count=1,
-            gist_count=0,
-        )
-        result = router.route(signals, "Search the web for latest news about Malta")
-        assert result['mode'] == 'ACT'
 
     def test_tiebreaker_invoked_within_margin(self):
         """When top-2 scores are within margin, tie-breaker LLM should be invoked."""
@@ -206,7 +188,6 @@ class TestModeRouter:
             'session_exchange_count', 'memory_confidence', 'prompt_token_count', 'has_question_mark',
             'interrogative_words', 'greeting_pattern', 'explicit_feedback',
             'information_density', 'implicit_reference',
-            'intent_type', 'intent_confidence', 'intent_needs_tools',
-            'intent_complexity', 'tool_relevance_score',
+            'intent_type', 'intent_confidence', 'intent_complexity',
         }
         assert expected_keys == set(signals.keys())

@@ -311,14 +311,14 @@ if __name__ == "__main__":
     from services.encryption_key_service import get_encryption_key
     get_encryption_key()
 
-    # 5.4. PRELOAD EMBEDDING MODEL
-    # Load sentence-transformers model on boot (before forking)
-    # This prevents first message from triggering 438MB HuggingFace download
+    # 5.4. PRELOAD EMBEDDING MODEL AND SERVICE SINGLETON
+    # Load embedding model and initialize singleton before forking
+    # This prevents HuggingFace requests in child processes
     try:
-        logging.info("[System] Preloading embedding model from HuggingFace...")
-        from services.embedding_service import _get_st_model
-        _get_st_model()  # Lazy-loads and caches the model
-        logging.info("[System] ✓ Embedding model loaded and cached")
+        logging.info("[System] Preloading embedding model and service singleton...")
+        from services.embedding_service import get_embedding_service
+        get_embedding_service()  # Lazy-loads model and creates singleton
+        logging.info("[System] ✓ Embedding model and service singleton ready")
     except Exception as e:
         logging.warning(f"[System] Embedding model preload failed: {e}")
         logging.warning("[System] Continuing without preload (will load on first embedding request)")
@@ -498,6 +498,26 @@ if __name__ == "__main__":
         worker_func=autobiography_synthesis_worker
     )
 
+    # Register triage calibration service (24h cycle, computes correctness scores)
+    try:
+        from services.triage_calibration_service import triage_calibration_worker
+        manager.register_service(
+            worker_id="triage-calibration-service",
+            worker_func=triage_calibration_worker
+        )
+    except Exception as e:
+        logging.warning(f"[Consumer] Triage calibration service registration failed: {e}")
+
+    # Register profile enrichment service (6h cycle, enriches tool profiles)
+    try:
+        from services.profile_enrichment_service import profile_enrichment_worker
+        manager.register_service(
+            worker_id="profile-enrichment-service",
+            worker_func=profile_enrichment_worker
+        )
+    except Exception as e:
+        logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
+
     # Register cron-triggered tools as background services
     try:
         from services.tool_registry_service import ToolRegistryService
@@ -522,5 +542,14 @@ if __name__ == "__main__":
         manager._tool_scanner_registry = registry
     except Exception as e:
         logging.warning(f"[Consumer] Tool scanner setup failed: {e}")
+
+    # Bootstrap tool capability profiles on startup
+    try:
+        from services.tool_profile_service import ToolProfileService
+        profile_svc = ToolProfileService()
+        profile_svc.bootstrap_all()
+        logging.info("[Consumer] Tool profile bootstrap complete")
+    except Exception as e:
+        logging.warning(f"[Consumer] Tool profile bootstrap failed: {e}")
 
     manager.run()

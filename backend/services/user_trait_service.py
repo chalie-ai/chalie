@@ -445,8 +445,8 @@ class UserTraitService:
     def _generate_embedding_raw(self, text: str) -> Optional[str]:
         """Generate embedding vector as pgvector-compatible string."""
         try:
-            from services.embedding_service import EmbeddingService
-            emb_service = EmbeddingService()
+            from services.embedding_service import get_embedding_service
+            emb_service = get_embedding_service()
             embedding = emb_service.generate_embedding(text)
             return '[' + ','.join(str(float(x)) for x in embedding) + ']'
         except Exception as e:

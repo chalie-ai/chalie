@@ -256,8 +256,8 @@ class FocusSessionService:
     def _generate_embedding(self, text: str) -> Optional[list]:
         """Generate embedding as list for JSON serialization."""
         try:
-            from services.embedding_service import EmbeddingService
-            emb_service = EmbeddingService()
+            from services.embedding_service import get_embedding_service
+            emb_service = get_embedding_service()
             emb = emb_service.generate_embedding(text)
             return [float(x) for x in emb]
         except Exception as e:

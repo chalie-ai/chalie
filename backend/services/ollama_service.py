@@ -97,8 +97,8 @@ class OllamaService:
             Exception if embedding generation fails
         """
         try:
-            from services.embedding_service import EmbeddingService
-            emb_service = EmbeddingService()
+            from services.embedding_service import get_embedding_service
+            emb_service = get_embedding_service()
             return emb_service.generate_embedding(text)
 
         except Exception as e:

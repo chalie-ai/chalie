@@ -91,7 +91,7 @@ def tool_worker(job_data: dict) -> str:
             - intent: Classified intent metadata
             - context_snapshot: Context state at time of spawn
             - metadata: Original request metadata
-            - tool_hints: Suggested tools from intent classifier
+            - tool_hints: Suggested tools (from CognitiveTriageService)
 
     Returns:
         str: Status message
@@ -241,9 +241,9 @@ def tool_worker(job_data: dict) -> str:
                 smart_repeat = False
                 if actions and recent_action_texts:
                     try:
-                        from services.embedding_service import EmbeddingService
+                        from services.embedding_service import get_embedding_service
                         import numpy as np
-                        emb_service = EmbeddingService()
+                        emb_service = get_embedding_service()
                         current_action_text = _action_fingerprint(actions)
                         current_vec = emb_service.generate_embedding_np(current_action_text)
                         for prev_text in recent_action_texts[-3:]:
@@ -396,6 +396,24 @@ def tool_worker(job_data: dict) -> str:
             f"{len(act_loop.act_history)} actions, {total_time:.1f}s total"
         )
 
+        # Record performance metrics for each tool invocation
+        try:
+            from services.tool_performance_service import ToolPerformanceService
+            perf_service = ToolPerformanceService()
+            for action in act_loop.get_history_context() if hasattr(act_loop, 'get_history_context') else []:
+                action_type = action.get('action_type', '') if isinstance(action, dict) else ''
+                if action_type and action_type not in ('recall', 'memorize', 'introspect', 'associate', 'schedule', 'goal', 'focus', 'list', 'autobiography', 'introspect'):
+                    action_success = action.get('status') == 'success' if isinstance(action, dict) else False
+                    action_latency = float(action.get('latency_ms', 0)) if isinstance(action, dict) else 0.0
+                    perf_service.record_invocation(
+                        tool_name=action_type,
+                        exchange_id=exchange_id,
+                        success=action_success,
+                        latency_ms=action_latency,
+                    )
+        except Exception as _perf_err:
+            logger.debug(f"[TOOL WORKER] Performance recording failed: {_perf_err}")
+
         return (
             f"Topic '{topic}' | Tool work complete: "
             f"{act_loop.iteration_number} iterations in {total_time:.1f}s"
@@ -445,9 +463,17 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict) -> bool:
             tool = registry.tools.get(tool_name)
             if not tool:
                 continue
-            card_config = tool['manifest'].get('card')
-            if not card_config:
+            output_config = tool['manifest'].get('output', {})
+            card_config = output_config.get('card', {})
+            if not card_config or not card_config.get('enabled'):
                 continue
+
+            # If synthesize is false, invoke() already rendered the card inline.
+            # Just suppress the follow-up text response without re-rendering.
+            if not output_config.get('synthesize', True):
+                any_replaces = True
+                continue
+
             raw = raw_map.get(tool_name)
             if not raw:
                 continue

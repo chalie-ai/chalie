@@ -84,6 +84,8 @@ class OutputService:
         source_type_map = {
             'proactive_drift': 'drift',
             'tool_followup': 'tool_followup',
+            'reminder': 'reminder',
+            'task': 'task',
         }
         event_type = source_type_map.get(source, 'response')
 
@@ -136,7 +138,8 @@ class OutputService:
             # the stream endpoint can drain missed events on next connect.
             try:
                 self.redis.rpush('notifications:recent', event_payload)
-                self.redis.expire('notifications:recent', 300)  # 5-minute TTL
+                self.redis.ltrim('notifications:recent', -200, -1)
+                self.redis.expire('notifications:recent', 86400)  # 24h TTL
             except Exception as e:
                 logger.warning(f"Notification buffer push failed: {e}")
 

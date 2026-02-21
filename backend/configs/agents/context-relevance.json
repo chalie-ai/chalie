@@ -86,7 +86,6 @@
   "dependencies": {
     "episodic_memory": ["gists"],
     "focus": ["active_goals"],
-    "available_tools": ["available_skills"],
     "onboarding_nudge": ["identity_context"],
     "warm_return_hint": ["identity_context"]
   },
@@ -166,15 +165,6 @@
         "strength": "hard"
       }
     ],
-    "available_skills": [
-      {
-        "when": {
-          "tool_relevance_score_lt": 0.1,
-          "intent_needs_tools": false
-        },
-        "strength": "hard"
-      }
-    ],
     "facts": [
       {
         "when": {
@@ -211,14 +201,7 @@
         "strength": "hard"
       }
     ],
-    "onboarding_nudge": [
-      {
-        "when": {
-          "intent_needs_tools": true
-        },
-        "strength": "hard"
-      }
-    ]
+    "onboarding_nudge": []
   },
   "urgency_overrides": [
     "working_memory",

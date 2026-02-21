@@ -33,12 +33,12 @@ def handle_associate(topic: str, params: dict) -> str:
 
     try:
         from services.semantic_retrieval_service import SemanticRetrievalService
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
         from services.database_service import DatabaseService, get_merged_db_config
 
         db_config = get_merged_db_config()
         db_service = DatabaseService(db_config)
-        embedding_service = EmbeddingService()
+        embedding_service = get_embedding_service()
         retrieval_service = SemanticRetrievalService(db_service, embedding_service)
 
         # Resolve seed names to concept IDs

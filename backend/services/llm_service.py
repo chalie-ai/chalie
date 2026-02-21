@@ -236,12 +236,21 @@ class OpenAIService:
         latency_ms = int((time.time() - start_time) * 1000)
 
         text = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason
 
-        logger.info(
-            f"[OpenAIService] model={response.model}, "
-            f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
-            f"latency={latency_ms}ms"
-        )
+        if not text or not text.strip():
+            logger.warning(
+                f"[OpenAIService] Empty response from model={response.model}, "
+                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+                f"latency={latency_ms}ms, finish_reason={finish_reason}. "
+                f"Content was: {repr(response.choices[0].message.content)}"
+            )
+        else:
+            logger.info(
+                f"[OpenAIService] model={response.model}, "
+                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+                f"latency={latency_ms}ms"
+            )
 
         return LLMResponse(
             text=text,
@@ -283,7 +292,9 @@ class GeminiService:
 
         text = response.text if response.text else ""
         if not text:
-            raise ValueError("Empty Gemini response")
+            finish_reason = getattr(response, 'finish_reason', 'unknown')
+            logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
+            raise ValueError(f"Empty Gemini response (finish_reason={finish_reason})")
 
         usage = getattr(response, 'usage_metadata', None)
         tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
