@@ -69,8 +69,20 @@ class SemanticConsolidationService:
             # Call LLM for extraction
             response = self.ollama.send_message("", prompt).text
 
+            # Validate response is not empty
+            if not response or not response.strip():
+                logging.error(f"Empty response from LLM for episode {episode.get('id', 'unknown')}")
+                return {'concepts': [], 'relationships': []}
+
+            # Log response for debugging (truncate if too long)
+            response_preview = response[:200] if len(response) > 200 else response
+            logging.debug(f"LLM response preview for episode {episode.get('id', 'unknown')}: {response_preview}")
+
+            # Extract JSON from response (handle markdown code blocks)
+            json_str = self._extract_json_from_response(response)
+
             # Parse JSON response
-            extracted = json.loads(response)
+            extracted = json.loads(json_str)
 
             # Validate structure
             if 'concepts' not in extracted or 'relationships' not in extracted:
@@ -81,11 +93,40 @@ class SemanticConsolidationService:
             return extracted
 
         except json.JSONDecodeError as e:
-            logging.error(f"Failed to parse extraction JSON: {e}")
+            logging.error(f"Failed to parse extraction JSON: {e} (response length: {len(response) if response else 0})")
             return {'concepts': [], 'relationships': []}
         except Exception as e:
             logging.error(f"Failed to extract from episode: {e}")
             return {'concepts': [], 'relationships': []}
+
+    def _extract_json_from_response(self, response: str) -> str:
+        """
+        Extract JSON from LLM response.
+
+        Handles responses wrapped in markdown code blocks or plain JSON.
+
+        Args:
+            response: Raw LLM response text
+
+        Returns:
+            Valid JSON string
+        """
+        # Try to extract from markdown code block
+        if "```json" in response:
+            start = response.find("```json") + 7
+            end = response.find("```", start)
+            if end > start:
+                return response[start:end].strip()
+
+        # Try to extract from generic code block
+        if "```" in response:
+            start = response.find("```") + 3
+            end = response.find("```", start)
+            if end > start:
+                return response[start:end].strip()
+
+        # Return as-is, stripped of whitespace
+        return response.strip()
 
     def _build_episode_content(self, episode: dict) -> str:
         """Build episode content string for extraction."""
@@ -121,8 +162,8 @@ class SemanticConsolidationService:
         """
         try:
             # Generate embedding for concept
-            from services.embedding_service import EmbeddingService
-            emb_service = EmbeddingService()
+            from services.embedding_service import get_embedding_service
+            emb_service = get_embedding_service()
             concept_text = f"{concept['name']} ({concept['type']}): {concept['definition']}"
             embedding = emb_service.generate_embedding(concept_text)
 

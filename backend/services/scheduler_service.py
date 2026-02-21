@@ -128,23 +128,21 @@ def _fire_item(item: dict):
     """Enqueue a due item on the prompt-queue for frontal cortex processing."""
     from services.prompt_queue import PromptQueue
     from services.client_context_service import ClientContextService
+    from workers.digest_worker import digest_worker
 
     message = item.get("message", "")
     source = item.get("item_type", "reminder")
 
     client_context_text = ClientContextService().format_for_prompt()
 
-    queue = PromptQueue(queue_name="prompt-queue")
-    queue.enqueue({
-        "prompt": message,
-        "metadata": {
-            "source": source,
-            "destination": "web",
-            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat(),
-            "scheduled_message": message,
-            "topic": item.get("topic", "general"),
-            "client_context": client_context_text,
-        }
+    queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+    queue.enqueue(message, {
+        "source": source,
+        "destination": "web",
+        "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat(),
+        "scheduled_message": message,
+        "topic": item.get("topic", "general"),
+        "client_context": client_context_text,
     })
 
     logger.info(f"{LOG_PREFIX} Fired {source} '{item.get('id')}': {message[:80]}")

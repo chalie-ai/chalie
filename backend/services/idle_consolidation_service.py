@@ -48,7 +48,7 @@ class IdleConsolidationService:
 
         logger.info(
             f"[IDLE CONSOLIDATION] Service initialized "
-            f"(check_interval={check_interval}s, idle_threshold=3600s)"
+            f"(check_interval={check_interval}s, idle_threshold=900s)"
         )
 
     def run(self, shared_state: Optional[dict] = None) -> None:
@@ -74,7 +74,7 @@ class IdleConsolidationService:
                 state = self.tracker.get_state()
                 time_since_last = time.time() - state['last_consolidation_time']
 
-                if time_since_last >= 3600:  # 1 hour = 3600 seconds
+                if time_since_last >= 900:  # 15 minutes (fallback; primary trigger is episode-count)
                     logger.info(
                         f"[IDLE CONSOLIDATION] System idle for {time_since_last/60:.1f} minutes, "
                         f"triggering batch consolidation"
@@ -83,7 +83,7 @@ class IdleConsolidationService:
                 else:
                     logger.debug(
                         f"[IDLE CONSOLIDATION] Idle but only {time_since_last/60:.1f} minutes "
-                        f"since last consolidation (need 60 min)"
+                        f"since last consolidation (need 15 min)"
                     )
 
             except KeyboardInterrupt:

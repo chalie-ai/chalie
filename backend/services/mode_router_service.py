@@ -60,7 +60,6 @@ def collect_routing_signals(
     classification_result: dict,
     session_service,
     intent: dict = None,
-    tool_relevance: dict = None,
 ) -> Dict[str, Any]:
     """
     Collect all routing signals from existing services and NLP analysis.
@@ -78,6 +77,7 @@ def collect_routing_signals(
         classification_result: Dict from topic classifier
         session_service: SessionService instance
         intent: Optional intent classification dict from IntentClassifierService
+            (tool selection handled by CognitiveTriageService)
 
     Returns:
         Dict of routing signals
@@ -110,20 +110,6 @@ def collect_routing_signals(
     interrogative_words = bool(INTERROGATIVE_WORDS.search(text))
     greeting_pattern = bool(GREETING_PATTERNS.match(text.strip()))
     implicit_reference = bool(IMPLICIT_REFERENCE.search(text))
-
-    # Tool relevance score from embedding-based ToolRelevanceService
-    # Include external tools AND action-oriented skills (those with side effects
-    # that require ACT mode). Cognitive skills (recall, introspect, etc.) are
-    # excluded to avoid inflating ACT score for simple memory queries.
-    ACTION_SKILLS = frozenset({'list', 'schedule', 'goal', 'focus'})
-    tool_relevance_score = 0.0
-    if tool_relevance:
-        action_items = [
-            t for t in tool_relevance.get('relevant_tools', [])
-            if t.get('type') == 'tool'
-            or (t.get('type') == 'skill' and t.get('name') in ACTION_SKILLS)
-        ]
-        tool_relevance_score = max((t['score'] for t in action_items), default=0.0)
 
     # Memory confidence signal: FOK (Feeling-of-Knowing) per topic
     # Read from Redis (set by recall skill), compute composite confidence score
@@ -176,10 +162,8 @@ def collect_routing_signals(
         'explicit_feedback': explicit_feedback,
         'information_density': information_density,
         'implicit_reference': implicit_reference,
-        'tool_relevance_score': tool_relevance_score,
 
         # Intent signals (from IntentClassifierService, if available)
-        'intent_needs_tools': False,
         'intent_complexity': 'simple',
         'intent_type': None,
         'intent_confidence': 0.0,
@@ -187,7 +171,6 @@ def collect_routing_signals(
 
     # Merge intent classification signals when available
     if intent:
-        signals['intent_needs_tools'] = intent.get('needs_tools', False)
         signals['intent_complexity'] = intent.get('complexity', 'simple')
         signals['intent_type'] = intent.get('intent_type')
         signals['intent_confidence'] = intent.get('confidence', 0.0)
@@ -387,9 +370,7 @@ class ModeRouterService:
             respond -= w.get('respond.greeting_penalty', 0.20)
         if feedback == 'positive':
             respond -= w.get('respond.feedback_penalty', 0.15)
-        # When tools are genuinely needed, responding without them is wrong
-        if signals.get('intent_needs_tools'):
-            respond -= w.get('respond.tool_needed_penalty', 0.50)
+        # Tool-needed penalty removed — tool dispatch now handled by CognitiveTriageService
 
         # ── CLARIFY ──────────────────────────────────────────────
         clarify = self.bases['CLARIFY']
@@ -412,22 +393,11 @@ class ModeRouterService:
             act += w.get('act.interrogative_gap', 0.15)
         if implicit_ref:
             act += w.get('act.implicit_reference', 0.15)
-        # Graduated tool relevance signal (replaces regex action_request + explicit_search)
-        tool_rel = signals.get('tool_relevance_score', 0.0)
-        if tool_rel > 0.55:
-            act += w.get('act.tool_relevance_strong', 0.60)
-        elif tool_rel > 0.35:
-            act += w.get('act.tool_relevance_moderate', 0.35)
-        elif tool_rel > 0.25:
-            act += w.get('act.tool_relevance_weak', 0.15)
+        # Tool relevance weights removed — CognitiveTriageService handles tool dispatch
         if warmth < 0.15:
             act -= w.get('act.very_cold_penalty', 0.10)
-        if is_warm and fact_density > 0.5 and not signals.get('intent_needs_tools'):
+        if is_warm and fact_density > 0.5:
             act -= w.get('act.warm_facts_penalty', 0.10)
-        # IntentClassifier signal: embedding-based tool need detection.
-        # This was already collected in signals but was never applied here — wiring it in.
-        if signals.get('intent_needs_tools'):
-            act += w.get('act.intent_needs_tools', 0.45)
         # Graduated memory confidence: low recall confidence → lean toward ACT
         mem_conf = signals.get('memory_confidence', 1.0)
         if interrog or has_q:

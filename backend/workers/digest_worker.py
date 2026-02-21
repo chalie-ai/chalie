@@ -292,7 +292,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     return response_data
 
 
-def generate_with_act_loop(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map, mode_router, signals, metadata=None, context_warmth=1.0, relevant_tools=None, thread_id=None):
+def generate_with_act_loop(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map, mode_router, signals, metadata=None, context_warmth=1.0, relevant_tools=None, selected_tools=None, thread_id=None):
     """
     Run ACT loop: execute actions, then re-route to terminal mode for response.
 
@@ -381,6 +381,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
             chat_history=chat_history,
             act_history=act_loop.get_history_context(),
             relevant_tools=relevant_tools,
+            selected_tools=selected_tools,
             inclusion_map=act_inclusion_map,
         )
 
@@ -525,7 +526,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
 
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, fact_store, metadata=None, context_warmth=1.0,
-                       pre_routing_result=None, relevant_tools=None, thread_id=None,
+                       pre_routing_result=None, relevant_tools=None, selected_tools=None, thread_id=None,
                        returning_from_silence=False):
     """
     Main routing + generation function.
@@ -594,6 +595,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             cortex_config, cortex_prompt_map, mode_router, signals,
             metadata=metadata, context_warmth=context_warmth,
             relevant_tools=relevant_tools,
+            selected_tools=selected_tools,
             thread_id=thread_id,
         )
     elif selected_mode == 'IGNORE':
@@ -1082,10 +1084,10 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
     if current_topic and current_topic != topic:
         # Check semantic similarity before suppressing
         try:
-            from services.embedding_service import EmbeddingService
+            from services.embedding_service import get_embedding_service
             import numpy as np
 
-            emb_service = EmbeddingService()
+            emb_service = get_embedding_service()
             current_emb = emb_service.generate_embedding(current_topic)
             original_emb = emb_service.generate_embedding(topic)
 
@@ -1303,7 +1305,7 @@ def _check_active_tool_work(text: str, topic: str) -> str:
         if not active_cycles:
             return None
 
-        emb_service = EmbeddingService()
+        emb_service = get_embedding_service()
         prompt_embedding = emb_service.generate_embedding(text)
 
         for cycle in active_cycles:
@@ -1366,6 +1368,153 @@ def _log_cycle_event(event_type: str, payload: dict, topic: str):
         )
     except Exception:
         pass
+
+
+def _handle_social_triage(
+    triage_result, text, topic, thread_id, metadata,
+    intent, intent_classifier, working_memory, thread_conv_service,
+):
+    """Handle social branch — template ack without LLM generation."""
+    from services.redis_client import RedisClientService
+
+    if triage_result.mode in ('CANCEL', 'IGNORE'):
+        return {
+            'response': '',
+            'mode': triage_result.mode,
+            'confidence': 1.0,
+            'generation_time': 0.0,
+        }
+
+    # ACKNOWLEDGE: template response
+    topic_phrase = intent_classifier.extract_topic_phrase(text) if hasattr(intent_classifier, 'extract_topic_phrase') else ''
+    try:
+        _redis = RedisClientService.create_connection()
+        ack_text = intent_classifier.select_template(
+            intent_type=intent.get('intent_type', 'greeting'),
+            complexity='simple',
+            register=intent.get('register', 'casual'),
+            user_id='default',
+            topic_phrase=topic_phrase,
+            is_reflective=False,
+            redis_conn=_redis,
+        )
+    except Exception:
+        ack_text = "Got it!"
+
+    orchestrator = get_orchestrator()
+    orchestrator.route_path('RESPOND', {
+        'response': ack_text,
+        'topic': topic,
+        'destination': metadata.get('destination', 'web'),
+        'confidence': 0.9,
+        'metadata': metadata,
+    })
+
+    thread_conv_service.add_response(thread_id, ack_text, 0.0)
+
+    return {
+        'response': ack_text,
+        'mode': 'ACKNOWLEDGE',
+        'confidence': 0.9,
+        'generation_time': 0.0,
+    }
+
+
+def _handle_act_triage(
+    triage_result, text, topic, thread_id, metadata,
+    intent, intent_classifier, working_memory, thread_conv_service,
+    context_warmth, exchange_id,
+):
+    """Handle ACT branch — fast ack + spawn tool_worker with triage-selected tools."""
+    import logging
+    from services.prompt_queue import PromptQueue
+    from services.redis_client import RedisClientService
+
+    # Determine ack style: external tools → action language, skills only → reflective
+    _all_tools_are_skills = all(
+        t in ('recall', 'memorize', 'introspect', 'associate', 'schedule', 'goal', 'focus', 'list', 'autobiography')
+        for t in triage_result.tools
+    ) if triage_result.tools else True
+
+    topic_phrase = intent_classifier.extract_topic_phrase(text) if hasattr(intent_classifier, 'extract_topic_phrase') else ''
+    try:
+        _redis = RedisClientService.create_connection()
+        ack_text = intent_classifier.select_template(
+            intent_type=intent.get('intent_type', 'question'),
+            complexity=intent.get('complexity', 'moderate'),
+            register=intent.get('register', 'neutral'),
+            user_id='default',
+            topic_phrase=topic_phrase,
+            is_reflective=_all_tools_are_skills,
+            redis_conn=_redis,
+        )
+    except Exception:
+        ack_text = "On it..."
+
+    orchestrator = get_orchestrator()
+    orchestrator.route_path('TOOL_SPAWN', {
+        'response': ack_text,
+        'topic': topic,
+        'destination': metadata.get('destination', 'web'),
+        'confidence': 0.5,
+        'metadata': metadata,
+    })
+
+    thread_conv_service.add_response(thread_id, ack_text, 0.0)
+
+    # Create cycle records and spawn tool work
+    try:
+        from services.cycle_service import CycleService
+        from services.database_service import get_shared_db_service
+        from workers.tool_worker import tool_worker
+
+        _db_svc2 = get_shared_db_service()
+        cycle_service = CycleService(_db_svc2)
+        user_cycle_id = cycle_service.create_cycle(
+            content=text, topic=topic,
+            cycle_type='user_input', source='user',
+        )
+        ack_cycle_id = cycle_service.create_cycle(
+            content=ack_text, topic=topic,
+            cycle_type='fast_response', source='system',
+            parent_cycle_id=user_cycle_id,
+        )
+
+        tool_queue = PromptQueue(queue_name="tool-queue", worker_func=tool_worker)
+        # Build relevant_tools list in the format tool_worker expects
+        _relevant_for_worker = [
+            {'name': t, 'score': 1.0, 'type': 'tool'}
+            for t in (triage_result.tools or [])
+        ]
+        tool_queue.enqueue({
+            'parent_cycle_id': ack_cycle_id,
+            'root_cycle_id': user_cycle_id,
+            'topic': topic,
+            'text': text,
+            'intent': intent,
+            'metadata': {**metadata, 'thread_id': thread_id},
+            'context_snapshot': {
+                'context_warmth': context_warmth,
+                'tool_hints': triage_result.tools,
+                'relevant_tools': _relevant_for_worker,
+                'triage_selected_tools': triage_result.tools,
+                'exchange_id': exchange_id,
+            },
+        })
+
+        logging.info(
+            f"[DIGEST] ACT triage: ack delivered, tool work spawned "
+            f"(tools={triage_result.tools}, user_cycle={user_cycle_id}, ack_cycle={ack_cycle_id})"
+        )
+    except Exception as _spawn_err:
+        logging.error(f"[DIGEST] ACT spawn failed: {_spawn_err}")
+
+    return {
+        'response': ack_text,
+        'mode': 'TOOL_SPAWN',
+        'confidence': 0.5,
+        'generation_time': 0.0,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1682,8 +1831,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Store user message embedding for proactive relevance scoring (256-dim, matches drift engine)
     msg_embedding = None
     try:
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
+        from services.embedding_service import get_embedding_service
+        emb_service = get_embedding_service()
         msg_embedding = emb_service.generate_embedding(text)
         from services.autonomous_actions.communicate_action import CommunicateAction
         communicate = CommunicateAction()
@@ -1815,17 +1964,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             session_service.reset_session()
         session_service.mark_topic_switch(topic)
 
-    # Step 9b: Tool relevance scoring (embedding-based, replaces regex tool hints)
-    tool_relevance = None
-    try:
-        from services.tool_relevance_service import ToolRelevanceService
-        tool_relevance = ToolRelevanceService().score_relevance(text, top_k=5)
-        logging.info(
-            f"[DIGEST] Tool relevance: max_score={tool_relevance['max_relevance_score']:.3f}, "
-            f"tools={[t['name'] for t in tool_relevance.get('relevant_tools', [])]}"
-        )
-    except Exception as e:
-        logging.debug(f"[DIGEST] Tool relevance scoring failed: {e}")
+    # Tool relevance scoring removed — handled by CognitiveTriageService
 
     # Step 9c: Compute memory_confidence before intent classifier
     # Use same FOK formula as mode_router_service.py collect_routing_signals()
@@ -1858,281 +1997,250 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         text=text,
         topic=topic,
         context_warmth=context_warmth,
-        tool_relevance=tool_relevance,
         memory_confidence=memory_confidence,
         working_memory_turns=working_memory_turns,
     )
     logging.info(
-        f"[DIGEST] Intent: type={intent['intent_type']}, needs_tools={intent['needs_tools']}, "
+        f"[DIGEST] Intent: type={intent['intent_type']}, "
         f"complexity={intent['complexity']}, confidence={intent['confidence']:.2f}"
     )
 
-    # ── Cancel intent handling ──
-    if intent.get('is_cancel'):
-        _cancel_active_tool_work(topic)
-
-    # ── Self-resolved intent handling ──
-    if intent.get('is_self_resolved'):
-        _cancel_active_tool_work(topic)
-
-    # ── Active tool work dedup ──
-    if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
-        dedup_response = _check_active_tool_work(text, topic)
-        if dedup_response:
-            orchestrator = get_orchestrator()
-            orchestrator.route_path('RESPOND', {
-                'response': dedup_response,
-                'confidence': 0.8,
-                'topic': topic,
-                'destination': metadata.get('destination', 'web'),
-                'metadata': metadata,
-            })
-            working_memory.append_turn(thread_id, 'assistant', dedup_response)
-            _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
-            return f"Topic '{topic}' | DEDUP: active tool work in progress"
-
-    # Step 9d: Collect routing signals (all Redis reads, ~5ms)
-    signals = collect_routing_signals(
-        text=text,
-        topic=topic,
-        context_warmth=context_warmth,
-        working_memory=working_memory,
-        gist_storage=gist_storage,
-        fact_store=fact_store,
-        world_state_service=world_state_service,
-        classification_result=classification_result,
-        session_service=session_service,
-        intent=intent,
-        tool_relevance=tool_relevance,
-    )
-
-    # Step 10: Route — check for fast-path before LLM generation
+    # Step 10: Cognitive Triage — 4-step branching dispatch
     is_fast_path_ack = False
+    routing_result = None
     try:
-        # ── Fast path check: embedding relevance → template ack + background work ──
-        tool_rel_score = tool_relevance.get('max_relevance_score', 0.0) if tool_relevance else 0.0
-        # Only use fast-path if context warmth is sufficient (not the very first message in a section)
-        # This prevents showing temporary ack animations for initial user messages
-        min_context_warmth_for_fast_path = 0.1
-        if (tool_rel_score > 0.35
-                and not intent.get('is_cancel')
-                and not intent.get('is_self_resolved')
-                and context_warmth >= min_context_warmth_for_fast_path):
+        from services.cognitive_triage_service import CognitiveTriageService, TriageContext
+        from services.tool_profile_service import ToolProfileService
 
-            # Pre-route to check if mode router agrees with ACT
-            _previous_mode = None
+        triage_service = CognitiveTriageService()
+        profile_service = ToolProfileService()
+
+        # Detect user signals from previous exchange (calibration)
+        calibration = None
+        try:
+            from services.triage_calibration_service import TriageCalibrationService
+            calibration = TriageCalibrationService()
+            _prev_exch_id = None
             try:
-                from services.routing_decision_service import RoutingDecisionService
-                from services.database_service import get_shared_db_service
-                _db_service = get_shared_db_service()
-                _rds = RoutingDecisionService(_db_service)
-                _previous_mode = _rds.get_previous_mode(topic)
+                _prev_exch_id = thread_conv_service.get_latest_exchange_id(topic) if topic else None
             except Exception:
                 pass
+            if _prev_exch_id and _prev_exch_id != exchange_id:
+                calibration.detect_user_signals(_prev_exch_id, text, intent)
+        except Exception as _cal_err:
+            logging.debug(f"[DIGEST] Calibration signal detection failed: {_cal_err}")
 
-            signals['_prompt_text'] = text
-            routing_result = mode_router.route(signals, text, previous_mode=_previous_mode)
-            selected_mode = routing_result['mode']
+        # Condensed working memory summary for triage context
+        _wm_summary = ""
+        try:
+            if wm_turns:
+                _wm_parts = [
+                    f"{t.get('role', '?')[:1].upper()}: {t.get('content', '')[:100]}"
+                    for t in wm_turns[-2:]
+                ]
+                _wm_summary = " | ".join(_wm_parts)
+        except Exception:
+            pass
 
-            if selected_mode == 'ACT':
-                # ── FAST PATH: template ack + background tool work ──
-                topic_phrase = intent_classifier.extract_topic_phrase(text)
+        # Get previous mode from routing decisions
+        _previous_mode = None
+        _previous_tools = []
+        try:
+            from services.routing_decision_service import RoutingDecisionService
+            from services.database_service import get_shared_db_service
+            _db_svc = get_shared_db_service()
+            _rds = RoutingDecisionService(_db_svc)
+            _previous_mode = _rds.get_previous_mode(topic)
+        except Exception:
+            pass
 
-                # Use reflective language when innate skills dominate.
-                # Check the #1 ranked tool: if it's an innate skill, we're in reflective mode
-                # regardless of what other external tools appear lower in the list.
-                _top_tools = tool_relevance.get('relevant_tools', []) if tool_relevance else []
-                _top_scorer = _top_tools[0] if _top_tools else None
-                _is_reflective = (not _top_scorer) or (_top_scorer.get('type') == 'skill')
+        triage_ctx = TriageContext(
+            context_warmth=context_warmth,
+            memory_confidence=memory_confidence,
+            working_memory_turns=working_memory_turns,
+            gist_count=gist_count,
+            fact_count=fact_count,
+            previous_mode=_previous_mode or 'RESPOND',
+            previous_tools=_previous_tools,
+            tool_summaries=profile_service.get_triage_summaries(),
+            working_memory_summary=_wm_summary,
+        )
 
-                from services.redis_client import RedisClientService
-                _redis_for_ack = RedisClientService.create_connection()
-                ack_text = intent_classifier.select_template(
-                    intent_type=intent['intent_type'],
-                    complexity=intent['complexity'],
-                    register=intent.get('register', 'neutral'),
-                    user_id='default',
-                    topic_phrase=topic_phrase,
-                    is_reflective=_is_reflective,
-                    redis_conn=_redis_for_ack,
+        triage_result = triage_service.triage(text, triage_ctx)
+
+        logging.info(
+            f"[DIGEST] Triage: branch={triage_result.branch}, mode={triage_result.mode}, "
+            f"tools={triage_result.tools}, conf_int={triage_result.confidence_internal:.2f}, "
+            f"conf_tool={triage_result.confidence_tool_need:.2f}, "
+            f"time={triage_result.triage_time_ms:.1f}ms"
+            + (" [SELF-EVAL OVERRIDE]" if triage_result.self_eval_override else "")
+        )
+
+        # Log calibration event (partial — outcome filled later)
+        if calibration:
+            try:
+                calibration.log_triage_decision(
+                    exchange_id=exchange_id, topic=topic, result=triage_result
                 )
+            except Exception as _cal_err:
+                logging.debug(f"[DIGEST] Calibration log failed: {_cal_err}")
 
-                # Deliver ack via TOOL_SPAWN orchestrator path
-                orchestrator = get_orchestrator()
-                orchestrator.route_path('TOOL_SPAWN', {
-                    'response': ack_text,
-                    'topic': topic,
-                    'destination': metadata.get('destination', 'web'),
-                    'confidence': 0.5,
-                    'metadata': metadata,
-                })
+        # Handle cancel / self-resolved from social filter
+        if triage_result.mode == 'CANCEL':
+            _cancel_active_tool_work(topic)
+        elif triage_result.mode == 'IGNORE':
+            _cancel_active_tool_work(topic)
 
-                # Store ack in conversation history
-                thread_conv_service.add_response(thread_id, ack_text, 0.0)
-
-                # Create cycle records and spawn tool work
-                try:
-                    from services.cycle_service import CycleService
-                    from services.database_service import get_shared_db_service
-
-                    _db_service2 = get_shared_db_service()
-                    cycle_service = CycleService(_db_service2)
-                    user_cycle_id = cycle_service.create_cycle(
-                        content=text, topic=topic,
-                        cycle_type='user_input', source='user',
-                    )
-                    ack_cycle_id = cycle_service.create_cycle(
-                        content=ack_text, topic=topic,
-                        cycle_type='fast_response', source='system',
-                        parent_cycle_id=user_cycle_id,
-                    )
-
-                    from workers.tool_worker import tool_worker
-                    tool_queue = PromptQueue(queue_name="tool-queue", worker_func=tool_worker)
-                    tool_queue.enqueue({
-                        'parent_cycle_id': ack_cycle_id,
-                        'root_cycle_id': user_cycle_id,
+        # ── Active tool work dedup (before branching, skip for social fast exits) ──
+        if triage_result.mode not in ('CANCEL', 'IGNORE'):
+            if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
+                dedup_response = _check_active_tool_work(text, topic)
+                if dedup_response:
+                    orchestrator = get_orchestrator()
+                    orchestrator.route_path('RESPOND', {
+                        'response': dedup_response,
+                        'confidence': 0.8,
                         'topic': topic,
-                        'text': text,
-                        'intent': intent,
-                        'metadata': {**metadata, 'thread_id': thread_id},
-                        'context_snapshot': {
-                            'context_warmth': context_warmth,
-                            'tool_hints': intent.get('tool_hints', []),
-                            'relevant_tools': tool_relevance.get('relevant_tools', []) if tool_relevance else [],
-                        },
+                        'destination': metadata.get('destination', 'web'),
+                        'metadata': metadata,
                     })
+                    working_memory.append_turn(thread_id, 'assistant', dedup_response)
+                    _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
+                    return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
-                    logging.info(
-                        f"[DIGEST] Fast path: ack delivered, tool work spawned "
-                        f"(user_cycle={user_cycle_id}, ack_cycle={ack_cycle_id})"
-                    )
-                except Exception as e:
-                    logging.error(f"[DIGEST] Fast path cycle/spawn failed: {e}")
+        # ── Branch dispatch ──
+        if triage_result.branch == 'social':
+            # Social branch — template ack, no LLM generation
+            response_data = _handle_social_triage(
+                triage_result, text, topic, thread_id, metadata,
+                intent, intent_classifier, working_memory, thread_conv_service,
+            )
+            is_fast_path_ack = (triage_result.mode in ('ACKNOWLEDGE', 'IGNORE', 'CANCEL'))
+            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0}
 
-                response_data = {
-                    'response': ack_text,
-                    'mode': 'TOOL_SPAWN',
-                    'confidence': 0.5,
-                    'generation_time': 0.0,
-                }
-                is_fast_path_ack = True
+        elif triage_result.branch == 'act':
+            # ACT branch — fast ack + spawn tool_worker with triage-selected tools
+            response_data = _handle_act_triage(
+                triage_result, text, topic, thread_id, metadata,
+                intent, intent_classifier, working_memory, thread_conv_service,
+                context_warmth, exchange_id,
+            )
+            is_fast_path_ack = True
+            routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need}
 
-            else:
-                # Router didn't select ACT — intent mismatch, use normal path
-                _log_cycle_event('intent_mismatch', {
-                    'predicted_needs_tools': True,
-                    'actual_mode': selected_mode,
-                }, topic)
-                # Pass pre-computed routing_result to avoid double mode routing
-                _relevant = tool_relevance.get('relevant_tools', []) if tool_relevance else None
-                response_data, routing_result = route_and_generate(
-                    topic, text, classification, thread_conv_service,
-                    cortex_config, cortex_prompt_map, mode_router, signals, fact_store,
-                    metadata=metadata, context_warmth=context_warmth,
-                    pre_routing_result=routing_result,
-                    relevant_tools=_relevant,
-                    thread_id=thread_id,
-                    returning_from_silence=returning_from_silence,
-                )
         else:
-            # ── Normal path (no tools needed, or low intent confidence) ──
-            _relevant = tool_relevance.get('relevant_tools', []) if tool_relevance else None
+            # RESPOND or CLARIFY branch — route_and_generate with forced mode
+            _forced_signals = collect_routing_signals(
+                text=text,
+                topic=topic,
+                context_warmth=context_warmth,
+                working_memory=working_memory,
+                gist_storage=gist_storage,
+                fact_store=fact_store,
+                world_state_service=world_state_service,
+                classification_result=classification_result,
+                session_service=session_service,
+                intent=intent,
+            )
+            _forced_signals['_prompt_text'] = text
+            _forced_mode = 'CLARIFY' if triage_result.branch == 'clarify' else 'RESPOND'
             response_data, routing_result = route_and_generate(
                 topic, text, classification, thread_conv_service,
-                cortex_config, cortex_prompt_map, mode_router, signals, fact_store,
+                cortex_config, cortex_prompt_map, mode_router, _forced_signals, fact_store,
                 metadata=metadata, context_warmth=context_warmth,
-                relevant_tools=_relevant,
+                pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal},
+                selected_tools=triage_result.tools if triage_result.tools else None,
                 thread_id=thread_id,
                 returning_from_silence=returning_from_silence,
             )
 
-        # Add response to exchange data
-        exchange_data['response'] = {'message': response_data['response']}
-        if response_data.get('actions'):
-            exchange_data['steps'] = response_data['actions']
+    except Exception as _triage_ex:
+        logging.error(f"[DIGEST] Triage dispatch failed: {_triage_ex}", exc_info=True)
+        # Fallback: normal path without triage
+        _fallback_signals = collect_routing_signals(
+            text=text, topic=topic, context_warmth=context_warmth,
+            working_memory=working_memory, gist_storage=gist_storage,
+            fact_store=fact_store, world_state_service=world_state_service,
+            classification_result=classification_result, session_service=session_service,
+            intent=intent,
+        )
+        _fallback_signals['_prompt_text'] = text
+        response_data, routing_result = route_and_generate(
+            topic, text, classification, thread_conv_service,
+            cortex_config, cortex_prompt_map, mode_router, _fallback_signals, fact_store,
+            metadata=metadata, context_warmth=context_warmth,
+            thread_id=thread_id,
+            returning_from_silence=returning_from_silence,
+        )
 
-        # Add complete exchange to session
-        session_service.add_exchange(exchange_data)
+    # Add response to exchange data
+    exchange_data['response'] = {'message': response_data['response']}
+    if response_data.get('actions'):
+        exchange_data['steps'] = response_data['actions']
 
-        # ═══════════════════════════════════════════════════════════
-        # PHASE D: POST-RESPONSE COMMIT
-        # ═══════════════════════════════════════════════════════════
+    # Add complete exchange to session
+    session_service.add_exchange(exchange_data)
 
-        # Step 11a: Append assistant turn to working memory (keyed by thread_id)
-        working_memory.append_turn(thread_id, 'assistant', response_data['response'])
+    # ═══════════════════════════════════════════════════════════
+    # PHASE D: POST-RESPONSE COMMIT
+    # ═══════════════════════════════════════════════════════════
 
-        # Step 11b: Log system response event
-        if interaction_log:
-            interaction_log.log_event(
-                event_type='system_response',
-                payload={
-                    'message': response_data['response'],
-                    'mode': response_data.get('mode', 'RESPOND'),
-                    'confidence': response_data.get('confidence', 0.0),
-                    'generation_time': response_data.get('generation_time', 0.0)
-                },
-                topic=topic,
-                exchange_id=exchange_id,
-                source=source,
-                metadata=metadata,
-                thread_id=thread_id,
-            )
+    # Step 11a: Append assistant turn to working memory (keyed by thread_id)
+    working_memory.append_turn(thread_id, 'assistant', response_data['response'])
 
-        # Step 11c: Encode assistant response (per-message encoding — Phase D)
-        # Skip for fast-path template acks — template has no semantic content worth encoding
-        if not is_fast_path_ack:
-            event_bus.emit_and_handle(ENCODE_EVENT, {
-                'topic': topic,
-                'exchange_id': exchange_id,
-                'prompt_message': '',
-                'response_message': response_data['response'],
-                'metadata': metadata,
-                'thread_id': thread_id,
-            })
+    # Step 11b: Log system response event
+    if interaction_log:
+        interaction_log.log_event(
+            event_type='system_response',
+            payload={
+                'message': response_data['response'],
+                'mode': response_data.get('mode', 'RESPOND'),
+                'confidence': response_data.get('confidence', 0.0),
+                'generation_time': response_data.get('generation_time', 0.0)
+            },
+            topic=topic,
+            exchange_id=exchange_id,
+            source=source,
+            metadata=metadata,
+            thread_id=thread_id,
+        )
 
-        # ═══════════════════════════════════════════════════════════
-        # PHASE E: ASYNC FOLLOW-UP
-        # ═══════════════════════════════════════════════════════════
+    # Step 11c: Encode assistant response (per-message encoding — Phase D)
+    # Skip for fast-path template acks — template has no semantic content worth encoding
+    if not is_fast_path_ack:
+        event_bus.emit_and_handle(ENCODE_EVENT, {
+            'topic': topic,
+            'exchange_id': exchange_id,
+            'prompt_message': '',
+            'response_message': response_data['response'],
+            'metadata': metadata,
+            'thread_id': thread_id,
+        })
 
-        # Step 12: Check for inactivity-based episode generation
-        should_generate, reason = session_service.should_generate_episode()
-        if should_generate:
-            logging.info(f"Episode generation triggered: {reason}")
-            session_data = session_service.get_session_data()
-            enqueue_episodic_memory(session_data)
-            session_service.reset_session()
+    # ═══════════════════════════════════════════════════════════
+    # PHASE E: ASYNC FOLLOW-UP
+    # ═══════════════════════════════════════════════════════════
 
-        # Print the actual response to stdout for the user
-        logging.info(f"\n{'='*60}")
-        logging.info(f"Topic: {topic}")
-        logging.info(f"Mode: {response_data['mode']} (router confidence: {routing_result['router_confidence']:.3f})")
-        logging.info(f"{'='*60}")
-        logging.info(response_data['response'])
-        logging.info(f"{'='*60}\n")
+    # Step 12: Check for inactivity-based episode generation
+    should_generate, reason = session_service.should_generate_episode()
+    if should_generate:
+        logging.info(f"Episode generation triggered: {reason}")
+        session_data = session_service.get_session_data()
+        enqueue_episodic_memory(session_data)
+        session_service.reset_session()
 
-        # Record metrics
-        metrics.record_timing(trace_id, 'response_generation', response_data['generation_time'] * 1000)
-        metrics.record_timing(trace_id, 'total_request', (time.time() - request_start_time) * 1000)
-        metrics.record_counter('responses_total')
+    # Print the actual response to stdout for the user
+    logging.info(f"\n{'='*60}")
+    logging.info(f"Topic: {topic}")
+    _rc = routing_result.get('router_confidence', 0.0) if routing_result else 0.0
+    logging.info(f"Mode: {response_data['mode']} (router confidence: {_rc:.3f})")
+    logging.info(f"{'='*60}")
+    logging.info(response_data['response'])
+    logging.info(f"{'='*60}\n")
 
-        return f"Topic '{topic}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"
+    # Record metrics
+    metrics.record_timing(trace_id, 'response_generation', response_data['generation_time'] * 1000)
+    metrics.record_timing(trace_id, 'total_request', (time.time() - request_start_time) * 1000)
+    metrics.record_counter('responses_total')
 
-    except TimeoutError as e:
-        thread_conv_service.add_response_error(thread_id, f"Timeout: {str(e)}")
-        metrics.record_counter('errors_total')
-        logging.error(f"\n{'='*60}")
-        logging.error(f"ERROR: Timeout")
-        logging.error(f"{'='*60}")
-        logging.error(f"{str(e)}")
-        logging.error(f"{'='*60}\n")
-        return f"Topic '{topic}' | ERROR: Timeout - {str(e)}"
-    except Exception as e:
-        thread_conv_service.add_response_error(thread_id, str(e))
-        metrics.record_counter('errors_total')
-        logging.error(f"\n{'='*60}")
-        logging.error(f"ERROR: Response Generation Failed")
-        logging.error(f"{'='*60}")
-        logging.error(f"{str(e)}")
-        logging.error(f"{'='*60}\n")
-        return f"Topic '{topic}' | ERROR: {str(e)}"
+    return f"Topic '{topic}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"

@@ -70,7 +70,6 @@ def memory_context():
 
         # Relevant concepts
         try:
-            from services.embedding_service import EmbeddingService
             semantic = SemanticRetrievalService(db)
             concepts = semantic.retrieve_concepts("personal goals routines preferences", limit=5)
             result["concepts"] = [

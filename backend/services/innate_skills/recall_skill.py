@@ -210,12 +210,12 @@ def _search_concepts(topic: str, query: str, limit: int) -> tuple:
     """Search semantic concepts via hybrid retrieval."""
     try:
         from services.semantic_retrieval_service import SemanticRetrievalService
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
         from services.database_service import DatabaseService, get_merged_db_config
 
         db_config = get_merged_db_config()
         db_service = DatabaseService(db_config)
-        embedding_service = EmbeddingService()
+        embedding_service = get_embedding_service()
         service = SemanticRetrievalService(db_service, embedding_service)
 
         concepts = service.retrieve_concepts(query=query, limit=limit)

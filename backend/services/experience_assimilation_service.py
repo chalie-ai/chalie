@@ -230,7 +230,7 @@ class ExperienceAssimilationService:
         """Store a reflection observation as an episodic memory."""
         from services.database_service import DatabaseService, get_merged_db_config
         from services.episodic_storage_service import EpisodicStorageService
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
 
         obs_text = observation['text']
         durability = observation.get('durability', 'evolving')
@@ -238,7 +238,7 @@ class ExperienceAssimilationService:
 
         tool_names = [o['tool'] for o in tool_outputs]
 
-        embedding_service = EmbeddingService()
+        embedding_service = get_embedding_service()
         embedding = embedding_service.generate_embedding(obs_text)
 
         episode_data = {
@@ -267,6 +267,15 @@ class ExperienceAssimilationService:
         try:
             storage = EpisodicStorageService(db_service)
             episode_id = storage.store_episode(episode_data)
+
+            # Trigger profile enrichment for high-salience episodes
+            if salience >= 7 and embedding is not None:
+                try:
+                    from services.tool_profile_service import ToolProfileService
+                    ToolProfileService().check_episode_relevance(embedding, str(episode_id))
+                except Exception as _enrich_err:
+                    logger.warning(f"{LOG_PREFIX} Profile enrichment check failed: {_enrich_err}")
+
             logger.info(
                 f"{LOG_PREFIX} Stored episode {episode_id}: "
                 f"'{obs_text[:80]}' (durability={durability}, salience={salience})"

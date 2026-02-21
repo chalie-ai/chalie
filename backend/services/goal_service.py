@@ -434,10 +434,10 @@ class GoalService:
 
         # Load embedding service for similarity check
         try:
-            from services.embedding_service import EmbeddingService
+            from services.embedding_service import get_embedding_service
             import numpy as np
 
-            emb_service = EmbeddingService()
+            emb_service = get_embedding_service()
 
             # Build existing goal embeddings
             existing_embeddings = []

@@ -292,8 +292,8 @@ def episodic_memory_worker(job_data: dict) -> str:
         embedding_text = " | ".join(embedding_text_parts)
 
         logging.debug(f"Embedding text: {embedding_text}")
-        from services.embedding_service import EmbeddingService
-        emb_service = EmbeddingService()
+        from services.embedding_service import get_embedding_service
+        emb_service = get_embedding_service()
         embedding = emb_service.generate_embedding(embedding_text)
         episode_data['embedding'] = embedding
 
@@ -306,8 +306,34 @@ def episodic_memory_worker(job_data: dict) -> str:
 
         logging.info(f"Generated and stored episode {episode_id} for topic '{topic}'")
 
-        # Semantic consolidation happens during idle/sleep periods only
-        # (via IdleConsolidationService), not per-episode.
+        # Feed the semantic consolidation tracker so concepts get created
+        try:
+            from services.semantic_consolidation_tracker import SemanticConsolidationTracker
+            tracker = SemanticConsolidationTracker()
+            tracker.increment_episode_count()
+            tracker.record_episode_salience(salience_float)
+
+            should_trigger, trigger_reason = tracker.should_trigger_consolidation(salience_float)
+            if should_trigger:
+                from services.config_service import ConfigService as _CS
+                _sem_config = _CS.connections()
+                _sem_queue_name = _sem_config.get("redis", {}).get("queues", {}).get(
+                    "semantic_consolidation_queue", {}
+                ).get("name", "semantic_consolidation_queue")
+                _sem_redis = RedisClientService.create_connection(decode_responses=False)
+                _sem_queue = Queue(_sem_queue_name, connection=_sem_redis)
+                _sem_queue.enqueue(
+                    'workers.semantic_consolidation_worker.semantic_consolidation_worker',
+                    {
+                        "type": "batch_consolidation",
+                        "trigger": trigger_reason,
+                        "timestamp": time.time(),
+                    }
+                )
+                tracker.reset_episode_count()
+                logging.info(f"[EPISODIC] Enqueued semantic consolidation (trigger={trigger_reason})")
+        except Exception as tracker_err:
+            logging.warning(f"[EPISODIC] Consolidation tracker error (non-fatal): {tracker_err}")
 
         # Cleanup: Remove consolidated exchanges from thread conversation
         if thread_id:

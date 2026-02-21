@@ -116,6 +116,9 @@ export class Renderer {
     if (meta.removed_by) {
       form.classList.add('speech-form--pending-removal');
       this._messagesByRemovalId.set(meta.removed_by, form);
+    } else {
+      // If this form was marked for removal but no longer is, remove the class
+      form.classList.remove('speech-form--pending-removal');
     }
 
     // Handle removes parameter — delete messages with matching removed_by

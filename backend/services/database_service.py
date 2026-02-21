@@ -159,6 +159,26 @@ class DatabaseService:
             except Exception as e:
                 logging.error(f"Failed to release connection: {e}")
 
+    def execute(self, sql, params=None):
+        """Execute a write statement (INSERT/UPDATE/DELETE) with auto-commit."""
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(sql, params)
+            finally:
+                cursor.close()
+
+    def fetch_all(self, sql, params=None):
+        """Execute a SELECT and return all rows as a list of dicts."""
+        import psycopg2.extras
+        with self.connection() as conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                cursor.execute(sql, params)
+                return [dict(row) for row in cursor.fetchall()]
+            finally:
+                cursor.close()
+
     @contextmanager
     def connection(self):
         """

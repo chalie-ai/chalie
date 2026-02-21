@@ -19,7 +19,7 @@ import numpy as np
 import random
 from typing import List, Dict, Any, Optional
 from collections import deque
-from services.embedding_service import EmbeddingService
+from services.embedding_service import get_embedding_service
 from services.semantic_storage_service import SemanticStorageService
 from services.config_service import ConfigService
 
@@ -29,9 +29,9 @@ class SemanticRetrievalService:
     Handles semantic retrieval using hybrid search with confidence filtering.
     """
 
-    def __init__(self, db_service, embedding_service: EmbeddingService = None, storage_service: SemanticStorageService = None):
+    def __init__(self, db_service, embedding_service = None, storage_service: SemanticStorageService = None):
         self.db_service = db_service
-        self.embedding_service = embedding_service or EmbeddingService()
+        self.embedding_service = embedding_service or get_embedding_service()
         self.storage_service = storage_service or SemanticStorageService(db_service)
         self.config = ConfigService.get_agent_config("semantic-memory")
         self.min_confidence_threshold = self.config.get('min_confidence_threshold', 0.4)
