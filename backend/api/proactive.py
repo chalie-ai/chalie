@@ -29,6 +29,21 @@ def events_stream():
         from services.redis_client import RedisClientService
 
         redis = RedisClientService.create_connection()
+
+        # Drain any buffered notifications missed during a reconnect gap.
+        # Events published to output:events while the stream was down are lost
+        # from pub/sub; the notifications:recent list catches them up.
+        while True:
+            item = redis.lpop('notifications:recent')
+            if not item:
+                break
+            try:
+                data = json.loads(item)
+                event_type = data.get('type', 'message')
+                yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+            except Exception:
+                pass
+
         pubsub = redis.pubsub()
         pubsub.subscribe(OUTPUT_CHANNEL)
 

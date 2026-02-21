@@ -1,0 +1,275 @@
+{
+  "enabled": true,
+  "log_exclusions": true,
+  "template_masks": {
+    "RESPOND": {
+      "identity_context": true,
+      "onboarding_nudge": true,
+      "user_traits": true,
+      "communication_style": true,
+      "active_goals": true,
+      "active_lists": true,
+      "client_context": true,
+      "focus": true,
+      "working_memory": true,
+      "facts": true,
+      "gists": true,
+      "episodic_memory": true,
+      "act_history": true,
+      "available_skills": true,
+      "available_tools": false,
+      "world_state": true,
+      "warm_return_hint": false,
+      "identity_modulation": true
+    },
+    "CLARIFY": {
+      "identity_context": true,
+      "onboarding_nudge": true,
+      "user_traits": true,
+      "communication_style": true,
+      "active_goals": false,
+      "active_lists": true,
+      "client_context": true,
+      "focus": true,
+      "working_memory": true,
+      "facts": true,
+      "gists": true,
+      "episodic_memory": true,
+      "act_history": true,
+      "available_skills": false,
+      "available_tools": false,
+      "world_state": true,
+      "warm_return_hint": false,
+      "identity_modulation": true
+    },
+    "ACT": {
+      "identity_context": false,
+      "onboarding_nudge": false,
+      "user_traits": false,
+      "communication_style": true,
+      "active_goals": true,
+      "active_lists": true,
+      "client_context": true,
+      "focus": true,
+      "working_memory": true,
+      "facts": true,
+      "gists": true,
+      "episodic_memory": true,
+      "act_history": true,
+      "available_skills": true,
+      "available_tools": true,
+      "world_state": true,
+      "warm_return_hint": false,
+      "identity_modulation": false
+    },
+    "ACKNOWLEDGE": {
+      "identity_context": true,
+      "onboarding_nudge": false,
+      "user_traits": true,
+      "communication_style": true,
+      "active_goals": false,
+      "active_lists": true,
+      "client_context": false,
+      "focus": false,
+      "working_memory": false,
+      "facts": false,
+      "gists": false,
+      "episodic_memory": false,
+      "act_history": false,
+      "available_skills": false,
+      "available_tools": false,
+      "world_state": false,
+      "warm_return_hint": true,
+      "identity_modulation": true
+    }
+  },
+  "dependencies": {
+    "episodic_memory": ["gists"],
+    "focus": ["active_goals"],
+    "available_tools": ["available_skills"],
+    "onboarding_nudge": ["identity_context"],
+    "warm_return_hint": ["identity_context"]
+  },
+  "signal_rules": {
+    "episodic_memory": [
+      {
+        "when": {
+          "context_warmth_gte": 0.5,
+          "working_memory_turns_gte": 2
+        },
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "greeting_pattern": true
+        },
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "information_density_lt": 0.2
+        },
+        "strength": "hard"
+      }
+    ],
+    "world_state": [
+      {
+        "when": {
+          "implicit_reference": false,
+          "information_density_lt": 0.5
+        },
+        "strength": "hard"
+      },
+      {
+        "when": {
+          "greeting_pattern": true,
+          "prompt_token_count_lt": 6
+        },
+        "strength": "hard"
+      }
+    ],
+    "working_memory": [
+      {
+        "when": {
+          "greeting_pattern": true,
+          "prompt_token_count_lt": 6
+        },
+        "strength": "hard"
+      }
+    ],
+    "focus": [
+      {
+        "when": {
+          "greeting_pattern": true
+        },
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "greeting_pattern": true,
+          "prompt_token_count_lt": 6
+        },
+        "strength": "hard"
+      }
+    ],
+    "active_goals": [
+      {
+        "when": {
+          "greeting_pattern": true
+        },
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "information_density_lt": 0.2
+        },
+        "strength": "hard"
+      }
+    ],
+    "available_skills": [
+      {
+        "when": {
+          "tool_relevance_score_lt": 0.1,
+          "intent_needs_tools": false
+        },
+        "strength": "hard"
+      }
+    ],
+    "facts": [
+      {
+        "when": {
+          "fact_count_eq": 0
+        },
+        "strength": "hard"
+      }
+    ],
+    "gists": [
+      {
+        "when": {
+          "gist_count_eq": 0,
+          "working_memory_turns_gte": 2
+        },
+        "strength": "hard"
+      }
+    ],
+    "active_lists": [
+      {
+        "when": {},
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "greeting_pattern": true
+        },
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "greeting_pattern": true,
+          "prompt_token_count_lt": 6
+        },
+        "strength": "hard"
+      }
+    ],
+    "onboarding_nudge": [
+      {
+        "when": {
+          "intent_needs_tools": true
+        },
+        "strength": "hard"
+      }
+    ]
+  },
+  "urgency_overrides": [
+    "working_memory",
+    "world_state",
+    "facts"
+  ],
+  "safety_overrides": {
+    "identity_context": [
+      {
+        "when": {
+          "returning_from_silence": true
+        }
+      },
+      {
+        "when": {
+          "context_warmth_lt": 0.3
+        }
+      }
+    ],
+    "working_memory": [
+      {
+        "when": {
+          "working_memory_turns_gte": 1
+        }
+      }
+    ],
+    "warm_return_hint": [
+      {
+        "when": {
+          "returning_from_silence": true
+        }
+      }
+    ],
+    "user_traits": [
+      {
+        "when": {
+          "returning_from_silence": true
+        }
+      }
+    ]
+  },
+  "soft_recovery_budget": 1500,
+  "soft_recovery_priority": [
+    "episodic_memory",
+    "working_memory",
+    "world_state",
+    "facts",
+    "active_goals",
+    "active_lists",
+    "focus",
+    "gists"
+  ],
+  "max_included_nodes": 12
+}

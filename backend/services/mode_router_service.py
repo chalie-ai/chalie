@@ -112,12 +112,37 @@ def collect_routing_signals(
     implicit_reference = bool(IMPLICIT_REFERENCE.search(text))
 
     # Tool relevance score from embedding-based ToolRelevanceService
-    # Use only external tools (type='tool'), not innate skills (type='skill'),
-    # to avoid inflating ACT score when only memory/introspection skills match.
+    # Include external tools AND action-oriented skills (those with side effects
+    # that require ACT mode). Cognitive skills (recall, introspect, etc.) are
+    # excluded to avoid inflating ACT score for simple memory queries.
+    ACTION_SKILLS = frozenset({'list', 'schedule', 'goal', 'focus'})
     tool_relevance_score = 0.0
     if tool_relevance:
-        ext_tools = [t for t in tool_relevance.get('relevant_tools', []) if t.get('type') == 'tool']
-        tool_relevance_score = max((t['score'] for t in ext_tools), default=0.0)
+        action_items = [
+            t for t in tool_relevance.get('relevant_tools', [])
+            if t.get('type') == 'tool'
+            or (t.get('type') == 'skill' and t.get('name') in ACTION_SKILLS)
+        ]
+        tool_relevance_score = max((t['score'] for t in action_items), default=0.0)
+
+    # Memory confidence signal: FOK (Feeling-of-Knowing) per topic
+    # Read from Redis (set by recall skill), compute composite confidence score
+    from services.redis_client import RedisClientService
+    redis_conn = RedisClientService.create_connection(decode_responses=True)
+    raw_fok = redis_conn.get(f"fok:{topic}") if topic else None
+    fok = float(raw_fok) if raw_fok else 0.0
+    fok_score = min(1.0, fok / 5.0)
+
+    density_score = min(1.0, (gist_count + fact_count) / 6.0)
+
+    memory_confidence = (
+        0.4 * fok_score
+        + 0.4 * context_warmth
+        + 0.2 * density_score
+    )
+    if is_new_topic:
+        memory_confidence *= 0.7
+    memory_confidence = round(memory_confidence, 3)
 
     # Explicit feedback detection
     explicit_feedback = None
@@ -141,6 +166,7 @@ def collect_routing_signals(
         'topic_confidence': topic_confidence,
         'is_new_topic': is_new_topic,
         'session_exchange_count': session_exchange_count,
+        'memory_confidence': memory_confidence,
 
         # NLP signals
         'prompt_token_count': prompt_token_count,
@@ -361,6 +387,9 @@ class ModeRouterService:
             respond -= w.get('respond.greeting_penalty', 0.20)
         if feedback == 'positive':
             respond -= w.get('respond.feedback_penalty', 0.15)
+        # When tools are genuinely needed, responding without them is wrong
+        if signals.get('intent_needs_tools'):
+            respond -= w.get('respond.tool_needed_penalty', 0.50)
 
         # ── CLARIFY ──────────────────────────────────────────────
         clarify = self.bases['CLARIFY']
@@ -393,8 +422,19 @@ class ModeRouterService:
             act += w.get('act.tool_relevance_weak', 0.15)
         if warmth < 0.15:
             act -= w.get('act.very_cold_penalty', 0.10)
-        if is_warm and fact_density > 0.5:
+        if is_warm and fact_density > 0.5 and not signals.get('intent_needs_tools'):
             act -= w.get('act.warm_facts_penalty', 0.10)
+        # IntentClassifier signal: embedding-based tool need detection.
+        # This was already collected in signals but was never applied here — wiring it in.
+        if signals.get('intent_needs_tools'):
+            act += w.get('act.intent_needs_tools', 0.45)
+        # Graduated memory confidence: low recall confidence → lean toward ACT
+        mem_conf = signals.get('memory_confidence', 1.0)
+        if interrog or has_q:
+            if mem_conf < 0.15:
+                act += w.get('act.memory_confidence_very_low', 0.20)
+            elif mem_conf < 0.30:
+                act += w.get('act.memory_confidence_low', 0.10)
 
         # ── ACKNOWLEDGE ──────────────────────────────────────────
         acknowledge = self.bases['ACKNOWLEDGE']

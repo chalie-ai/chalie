@@ -63,6 +63,7 @@ frontend/
 - **`episodic_storage_service.py`** — PostgreSQL CRUD for episodic memories
 - **`semantic_storage_service.py`** — PostgreSQL CRUD for semantic concepts
 - **`gist_storage_service.py`** — Redis-backed short-term memory with deduplication
+- **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
 
 #### Autonomous Behavior
 - **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle
@@ -86,17 +87,25 @@ frontend/
 - **`config_service.py`** — Environment and JSON file config (precedence: env > .env > json)
 - **`output_service.py`** — Output queue management for responses
 
+#### Topic Classification
+- **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
+- **`adaptive_boundary_detector.py`** — 3-layer self-calibrating topic boundary detector (NEWMA + Transient Surprise + Leaky Accumulator); persists per-thread state in Redis; degrades gracefully to static threshold when Redis is unavailable
+- **`topic_stability_regulator_service.py`** — 24h adaptive tuning of topic classification and boundary detector parameters
+
 #### Session & Conversation
 - **`topic_conversation_service.py`** — File-based conversation persistence
 - **`session_service.py`** — Tracks user sessions and topic changes
 
 ### Innate Skills (`backend/services/innate_skills/`)
 
-5 built-in cognitive skills for the ACT loop:
+8 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
 - **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
+- **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
+- **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
+- **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
 - **`delegate_skill.py`** — External specialist consultation (async)
 
 ## Worker Processes (`backend/workers/`)
@@ -121,7 +130,7 @@ frontend/
 ```
 [User Input]
   → [Consumer] → [Prompt Queue] → [Digest Worker]
-    ├─ Classification (embedding-based, deterministic)
+    ├─ Classification (embedding-based, adaptive boundary detection)
     ├─ Context Assembly (retrieve from all 5 memory layers)
     ├─ Mode Routing (deterministic ~5ms mathematical router)
     ├─ Mode-Specific LLM Generation
@@ -174,15 +183,16 @@ frontend/
 - Replaces old approach: single combined prompt with mode selection embedded
 - Focused scope prevents elaboration and improves consistency
 
-### 5-Layer Memory Hierarchy
+### Memory Hierarchy
 - **Working Memory** (Redis, 4 turns, 24h TTL) — Current conversation
 - **Gists** (Redis, 30min TTL) — Compressed exchange summaries
 - **Facts** (Redis, 24h TTL) — Atomic key-value assertions
 - **Episodes** (PostgreSQL + pgvector) — Narrative units with decay
 - **Concepts** (PostgreSQL + pgvector) — Knowledge nodes and relationships
 - **User Traits** (PostgreSQL) — Personal facts with category-specific decay
+- **Lists** (PostgreSQL) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
-Each layer optimized for its timescale; all integrated via context assembly.
+Each layer optimized for its timescale; all integrated via context assembly. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
 
 ### Configuration Precedence
 ```
@@ -195,6 +205,15 @@ See `PROVIDERS_SETUP.md` for provider configuration.
 - `WorkerManager` maintains shared dictionary via `multiprocessing.Manager()`
 - Workers use `WorkerBase._update_shared_state` to merge per-worker metrics
 - Avoids global locks, keeps worker pool lightweight
+
+### Adaptive Topic Boundary Detection
+- Replaces static 0.65 cosine similarity threshold with a 3-layer self-calibrating detector
+- **NEWMA** (fast/slow EWMA divergence) detects gradual semantic drift
+- **Transient Surprise** (z-score of similarity drop) catches sharp topic shifts
+- **Leaky Accumulator** provides hysteresis — single-message outliers don't create false topics
+- All thresholds derived from running conversation statistics; no manual tuning
+- State persisted in Redis (`adaptive_boundary:{thread_id}`, 24h TTL); cold-start fallback (0.55 threshold) when Redis unavailable or < 5 messages
+- Base parameters (`accumulator_boundary_base`, `accumulator_leak_rate`, NEWMA windows) are the slow outer loop controlled by Topic Stability Regulator
 
 ### Topic Confidence Reinforcement
 - Topic confidence updated via bounded reinforcement formula

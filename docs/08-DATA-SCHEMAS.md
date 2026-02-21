@@ -109,3 +109,57 @@ CREATE TABLE messages (
 - `metadata`: Additional context (routing decisions, tool invocations, etc.)
 
 These schemas are referenced by the services and workers throughout the codebase.
+
+## PostgreSQL – Lists Tables
+
+Three tables provide deterministic list management with full history (`list_service.py`).
+
+**`lists`** — List containers
+```sql
+CREATE TABLE lists (
+    id          TEXT        PRIMARY KEY,           -- 8-char hex
+    user_id     TEXT        NOT NULL DEFAULT 'primary',
+    name        TEXT        NOT NULL,
+    list_type   TEXT        NOT NULL DEFAULT 'checklist',
+    metadata    JSONB       NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at  TIMESTAMPTZ                        -- soft delete
+);
+-- Unique name per user (case-insensitive, active lists only)
+CREATE UNIQUE INDEX idx_lists_user_name_unique ON lists (user_id, lower(name)) WHERE deleted_at IS NULL;
+```
+
+**`list_items`** — Items within lists
+```sql
+CREATE TABLE list_items (
+    id          TEXT        PRIMARY KEY,           -- 8-char hex
+    list_id     TEXT        NOT NULL REFERENCES lists(id),
+    content     TEXT        NOT NULL,
+    checked     BOOLEAN     NOT NULL DEFAULT FALSE,
+    position    INTEGER     NOT NULL DEFAULT 0,
+    metadata    JSONB       NOT NULL DEFAULT '{}',
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    removed_at  TIMESTAMPTZ                        -- soft delete (preserves history)
+);
+```
+
+**`list_events`** — Audit log for history queries
+```sql
+CREATE TABLE list_events (
+    id           TEXT        PRIMARY KEY,          -- 8-char hex
+    list_id      TEXT        NOT NULL REFERENCES lists(id),
+    event_type   TEXT        NOT NULL,             -- item_added, item_removed, item_checked, item_unchecked, list_created, list_cleared, list_deleted, list_renamed
+    item_content TEXT,
+    details      JSONB       NOT NULL DEFAULT '{}',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+**Design notes:**
+- Items are soft-deleted (`removed_at`) rather than hard-deleted — history is preserved for temporal reasoning
+- Re-adding a previously removed item restores the original row (clears `removed_at`) instead of inserting a duplicate
+- `lists.updated_at` is touched on every item mutation for recency-based resolution
+- Name resolution is case-insensitive; `list_service._resolve_list()` tries exact ID first, then name match
+- Context injection: `list_service.get_lists_for_prompt()` formats a compact summary injected as `{{active_lists}}` into all four mode prompts (RESPOND, ACT, CLARIFY, ACKNOWLEDGE)

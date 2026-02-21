@@ -127,15 +127,12 @@ class ChalieApp {
 
   async _loadVoiceConfig() {
     try {
-      const r = await this.api.fetch('/system/voice-config');
-      if (r.ok) {
-        const cfg = await r.json();
-        this.voice.configure(cfg.tts_endpoint, cfg.stt_endpoint);
-        if (cfg.stt_endpoint) {
-          document.getElementById('micBtn')?.classList.remove('hidden');
-        }
-        this.renderer.setTtsEnabled(!!cfg.tts_endpoint);
+      const cfg = await this.api._get('/system/voice-config');
+      this.voice.configure(cfg.tts_endpoint, cfg.stt_endpoint);
+      if (cfg.stt_endpoint) {
+        document.getElementById('micBtn')?.classList.remove('hidden');
       }
+      this.renderer.setTtsEnabled(!!cfg.tts_endpoint);
     } catch (_) {
       // silently ignore if voice config unavailable
     }
@@ -275,21 +272,30 @@ class ChalieApp {
     const sendBtn = document.getElementById('sendBtn');
     const text = textarea.value.trim();
 
-    if (!text || this._isSending) return;
+    if (!text) return;
+
+    // If a message is in-flight, resolve it before starting a new one
+    if (this._isSending && this._pendingForm) {
+      this.renderer.resolvePendingForm(this._pendingForm, '', {});
+    }
 
     this._isSending = true;
+    this.presence.setState('processing');
     textarea.value = '';
     textarea.style.height = 'auto';
-    sendBtn.disabled = true;
+
+    // Capture timestamp for this exchange
+    const exchangeTimestamp = new Date();
 
     // Detect tools-related query before sending
     const isToolsQuery = /connect|integrat|tool|what.{0,10}(linked|set.?up|active|running)/i.test(text);
 
-    // Render user form
-    this.renderer.appendUserForm(text);
+    // Render user form with timestamp
+    this.renderer.appendUserForm(text, exchangeTimestamp);
 
-    // Create pending form
+    // Create pending form and store reference for potential early resolution
     const pendingForm = this.renderer.createPendingForm();
+    this._pendingForm = pendingForm;
 
     let responseText = '';
     let responseMeta = {};
@@ -301,8 +307,13 @@ class ChalieApp {
       onMessage: (data) => {
         responseText = data.text;
         responseMeta = { topic: data.topic };
-        // Pass through removed_by and removes if present
-        if (data.removed_by) responseMeta.removed_by = data.removed_by;
+        if (data.removed_by) {
+          responseMeta.removed_by = data.removed_by;
+          // Register immediately so the drift stream can find this element
+          // before onDone fires — prevents a race where a tool follow-up
+          // arrives via output:events before resolvePendingForm has run.
+          this.renderer.registerPendingRemoval(data.removed_by, pendingForm);
+        }
         if (data.removes) responseMeta.removes = data.removes;
         this.presence.setState('responding');
       },
@@ -315,10 +326,12 @@ class ChalieApp {
       onDone: (data) => {
         if (responseText) {
           responseMeta.duration_ms = data.duration_ms;
+          responseMeta.ts = exchangeTimestamp;
           this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
         }
         this.presence.setState('resting');
         this._isSending = false;
+        this._pendingForm = null;
         // Re-enable input
         document.getElementById('messageInput').focus();
         // Show ToolsCard if the message was about connected integrations
@@ -343,10 +356,10 @@ class ChalieApp {
 
       for (const exchange of data.exchanges) {
         if (exchange.prompt) {
-          this.renderer.appendUserForm(exchange.prompt);
+          this.renderer.appendUserForm(exchange.prompt, exchange.timestamp);
         }
         if (exchange.response) {
-          this.renderer.appendChalieForm(exchange.response, { topic: exchange.topic });
+          this.renderer.appendChalieForm(exchange.response, { topic: exchange.topic, ts: exchange.timestamp });
         }
       }
     } catch (err) {
@@ -420,6 +433,7 @@ class ChalieApp {
     const meta = {
       topic: data.topic,
       type: data.type,
+      ts: new Date(),
     };
     if (data.removed_by) meta.removed_by = data.removed_by;
     if (data.removes) meta.removes = data.removes;
@@ -660,11 +674,11 @@ class ChalieApp {
       return;
     }
 
-    // iOS-style drifting gradient blobs
+    // Radiant drifting gradient blobs
     let t = 0;
     const animate = () => {
       this._drawAmbientFrame(ctx, canvas, t);
-      t += 0.0025;
+      t += 0.0008;
       requestAnimationFrame(animate);
     };
     animate();
@@ -675,44 +689,38 @@ class ChalieApp {
     const h = canvas.height;
     const m = Math.min(w, h);
 
-    // Base fill
-    ctx.fillStyle = '#1a2d42';
+    // Near-black base. The orbs are the only light source.
+    ctx.fillStyle = '#06080e';
     ctx.fillRect(0, 0, w, h);
 
-    // iOS-style orbs: large, soft, overlapping, independently breathing
-    // Each has its own drift speed on x/y and a radius breath cycle
+    // Restrained orbs — think distant nebulae, not lava lamps.
+    // Two warm (violet / magenta) and one cool (cyan) for contrast.
+    // Low alpha keeps it atmospheric, not decorative.
     const orbs = [
-      // Large dominant orb — top-left, sky blue
-      { cx: 0.25, cy: 0.25, r: 0.65, color: [90, 160, 225],  alpha: 0.15,
-        dx: 0.07, dy: 0.05, sx: 1.0,  sy: 0.8,  rBreath: 0.08, phase: 0.0  },
-      // Mid-right — cooler blue
-      { cx: 0.75, cy: 0.45, r: 0.58, color: [130, 190, 235], alpha: 0.13,
-        dx: 0.06, dy: 0.07, sx: 0.85, sy: 1.1,  rBreath: 0.06, phase: 2.1  },
-      // Bottom-center — indigo tint
-      { cx: 0.50, cy: 0.85, r: 0.50, color: [100, 145, 215], alpha: 0.12,
-        dx: 0.05, dy: 0.04, sx: 1.15, sy: 0.9,  rBreath: 0.07, phase: 3.9  },
-      // Top-right accent — pale cyan
-      { cx: 0.82, cy: 0.18, r: 0.38, color: [170, 215, 245], alpha: 0.10,
-        dx: 0.09, dy: 0.06, sx: 0.95, sy: 1.05, rBreath: 0.09, phase: 1.3  },
-      // Bottom-left — deep blue anchor
-      { cx: 0.15, cy: 0.78, r: 0.42, color: [70,  130, 200], alpha: 0.11,
-        dx: 0.04, dy: 0.08, sx: 1.05, sy: 0.95, rBreath: 0.05, phase: 5.1  },
+      // Large violet field — dominates top-left — this IS the brand color
+      { cx: 0.22, cy: 0.20, r: 0.70, color: [100, 60, 220], alpha: 0.08,
+        dx: 0.05, dy: 0.04, sx: 1.0,  sy: 0.75, rBreath: 0.04, phase: 0.0  },
+      // Magenta — lower-right — warm human counterpoint
+      { cx: 0.78, cy: 0.65, r: 0.55, color: [180, 30, 140], alpha: 0.06,
+        dx: 0.04, dy: 0.05, sx: 0.85, sy: 1.1,  rBreath: 0.04, phase: 2.4  },
+      // Cyan accent — top-right — the "technology" color, small and precise
+      { cx: 0.80, cy: 0.15, r: 0.30, color: [0, 180, 220],  alpha: 0.05,
+        dx: 0.06, dy: 0.03, sx: 0.95, sy: 1.05, rBreath: 0.03, phase: 1.5  },
+      // Deep indigo anchor — bottom — grounds the composition
+      { cx: 0.40, cy: 0.90, r: 0.50, color: [60, 40, 140],  alpha: 0.06,
+        dx: 0.03, dy: 0.06, sx: 1.10, sy: 0.90, rBreath: 0.04, phase: 4.2  },
     ];
 
     for (const orb of orbs) {
-      // Drift: independent horizontal and vertical oscillation at slightly
-      // different rates so paths are elliptical / Lissajous-like
       const x = w * (orb.cx + orb.dx * Math.sin(t * orb.sx + orb.phase));
       const y = h * (orb.cy + orb.dy * Math.cos(t * orb.sy + orb.phase * 0.7));
-      // Radius breathes in/out
-      const r = m * orb.r * (1 + orb.rBreath * Math.sin(t * 0.6 + orb.phase));
-      // Alpha breathes subtly too
-      const a = orb.alpha * (0.85 + 0.15 * Math.cos(t * 0.4 + orb.phase));
+      const r = m * orb.r * (1 + orb.rBreath * Math.sin(t * 0.5 + orb.phase));
+      const a = orb.alpha * (0.85 + 0.15 * Math.cos(t * 0.3 + orb.phase));
 
       const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
       const [cr, cg, cb] = orb.color;
       grad.addColorStop(0,   `rgba(${cr},${cg},${cb},${a})`);
-      grad.addColorStop(0.5, `rgba(${cr},${cg},${cb},${(a * 0.4).toFixed(3)})`);
+      grad.addColorStop(0.4, `rgba(${cr},${cg},${cb},${(a * 0.35).toFixed(4)})`);
       grad.addColorStop(1,   `rgba(${cr},${cg},${cb},0)`);
 
       ctx.fillStyle = grad;

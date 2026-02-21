@@ -36,17 +36,23 @@ class ClientContextService:
             str: "City, Country" format, or None on failure
         """
         try:
-            url = f"https://wttr.in/{lat},{lon}?format=j1"
-            response = requests.get(url, timeout=3)
+            url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=en"
+            headers = {"User-Agent": "Chalie/1.0"}
+            response = requests.get(url, headers=headers, timeout=3)
             response.raise_for_status()
             data = response.json()
-            nearest_area = data.get("nearest_area", [])
-            if nearest_area:
-                area = nearest_area[0]
-                city = area.get("areaName", [{}])[0].get("value", "Unknown")
-                country = area.get("country", [{}])[0].get("value", "Unknown")
+            address = data.get("address", {})
+            # Prefer city/town/municipality over finer sub-localities to avoid
+            # obscure hamlet names (e.g. Maltese sub-village names with special chars)
+            city = (address.get("city") or address.get("town") or
+                    address.get("municipality") or address.get("county") or
+                    address.get("state_district") or "")
+            country = address.get("country", "")
+            if city and country:
                 return f"{city}, {country}"
-        except (requests.RequestException, KeyError, ValueError, IndexError) as e:
+            if country:
+                return country
+        except (requests.RequestException, KeyError, ValueError) as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to resolve location: {e}")
         return None
 
@@ -129,20 +135,14 @@ class ClientContextService:
 
         parts = []
 
-        # Format time in user's timezone
-        if local_time := ctx.get("local_time"):
-            if timezone := ctx.get("timezone"):
-                try:
-                    # Parse ISO format time and convert to user's timezone
-                    dt = datetime.fromisoformat(local_time.replace("Z", "+00:00"))
-                    user_tz = ZoneInfo(timezone)
-                    user_dt = dt.astimezone(user_tz)
-                    # Format as "03:45 PM, Thursday 20 February 2026"
-                    time_str = user_dt.strftime("%I:%M %p, %A %d %B %Y").lstrip("0")
-                    parts.append(f"Current time: {time_str}")
-                except (ValueError, KeyError) as e:
-                    logging.debug(f"[CLIENT CONTEXT] Failed to format time: {e}")
-                    parts.append(f"Current time: {local_time}")
+        # Format time using live server clock in user's timezone (avoids stale heartbeat)
+        if timezone := ctx.get("timezone"):
+            try:
+                user_dt = datetime.now(ZoneInfo(timezone))
+                time_str = user_dt.strftime("%I:%M %p, %A %d %B %Y").lstrip("0")
+                parts.append(f"Current time: {time_str}")
+            except Exception as e:
+                logging.debug(f"[CLIENT CONTEXT] Failed to compute time: {e}")
 
         # Format location: only include if resolved name is available (never expose raw coordinates to LLM)
         if location_name := ctx.get("location_name"):

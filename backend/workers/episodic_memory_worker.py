@@ -49,7 +49,8 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     # Condition 2: 10+ minutes since earliest exchange
     earliest_time = None
     for exchange in enriched:
-        response_time_str = exchange.get('response', {}).get('time')
+        resp = exchange.get('response')
+        response_time_str = resp.get('time') if isinstance(resp, dict) else None
         if response_time_str:
             # Parse time (format: "2026-01-22 04:52")
             try:
@@ -228,8 +229,8 @@ def episodic_memory_worker(job_data: dict) -> str:
         conversation_service = ThreadConversationService()
 
         # Build session data from exchanges
-        start_time = exchanges[0].get('prompt', {}).get('time', datetime.now().isoformat())
-        end_time = exchanges[-1].get('response', {}).get('time', datetime.now().isoformat())
+        start_time = (exchanges[0].get('prompt') or {}).get('time', datetime.now().isoformat())
+        end_time = (exchanges[-1].get('response') or {}).get('time', datetime.now().isoformat())
 
         session_data = {
             'topic': topic,

@@ -196,6 +196,66 @@ def _extract_and_store_traits(memory_chunk: dict, metadata: dict):
         logging.info(f"[memory_chunker] Stored {stored}/{len(traits)} user traits")
 
 
+def _extract_and_store_communication_style(memory_chunk: dict, metadata: dict):
+    """
+    Extract communication style from memory chunk and store as a single structured trait.
+
+    Stores one 'communication_style' trait per exchange as JSON value containing all
+    dimensions. Merges with existing via EMA (0.3 * observed + 0.7 * existing) per dim.
+    Skips if confidence < 3.
+
+    Args:
+        memory_chunk: The LLM-generated memory chunk (may contain communication_style)
+        metadata: Job metadata
+    """
+    import json as _json
+
+    comm_style = memory_chunk.get('communication_style', {})
+    if not comm_style or not isinstance(comm_style, dict):
+        return
+
+    confidence_raw = comm_style.get('confidence', 0)
+    if confidence_raw < 3:
+        return
+
+    # Normalize confidence from 0-10 to 0-1
+    confidence = max(0.0, min(1.0, confidence_raw / 10.0))
+
+    dimensions = {
+        k: comm_style[k]
+        for k in ('verbosity', 'directness', 'formality', 'abstraction_level')
+        if k in comm_style and isinstance(comm_style[k], (int, float)) and comm_style[k] > 0
+    }
+    if not dimensions:
+        return
+
+    from services.user_trait_service import UserTraitService
+    from services.database_service import get_shared_db_service
+
+    db_service = get_shared_db_service()
+    trait_service = UserTraitService(db_service)
+
+    # Load existing style for EMA merge
+    existing = trait_service.get_communication_style()
+    if existing:
+        merged = {}
+        for dim, val in dimensions.items():
+            old_val = existing.get(dim, val)
+            merged[dim] = round(0.3 * val + 0.7 * old_val, 2)
+    else:
+        merged = {k: round(float(v), 2) for k, v in dimensions.items()}
+
+    trait_service.store_trait(
+        trait_key='communication_style',
+        trait_value=_json.dumps(merged),
+        confidence=confidence,
+        category='communication_style',
+        source='inferred',
+        is_literal=True,
+    )
+    logging.info(f"[memory_chunker] Stored communication_style: {merged} (confidence={confidence:.2f})")
+
+
 def _apply_identity_reinforcement(topic: str, memory_chunk: dict):
     """Apply dual-channel identity reinforcement after chunk extraction."""
     from services.redis_client import RedisClientService
@@ -357,6 +417,15 @@ def memory_chunker_worker(job_data: dict) -> str:
                 raise
             except Exception as e:
                 logging.warning(f"[memory_chunker] Trait extraction failed: {e}")
+
+            # Extract and store communication style from the same memory chunk
+            try:
+                metadata = job_data.get('metadata', {})
+                _extract_and_store_communication_style(memory_chunk, metadata)
+            except TimeoutError:
+                raise
+            except Exception as e:
+                logging.warning(f"[memory_chunker] Communication style extraction failed: {e}")
 
             return f"Topic '{topic}' | Memory chunk generated in {generation_time:.2f}s"
 

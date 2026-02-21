@@ -17,6 +17,7 @@ export class Renderer {
     this._userScrolledUp = false;
     this._messagesByRemovalId = new Map(); // Track messages by removed_by ID
     this._ttsEnabled = false;
+    this._activeForm = null;
     this._initScrollTracking();
   }
 
@@ -30,11 +31,19 @@ export class Renderer {
   // ---------------------------------------------------------------------------
 
   /** Append a user speech form. */
-  appendUserForm(text) {
+  appendUserForm(text, ts = null) {
     const el = this._createEl('div', 'speech-form speech-form--user');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = text;
     el.appendChild(textEl);
+
+    // Append meta row with timestamp
+    const metaRow = this._createEl('div', 'speech-form__meta');
+    const timestampEl = this._createEl('span', 'speech-form__timestamp');
+    timestampEl.textContent = this._formatTimestamp(ts);
+    metaRow.appendChild(timestampEl);
+    el.appendChild(metaRow);
+
     this._spine.appendChild(el);
     this._scrollToBottom();
     return el;
@@ -70,6 +79,7 @@ export class Renderer {
     }
 
     this._spine.appendChild(el);
+    this._setActiveForm(el);
     this._scrollToBottom();
     return el;
   }
@@ -117,6 +127,7 @@ export class Renderer {
       }
     }
 
+    this._setActiveForm(form);
     this._scrollToBottom();
   }
 
@@ -147,6 +158,18 @@ export class Renderer {
     return cardElement;
   }
 
+  /**
+   * Register a pending form under a removal ID immediately, before onDone fires.
+   * Allows the drift stream to find and remove the placeholder even when a
+   * tool follow-up arrives before resolvePendingForm has been called.
+   * @param {string} id — the removed_by token
+   * @param {HTMLElement} el — the pending form element
+   */
+  registerPendingRemoval(id, el) {
+    el.classList.add('speech-form--pending-removal');
+    this._messagesByRemovalId.set(id, el);
+  }
+
   /** Remove all children from the spine. */
   clear() {
     this._spine.innerHTML = '';
@@ -158,6 +181,11 @@ export class Renderer {
 
   _buildMetaRow(text, meta) {
     const metaRow = this._createEl('div', 'speech-form__meta');
+
+    // Timestamp — always shown
+    const timestampEl = this._createEl('span', 'speech-form__timestamp');
+    timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
+    metaRow.appendChild(timestampEl);
 
     // TTS speak button — only shown when TTS is configured
     if (this._ttsEnabled) {
@@ -191,5 +219,20 @@ export class Renderer {
     requestAnimationFrame(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
+  }
+
+  _formatTimestamp(ts) {
+    const d = ts ? new Date(ts) : new Date();
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${day} ${months[d.getMonth()]} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+
+  _setActiveForm(el) {
+    if (this._activeForm) {
+      this._activeForm.classList.remove('speech-form--active');
+    }
+    el.classList.add('speech-form--active');
+    this._activeForm = el;
   }
 }

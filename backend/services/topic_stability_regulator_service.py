@@ -71,12 +71,20 @@ class TopicStabilityRegulator:
         "w_freshness": 0.3,
         "w_salience": 0.1,
 
+        # Adaptive boundary detector parameters
+        "accumulator_leak_rate": 0.4,       # Fraction of accumulator lost per message
+        "accumulator_boundary_base": 2.5,   # Base firing threshold for leaky accumulator
+        "newma_window_fast": 4,             # Fast EWMA window (recent semantic center)
+        "newma_window_slow": 18,            # Slow EWMA window (long-term baseline)
+
         # Cooldown tracking (ISO timestamps)
         "last_adjusted": {
             "switch_threshold": None,
             "decay_constant": None,
             "w_semantic": None,
-            "w_freshness": None
+            "w_freshness": None,
+            "accumulator_boundary_base": None,
+            "accumulator_leak_rate": None
         }
     }
 
@@ -99,20 +107,24 @@ class TopicStabilityRegulator:
         "decay_constant": (60, 1800),
         "w_semantic": (0.3, 0.8),
         "w_freshness": (0.1, 0.6),
-        "w_salience": (0.05, 0.2)
+        "w_salience": (0.05, 0.2),
+        "accumulator_leak_rate": (0.2, 0.7),
+        "accumulator_boundary_base": (1.5, 4.0),
+        "newma_window_fast": (2, 8),
+        "newma_window_slow": (10, 30)
     }
 
     # Metric → Parameter mapping (primary + fallback for boundary conditions)
     # Format: (primary_parameter, fallback_parameter)
     CONTROL_MAP = {
-        "switch_frequency": ("switch_threshold", None),           # Primary only
-        "avg_topic_lifespan": ("decay_constant", None),          # Primary only
-        "fragmentation_rate": ("switch_threshold", "w_semantic") # Primary + fallback
+        "switch_frequency": ("accumulator_boundary_base", "switch_threshold"),
+        "avg_topic_lifespan": ("decay_constant", None),
+        "fragmentation_rate": ("accumulator_boundary_base", "accumulator_leak_rate")
     }
 
-    # Rationale for fragmentation control:
-    # - Primary: switch_threshold (fragmentation mainly caused by threshold too high)
-    # - Fallback: w_semantic (if threshold at bound, adjust semantic weight instead)
+    # Rationale:
+    # - switch_frequency: primary is boundary_base (adaptive detector gate), fallback is legacy threshold
+    # - fragmentation_rate: boundary_base raises bar; leak_rate as fallback slows accumulation
 
     def __init__(self, db=None):
         self.db = db or DatabaseService(get_merged_db_config())
@@ -506,41 +518,52 @@ class TopicStabilityRegulator:
         Calculate minimal correction for parameter.
 
         Direction logic:
-        - switch_frequency too high → INCREASE threshold (harder to create topic)
-        - switch_frequency too low → DECREASE threshold (easier to create topic)
+        - switch_frequency too high → INCREASE accumulator_boundary_base (harder to cross)
+        - switch_frequency too low → DECREASE accumulator_boundary_base (easier to cross)
         - lifespan too short → INCREASE decay_constant (longer memory)
         - lifespan too long → DECREASE decay_constant (shorter memory)
-        - fragmentation too high → INCREASE w_semantic (prioritize similarity)
+        - fragmentation too high → INCREASE accumulator_boundary_base, or INCREASE leak_rate
+        - switch_threshold retained as fallback for switch_frequency
 
         Returns:
-            Adjustment value (±0.01 max)
+            Adjustment value
         """
         lower, upper = self.STABILITY_BANDS[metric_name]
 
         if current_value > upper:
             # Above band
             if metric_name == "switch_frequency":
-                # Too many switches → INCREASE threshold
-                adjustment = +self.MAX_DAILY_ADJUSTMENT
+                if parameter == "accumulator_boundary_base":
+                    adjustment = +self.MAX_DAILY_ADJUSTMENT
+                else:
+                    # Legacy fallback: switch_threshold
+                    adjustment = +self.MAX_DAILY_ADJUSTMENT
             elif metric_name == "avg_topic_lifespan":
                 # Topics too long → DECREASE decay
                 adjustment = -10  # Decay constant in seconds
             elif metric_name == "fragmentation_rate":
-                # Too fragmented → INCREASE semantic weight
-                adjustment = +self.MAX_DAILY_ADJUSTMENT
+                if parameter == "accumulator_boundary_base":
+                    adjustment = +self.MAX_DAILY_ADJUSTMENT
+                elif parameter == "accumulator_leak_rate":
+                    # More leakage → slower accumulation
+                    adjustment = +self.MAX_DAILY_ADJUSTMENT
+                else:
+                    adjustment = +self.MAX_DAILY_ADJUSTMENT
             else:
                 adjustment = 0
 
         elif current_value < lower:
             # Below band
             if metric_name == "switch_frequency":
-                # Too few switches → DECREASE threshold
-                adjustment = -self.MAX_DAILY_ADJUSTMENT
+                if parameter == "accumulator_boundary_base":
+                    adjustment = -self.MAX_DAILY_ADJUSTMENT
+                else:
+                    adjustment = -self.MAX_DAILY_ADJUSTMENT
             elif metric_name == "avg_topic_lifespan":
                 # Topics too short → INCREASE decay
                 adjustment = +10
             elif metric_name == "fragmentation_rate":
-                # Not a problem (low fragmentation is good)
+                # Low fragmentation is good — no action
                 adjustment = 0
             else:
                 adjustment = 0
@@ -590,7 +613,9 @@ class TopicStabilityRegulator:
         Get current regulated parameters.
 
         Returns:
-            {switch_threshold, decay_constant, w_semantic, w_freshness, w_salience}
+            {switch_threshold, decay_constant, w_semantic, w_freshness, w_salience,
+             accumulator_leak_rate, accumulator_boundary_base,
+             newma_window_fast, newma_window_slow}
         """
         config = self._load_config()
         return {
@@ -598,7 +623,19 @@ class TopicStabilityRegulator:
             'decay_constant': config['decay_constant'],
             'w_semantic': config['w_semantic'],
             'w_freshness': config['w_freshness'],
-            'w_salience': config['w_salience']
+            'w_salience': config['w_salience'],
+            'accumulator_leak_rate': config.get(
+                'accumulator_leak_rate', self.DEFAULT_CONFIG['accumulator_leak_rate']
+            ),
+            'accumulator_boundary_base': config.get(
+                'accumulator_boundary_base', self.DEFAULT_CONFIG['accumulator_boundary_base']
+            ),
+            'newma_window_fast': config.get(
+                'newma_window_fast', self.DEFAULT_CONFIG['newma_window_fast']
+            ),
+            'newma_window_slow': config.get(
+                'newma_window_slow', self.DEFAULT_CONFIG['newma_window_slow']
+            ),
         }
 
 

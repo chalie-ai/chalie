@@ -74,24 +74,21 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (event.request.method !== 'GET') {
-    if (event.preloadResponse) event.preloadResponse.catch(() => {});
     return;
   }
 
   const { origin, pathname, host } = new URL(event.request.url);
 
-  // 1. Network-only hosts: pass through
+  // 1. Network-only hosts: pass through (never use preload)
   if (NETWORK_ONLY_HOSTS.some((h) => host === h)) {
-    if (event.preloadResponse) event.preloadResponse.catch(() => {});
     return;
   }
 
-  // 2. Same-origin network-only paths: pass through
+  // 2. Same-origin network-only paths: pass through (never use preload)
   if (
     origin === self.location.origin &&
     NETWORK_ONLY_PATHS.some((p) => pathname.startsWith(p))
   ) {
-    if (event.preloadResponse) event.preloadResponse.catch(() => {});
     return;
   }
 
@@ -108,7 +105,6 @@ self.addEventListener('fetch', (event) => {
   }
 
   // 5. Everything else: pass through (network)
-  if (event.preloadResponse) event.preloadResponse.catch(() => {});
 });
 
 // ============================================================================

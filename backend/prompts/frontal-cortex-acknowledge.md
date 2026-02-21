@@ -4,7 +4,15 @@ Your task: give a brief, warm social acknowledgment. Keep it short and natural.
 
 ────────────────────────────────
 
+{{identity_context}}
+
+{{warm_return_hint}}
+
 {{user_traits}}
+
+{{communication_style}}
+
+{{active_lists}}
 
 ## Client Context
 

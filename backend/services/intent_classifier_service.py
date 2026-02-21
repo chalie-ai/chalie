@@ -176,6 +176,8 @@ class IntentClassifierService:
         gist_count: int = 0,
         procedural_stats: Optional[Dict] = None,
         tool_relevance: Optional[Dict] = None,
+        memory_confidence: float = 1.0,
+        working_memory_turns: int = 0,
     ) -> Dict[str, Any]:
         """
         Classify user intent from prompt text + memory signals.
@@ -222,7 +224,8 @@ class IntentClassifierService:
         # Needs tools?
         needs_tools = self._needs_tools(
             intent_type, tool_hints, memory_sufficient, complexity, context_warmth,
-            tool_relevance_score
+            tool_relevance_score, memory_confidence=memory_confidence,
+            working_memory_turns=working_memory_turns
         )
 
         # Confidence
@@ -342,11 +345,14 @@ class IntentClassifierService:
         complexity: str,
         context_warmth: float = 0.0,
         tool_relevance_score: float = 0.0,
+        memory_confidence: float = 1.0,
+        working_memory_turns: int = 0,
     ) -> bool:
         """Determine if this prompt likely needs tool use.
 
         Embedding relevance is the sole authority — regex pattern matching
         no longer gates tool dispatch.
+        Also considers low recall confidence on genuine questions.
         """
         # Embedding relevance is the sole authority
         if tool_relevance_score > 0.35:
@@ -356,7 +362,24 @@ class IntentClassifierService:
         if intent_type in ('greeting', 'feedback', 'empty'):
             return False
 
+        # Secondary signal: low recall confidence on a genuine question
+        if (memory_confidence < 0.20
+            and intent_type in ('question', 'command')
+            and not memory_sufficient
+            and not self._is_opinion_question(tool_hints)
+            and working_memory_turns < 2):  # avoid re-ACT on follow-ups
+            return True
+
         return False
+
+    def _is_opinion_question(self, tool_hints: list) -> bool:
+        """
+        Detect if query is subjective/opinion-based where no tool provides objective answer.
+        Opinion questions: "is this good?", "do you think?", "is it worth?"
+        """
+        # Simple heuristic: check for subjective qualifiers in tool_hints
+        opinion_markers = {'good', 'bad', 'worth', 'think', 'opinion', 'believe', 'suggest'}
+        return any(marker in ' '.join(tool_hints).lower() for marker in opinion_markers)
 
     def _calculate_confidence(
         self,

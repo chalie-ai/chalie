@@ -75,6 +75,7 @@ class DecayEngineService:
         identity_count = self._apply_identity_inertia()
         external_count = self._decay_external_knowledge()
         trait_stats = self._decay_user_traits()
+        goal_dormancy = self._apply_goal_dormancy()
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
@@ -82,7 +83,8 @@ class DecayEngineService:
             f"semantic={semantic_count} updated, "
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
-            f"traits={trait_stats.get('decayed', 0)} decayed/{trait_stats.get('deleted', 0)} deleted"
+            f"traits={trait_stats.get('decayed', 0)} decayed/{trait_stats.get('deleted', 0)} deleted, "
+            f"goals={goal_dormancy} moved to dormant"
         )
 
     def _decay_episodic(self) -> int:
@@ -326,6 +328,30 @@ class DecayEngineService:
         except Exception as e:
             logger.error(f"[DECAY ENGINE] User trait decay failed: {e}")
             return {'decayed': 0, 'deleted': 0}
+
+    def _apply_goal_dormancy(self) -> int:
+        """
+        Move goals not mentioned in 30 days to dormant status.
+
+        Returns:
+            Number of goals moved to dormant
+        """
+        try:
+            from .database_service import DatabaseService, get_merged_db_config
+            from .goal_service import GoalService
+
+            db_config = get_merged_db_config()
+            db_service = DatabaseService(db_config)
+            try:
+                goal_service = GoalService(db_service)
+                return goal_service.apply_dormancy()
+            finally:
+                db_service.close_pool()
+        except ImportError:
+            return 0
+        except Exception as e:
+            logger.error(f"[DECAY ENGINE] Goal dormancy failed: {e}")
+            return 0
 
     def _apply_identity_inertia(self) -> int:
         """Apply inertia: pull identity activations toward baselines."""

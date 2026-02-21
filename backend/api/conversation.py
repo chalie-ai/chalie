@@ -101,7 +101,7 @@ def chat_sse():
                     if 'error' in parsed:
                         yield sse_event("error", {
                             "message": parsed['error'],
-                            "recoverable": False
+                            "recoverable": True
                         })
                         yield sse_event("done", {
                             "duration_ms": int((time.time() - start_time) * 1000)
@@ -218,12 +218,12 @@ def conversation_recent():
 
         formatted = []
         for ex in exchanges:
-            prompt = ex.get("prompt", {})
-            response = ex.get("response", {})
+            prompt = ex.get("prompt", {}) or {}
+            response = ex.get("response", {}) or {}
             formatted.append({
                 "id": ex.get("id", ""),
-                "prompt": prompt.get("message", ""),
-                "response": response.get("message", ""),
+                "prompt": prompt.get("message", "") if isinstance(prompt, dict) else "",
+                "response": response.get("message", "") if isinstance(response, dict) else "",
                 "topic": ex.get("topic", ""),
                 "timestamp": ex.get("timestamp", ""),
             })

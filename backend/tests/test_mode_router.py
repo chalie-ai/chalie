@@ -203,7 +203,7 @@ class TestModeRouter:
         expected_keys = {
             'context_warmth', 'working_memory_turns', 'gist_count', 'fact_count',
             'fact_keys', 'world_state_present', 'topic_confidence', 'is_new_topic',
-            'session_exchange_count', 'prompt_token_count', 'has_question_mark',
+            'session_exchange_count', 'memory_confidence', 'prompt_token_count', 'has_question_mark',
             'interrogative_words', 'greeting_pattern', 'explicit_feedback',
             'information_density', 'implicit_reference',
             'intent_type', 'intent_confidence', 'intent_needs_tools',

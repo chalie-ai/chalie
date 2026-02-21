@@ -124,7 +124,8 @@ class SessionService:
             'topic': self.current_topic,
             'exchanges': self.session_exchanges.copy(),
             'start_time': time.strftime('%Y-%m-%d %H:%M:%S',
-                                       time.localtime(self.session_start_time)) if self.session_start_time else None
+                                       time.localtime(self.session_start_time)) if self.session_start_time else None,
+            'thread_id': self._thread_id
         }
 
     def reset_session(self):
@@ -142,6 +143,33 @@ class SessionService:
     def get_last_activity_time(self) -> float:
         """Get the timestamp of last activity."""
         return self.last_activity_time
+
+    def is_returning_from_silence(self, threshold_seconds: int = 2700) -> float:
+        """
+        Returns the silence gap in seconds if gap >= threshold_seconds, else 0.0.
+
+        Returns 0.0 if no prior activity is recorded.
+
+        Must be called BEFORE track_classification() updates last_activity_time
+        so the gap is measured against the *previous* activity timestamp.
+
+        Callers use ``> 0`` for boolean behaviour; the raw value enables tiered
+        warmth responses in future (45 min vs 6 hr vs 24 hr).
+
+        Never raises.
+        """
+        try:
+            if self._thread_id and self._redis:
+                raw = self._get_thread_field("last_activity", default="")
+                if raw:
+                    gap = time.time() - float(raw)
+                    return gap if gap >= threshold_seconds else 0.0
+            if self.last_activity_time is None:
+                return 0.0
+            gap = time.time() - self.last_activity_time
+            return gap if gap >= threshold_seconds else 0.0
+        except (ValueError, TypeError):
+            return 0.0
 
     def check_topic_switch(self, new_topic: str) -> bool:
         """Check if a topic switch has occurred."""

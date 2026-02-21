@@ -300,6 +300,7 @@ if __name__ == "__main__":
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.thread_expiry_service import thread_expiry_worker
     from services.scheduler_service import scheduler_worker
+    from services.autobiography_service import autobiography_synthesis_worker
 
     # 5. RESOLVE HOSTNAMES (BEFORE FORKING)
     # This prevents DNS lookup segfaults in child processes on macOS
@@ -309,6 +310,18 @@ if __name__ == "__main__":
     # Auto-generates if not present, stores in .key with restrictive permissions (0600)
     from services.encryption_key_service import get_encryption_key
     get_encryption_key()
+
+    # 5.4. PRELOAD EMBEDDING MODEL
+    # Load sentence-transformers model on boot (before forking)
+    # This prevents first message from triggering 438MB HuggingFace download
+    try:
+        logging.info("[System] Preloading embedding model from HuggingFace...")
+        from services.embedding_service import _get_st_model
+        _get_st_model()  # Lazy-loads and caches the model
+        logging.info("[System] ✓ Embedding model loaded and cached")
+    except Exception as e:
+        logging.warning(f"[System] Embedding model preload failed: {e}")
+        logging.warning("[System] Continuing without preload (will load on first embedding request)")
 
     # 5.5. INITIALIZE EPISODIC MEMORY DATABASE
     # Check if episodic memory database exists, create if not
@@ -477,6 +490,12 @@ if __name__ == "__main__":
     manager.register_service(
         worker_id="scheduler-service",
         worker_func=scheduler_worker
+    )
+
+    # Register autobiography synthesis service (6h cycle, synthesizes user narrative)
+    manager.register_service(
+        worker_id="autobiography-synthesis-service",
+        worker_func=autobiography_synthesis_worker
     )
 
     # Register cron-triggered tools as background services

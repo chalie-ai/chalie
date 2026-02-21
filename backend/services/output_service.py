@@ -107,17 +107,18 @@ class OutputService:
 
         event_payload = json.dumps(event_payload_dict)
 
-        # Skip output:events for fast-path tool-spawn acks — the sync SSE channel
-        # is guaranteed open at that point and will deliver it. Publishing to both
-        # causes the frontend to render the ack twice.
-        if not (sse_channel and mode == 'TOOL_SPAWN'):
+        # Only publish to output:events for background outputs (no sync SSE channel).
+        # When a sync /chat SSE connection is open it delivers the response directly;
+        # publishing to output:events as well causes the drift stream to render a
+        # duplicate after _isSending resets to false.
+        if not sse_channel:
             self.redis.publish('output:events', event_payload)
 
         # Deliver via per-request channel for sync /chat SSE connections
         if sse_channel:
             self.redis.publish(f"sse:{sse_channel}", output_id)
 
-        # Web push for all background output (no sync SSE connection)
+        # Web push + catch-up buffer for all background output (no sync SSE connection)
         if not sse_channel:
             try:
                 from api.push import send_push_to_all
@@ -130,8 +131,17 @@ class OutputService:
             except Exception as e:
                 logger.warning(f"Web push dispatch failed: {e}")
 
-        # Notification tools (Telegram etc.) for drift only
-        if source == 'proactive_drift':
+            # Buffer for catch-up: events published during a brief drift stream
+            # reconnect gap are permanently lost from pub/sub. Push to a list so
+            # the stream endpoint can drain missed events on next connect.
+            try:
+                self.redis.rpush('notifications:recent', event_payload)
+                self.redis.expire('notifications:recent', 300)  # 5-minute TTL
+            except Exception as e:
+                logger.warning(f"Notification buffer push failed: {e}")
+
+        # Notification tools (Telegram etc.) for drift and all background events
+        if source == 'proactive_drift' or source in ('reminder', 'task') or source.startswith('cron_tool:'):
             self._send_to_notification_tools(response)
 
         logger.info(

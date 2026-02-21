@@ -26,6 +26,11 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 **Building tools to extend Chalie's capabilities?**
 - **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, sandbox constraints, examples
 
+## Performance & Optimization
+
+**Optimizing Chalie's performance?**
+- **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Context relevance pre-parser, selective context injection, configuration tuning
+
 ## User Interface
 
 **Building or modifying the web interface?**
@@ -45,7 +50,8 @@ docs/
 ├── 06-WORKERS.md                     ← Worker processes overview
 ├── 07-COGNITIVE-ARCHITECTURE.md      ← Mode router & cognition
 ├── 08-DATA-SCHEMAS.md                ← Data structures
-└── 09-TOOLS.md                       ← Tools system & creation guide
+├── 09-TOOLS.md                       ← Tools system & creation guide
+└── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
 ```
 
 ### Important Project Files (Not in docs/)
@@ -71,7 +77,7 @@ docs/
 5. Open http://localhost:8081/ in browser
 
 ### Understanding a Specific Component
-- **Memory system?** → See 04-ARCHITECTURE.md "5-Layer Memory Hierarchy"
+- **Memory system?** → See 04-ARCHITECTURE.md "Memory Hierarchy"
 - **How routing works?** → See 07-COGNITIVE-ARCHITECTURE.md
 - **Data flow?** → See 05-WORKFLOW.md or 04-ARCHITECTURE.md "Data Flow Pipeline"
 - **Worker responsibilities?** → See 06-WORKERS.md
@@ -125,12 +131,13 @@ Chalie selects one of 5 engagement modes for each user message:
 Mode is selected by a fast mathematical router (~5ms) based on observable signals, then the LLM generates a response in that mode-specific style.
 
 ### Memory Hierarchy
-Information flows through 5 layers with different timescales:
+Information flows through multiple layers with different timescales:
 1. **Working Memory** (4 turns, 24h) → Current conversation
 2. **Gists** (30min) → Compressed exchange summaries
 3. **Facts** (24h) → Atomic assertions
 4. **Episodes** (permanent, decaying) → Narrative memories
 5. **Concepts** (permanent, decaying) → Knowledge graph
+6. **Lists** (permanent, no decay) → Deterministic ground-truth state (shopping, to-do, chores)
 
 ### Autonomy
 Chalie can generate spontaneous thoughts during idle periods via the Cognitive Drift Engine (Default Mode Network). Thoughts go through three gates (quality, timing, engagement) before being sent to users.
@@ -150,10 +157,15 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 
 ## Document Status
 
-**Last Updated**: 2026-02-19
+**Last Updated**: 2026-02-21
 
 All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
 
 **Recent Additions**:
+- New Innate Skills: `scheduler` (reminders/task management) and `autobiography` (synthesized user narrative retrieval)
+- New Innate Skill: `list` — deterministic list management (shopping, to-do, chores) with perfect recall and full event history
+- Updated 07-COGNITIVE-ARCHITECTURE.md: 8 innate skills now (was 7)
+- Updated 04-ARCHITECTURE.md: Added list_service.py, list_skill.py; expanded memory hierarchy to include Lists layer
+- Updated 08-DATA-SCHEMAS.md: Added lists, list_items, list_events table schemas
 - 09-TOOLS.md: Comprehensive tools system documentation
 - Updated 08-DATA-SCHEMAS.md: Removed outdated file-based storage references
