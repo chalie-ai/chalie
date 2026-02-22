@@ -67,7 +67,8 @@ def _poll_and_fire():
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, item_type, message, due_at, recurrence,
-                       window_start, window_end, topic, created_by_session
+                       window_start, window_end, topic, created_by_session, group_id,
+                       is_prompt
                 FROM scheduled_items
                 WHERE status = 'pending' AND due_at <= %s
                 ORDER BY due_at
@@ -78,12 +79,25 @@ def _poll_and_fire():
 
             cols = [
                 "id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "topic", "created_by_session"
+                "window_start", "window_end", "topic", "created_by_session", "group_id",
+                "is_prompt"
             ]
 
             for row in rows:
                 item = dict(zip(cols, row))
                 try:
+                    # Cancel-wins guard: re-check status before firing.
+                    # FOR UPDATE held the lock, but a cancel may have committed
+                    # just before we got here.  If status is no longer 'pending'
+                    # we skip without firing.
+                    cursor.execute(
+                        "SELECT status FROM scheduled_items WHERE id=%s",
+                        (item["id"],)
+                    )
+                    current = cursor.fetchone()
+                    if not current or current[0] != "pending":
+                        continue
+
                     _fire_item(item)
                     cursor.execute(
                         "UPDATE scheduled_items SET status='fired', last_fired_at=%s WHERE id=%s",
@@ -96,8 +110,9 @@ def _poll_and_fire():
                             cursor.execute("""
                                 INSERT INTO scheduled_items
                                   (id, item_type, message, due_at, recurrence,
-                                   window_start, window_end, status, topic, created_by_session, created_at)
-                                VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s)
+                                   window_start, window_end, status, topic,
+                                   created_by_session, created_at, group_id, is_prompt)
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s)
                             """, (
                                 next_item["id"],
                                 next_item["item_type"],
@@ -108,7 +123,9 @@ def _poll_and_fire():
                                 next_item.get("window_end"),
                                 next_item["topic"],
                                 next_item["created_by_session"],
-                                now
+                                now,
+                                next_item.get("group_id"),
+                                next_item.get("is_prompt", False),
                             ))
 
                 except Exception as e:
@@ -125,27 +142,41 @@ def _poll_and_fire():
 
 
 def _fire_item(item: dict):
-    """Enqueue a due item on the prompt-queue for frontal cortex processing."""
-    from services.prompt_queue import PromptQueue
-    from services.client_context_service import ClientContextService
-    from workers.digest_worker import digest_worker
-
+    """Fire a due item — directly or via LLM pipeline depending on is_prompt."""
     message = item.get("message", "")
     source = item.get("item_type", "reminder")
+    is_prompt = item.get("is_prompt", False)
 
-    client_context_text = ClientContextService().format_for_prompt()
+    if is_prompt:
+        # Route through digest_worker → cognitive triage → LLM (original behaviour)
+        from services.prompt_queue import PromptQueue
+        from services.client_context_service import ClientContextService
+        from workers.digest_worker import digest_worker
 
-    queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-    queue.enqueue(message, {
-        "source": source,
-        "destination": "web",
-        "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat(),
-        "scheduled_message": message,
-        "topic": item.get("topic", "general"),
-        "client_context": client_context_text,
-    })
+        client_context_text = ClientContextService().format_for_prompt()
+        queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+        queue.enqueue(message, {
+            "source": source,
+            "destination": "web",
+            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat(),
+            "scheduled_message": message,
+            "topic": item.get("topic", "general"),
+            "client_context": client_context_text,
+        })
+        logger.info(f"{LOG_PREFIX} Fired {source} (via LLM) '{item.get('id')}': {message[:80]}")
+    else:
+        # Direct delivery — bypass LLM, publish straight to output events
+        from services.output_service import OutputService
 
-    logger.info(f"{LOG_PREFIX} Fired {source} '{item.get('id')}': {message[:80]}")
+        OutputService().enqueue_text(
+            topic=item.get("topic", "general"),
+            response=message,
+            mode=source.upper(),
+            confidence=1.0,
+            generation_time=0.0,
+            original_metadata={"source": source},
+        )
+        logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
 
 
 def _build_recurrence(item: dict, fired_at: datetime) -> dict:
@@ -185,6 +216,8 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
         "window_end": item.get("window_end"),
         "topic": item.get("topic"),
         "created_by_session": item.get("created_by_session"),
+        "group_id": item.get("group_id") or item.get("id"),  # inherit group, fall back to own id
+        "is_prompt": item.get("is_prompt", False),
     }
 
 
@@ -258,5 +291,12 @@ def _calculate_next_due(
             return None
 
         return next_dt
+
+    elif recurrence.startswith("interval:"):
+        try:
+            mins = int(recurrence.split(":", 1)[1])
+            return due_at + timedelta(minutes=mins)
+        except (ValueError, IndexError):
+            return None
 
     return None

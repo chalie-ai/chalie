@@ -46,7 +46,7 @@ def handle_list(topic: str, params: dict) -> str:
         db = DatabaseService(db_config)
         try:
             service = ListService(db)
-            return _dispatch(service, action, params)
+            return _dispatch(service, action, params, topic)
         finally:
             db.close_pool()
 
@@ -55,27 +55,27 @@ def handle_list(topic: str, params: dict) -> str:
         return f"[LIST] Error: {e}"
 
 
-def _dispatch(service, action: str, params: dict) -> str:
+def _dispatch(service, action: str, params: dict, topic: str) -> str:
     if action == 'create':
-        return _handle_create(service, params)
+        return _handle_create(service, params, topic)
     elif action == 'add':
-        return _handle_add(service, params)
+        return _handle_add(service, params, topic)
     elif action == 'remove':
-        return _handle_remove(service, params)
+        return _handle_remove(service, params, topic)
     elif action == 'check':
-        return _handle_check(service, params)
+        return _handle_check(service, params, topic)
     elif action == 'uncheck':
-        return _handle_uncheck(service, params)
+        return _handle_uncheck(service, params, topic)
     elif action == 'view':
-        return _handle_view(service, params)
+        return _handle_view(service, params, topic)
     elif action == 'list_all':
-        return _handle_list_all(service)
+        return _handle_list_all(service, topic)
     elif action == 'clear':
-        return _handle_clear(service, params)
+        return _handle_clear(service, params, topic)
     elif action == 'delete':
-        return _handle_delete(service, params)
+        return _handle_delete(service, params, topic)
     elif action == 'rename':
-        return _handle_rename(service, params)
+        return _handle_rename(service, params, topic)
     elif action == 'history':
         return _handle_history(service, params)
     else:
@@ -108,19 +108,24 @@ def _resolve_name(service, params: dict) -> Optional[str]:
     return None
 
 
-def _handle_create(service, params: dict) -> str:
+def _handle_create(service, params: dict, topic: str) -> str:
     name = params.get('name', '').strip()
     if not name:
         return "[LIST] 'name' is required to create a list."
 
     try:
         list_id = service.create_list(name)
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_create_card(topic, name)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[LIST] Created list '{name}' (id={list_id})."
     except ValueError as e:
         return f"[LIST] {e}"
 
 
-def _handle_add(service, params: dict) -> str:
+def _handle_add(service, params: dict, topic: str) -> str:
     items = params.get('items', [])
     if isinstance(items, str):
         items = [items]
@@ -147,13 +152,19 @@ def _handle_add(service, params: dict) -> str:
     if added == 0:
         return f"[LIST] All items already on '{name}' (deduped)."
     skipped = len(items) - added
+    if added > 0:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_add_card(topic, name, items[:added], skipped)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     msg = f"[LIST] Added {added} item(s) to '{name}'."
     if skipped > 0:
         msg += f" {skipped} skipped (already present)."
     return msg
 
 
-def _handle_remove(service, params: dict) -> str:
+def _handle_remove(service, params: dict, topic: str) -> str:
     items = params.get('items', [])
     if isinstance(items, str):
         items = [items]
@@ -167,10 +178,16 @@ def _handle_remove(service, params: dict) -> str:
         return "[LIST] Multiple lists exist. Specify 'name'."
 
     removed = service.remove_items(name, items)
+    if removed > 0:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_remove_card(topic, name, items[:removed])
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Removed {removed} item(s) from '{name}'."
 
 
-def _handle_check(service, params: dict) -> str:
+def _handle_check(service, params: dict, topic: str) -> str:
     items = params.get('items', [])
     if isinstance(items, str):
         items = [items]
@@ -184,10 +201,16 @@ def _handle_check(service, params: dict) -> str:
         return "[LIST] Multiple lists exist. Specify 'name'."
 
     count = service.check_items(name, items)
+    if count > 0:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_check_card(topic, name, items[:count], True)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Checked {count} item(s) on '{name}'."
 
 
-def _handle_uncheck(service, params: dict) -> str:
+def _handle_uncheck(service, params: dict, topic: str) -> str:
     items = params.get('items', [])
     if isinstance(items, str):
         items = [items]
@@ -201,10 +224,16 @@ def _handle_uncheck(service, params: dict) -> str:
         return "[LIST] Multiple lists exist. Specify 'name'."
 
     count = service.uncheck_items(name, items)
+    if count > 0:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_check_card(topic, name, items[:count], False)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Unchecked {count} item(s) on '{name}'."
 
 
-def _handle_view(service, params: dict) -> str:
+def _handle_view(service, params: dict, topic: str) -> str:
     name = params.get('name', '').strip()
     if not name:
         name = _resolve_name(service, params)
@@ -216,6 +245,15 @@ def _handle_view(service, params: dict) -> str:
         return f"[LIST] List '{name}' not found."
 
     items = lst.get('items', [])
+    total = len(items)
+    checked = sum(1 for i in items if i['checked'])
+
+    try:
+        from services.list_card_service import ListCardService
+        ListCardService().emit_view_card(topic, lst['name'], items, checked, total)
+    except Exception as card_err:
+        logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
+
     if not items:
         return f"[LIST] '{lst['name']}' is empty."
 
@@ -224,14 +262,19 @@ def _handle_view(service, params: dict) -> str:
         status = "✓" if item['checked'] else "·"
         lines.append(f"  {status} {item['content']}")
 
-    total = len(items)
-    checked = sum(1 for i in items if i['checked'])
     lines.append(f"  ({checked}/{total} checked)")
     return "\n".join(lines)
 
 
-def _handle_list_all(service) -> str:
+def _handle_list_all(service, topic: str) -> str:
     lists = service.get_all_lists()
+    if lists:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_list_all_card(topic, lists)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
+
     if not lists:
         return "[LIST] No lists found."
 
@@ -244,7 +287,7 @@ def _handle_list_all(service) -> str:
     return "\n".join(lines)
 
 
-def _handle_clear(service, params: dict) -> str:
+def _handle_clear(service, params: dict, topic: str) -> str:
     name = params.get('name', '').strip()
     if not name:
         return "[LIST] 'name' is required to clear a list."
@@ -252,21 +295,32 @@ def _handle_clear(service, params: dict) -> str:
     count = service.clear_list(name)
     if count == -1:
         return f"[LIST] List '{name}' not found."
+    if count > 0:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_clear_card(topic, name, count)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Cleared {count} item(s) from '{name}'."
 
 
-def _handle_delete(service, params: dict) -> str:
+def _handle_delete(service, params: dict, topic: str) -> str:
     name = params.get('name', '').strip()
     if not name:
         return "[LIST] 'name' is required to delete a list."
 
     success = service.delete_list(name)
     if success:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_delete_card(topic, name)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[LIST] Deleted list '{name}'."
     return f"[LIST] List '{name}' not found."
 
 
-def _handle_rename(service, params: dict) -> str:
+def _handle_rename(service, params: dict, topic: str) -> str:
     name = params.get('name', '').strip()
     new_name = params.get('new_name', '').strip()
     if not name or not new_name:
@@ -274,6 +328,11 @@ def _handle_rename(service, params: dict) -> str:
 
     success = service.rename_list(name, new_name)
     if success:
+        try:
+            from services.list_card_service import ListCardService
+            ListCardService().emit_rename_card(topic, name, new_name)
+        except Exception as card_err:
+            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[LIST] Renamed '{name}' → '{new_name}'."
     return f"[LIST] Failed to rename '{name}' — list not found or new name already in use."
 

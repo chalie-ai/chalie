@@ -7,11 +7,12 @@ Working memory: {{working_memory_summary}}
 Available external tools (use these tool names exactly):
 {{tool_summaries_grouped}}
 
-Built-in capabilities (always available — never list these as tools): memory recall, storing facts, list management, scheduling, goal tracking, introspection.
+Built-in passive capabilities (work in any mode, no special routing needed): memory recall, introspection, storing facts.
+Built-in action skills (always available, never list as tools — but DO route to ACT when the user wants one executed): scheduling/reminders, list management (add/remove/check items), goal creation or updates.
 
 Routing rules:
-- ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, or a tool listed above. List which tool(s) to use.
-- RESPOND: I can answer fully from training knowledge with high confidence. Use for timeless facts, opinions, math, definitions, advice, conceptual questions, personal context already in working memory.
+- ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, a tool listed above, OR the user wants an action performed via a built-in action skill (set/create/cancel a reminder or schedule, add/remove items from a list, create or update a goal). For action skill requests leave tools=[].
+- RESPOND: I can answer fully from training knowledge or memory with high confidence. Use for timeless facts, opinions, math, definitions, advice, conceptual questions, personal context already in working memory, or when the user is asking ABOUT schedules/lists/goals (not requesting an action on them).
 - CLARIFY: the request is genuinely too vague to route without more information.
 
 Critical bias: when in doubt between RESPOND and ACT, choose ACT. Accuracy matters more than speed.

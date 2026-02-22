@@ -1021,6 +1021,11 @@ body::before {
     margin-bottom: 0;
 }
 
+.recurrence-hint {
+    color: rgba(138, 92, 255, 0.75);
+    font-style: italic;
+}
+
 /* Empty state */
 .tools-empty {
     grid-column: 1/-1;
@@ -1090,6 +1095,585 @@ body::before {
 .tool-card--marketplace .tool-card__status.--marketplace {
     background: rgba(245, 158, 11, 0.12);
     color: var(--warning);
+}
+
+/* ==========================================
+   Scheduler Tab
+   ========================================== */
+
+/* Filter bar */
+.scheduler-filters {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.filter-tab {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 5px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 220ms ease;
+}
+
+.filter-tab:hover {
+    color: var(--text);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.filter-tab.active {
+    background: rgba(138, 92, 255, 0.08);
+    border-color: rgba(138, 92, 255, 0.30);
+    color: var(--accent-hover);
+}
+
+/* List */
+.scheduler-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+/* Card */
+.schedule-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    transition: border-color 220ms ease;
+}
+
+.schedule-card:hover {
+    border-color: rgba(138, 92, 255, 0.20);
+}
+
+.schedule-card__body {
+    flex: 1;
+    min-width: 0;
+}
+
+.schedule-card__message {
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.schedule-card__meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.schedule-card__due {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.schedule-card__last-fired {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.schedule-card__right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* Status badge */
+.schedule-card__status {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 4px;
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+
+.schedule-card__status.--pending {
+    background: rgba(138, 92, 255, 0.10);
+    color: var(--accent);
+}
+
+.schedule-card__status.--fired {
+    background: rgba(52, 211, 153, 0.12);
+    color: var(--success);
+}
+
+.schedule-card__status.--failed {
+    background: rgba(251, 113, 133, 0.12);
+    color: var(--error);
+}
+
+.schedule-card__status.--cancelled {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+}
+
+/* Actions on card */
+.schedule-card__actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+/* Inline badges (type, recurrence) */
+.schedule-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: capitalize;
+}
+
+.schedule-badge.--type-reminder {
+    background: rgba(138, 92, 255, 0.08);
+    color: #9E74FF;
+}
+
+.schedule-badge.--type-task {
+    background: rgba(245, 158, 11, 0.10);
+    color: var(--warning);
+}
+
+.schedule-badge.--recurrence {
+    background: rgba(34, 211, 238, 0.08);
+    color: #22d3ee;
+}
+
+/* Footer row */
+.scheduler-footer {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+/* Interval minutes input */
+.form-group input[type="number"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    transition: border-color 0.15s;
+}
+
+.form-group input[type="number"]:focus {
+    outline: none;
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
+}
+
+/* Accordion — "All" view */
+.schedule-accordion-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 220ms ease;
+}
+
+.schedule-accordion-row:hover {
+    border-color: rgba(138, 92, 255, 0.20);
+}
+
+.schedule-accordion-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.accordion-chevron {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 4px;
+    transition: color 220ms ease;
+}
+
+.schedule-accordion-row:hover .accordion-chevron {
+    color: var(--text-secondary);
+}
+
+.schedule-accordion-body {
+    border-top: 1px solid var(--border);
+    padding: 12px 20px 14px;
+}
+
+/* Fire history inside accordion */
+.fire-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.fire-history-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.fire-history-item__status {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: capitalize;
+    flex-shrink: 0;
+}
+
+.fire-history-item__status.--pending  { background: rgba(138, 92, 255, 0.10); color: var(--accent); }
+.fire-history-item__status.--fired    { background: rgba(52, 211, 153, 0.12); color: var(--success); }
+.fire-history-item__status.--failed   { background: rgba(251, 113, 133, 0.12); color: var(--error); }
+.fire-history-item__status.--cancelled { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); }
+
+.fire-history-item__date {
+    color: var(--text-secondary);
+}
+
+/* Window time inputs */
+.window-inputs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.window-sep {
+    font-size: 13px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.window-inputs input[type="time"] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    transition: border-color 0.15s;
+    flex: 1;
+    min-width: 100px;
+}
+
+.window-inputs input[type="time"]:focus {
+    outline: none;
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
+}
+
+/* Datetime-local input */
+.form-group input[type="datetime-local"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    transition: border-color 0.15s;
+    color-scheme: dark;
+}
+
+.form-group input[type="datetime-local"]:focus {
+    outline: none;
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
+}
+
+/* Responsive: stack card vertically at 640px */
+@media (max-width: 640px) {
+    .schedule-card {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .schedule-card__right {
+        flex-direction: row;
+        align-items: center;
+        width: 100%;
+        justify-content: space-between;
+    }
+}
+
+/* ==========================================
+   Lists Tab
+   ========================================== */
+
+.lists-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Card */
+.list-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 220ms ease;
+}
+
+.list-card:hover {
+    border-color: rgba(138, 92, 255, 0.15);
+}
+
+.list-card--expanded {
+    border-color: rgba(138, 92, 255, 0.30);
+    box-shadow: 0 0 20px rgba(138, 92, 255, 0.07);
+}
+
+/* Header */
+.list-card__header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.list-card__header:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.list-card__title-row {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.list-card__name {
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.list-card__count {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.list-card__header-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* Progress bar */
+.list-card__progress-bar {
+    height: 2px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 0 20px;
+}
+
+.list-card__progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 1px;
+    transition: width 300ms ease;
+    min-width: 2px;
+}
+
+/* Items area */
+.list-card__items {
+    padding: 8px 20px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.list-card__empty {
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 8px 0 4px;
+    font-style: italic;
+}
+
+/* Individual item row */
+.list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 4px;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+
+.list-item:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.list-item:hover .list-item__remove {
+    opacity: 1;
+}
+
+.list-item--checked {
+    opacity: 0.5;
+}
+
+.list-item--checked .list-item__content {
+    text-decoration: line-through;
+}
+
+/* Custom checkbox */
+.list-item__checkbox {
+    position: relative;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.list-item__checkbox input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.list-item__check-mark {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 18px;
+    height: 18px;
+    border: 1.5px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    background: transparent;
+    transition: all 220ms ease;
+}
+
+.list-item__checkbox input:checked + .list-item__check-mark {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.list-item__check-mark::after {
+    content: '';
+    position: absolute;
+    display: none;
+    left: 5px;
+    top: 2px;
+    width: 4px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.list-item__checkbox input:checked + .list-item__check-mark::after {
+    display: block;
+}
+
+/* Item content */
+.list-item__content {
+    flex: 1;
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+/* Remove button */
+.list-item__remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    opacity: 0;
+    flex-shrink: 0;
+    transition: color 0.15s, opacity 0.15s;
+    line-height: 1;
+}
+
+.list-item__remove:hover {
+    color: var(--error);
+    background: rgba(251, 113, 133, 0.08);
+}
+
+/* Add item row */
+.list-card__add-item {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: center;
+}
+
+.list-card__add-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    padding: 7px 12px;
+    font-size: 13px;
+    font-family: var(--font);
+    transition: border-color 0.15s;
+    min-width: 0;
+}
+
+.list-card__add-input:focus {
+    outline: none;
+    border-color: rgba(138, 92, 255, 0.35);
+    box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
+}
+
+.list-card__add-input::placeholder {
+    color: var(--text-muted);
+}
+
+/* Responsive: stack card header at 640px */
+@media (max-width: 640px) {
+    .list-card__header {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    .list-card__header-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
 }
 
 /* Responsive */

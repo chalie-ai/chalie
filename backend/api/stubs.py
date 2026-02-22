@@ -20,13 +20,6 @@ def _stub_route(rule, **options):
     return decorator
 
 
-@stubs_bp.route('/reminders', methods=['GET', 'POST'])
-@stubs_bp.route('/reminders/<path:subpath>', methods=['GET', 'POST', 'PATCH', 'DELETE'])
-@require_session
-def reminders_stub(subpath=None):
-    return jsonify(_NOT_IMPLEMENTED[0]), _NOT_IMPLEMENTED[1]
-
-
 @stubs_bp.route('/calendar', methods=['GET'])
 @stubs_bp.route('/calendar/<path:subpath>', methods=['GET'])
 @require_session

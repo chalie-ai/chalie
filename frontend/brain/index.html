@@ -20,6 +20,8 @@
                 <button class="tab" data-tab="cognition">Cognition</button>
                 <button class="tab" data-tab="voice">Voice</button>
                 <button class="tab" data-tab="embodiment">Embodiment</button>
+                <button class="tab" data-tab="scheduler">Scheduler</button>
+                <button class="tab" data-tab="lists">Lists</button>
             </nav>
         </div>
     </header>
@@ -122,7 +124,120 @@
                 </div>
             </div>
         </div>
+        <!-- Lists Tab -->
+        <div class="tab-panel" id="tab-lists">
+            <div class="panel-header">
+                <h2>Lists</h2>
+                <button class="btn btn-primary" id="newListBtn">+ New List</button>
+            </div>
+            <div class="lists-container" id="listsContainer">
+                <div class="loading">Loading lists…</div>
+            </div>
+        </div>
+
+        <!-- Scheduler Tab -->
+        <div class="tab-panel" id="tab-scheduler">
+            <div class="panel-header">
+                <h2>Scheduler</h2>
+                <button class="btn btn-primary" id="newScheduleBtn">+ New Schedule</button>
+            </div>
+
+            <!-- Filter bar -->
+            <div class="scheduler-filters">
+                <button class="filter-tab active" data-filter="all">All</button>
+                <button class="filter-tab" data-filter="pending">Pending</button>
+                <button class="filter-tab" data-filter="fired">Fired</button>
+                <button class="filter-tab" data-filter="failed">Failed</button>
+                <button class="filter-tab" data-filter="cancelled">Cancelled</button>
+            </div>
+
+            <!-- Item list -->
+            <div class="scheduler-list" id="schedulerList">
+                <div class="loading">Loading schedule…</div>
+            </div>
+
+            <!-- Pagination + utility row -->
+            <div class="scheduler-footer" id="schedulerFooter" style="display:none">
+                <button class="btn btn-secondary" id="scheduleLoadMoreBtn" style="display:none">Load more</button>
+                <button class="btn btn-secondary" id="clearHistoryBtn" style="display:none">Clear History</button>
+            </div>
+        </div>
     </main>
+
+    <!-- Create / Edit Schedule Modal -->
+    <div class="modal-overlay hidden" id="scheduleModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2 id="scheduleModalTitle">New Schedule</h2>
+                    <button class="btn-close" id="closeScheduleModal">✕</button>
+                </div>
+            </div>
+            <form id="scheduleForm">
+                <div class="form-group">
+                    <label>Prompt / Message</label>
+                    <textarea id="scheduleMessage" rows="3" maxlength="1000" placeholder="What Chalie should do when this fires"></textarea>
+                    <p class="form-hint">Up to 1 000 characters</p>
+                </div>
+                <div class="form-group">
+                    <label id="scheduleDueAtLabel">Due Date &amp; Time</label>
+                    <input type="datetime-local" id="scheduleDueAt">
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="scheduleType">
+                        <option value="reminder">Reminder</option>
+                        <option value="task">Task</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Recurrence</label>
+                    <select id="scheduleRecurrence">
+                        <option value="">None (one-time)</option>
+                        <option value="interval">Every X minutes</option>
+                        <option value="hourly">Hourly</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays (Mon–Fri)</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                    </select>
+                    <p class="form-hint recurrence-hint" id="recurrenceHint" style="display:none"></p>
+                </div>
+                <div class="form-group" id="intervalGroup" style="display:none">
+                    <label>Interval (minutes)</label>
+                    <input type="number" id="scheduleIntervalMinutes" min="1" max="1440" value="30" placeholder="30">
+                    <p class="form-hint">1–1440 min &nbsp;·&nbsp; Examples: 30 = every 30 min, 90 = every 1.5 h</p>
+                </div>
+                <div class="form-group window-inputs-group" id="windowGroup" style="display:none">
+                    <label>Active Window (local time)</label>
+                    <div class="window-inputs">
+                        <input type="time" id="scheduleWindowStart" placeholder="09:00">
+                        <span class="window-sep">to</span>
+                        <input type="time" id="scheduleWindowEnd" placeholder="17:00">
+                    </div>
+                    <p class="form-hint">Hourly fires only within this time window</p>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelScheduleFormBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Cancel Confirmation Modal -->
+    <div class="modal-overlay hidden" id="cancelScheduleModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2>Cancel Schedule</h2>
+                <p id="cancelScheduleDesc">Are you sure you want to cancel this scheduled item?</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="keepScheduleBtn">No, Keep It</button>
+                <button class="btn btn-danger" id="confirmCancelScheduleBtn">Yes, Cancel</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Login Modal -->
     <div class="modal-overlay hidden" id="loginModal">
@@ -255,6 +370,64 @@
             <div class="form-actions">
                 <button class="btn btn-secondary" id="cancelToolSettingsBtn">Cancel</button>
                 <button class="btn btn-primary" id="saveToolSettingsBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create List Modal -->
+    <div class="modal-overlay hidden" id="createListModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2>New List</h2>
+                    <button class="btn-close" id="closeCreateListModal">✕</button>
+                </div>
+            </div>
+            <form id="createListForm">
+                <div class="form-group">
+                    <label>List Name</label>
+                    <input type="text" id="createListName" maxlength="200" placeholder="e.g. Shopping List" required>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelCreateListBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Rename List Modal -->
+    <div class="modal-overlay hidden" id="renameListModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2>Rename List</h2>
+                    <button class="btn-close" id="closeRenameListModal">✕</button>
+                </div>
+            </div>
+            <form id="renameListForm">
+                <div class="form-group">
+                    <label>New Name</label>
+                    <input type="text" id="renameListName" maxlength="200" required>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelRenameListBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Rename</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete List Modal -->
+    <div class="modal-overlay hidden" id="deleteListModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2>Delete List</h2>
+                <p id="deleteListDesc">Are you sure you want to delete this list?</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="cancelDeleteListBtn">Cancel</button>
+                <button class="btn btn-danger" id="confirmDeleteListBtn">Delete</button>
             </div>
         </div>
     </div>
