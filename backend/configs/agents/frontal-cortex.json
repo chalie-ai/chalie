@@ -1,5 +1,4 @@
 {
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.5,
   "max_predict_tokens": 2048,
   "timeout": 180,
@@ -16,11 +15,9 @@
     "episodes": 0.7,
     "concepts": 0.6
   },
-
   "_comment_act_loop": "ACT loop now has NO hard iteration limit - uses efficiency-based natural termination",
   "act_cumulative_timeout": 180.0,
   "act_per_action_timeout": 30.0,
-
   "_comment_cost_model": "Efficiency-based cost modeling parameters",
   "cost_base": 1.0,
   "cost_growth_factor": 1.5,
@@ -28,21 +25,23 @@
   "warmth_floor": 0.3,
   "ignore_cost_increment": 2.0,
   "inefficient_penalty_rate": 0.1,
-
   "fatigue_budget": 10.0,
   "fatigue_growth_rate": 0.3,
   "fatigue_costs": {},
-
   "max_act_iterations": 7,
   "act_repetition_similarity_threshold": 0.85,
   "act_max_tool_injection": 5,
-
   "tools_enabled": true,
-
   "_comment_innate_skills": "Configuration for innate cognitive skills in the ACT loop",
   "innate_skills": {
     "recall": {
-      "default_layers": ["working_memory", "gists", "facts", "episodes", "concepts"],
+      "default_layers": [
+        "working_memory",
+        "gists",
+        "facts",
+        "episodes",
+        "concepts"
+      ],
       "default_limit": 3
     },
     "associate": {
@@ -52,7 +51,6 @@
       "max_depth": 2
     }
   },
-
   "thread": {
     "soft_expiry_minutes": 30,
     "hard_expiry_minutes": 240

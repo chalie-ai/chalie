@@ -1,5 +1,4 @@
 {
-  "provider": "rx580",
   "format": "text",
   "temperature": 0.1,
   "timeout": 30,

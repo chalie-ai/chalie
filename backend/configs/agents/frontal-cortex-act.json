@@ -1,32 +1,32 @@
 {
   "_comment": "ACT mode: Action planning and execution with qwen3:14b for reasoning",
-
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.5,
   "max_predict_tokens": 2048,
   "timeout": 180,
   "format": "json",
-
   "min_gist_confidence": 7,
   "attention_span_minutes": 30,
   "max_gists": 8,
-
   "_comment_act_loop": "ACT loop safety limits and cost model",
   "act_cumulative_timeout": 60.0,
   "act_per_action_timeout": 10.0,
   "max_act_iterations": 5,
-
   "cost_base": 1.0,
   "cost_growth_factor": 1.5,
   "uncertainty_weight": 3.0,
   "warmth_floor": 0.3,
   "ignore_cost_increment": 2.0,
   "inefficient_penalty_rate": 0.1,
-
   "_comment_innate_skills": "Configuration for innate cognitive skills",
   "innate_skills": {
     "recall": {
-      "default_layers": ["working_memory", "gists", "facts", "episodes", "concepts"],
+      "default_layers": [
+        "working_memory",
+        "gists",
+        "facts",
+        "episodes",
+        "concepts"
+      ],
       "default_limit": 3
     },
     "associate": {

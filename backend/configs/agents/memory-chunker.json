@@ -1,5 +1,4 @@
 {
-  "provider": "rx580",
   "temperature": 0.3,
   "max_predict_tokens": 512,
   "keep_alive": "5m",

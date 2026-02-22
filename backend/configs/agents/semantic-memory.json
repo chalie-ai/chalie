@@ -1,16 +1,13 @@
 {
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.5,
   "max_predict_tokens": 2048,
   "format": "json",
   "timeout": 300,
-
   "database": {
     "pool_size": 10,
     "max_overflow": 20,
     "pool_timeout": 30
   },
-
   "similarity_threshold": 0.85,
   "min_confidence_threshold": 0.4,
   "reinforcement_factor": 0.1,
@@ -21,7 +18,6 @@
   "max_spreading_depth": 2,
   "decay_factor": 0.7,
   "weak_relationship_random_activation": 0.15,
-
   "inference_weights": {
     "vector_similarity": 5,
     "strength": 3,
@@ -29,7 +25,6 @@
     "utility_score": 2,
     "confidence": 1
   },
-
   "comments": {
     "embedding_dimensions": "768-dim from sentence-transformers/all-mpnet-base-v2 (no external service required)",
     "min_confidence_threshold": "Below 0.4, return empty (can't remember)",

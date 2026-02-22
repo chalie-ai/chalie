@@ -47,6 +47,8 @@ const JOBS = [
     { id: 'experience-assimilation', name: 'Experience Assimilation', desc: 'Evaluates tool outputs for novel knowledge worth storing.', badge: '8B sufficient', badgeClass: 'badge-8b' },
     { id: 'cognitive-drift', name: 'Cognitive Drift (DMN)', desc: 'Generates spontaneous thoughts during idle (Default Mode Network).', badge: '4B sufficient', badgeClass: 'badge-4b' },
     { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Resolves ambiguous routing with binary A-vs-B decision. Must be fast.', badge: '4B sufficient', badgeClass: 'badge-4b' },
+    { id: 'fact-store', name: 'Fact Store', desc: 'Extracts and stores atomic facts from exchanges. Runs async.', badge: '8B sufficient', badgeClass: 'badge-8b' },
+    { id: 'topic-namer', name: 'Topic Namer', desc: 'Generates short display names for conversation topics.', badge: '4B sufficient', badgeClass: 'badge-4b' },
 ];
 
 // ==========================================

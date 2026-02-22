@@ -1,7 +1,6 @@
 {
-  "provider": "triage",
   "temperature": 0.1,
   "max_predict_tokens": 400,
-  "timeout": 5,
+  "timeout": 60,
   "format": "json"
 }
