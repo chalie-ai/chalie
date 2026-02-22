@@ -73,7 +73,7 @@ The router naturally shifts behavior as memory accumulates:
 
 ## Innate Skills (Action Types)
 
-The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, sub-cortical).
+The ACT loop uses 9 innate cognitive skills. All are non-LLM operations (fast, sub-cortical).
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
@@ -84,6 +84,8 @@ The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, s
 | `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
 | `autobiography` | narrative | <500ms | Retrieve synthesized user narrative covering identity, relationship arc, values, patterns, active threads |
 | `list` | lists | <50ms | Create and manage deterministic lists (shopping, to-do, chores); add/remove/check items, view, history |
+| `goal` | planning | <100ms | Persistent directional goals: create, list, update, progress, check_in |
+| `focus` | attention | <50ms | Focus session management: set, check, clear. Distraction detection |
 
 ### Backward Compatibility Aliases
 

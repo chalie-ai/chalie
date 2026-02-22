@@ -32,6 +32,7 @@ User Input
 - **Episodes** (PostgreSQL + pgvector) — narrative units with decay
 - **Concepts** (PostgreSQL + pgvector) — knowledge nodes and relationships
 - **User Traits** (PostgreSQL) — personal facts, category-specific decay
+- **Lists** (PostgreSQL) — deterministic list management (shopping, to-do, chores)
 
 ## Prerequisites
 
@@ -42,26 +43,12 @@ User Input
 
 ## Quick Start
 
-### 1. Clone & Setup
+### 1. Clone & Start
 
 ```bash
 git clone https://github.com/chalie-ai/chalie.git
 cd chalie
-cp .env.example .env
-```
-
-### 2. Configure LLM Provider (Optional)
-
-Edit `.env` to change the Postgres password if desired:
-```bash
-POSTGRES_PASSWORD=your_secure_password
-```
-
-### 3. Start Containers
-
-```bash
-docker-compose build
-docker-compose up -d
+docker-compose build && docker-compose up -d
 ```
 
 Check status:
@@ -70,7 +57,7 @@ docker-compose logs -f backend
 docker-compose ps
 ```
 
-### 4. Onboard
+### 2. Onboard
 
 Open http://localhost:8081/on-boarding/ in your browser.
 
@@ -80,7 +67,7 @@ Open http://localhost:8081/on-boarding/ in your browser.
   - **For Cloud**: OpenAI, Anthropic, or Google Gemini (requires API key)
 - **Redirect**: After setup, you'll be redirected to the chat interface
 
-### 5. Chat
+### 3. Chat
 
 Start chatting! Chalie will:
 - Remember context across exchanges
@@ -124,7 +111,7 @@ Choose based on your preference:
 Chalie supports optional Text-to-Speech (TTS) and Speech-to-Text (STT) via OpenAI-compatible servers.
 
 1. Set up a TTS/STT server (e.g., [bark](https://github.com/suno-ai/bark), FastAPI wrapper around Whisper)
-2. Open the **Dashboard** (http://localhost:8081/dashboard/)
+2. Open the **Brain** dashboard (http://localhost:8081/brain/)
 3. Navigate to the **Voice** tab
 4. Enter your TTS/STT endpoints:
    - **TTS**: POST request, input `{"text": "..."}`, output: binary audio (mp3/wav/ogg)
