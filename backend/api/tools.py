@@ -612,9 +612,24 @@ def get_tool_config(tool_name: str):
             field_def = schema.get(key, {})
             masked[key] = "***" if field_def.get("secret", False) else value
 
+        # Enrich schema with UI-friendly fields (label, hint, placeholder)
+        # The raw manifest schema uses "description" and "default"; the brain UI
+        # expects "label", "hint", and "placeholder" — add them here.
+        enriched_schema = {}
+        for key, field_def in schema.items():
+            if isinstance(field_def, dict):
+                enriched_schema[key] = {
+                    **field_def,
+                    "label": field_def.get("description", key),
+                    "hint": field_def.get("description", ""),
+                    "placeholder": field_def.get("default", ""),
+                }
+            else:
+                enriched_schema[key] = field_def
+
         return jsonify({
             "tool_name": tool_name,
-            "config_schema": schema,
+            "config_schema": enriched_schema,
             "config": masked,
         }), 200
 
