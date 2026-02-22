@@ -1,12 +1,11 @@
 {
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.6,
   "max_predict_tokens": 4096,
   "format": "",
   "timeout": 300,
   "comments": {
     "temperature": "Warm enough (0.6) for natural, engaging prose; cool enough for factual consistency",
-    "format": "Empty string — no JSON constraint, free prose output",
+    "format": "Empty string \u2014 no JSON constraint, free prose output",
     "max_predict_tokens": "Sufficient for 1200-2400 word narrative across six sections"
   }
 }

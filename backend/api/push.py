@@ -137,23 +137,7 @@ def send_push_to_all(title, body, tag='chalie-drift'):
 
         payload = json.dumps(payload_dict)
 
-        # Convert raw base64 private scalar to PEM — pywebpush 2.x requires PEM
-        import base64
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization
-
-        priv_b64 = keys['private']
-        if priv_b64.startswith('-----'):
-            pem_key = priv_b64
-        else:
-            padded = priv_b64 + '=' * (4 - len(priv_b64) % 4)
-            priv_bytes = base64.urlsafe_b64decode(padded)
-            private_key_obj = ec.derive_private_key(int.from_bytes(priv_bytes, 'big'), ec.SECP256R1())
-            pem_key = private_key_obj.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption(),
-            ).decode('ascii')
+        vapid_key = keys['private']
 
         stale = []
         for raw_sub in subscriptions:
@@ -162,7 +146,7 @@ def send_push_to_all(title, body, tag='chalie-drift'):
                 webpush(
                     subscription_info=sub,
                     data=payload,
-                    vapid_private_key=pem_key,
+                    vapid_private_key=vapid_key,
                     vapid_claims={'sub': 'mailto:chalie@localhost'},
                 )
             except WebPushException as e:
