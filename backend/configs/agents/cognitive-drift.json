@@ -1,15 +1,14 @@
 {
-  "provider": "rx580",
   "temperature": 0.8,
   "max_predict_tokens": 150,
   "format": "json",
   "timeout": 360,
   "check_interval": 300,
   "seed_weights": {
-    "decaying": 0.40,
-    "recent": 0.30,
-    "salient": 0.20,
-    "random": 0.10
+    "decaying": 0.4,
+    "recent": 0.3,
+    "salient": 0.2,
+    "random": 0.1
   },
   "max_activation_depth": 2,
   "max_activated_concepts": 5,
@@ -18,7 +17,10 @@
   "salience_lookback_days": 7,
   "gist_confidence": 8,
   "concept_cooldown_minutes": 60,
-  "jitter_range": [0.7, 1.3],
+  "jitter_range": [
+    0.7,
+    1.3
+  ],
   "fatigue_budget": 2.5,
   "fatigue_window_minutes": 30,
   "long_gap_probability": 0.1,
@@ -56,7 +58,11 @@
     "reflect": {
       "enabled": true,
       "min_activation_energy": 0.35,
-      "type_bonuses": {"reflection": 1.3, "hypothesis": 1.2, "question": 0.9},
+      "type_bonuses": {
+        "reflection": 1.3,
+        "hypothesis": 1.2,
+        "question": 0.9
+      },
       "type_repeat_decay": 0.8,
       "min_episode_similarity": 0.3,
       "min_concept_similarity": 0.35,
@@ -68,10 +74,10 @@
     }
   },
   "descriptions": {
-    "check_interval": "Base seconds between drift checks (jittered ±30%)",
+    "check_interval": "Base seconds between drift checks (jittered \u00b130%)",
     "seed_weights": "Probability weights for each seed selection strategy",
     "episode_lookback_hours": "No drift if no episodes within this window (168h = 7 days)",
-    "episode_recency_decay": "Exponential decay rate for recency weighting in seed selection (λ in exp(-λ*age_hours)). 0.02 = ~3.5% weight at 7 days vs today.",
+    "episode_recency_decay": "Exponential decay rate for recency weighting in seed selection (\u03bb in exp(-\u03bb*age_hours)). 0.02 = ~3.5% weight at 7 days vs today.",
     "salience_lookback_days": "Window for high-salience episode rumination",
     "concept_cooldown_minutes": "Per-concept cooldown to prevent circular rumination",
     "jitter_range": "Random multiplier range for check interval [min, max]",

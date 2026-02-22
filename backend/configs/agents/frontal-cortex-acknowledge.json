@@ -1,6 +1,5 @@
 {
   "_comment": "ACKNOWLEDGE mode: Simple acknowledgment with qwen3:8b for speed",
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.3,
   "max_predict_tokens": 512,
   "timeout": 180,

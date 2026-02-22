@@ -1,5 +1,4 @@
 {
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.3,
   "timeout": 300,
   "max_predict_tokens": 128,
@@ -7,13 +6,12 @@
   "keep_alive": "5m",
   "batch_size": 5,
   "min_interval_minutes": 30,
-  "confidence_gate": 0.70,
+  "confidence_gate": 0.7,
   "user_override_threshold": 0.2,
-
   "_comment_sampling": "Stratified sampling buckets for reflection selection",
   "sampling_buckets": {
-    "low_confidence": 0.50,
-    "high_confidence": 0.20,
-    "tiebreaker": 0.30
+    "low_confidence": 0.5,
+    "high_confidence": 0.2,
+    "tiebreaker": 0.3
   }
 }

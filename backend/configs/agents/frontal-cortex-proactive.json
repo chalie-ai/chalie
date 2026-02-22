@@ -1,6 +1,5 @@
 {
   "_comment": "PROACTIVE mode: Translate drift thought into conversational outreach (1-2 sentences)",
-  "provider": "openai-gpt4o-mini",
   "temperature": 0.6,
   "max_predict_tokens": 256,
   "timeout": 180,

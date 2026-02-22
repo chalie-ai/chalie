@@ -248,16 +248,13 @@ class ConfigService:
                 config['provider'] = assignment_provider
                 logger.debug(f"[ConfigService] Using cached provider '{assignment_provider}' for job '{agent_name}'")
             else:
-                # No explicit assignment — check if the JSON provider exists in cache;
-                # if not, fall back to the first active provider to avoid a broken config.
-                json_provider = config.get('provider')
-                if json_provider:
-                    providers = ConfigService.get_providers()
-                    if json_provider not in providers and providers:
-                        fallback_name = next(iter(providers))
-                        config['provider'] = fallback_name
-                        logger.warning(f"[ConfigService] Provider '{json_provider}' not found for job "
-                                       f"'{agent_name}', falling back to '{fallback_name}'")
+                # No explicit assignment — fall back to the first active provider.
+                providers = ConfigService.get_providers()
+                if providers:
+                    fallback_name = next(iter(providers))
+                    config['provider'] = fallback_name
+                    logger.warning(f"[ConfigService] No provider assigned for job '{agent_name}', "
+                                   f"falling back to '{fallback_name}'")
         except Exception as e:
             logger.warning(f"[ConfigService] Job assignment lookup failed for '{agent_name}': {e}")
 
