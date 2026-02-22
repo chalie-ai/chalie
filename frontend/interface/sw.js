@@ -13,7 +13,7 @@ const SHELL_ASSETS = [
   '/presence.js', '/voice.js', '/tools.js', '/style.css',
   '/icons/icon.png',
   '/cards/base.js', '/cards/memory.js', '/cards/timeline.js',
-  '/cards/tools.js', '/cards/reminders.js', '/cards/weather.js', '/cards/digest.js',
+  '/cards/reminders.js', '/cards/weather.js', '/cards/digest.js',
 ];
 
 const NETWORK_ONLY_PATHS = [

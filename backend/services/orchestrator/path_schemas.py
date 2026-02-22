@@ -89,11 +89,6 @@ def validate_ignore(ctx: Dict[str, Any]) -> bool:
     return True  # Only requires topic
 
 
-def validate_tool_spawn(ctx: Dict[str, Any]) -> bool:
-    """Validate TOOL_SPAWN path context."""
-    return bool(ctx.get('response'))  # Needs the acknowledgment text
-
-
 # Orchestrator paths registry
 # Handlers will be set during OrchestratorService initialization
 ORCHESTRATOR_PATHS: Dict[str, PathDefinition] = {
@@ -140,14 +135,5 @@ ORCHESTRATOR_PATHS: Dict[str, PathDefinition] = {
         validator=validate_ignore,
         handler=None,  # Will be set to IgnoreHandler
         description="Terminal path: Log and ignore input"
-    ),
-
-    "TOOL_SPAWN": PathDefinition(
-        name="TOOL_SPAWN",
-        path_type=PathType.TACTICAL,
-        required_fields=["response", "topic", "destination"],
-        validator=validate_tool_spawn,
-        handler=None,  # Will be set to ToolSpawnHandler
-        description="Tactical path: Send acknowledgment and spawn background tool work"
     ),
 }

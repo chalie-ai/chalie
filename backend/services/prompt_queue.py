@@ -83,18 +83,28 @@ class PromptQueue:
         worker = StatefulWorker([queue], connection=redis_conn)
         logging.info(f"[{worker_id}] Starting worker for queue '{queue_name}' (PID: {multiprocessing.current_process().pid})")
 
-        # CRITICAL: Clear abandoned jobs from previous crashes before starting work
-        # This prevents workers from hanging on stale jobs that will never complete
+        # CRITICAL: Re-enqueue jobs abandoned from previous crashes before starting work.
+        # Jobs in StartedJobRegistry have no heartbeat after a container death — we try
+        # to put them back on the queue so they're retried rather than silently lost.
         try:
             from rq.registry import StartedJobRegistry
+            from rq.job import Job
             started_registry = StartedJobRegistry(queue_name, connection=redis_conn)
             abandoned_count = len(started_registry)
             if abandoned_count > 0:
-                logging.warning(f"[{worker_id}] Found {abandoned_count} abandoned jobs in StartedJobRegistry, cleaning up...")
+                logging.warning(f"[{worker_id}] Found {abandoned_count} abandoned jobs in StartedJobRegistry, re-enqueueing...")
+                for job_id in started_registry.get_job_ids():
+                    try:
+                        job = Job.fetch(job_id, connection=redis_conn)
+                        queue.enqueue_job(job)
+                        started_registry.remove(job, pipeline=None)
+                        logging.info(f"[{worker_id}] Re-enqueued abandoned job {job_id[:8]}")
+                    except Exception as e:
+                        logging.warning(f"[{worker_id}] Could not re-enqueue {job_id[:8]}, will cleanup: {e}")
                 started_registry.cleanup()
-                logging.info(f"[{worker_id}] Abandoned jobs cleared")
+                logging.info(f"[{worker_id}] Abandoned jobs processed")
         except Exception as e:
-            logging.error(f"[{worker_id}] Failed to clear abandoned jobs: {e}")
+            logging.error(f"[{worker_id}] Failed to process abandoned jobs: {e}")
 
         try:
             # Run continuously (burst=False) for idle-busy workers

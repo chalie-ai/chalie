@@ -10,7 +10,6 @@ import re
 import time
 import json
 from typing import List, Dict, Optional
-from services.gist_storage_service import GistStorageService
 import logging
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,36 +94,10 @@ class FrontalCortexService:
         """Initialize with configuration for LLM."""
         from services.llm_service import create_llm_service
         from services.world_state_service import WorldStateService
-        from services.config_service import ConfigService
-        from services.database_service import DatabaseService
-        from services.episodic_retrieval_service import EpisodicRetrievalService
 
         self.config = config
         self.llm = create_llm_service(config)
         self.world_state_service = WorldStateService()
-
-        # Initialize gist storage service
-        attention_span_minutes = config.get('attention_span_minutes', 30)
-        min_confidence = config.get('min_gist_confidence', 7)
-        max_gists = config.get('max_gists', 8)
-        self.gist_storage = GistStorageService(
-            attention_span_minutes=attention_span_minutes,
-            min_confidence=min_confidence,
-            max_gists=max_gists
-        )
-
-        # Initialize episodic memory retrieval
-        try:
-            from services.database_service import get_merged_db_config
-
-            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            db_config = get_merged_db_config()
-            database_service = DatabaseService(db_config)
-            self.episodic_retrieval = EpisodicRetrievalService(database_service, episodic_config)
-            logging.info("Episodic memory retrieval initialized")
-        except Exception as e:
-            logging.warning(f"Episodic memory service not available: {e}")
-            self.episodic_retrieval = None
 
     def generate_response(
         self,
@@ -317,47 +290,12 @@ class FrontalCortexService:
         # Helper to check if a node should be included
         _include = lambda node: (inclusion_map or {}).get(node, True)
 
-        # Use pre-assembled context if available, otherwise build internally
-        if assembled_context:
-            formatted_context = assembled_context.get('gists', '') if _include('gists') else ''
-            if not formatted_context and _include('gists'):
-                formatted_context = self._get_gist_context(topic)
-            episodic_context = assembled_context.get('episodes', '') if _include('episodic_memory') else ''
-            facts_context = assembled_context.get('facts', '') if _include('facts') else ''
-            working_memory_context = assembled_context.get('working_memory', '') if _include('working_memory') else ''
-            world_state = self.world_state_service.get_world_state(topic, thread_id=thread_id) if _include('world_state') else ''
-        else:
-            # Parallelize independent I/O calls for faster context assembly
-            # Only submit futures for nodes that are included
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            context_results = {}
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {}
-                if _include('gists'):
-                    futures[executor.submit(self._get_gist_context, topic)] = 'gists'
-                if _include('world_state'):
-                    futures[executor.submit(self.world_state_service.get_world_state, topic, thread_id)] = 'world_state'
-                if _include('episodic_memory'):
-                    futures[executor.submit(self._get_episodic_context, original_prompt, topic, act_history)] = 'episodes'
-                if _include('facts'):
-                    futures[executor.submit(self._get_facts_context, topic)] = 'facts'
-                if _include('working_memory'):
-                    futures[executor.submit(self._get_working_memory_context, topic, thread_id)] = 'working_memory'
-
-                for future in as_completed(futures):
-                    key = futures[future]
-                    try:
-                        context_results[key] = future.result()
-                    except Exception as e:
-                        logging.warning(f"[FRONTAL CORTEX] Parallel context failed for {key}: {e}")
-                        context_results[key] = ''
-
-            formatted_context = context_results.get('gists', '')
-            world_state = context_results.get('world_state', '')
-            episodic_context = context_results.get('episodes', '')
-            facts_context = context_results.get('facts', '')
-            working_memory_context = context_results.get('working_memory', '')
+        _ctx = assembled_context or {}
+        formatted_context = _ctx.get('gists', '') if _include('gists') else ''
+        episodic_context = _ctx.get('episodes', '') if _include('episodic_memory') else ''
+        facts_context = _ctx.get('facts', '') if _include('facts') else ''
+        working_memory_context = _ctx.get('working_memory', '') if _include('working_memory') else ''
+        world_state = self.world_state_service.get_world_state(topic, thread_id=thread_id) if _include('world_state') else ''
 
         # Replace placeholders
         result = template.replace('{{original_prompt}}', original_prompt)
@@ -805,38 +743,6 @@ class FrontalCortexService:
             logging.debug(f"Client context not available: {e}")
             return ""
 
-    def _get_gist_context(self, topic: str) -> str:
-        """
-        Get gists from Redis or fallback to last message.
-
-        Args:
-            topic: Topic name
-
-        Returns:
-            str: Formatted gist context or fallback message
-        """
-        # Try to get gists from Redis
-        gists = self.gist_storage.get_latest_gists(topic)
-
-        if gists:
-            # Filter out cold_start gists — they're internal metadata, not conversation context
-            real_gists = [g for g in gists if g.get('type') != 'cold_start']
-            if real_gists:
-                lines = ["## Recent Conversation Gists"]
-                for gist in real_gists:
-                    content = gist['content']
-                    gist_type = gist['type']
-                    confidence = gist['confidence']
-                    lines.append(f"- [{gist_type}] {content} (confidence: {confidence})")
-                return "\n".join(lines)
-
-        # Fallback to last message if no gists available
-        last_message = self.gist_storage.get_last_message(topic)
-        if last_message:
-            return f"## Last Exchange\nUser: {last_message['prompt']}\nAssistant: {last_message['response']}"
-
-        return "No previous conversation context available"
-
     def _get_available_skills(self) -> str:
         """
         Get available innate skills from the dispatcher for prompt injection.
@@ -913,105 +819,4 @@ class FrontalCortexService:
             logging.debug(f"Tool registry not available for prompt: {e}")
             return "(no tools loaded)"
 
-    def _get_facts_context(self, topic: str) -> str:
-        """
-        Get facts from Redis formatted for prompt injection.
-
-        Args:
-            topic: Topic name
-
-        Returns:
-            Formatted facts context or empty string
-        """
-        try:
-            from services.fact_store_service import FactStoreService
-            fact_store = FactStoreService()
-            return fact_store.get_facts_formatted(topic)
-        except Exception as e:
-            logging.warning(f"Fact store not available: {e}")
-            return ""
-
-    def _get_working_memory_context(self, topic: str, thread_id: str = None) -> str:
-        """
-        Get working memory formatted for prompt injection.
-
-        Args:
-            topic: Topic name (legacy fallback key)
-            thread_id: Thread ID (preferred key, overrides topic)
-
-        Returns:
-            Formatted working memory context or empty string
-        """
-        try:
-            from services.working_memory_service import WorkingMemoryService
-            max_turns = self.config.get('max_working_memory_turns', 10)
-            working_memory = WorkingMemoryService(max_turns=max_turns)
-            identifier = thread_id if thread_id else topic
-            return working_memory.get_formatted_context(identifier)
-        except Exception as e:
-            logging.warning(f"Working memory not available: {e}")
-            return ""
-
-    def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
-        """
-        Parse semantic_query results from act_history string.
-
-        Returns list of {"name": "...", "definition": "..."} dicts.
-        """
-        import re
-
-        concepts = []
-        # Match both old format "(strength: 0.XX)" and innate skills format "(confidence=X, strength=Y)"
-        pattern = r'-\s+([^:]+):\s+([^(]+)\s+\((?:strength[:=]|confidence=)'
-        matches = re.findall(pattern, act_history)
-
-        for name, definition in matches:
-            concepts.append({
-                'name': name.strip(),
-                'definition': definition.strip()
-            })
-
-        return concepts
-
-    def _get_episodic_context(self, prompt: str, topic: str, act_history: str = "") -> str:
-        """
-        Retrieve relevant episodes and format as context.
-
-        Args:
-            prompt: User's current prompt
-            topic: Current topic
-            act_history: ACT history to extract semantic concepts from
-
-        Returns:
-            str: Formatted episodic memory context or empty string
-        """
-        if not self.episodic_retrieval:
-            return ""
-
-        try:
-            # Extract semantic concepts from act_history if present
-            semantic_concepts = self._extract_semantic_from_history(act_history)
-
-            # Retrieve episodes with semantic boost
-            episodes = self.episodic_retrieval.retrieve_episodes(
-                query_text=prompt,
-                topic=topic,
-                limit=3,
-                semantic_concepts=semantic_concepts if semantic_concepts else None
-            )
-
-            if not episodes:
-                return ""
-
-            lines = ["\n## Relevant Past Experiences"]
-            for i, ep in enumerate(episodes, 1):
-                lines.append(f"{i}. {ep['gist']}")
-                lines.append(f"   - Outcome: {ep['outcome']}")
-                lines.append(f"   - Salience: {ep['salience']}/10")
-
-            return "\n".join(lines)
-
-        except Exception as e:
-            logging.error(f"Failed to retrieve episodic memories: {e}")
-            return ""
 

@@ -9,7 +9,6 @@ import { VoiceIO } from './voice.js';
 import { ClientHeartbeat } from './heartbeat.js';
 import { MemoryCard } from './cards/memory.js';
 import { TimelineCard } from './cards/timeline.js';
-import { ToolsCard } from './cards/tools.js';
 import { ToolResultCard } from './cards/tool_result.js';
 
 class ChalieApp {
@@ -31,7 +30,6 @@ class ChalieApp {
     // Cards
     this._memoryCard = null;
     this._timelineCard = null;
-    this._toolsCard = null;
 
     this._init();
   }
@@ -189,7 +187,6 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _initTools() {
-    this._toolsCard = new ToolsCard(this.api, this.renderer);
     document.getElementById('settingsBtn')?.addEventListener('click', () => {
       window.open('/brain/', '_blank');
     });
@@ -287,15 +284,17 @@ class ChalieApp {
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
 
-    // Detect tools-related query before sending
-    const isToolsQuery = /connect|integrat|tool|what.{0,10}(linked|set.?up|active|running)/i.test(text);
-
     // Render user form with timestamp
     this.renderer.appendUserForm(text, exchangeTimestamp);
 
     // Create pending form and store reference for potential early resolution
     const pendingForm = this.renderer.createPendingForm();
     this._pendingForm = pendingForm;
+
+    // After 2 seconds, upgrade the "..." dots to a brief placeholder phrase
+    const pendingUpgradeTimer = setTimeout(() => {
+      this.renderer.upgradePendingText(pendingForm);
+    }, 2000);
 
     let responseText = '';
     let responseMeta = {};
@@ -305,39 +304,34 @@ class ChalieApp {
         this.presence.setState(stage);
       },
       onMessage: (data) => {
+        clearTimeout(pendingUpgradeTimer);
         responseText = data.text;
         responseMeta = { topic: data.topic };
-        if (data.removed_by) {
-          responseMeta.removed_by = data.removed_by;
-          // Register immediately so the drift stream can find this element
-          // before onDone fires — prevents a race where a tool follow-up
-          // arrives via output:events before resolvePendingForm has run.
-          this.renderer.registerPendingRemoval(data.removed_by, pendingForm);
-        }
-        if (data.removes) responseMeta.removes = data.removes;
         this.presence.setState('responding');
       },
       onError: (data) => {
+        clearTimeout(pendingUpgradeTimer);
         this.renderer.resolvePendingFormError(pendingForm, data.message);
         if (!data.recoverable) {
           this._handleAuthFailure();
         }
       },
       onDone: (data) => {
+        clearTimeout(pendingUpgradeTimer);
         if (responseText) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
           this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
+          this._pendingForm = null;
+        } else {
+          // card-only: keep the pending bubble visible until the card arrives via drift stream
+          this.renderer.upgradePendingText(pendingForm); // no-op if already upgraded
+          // _pendingForm stays set; drift card handler will remove it
         }
         this.presence.setState('resting');
         this._isSending = false;
-        this._pendingForm = null;
         // Re-enable input
         document.getElementById('messageInput').focus();
-        // Show ToolsCard if the message was about connected integrations
-        if (isToolsQuery) {
-          this._toolsCard.fetch();
-        }
       },
     });
 
@@ -411,14 +405,12 @@ class ChalieApp {
   }
 
   _handleEvent(data) {
-    // Tool-status event — show ToolsCard in the spine
-    if (data.type === 'tools') {
-      this._toolsCard.fetch();
-      return;
-    }
-
     // Tool result card event
     if (data.type === 'card') {
+      if (this._pendingForm) {
+        this._pendingForm.remove();
+        this._pendingForm = null;
+      }
       const cardEl = this._toolResultCard.build(data);
       this.renderer.appendToolCard(cardEl);
       return;
@@ -431,14 +423,11 @@ class ChalieApp {
     // is in flight — the chat SSE already renders the reply via resolvePendingForm.
     if (data.type === 'response' && this._isSending) return;
 
-    // Build metadata, including removed_by and removes if present
     const meta = {
       topic: data.topic,
       type: data.type,
       ts: new Date(),
     };
-    if (data.removed_by) meta.removed_by = data.removed_by;
-    if (data.removes) meta.removes = data.removes;
 
     // Render in conversation spine as a Chalie message
     this.renderer.appendChalieForm(content, meta);

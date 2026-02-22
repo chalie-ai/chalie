@@ -11,7 +11,6 @@ from .orchestrator.handlers import (
     ClarifyHandler,
     AcknowledgeHandler,
     IgnoreHandler,
-    ToolSpawnHandler,
 )
 
 
@@ -40,7 +39,6 @@ class OrchestratorService:
             'CLARIFY': ClarifyHandler(self.output_service),
             'ACKNOWLEDGE': AcknowledgeHandler(self.output_service),
             'IGNORE': IgnoreHandler(),
-            'TOOL_SPAWN': ToolSpawnHandler(self.output_service),
         }
 
         # Link handlers to path definitions

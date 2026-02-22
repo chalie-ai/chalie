@@ -30,6 +30,19 @@ export class ToolResultCard {
     const body = document.createElement('div');
     body.className = 'tool-result-card__body';
     body.innerHTML = data.html;
+
+    // Wire up YouTube click-to-play (onclick stripped by HTML sanitizer)
+    const thumb = body.querySelector('.yt-th');
+    const frame = body.querySelector('.yt-fr');
+    if (thumb && frame) {
+      thumb.style.cursor = 'pointer';
+      thumb.addEventListener('click', () => {
+        frame.src = frame.dataset.src;
+        thumb.style.display = 'none';
+        frame.style.display = 'block';
+      });
+    }
+
     card.appendChild(body);
 
     return card;

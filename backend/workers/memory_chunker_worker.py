@@ -13,10 +13,17 @@ import logging
 
 def _extract_json(text: str) -> str:
     """Extract JSON from LLM response that may contain leading text or code fences."""
+    # First try: strip code fences
     match = re.search(r'```(?:json)?\s*(.*?)```', text, re.DOTALL)
     if match:
         logging.debug("[memory_chunker] Stripped code fence from LLM response")
         return match.group(1).strip()
+    # Second try: find JSON object by scanning for first { and last }
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        logging.debug("[memory_chunker] Extracted JSON by boundary scan")
+        return text[start:end + 1]
     return text
 
 
@@ -80,7 +87,13 @@ def generate_memory_chunk(topic: str, prompt_message: str, response_message: str
     response = llm.send_message(system_prompt, user_message).text
 
     # Parse JSON response
-    memory_chunk = json.loads(_extract_json(response))
+    extracted = _extract_json(response)
+    try:
+        memory_chunk = json.loads(extracted)
+    except json.JSONDecodeError:
+        logging.error(f"[memory_chunker] JSON parse failed for topic '{topic}'")
+        logging.debug(f"[memory_chunker] Raw LLM response: {response[:1000]}")
+        raise
 
     return memory_chunk
 
@@ -340,7 +353,10 @@ def memory_chunker_worker(job_data: dict) -> str:
             # Add memory chunk to specific exchange
             if thread_id:
                 thread_conv_service = ThreadConversationService()
-                thread_conv_service.add_memory_chunk(thread_id, exchange_id, memory_chunk)
+                stored = thread_conv_service.add_memory_chunk(thread_id, exchange_id, memory_chunk)
+                if not stored:
+                    logging.error(f"[memory_chunker] Exchange {exchange_id[:8]} not found in thread {thread_id} — memory chunk lost")
+                    raise RuntimeError(f"Exchange {exchange_id[:8]} not found in thread {thread_id}")
 
             # Store gists in Redis with TTL and confidence filtering
             gists = memory_chunk.get('gists', [])
@@ -430,7 +446,8 @@ def memory_chunker_worker(job_data: dict) -> str:
             return f"Topic '{topic}' | Memory chunk generated in {generation_time:.2f}s"
 
         except json.JSONDecodeError as e:
-            return f"Topic '{topic}' | ERROR: Invalid JSON from LLM - {str(e)}"
+            logging.error(f"[memory_chunker] Invalid JSON from LLM for topic '{topic}': {e}")
+            raise
         except Exception as e:
             return f"Topic '{topic}' | ERROR: {str(e)}"
     finally:

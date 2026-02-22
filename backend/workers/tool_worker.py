@@ -193,6 +193,25 @@ def tool_worker(job_data: dict) -> str:
         except Exception:
             exchange_id = "unknown"
 
+        from services.context_relevance_service import ContextRelevanceService
+        from services.context_assembly_service import ContextAssemblyService
+
+        inclusion_map = None
+        try:
+            inclusion_map = ContextRelevanceService().compute_inclusion_map(
+                mode='ACT', signals={}, classification=classification, returning_from_silence=False,
+            )
+        except Exception as e:
+            logger.warning(f"[TOOL WORKER] Context relevance failed: {e}")
+
+        assembled_context = None
+        try:
+            assembled_context = ContextAssemblyService({}).assemble(
+                prompt=text, topic=topic, thread_id=thread_id,
+            )
+        except Exception as e:
+            logger.warning(f"[TOOL WORKER] Context assembly failed: {e}")
+
         # ACT loop
         consecutive_same_action = 0
         last_action_type = None
@@ -216,6 +235,8 @@ def tool_worker(job_data: dict) -> str:
                 chat_history=chat_history,
                 act_history=act_loop.get_history_context(),
                 relevant_tools=relevant_tools,
+                assembled_context=assembled_context,
+                inclusion_map=inclusion_map,
             )
 
             actions = response_data.get('actions', [])
@@ -376,8 +397,8 @@ def tool_worker(job_data: dict) -> str:
         # Enqueue tool outputs for background experience assimilation
         _enqueue_tool_reflection(act_loop.act_history, topic, text)
 
-        # Render and deliver cards; gate text follow-up on replaces_response
-        card_replaces = _enqueue_tool_cards(act_loop.act_history, topic, metadata)
+        # Render and deliver cards; gate text follow-up for synthesize=false tools
+        card_replaces = _enqueue_tool_cards(act_loop.act_history, topic, metadata, cycle_id=cycle_id)
         if not card_replaces:
             _enqueue_followup(
                 topic=topic,
@@ -433,9 +454,10 @@ def tool_worker(job_data: dict) -> str:
         signal.alarm(0)
 
 
-def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict) -> bool:
-    """Render and enqueue cards for card-enabled tools. Returns True if any card replaces the text response."""
-    any_replaces = False
+def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:
+    """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
+    tool was found (suppresses the text follow-up since the card was already rendered inline)."""
+    any_synthesize_false = False
     try:
         from services.redis_client import RedisClientService
         from services.tool_registry_service import ToolRegistryService
@@ -469,9 +491,15 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict) -> bool:
                 continue
 
             # If synthesize is false, invoke() already rendered the card inline.
-            # Just suppress the follow-up text response without re-rendering.
+            # Suppress the text follow-up and close the waiting SSE connection.
             if not output_config.get('synthesize', True):
-                any_replaces = True
+                any_synthesize_false = True
+                sse_uuid = metadata.get('uuid')
+                if sse_uuid:
+                    try:
+                        output_svc.enqueue_close_signal(sse_uuid)
+                    except Exception as _re:
+                        logger.warning(f"[TOOL WORKER] Failed to send close signal: {_re}")
                 continue
 
             raw = raw_map.get(tool_name)
@@ -481,13 +509,11 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict) -> bool:
             card_data = renderer.render(tool_name, raw, card_config, tool['dir'])
             if card_data:
                 output_svc.enqueue_card(topic, card_data, metadata)
-                if card_config.get('replaces_response'):
-                    any_replaces = True
 
     except Exception as e:
         logger.warning(f"[TOOL WORKER] Card enqueue failed: {e}")
 
-    return any_replaces
+    return any_synthesize_false
 
 
 def _action_fingerprint(actions: list) -> str:
@@ -550,6 +576,7 @@ def _enqueue_followup(
             'destination': metadata.get('destination', 'web'),
             'thread_id': metadata.get('thread_id'),
             'source': 'tool_followup',
+            'uuid': metadata.get('uuid'),   # routes tool result to the waiting SSE connection
         }
 
         followup_queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)

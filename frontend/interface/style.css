@@ -522,17 +522,6 @@ body {
   color: var(--error);
 }
 
-/* Pending removal — half padding and subtle pulsating */
-.speech-form--pending-removal {
-  padding: var(--space-md);
-  animation: pulsateRemoval 3s ease-in-out infinite;
-}
-
-@keyframes pulsateRemoval {
-  0%, 100% { opacity: 0.2; }
-  50% { opacity: 0.5; }
-}
-
 /* --------------------------------------------------------------------------
    9. Capability Cards
    -------------------------------------------------------------------------- */
@@ -1224,42 +1213,6 @@ body {
     margin: var(--space-md);
     max-width: calc(100% - var(--space-xl));
   }
-}
-
-/* ToolsCard styles */
-.tools-card-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-xs);
-  margin-bottom: var(--space-sm);
-}
-
-.tools-card-chip {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.9rem;
-  line-height: 1;
-}
-
-.tools-card-summary {
-  margin-bottom: var(--space-xs);
-}
-
-.tools-card-text {
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-}
-
-.tools-card-available {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  margin-bottom: var(--space-sm);
 }
 
 /* --------------------------------------------------------------------------

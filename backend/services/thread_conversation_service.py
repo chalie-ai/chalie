@@ -142,12 +142,15 @@ class ThreadConversationService:
         self.redis.lset(conv_key, -1, json.dumps(exchange))
         self._refresh_ttl(thread_id)
 
-    def add_memory_chunk(self, thread_id: str, exchange_id: str, memory_chunk: dict) -> None:
+    def add_memory_chunk(self, thread_id: str, exchange_id: str, memory_chunk: dict) -> bool:
         """Add or merge a memory chunk to a specific exchange by ID.
 
         With per-message encoding, this may be called twice per exchange:
         once for the user message (Phase A) and once for the assistant response
         (Phase D). Gists are merged so both survive in conversation history.
+
+        Returns:
+            True if the exchange was found and updated, False if not found.
         """
         conv_key = self._conv_key(thread_id)
         all_raw = self.redis.lrange(conv_key, 0, -1)
@@ -163,9 +166,10 @@ class ThreadConversationService:
                 exchange["memory_chunk"] = memory_chunk
                 self.redis.lset(conv_key, i, json.dumps(exchange))
                 self._refresh_ttl(thread_id)
-                return
+                return True
 
         logging.warning(f"[THREAD_CONV] Exchange {exchange_id[:8]} not found in thread {thread_id}")
+        return False
 
     def get_conversation_history(self, thread_id: str) -> list:
         """Get all exchanges for a thread."""

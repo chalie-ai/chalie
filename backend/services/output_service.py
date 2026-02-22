@@ -31,8 +31,6 @@ class OutputService:
         confidence: float,
         generation_time: float,
         original_metadata: dict = None,
-        removed_by: str = None,
-        removes: str = None
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
@@ -44,8 +42,6 @@ class OutputService:
             confidence: Confidence score of the response
             generation_time: Time taken to generate the response
             original_metadata: Optional original metadata from the request (uuid, user_id, etc.)
-            removed_by: Temporary ID for placeholder that will be removed when final response arrives
-            removes: Temporary ID of placeholder to remove (sent with final response)
 
         Returns:
             str: UUID of the enqueued output
@@ -58,12 +54,6 @@ class OutputService:
             "generation_time": generation_time,
             "metadata": original_metadata or {}
         }
-
-        # Add removed_by and removes to metadata if present
-        if removed_by:
-            metadata_dict["removed_by"] = removed_by
-        if removes:
-            metadata_dict["removes"] = removes
 
         output = {
             "id": output_id,
@@ -99,14 +89,6 @@ class OutputService:
             'generated_at': output['created_at'],
         }
 
-        # Add removed_by field for ACK responses (FE identifies placeholder to remove later)
-        if removed_by:
-            event_payload_dict['removed_by'] = removed_by
-
-        # Add removes field for final responses (FE removes the temporary placeholder)
-        if removes:
-            event_payload_dict['removes'] = removes
-
         event_payload = json.dumps(event_payload_dict)
 
         # Only publish to output:events for background outputs (no sync SSE channel).
@@ -127,8 +109,6 @@ class OutputService:
                 send_push_to_all(
                     title='Chalie',
                     body=response[:200] if len(response) > 200 else response,
-                    removed_by=removed_by,
-                    removes=removes,
                 )
             except Exception as e:
                 logger.warning(f"Web push dispatch failed: {e}")
@@ -211,6 +191,19 @@ class OutputService:
                     logger.warning(f"Notification tool '{tool['name']}' error: {e}")
         except Exception as e:
             logger.warning(f"Notification dispatch error: {e}")
+
+    def enqueue_close_signal(self, sse_uuid: str) -> None:
+        """
+        Signal the waiting SSE connection to close with no text response.
+        Used for synthesize=false tools that render inline cards only.
+
+        Args:
+            sse_uuid: The SSE request UUID to close
+        """
+        if not sse_uuid:
+            return
+        self.redis.publish(f"sse:{sse_uuid}", json.dumps({"type": "close"}))
+        logger.debug(f"[OutputService] Published close signal for SSE channel '{sse_uuid}'")
 
     def enqueue_act(
         self,
