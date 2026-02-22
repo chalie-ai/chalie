@@ -8,7 +8,7 @@
 | **Memory Chunker Worker** (`workers/memory_chunker_worker.py`) | `idle-busy` | Enqueued by Digest Worker | Enriches a single exchange with a memory chunk via the **memory-chunker** LLM and stores it back into the conversation file. | Handles JSON decoding errors gracefully. |
 | **Episodic Memory Worker** (`workers/episodic_memory_worker.py`) | `idle-busy` | Enqueued by Digest Worker | Builds episodes from a sequence of exchanges, waits for memory chunks, generates via LLM, stores in PostgreSQL. Triggers semantic consolidation. | |
 | **Semantic Consolidation Worker** (`workers/semantic_consolidation_worker.py`) | `idle-busy` | Enqueued by Episodic Memory Worker | Extracts concepts + relationships from episodes. Matches existing (similarity > 0.85) or creates new. | |
-| **Telegram Worker** (`workers/telegram_worker.py`) | `service` | `consumer.py` | Converts Telegram messages to prompts and enqueues into `prompt-queue`. Sends responses back to Telegram. | |
+| **Tool Worker** (`workers/tool_worker.py`) | `idle-busy` | Enqueued by ACT Loop | Background ACT loop execution via RQ queue. Manages tool invocation and result handling. | |
 
 ## Services
 
@@ -21,6 +21,12 @@
 | **Topic Stability Regulator** (`services/topic_stability_regulator_service.py`) | `consumer.py` | Adaptive tuning of topic switching parameters. 24h cycle. | |
 | **Routing Stability Regulator** (`services/routing_stability_regulator_service.py`) | `consumer.py` | Single authority for mode router weight mutation. 24h cycle. Reads pressure signals, applies bounded corrections (max ±0.02/day), 48h cooldown per parameter. Closed-loop control (reverts ineffective adjustments). | Persists to `configs/generated/mode_router_config.json`. |
 | **Routing Reflection** (`services/routing_reflection_service.py`) | `consumer.py` | Idle-time peer review of routing decisions via strong LLM (qwen3:14b). Stratified sampling, dimensional ambiguity analysis, anti-authority safeguards. | Consultant, not authority. Feeds pressure signals to regulator. |
+| **Experience Assimilation** (`services/experience_assimilation_service.py`) | `consumer.py` | Converts tool results into episodic memory. 60s poll cycle. | |
+| **Thread Expiry Service** (`services/thread_expiry_service.py`) | `consumer.py` | Expires stale conversation threads. 5min poll cycle. | |
+| **Scheduler Service** (`services/scheduler_service.py`) | `consumer.py` | Fires due reminders and scheduled tasks. 60s poll cycle. | |
+| **Autobiography Synthesis Service** (`services/autobiography_synthesis_service.py`) | `consumer.py` | Synthesizes user narrative from interactions. 6h cycle. | |
+| **Triage Calibration Service** (`services/triage_calibration_service.py`) | `consumer.py` | Scores triage/routing correctness and provides learning signals. 24h cycle. | |
+| **Profile Enrichment Service** (`services/profile_enrichment_service.py`) | `consumer.py` | Enriches tool capability profiles from execution data. 6h cycle. | |
 
 ## Worker Base
 

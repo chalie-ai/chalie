@@ -8,14 +8,14 @@ Chalie is a human-in-the-loop cognitive assistant that combines memory consolida
 
 ### System Type
 - **Synthetic cognitive brain** using LLMs to replicate human brain functions
-- **Tech Stack**: Python backend, PostgreSQL + pgvector, Redis, Ollama (configurable LLMs), Bootstrap 5 frontend
+- **Tech Stack**: Python backend, PostgreSQL + pgvector, Redis, Ollama (configurable LLMs), Vanilla JavaScript frontend (Radiant design system)
 - **Core Pattern**: Worker-based architecture with Redis queue, service-oriented design
 
 ### Communication Pattern
 1. User sends message → POST to `/chat` with text
 2. Backend processes: Mode router selects mode → mode-specific LLM generates response
 3. Response delivered: Via SSE stream (status → message → done events)
-4. Authentication: API key via `Authorization: Bearer <key>` header
+4. Authentication: Session cookie-based authentication (`@require_session` decorator)
 
 ## Code Organization
 
@@ -33,13 +33,15 @@ backend/
 └── consumer.py        # Main supervisor process
 ```
 
-Frontend UI located separately:
+Frontend applications located separately:
 ```
 frontend/
-└── interface/         # Web UI (HTML/CSS/JS, Bootstrap 5, dark theme)
+├── interface/         # Main chat UI (HTML/CSS/JS, Radiant design system)
+├── brain/             # Admin/cognitive dashboard
+└── on-boarding/       # Account setup wizard
 ```
 
-**IMPORTANT**: All UI code must exist under `/interface/` and nowhere else.
+**IMPORTANT**: UI code must exist under `/interface/`, `/brain/`, or `/on-boarding/` only.
 
 ## Key Services
 
@@ -73,17 +75,24 @@ frontend/
 #### Tool Integration
 - **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement
-- **`trust_evaluation_service.py`** — 5-axis trust scoring for tool outputs
+- **`tool_registry_service.py`** — Tool discovery and metadata management
+- **`tool_container_service.py`** — Container lifecycle and execution
+- **`tool_config_service.py`** — Tool configuration persistence
+- **`tool_performance_service.py`** — Performance metrics tracking
+- **`tool_profile_service.py`** — Tool capability caching and profiles
 
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
-- **`governance_service.py`** — System health monitoring and parameter adjustment
+- **`identity_state_service.py`** — Tracks identity state changes and evolution
+- **`user_trait_service.py`** — User trait management with category-specific decay
 
 #### Infrastructure
 - **`database_service.py`** — PostgreSQL connection pool and migrations
-- **`redis_client_service.py`** — Redis connection handling
+- **`redis_client.py`** — Redis connection handling
 - **`config_service.py`** — Environment and JSON file config (precedence: env > .env > json)
 - **`output_service.py`** — Output queue management for responses
+- **`event_bus_service.py`** — Pub/sub event routing
+- **`card_renderer_service.py`** — Card system rendering engine
 
 #### Topic Classification
 - **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
@@ -91,12 +100,13 @@ frontend/
 - **`topic_stability_regulator_service.py`** — 24h adaptive tuning of topic classification and boundary detector parameters
 
 #### Session & Conversation
-- **`topic_conversation_service.py`** — File-based conversation persistence
+- **`thread_conversation_service.py`** — Redis-backed conversation thread persistence
+- **`thread_service.py`** — Manages conversation threads with expiry
 - **`session_service.py`** — Tracks user sessions and topic changes
 
-### Innate Skills (`backend/services/innate_skills/`)
+### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-8 built-in cognitive skills for the ACT loop:
+9 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
@@ -104,6 +114,8 @@ frontend/
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
+- **`goal_skill.py`** — Persistent directional goals: create, list, update, progress, check_in (<100ms)
+- **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
 
 ## Worker Processes (`backend/workers/`)
 
@@ -120,6 +132,12 @@ frontend/
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Routing Reflection** — Idle-time peer review of routing decisions
 - **Topic Stability Regulator** — Adaptive tuning of topic classification parameters
+- **Experience Assimilation** — Tool results → episodic memory (60s poll)
+- **Thread Expiry Service** — Expires stale threads (5min cycle)
+- **Scheduler Service** — Fires due reminders/tasks (60s poll)
+- **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
+- **Triage Calibration** — Triage correctness scoring (24h cycle)
+- **Profile Enrichment** — Tool profile enrichment (6h cycle)
 
 ## Data Flow Pipeline
 
@@ -196,7 +214,7 @@ Each layer optimized for its timescale; all integrated via context assembly. Lis
 Environment variables > .env file > JSON config files > hardcoded defaults
 ```
 
-See `PROVIDERS_SETUP.md` for provider configuration.
+See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 
 ### Thread-Safe Worker State
 - `WorkerManager` maintains shared dictionary via `multiprocessing.Manager()`
@@ -254,17 +272,23 @@ See `PROVIDERS_SETUP.md` for provider configuration.
 - Runtime configurable via REST API (`/api/providers`)
 - Supports: Ollama, Anthropic, OpenAI, Google Gemini
 
-See `PROVIDERS-SETUP.md` for detailed setup instructions.
+See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 
 ## REST API
 
-### Main Endpoints
-- **`POST /chat`** — Send message, get SSE streaming response
-- **`GET /chat/<conversation_id>`** — Get conversation history
-- **`GET /providers`** — List configured LLM providers
-- **`POST /providers`** — Register new provider
-- **`GET /memory/search`** — Search memories
-- **`GET /system/health`** — System health check
+### Available Blueprints
+- **`user_auth`** — Account creation, login, API key management
+- **`conversation`** — Chat endpoint (SSE streaming), conversation list/retrieval
+- **`memory`** — Memory search, fact management
+- **`proactive`** — Outreach/notifications, upcoming tasks
+- **`privacy`** — Data deletion, export
+- **`system`** — Health, version, settings
+- **`tools`** — Tool execution, configuration
+- **`providers`** — LLM provider configuration
+- **`push`** — Push notification subscription
+- **`scheduler`** — Reminders and scheduled tasks
+- **`lists`** — List management
+- **`stubs`** — Placeholder endpoints (calendar, notifications, integrations, voice, permissions) returning 501
 
 See API blueprints in `backend/api/` for full reference.
 

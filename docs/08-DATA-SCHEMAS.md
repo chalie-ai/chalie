@@ -70,45 +70,33 @@ CREATE TABLE episodes (
 - `last_accessed_at` (TIMESTAMP) – Last retrieval time (for freshness decay)
 - `access_count` (INTEGER) – Number of accesses
 
-## PostgreSQL – Conversations & Messages Tables
+## PostgreSQL – Threads Table
 
-Conversations are stored as relational data in PostgreSQL (not files).
+Conversations are stored as Redis-backed threads with metadata in PostgreSQL.
 
-**Conversations Table:**
+**Threads Table:**
 ```sql
-CREATE TABLE conversations (
-    id UUID PRIMARY KEY,
-    user_id UUID NOT NULL REFERENCES users(id),
+CREATE TABLE threads (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
     topic TEXT NOT NULL,
     title TEXT,
     status TEXT DEFAULT 'active',  -- active, archived, deleted
+    metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    thread_id TEXT  -- Maps to conversation thread
-);
-```
-
-**Messages Table:**
-```sql
-CREATE TABLE messages (
-    id UUID PRIMARY KEY,
-    conversation_id UUID NOT NULL REFERENCES conversations(id),
-    role TEXT NOT NULL,  -- 'user' or 'assistant'
-    content TEXT NOT NULL,
-    mode TEXT,  -- RESPOND, ACT, CLARIFY, ACKNOWLEDGE
-    metadata JSONB,  -- routing_score, tool_calls, etc.
-    created_at TIMESTAMP DEFAULT NOW()
+    last_message_at TIMESTAMP,
+    expires_at TIMESTAMP
 );
 ```
 
 **Fields**:
-- `topic`: Normalized conversation topic (used for memory scoping)
-- `role`: Message author ('user' or 'assistant/chalie')
-- `content`: Full message text
-- `mode`: Cognitive mode used for Chalie's response
-- `metadata`: Additional context (routing decisions, tool invocations, etc.)
+- `id`: Unique thread identifier
+- `topic`: Active conversation topic (used for memory scoping)
+- `metadata`: Thread state including confidence, classifier info
+- `expires_at`: Thread expiry time (managed by thread_expiry_service)
 
-These schemas are referenced by the services and workers throughout the codebase.
+Conversation history is stored in Redis via `ThreadConversationService` with a 24h TTL. Thread metadata is persisted in PostgreSQL for durability.
 
 ## PostgreSQL – Lists Tables
 
@@ -163,3 +151,151 @@ CREATE TABLE list_events (
 - `lists.updated_at` is touched on every item mutation for recency-based resolution
 - Name resolution is case-insensitive; `list_service._resolve_list()` tries exact ID first, then name match
 - Context injection: `list_service.get_lists_for_prompt()` formats a compact summary injected as `{{active_lists}}` into all four mode prompts (RESPOND, ACT, CLARIFY, ACKNOWLEDGE)
+
+## PostgreSQL – Additional Core Tables
+
+### Scheduled Items
+```sql
+CREATE TABLE scheduled_items (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    scheduled_for TIMESTAMP NOT NULL,
+    recurrence TEXT,  -- none, daily, weekly, monthly
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Goals
+```sql
+CREATE TABLE goals (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'active',  -- active, completed, abandoned
+    progress FLOAT DEFAULT 0.0,
+    target_date TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Autobiography
+```sql
+CREATE TABLE autobiography (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    sections JSONB,  -- identity, values, patterns, etc.
+    version INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Routing Decisions (Audit Trail)
+```sql
+CREATE TABLE routing_decisions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    selected_mode TEXT NOT NULL,
+    scores JSONB NOT NULL,
+    signals JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Semantic Concepts & Relationships
+```sql
+CREATE TABLE semantic_concepts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    definition TEXT,
+    embedding vector(768),
+    strength FLOAT DEFAULT 1.0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE semantic_relationships (
+    id TEXT PRIMARY KEY,
+    concept_a_id TEXT NOT NULL REFERENCES semantic_concepts(id),
+    concept_b_id TEXT NOT NULL REFERENCES semantic_concepts(id),
+    relationship_type TEXT NOT NULL,
+    strength FLOAT DEFAULT 1.0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### User Traits
+```sql
+CREATE TABLE user_traits (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    confidence FLOAT DEFAULT 1.0,
+    decay_rate FLOAT DEFAULT 0.05,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Providers & Tool Configs
+```sql
+CREATE TABLE providers (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,  -- ollama, openai, anthropic, gemini
+    endpoint TEXT,
+    config JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE job_provider_assignments (
+    id TEXT PRIMARY KEY,
+    job_name TEXT NOT NULL,
+    provider_id TEXT NOT NULL REFERENCES providers(id),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE tool_configs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    config JSONB,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Master Account
+```sql
+CREATE TABLE master_account (
+    id TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    encryption_key TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Triage Calibration
+```sql
+CREATE TABLE triage_calibration (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    score FLOAT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
