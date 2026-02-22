@@ -69,8 +69,8 @@ class ToolProfileService:
     def _get_db(self):
         if self._db:
             return self._db
-        from services.database_service import DatabaseService, get_merged_db_config
-        return DatabaseService(get_merged_db_config())
+        from services.database_service import get_lightweight_db_service
+        return get_lightweight_db_service()
 
     def _get_llm(self):
         from services.llm_service import create_llm_service

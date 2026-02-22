@@ -157,12 +157,11 @@ class ContextAssemblyService:
         """Retrieve episodic memory context."""
         try:
             from services.episodic_retrieval_service import EpisodicRetrievalService
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
             from services.config_service import ConfigService
 
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
+            db_service = get_shared_db_service()
             retrieval = EpisodicRetrievalService(db_service, episodic_config)
 
             # Extract semantic concepts from act_history for boost

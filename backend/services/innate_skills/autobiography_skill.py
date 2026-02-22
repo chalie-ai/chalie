@@ -34,10 +34,9 @@ def handle_autobiography(topic: str, params: dict) -> str:
         Formatted narrative string or "not synthesized" message
     """
     try:
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db = DatabaseService(db_config)
+        db = get_shared_db_service()
 
         user_id = "primary"
 

@@ -19,8 +19,8 @@ from typing import Dict, Any, Optional, List
 
 from services.redis_client import RedisClientService
 from services.config_service import ConfigService
-from services.llm_service import create_llm_service
-from services.database_service import DatabaseService, get_merged_db_config
+from services.llm_service import create_refreshable_llm_service
+from services.database_service import get_lightweight_db_service
 from services.routing_decision_service import RoutingDecisionService
 
 logger = logging.getLogger(__name__)
@@ -55,12 +55,11 @@ class RoutingReflectionService:
         ).get("name", "semantic_consolidation_queue")
 
         # Database
-        db_config = get_merged_db_config()
-        self.db_service = DatabaseService(db_config)
+        self.db_service = get_lightweight_db_service()
         self.decision_service = RoutingDecisionService(self.db_service)
 
-        # LLM for reflection (provider resolved from mode-reflection config)
-        self.ollama = create_llm_service(self.config)
+        # LLM for reflection — refreshable so provider changes take effect without restart
+        self.ollama = create_refreshable_llm_service("mode-reflection")
 
         # Load reflection prompt
         self.prompt_template = ConfigService.get_agent_prompt("mode-reflection")

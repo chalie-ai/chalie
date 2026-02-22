@@ -69,6 +69,14 @@ def get_shared_db_service() -> 'DatabaseService':
     return _shared_db_service
 
 
+def get_lightweight_db_service() -> 'DatabaseService':
+    """Create a DatabaseService with minimal pool for single-threaded background workers."""
+    db_config = get_merged_db_config()
+    db_config['pool_size'] = 1
+    db_config['max_overflow'] = 1
+    return DatabaseService(db_config)
+
+
 class DatabaseService:
     """Manages PostgreSQL connection pooling via SQLAlchemy engine."""
 
