@@ -39,16 +39,14 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     # Filter only enriched exchanges (guard against None entries from storage)
     enriched = [e for e in exchanges if e and e.get('memory_chunk')]
 
-    if not enriched:
-        return False, "No enriched exchanges", []
-
     # Condition 1: 3+ enriched exchanges
     if len(enriched) >= min_exchanges:
         return True, f"{len(enriched)} enriched exchanges ready", enriched
 
-    # Condition 2: 10+ minutes since earliest exchange
+    # Condition 2: 10+ minutes since earliest exchange — check ALL exchanges, not just enriched,
+    # so a topic with 0 enriched exchanges can still time out rather than retrying forever.
     earliest_time = None
-    for exchange in enriched:
+    for exchange in exchanges:
         resp = exchange.get('response')
         response_time_str = resp.get('time') if isinstance(resp, dict) else None
         if response_time_str:
@@ -63,7 +61,10 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     if earliest_time:
         elapsed = datetime.now() - earliest_time
         if elapsed.total_seconds() >= timeout_minutes * 60:
-            return True, f"{timeout_minutes} minute timeout reached", enriched
+            return True, f"timeout reached, {len(enriched)} enriched", enriched
+
+    if not enriched:
+        return False, "No enriched exchanges", []
 
     return False, f"Not ready: {len(enriched)} exchanges, waiting for more or timeout", []
 
@@ -213,6 +214,10 @@ def episodic_memory_worker(job_data: dict) -> str:
             return f"Deferred - {reason}"
 
         logging.info(f"Topic '{topic}' ready for consolidation: {reason}, {len(exchanges)} exchanges")
+
+        if not exchanges:
+            logging.warning(f"[EPISODIC] Topic '{topic}' timeout reached with 0 enriched exchanges — skipping episode creation")
+            return "Skipped — timeout reached with 0 enriched exchanges"
 
         # Load configs
         from services.database_service import get_merged_db_config

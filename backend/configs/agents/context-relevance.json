@@ -184,10 +184,6 @@
     ],
     "active_lists": [
       {
-        "when": {},
-        "strength": "soft"
-      },
-      {
         "when": {
           "greeting_pattern": true
         },
@@ -254,5 +250,5 @@
     "focus",
     "gists"
   ],
-  "max_included_nodes": 12
+  "max_included_nodes": 14
 }

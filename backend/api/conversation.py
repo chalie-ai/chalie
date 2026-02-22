@@ -79,7 +79,7 @@ def chat_sse():
 
         # Listen for pub/sub events with keepalive and timeout
         start_time = time.time()
-        timeout_seconds = 90
+        timeout_seconds = 360
         keepalive_interval = 15
         status_interval = 20
         last_keepalive = time.time()
@@ -95,7 +95,7 @@ def chat_sse():
                 if isinstance(payload, bytes):
                     payload = payload.decode()
 
-                # Check if it's an error from the background thread
+                # Check if it's an error or close signal from the background thread
                 try:
                     parsed = json.loads(payload)
                     if 'error' in parsed:
@@ -103,6 +103,11 @@ def chat_sse():
                             "message": parsed['error'],
                             "recoverable": True
                         })
+                        yield sse_event("done", {
+                            "duration_ms": int((time.time() - start_time) * 1000)
+                        })
+                        break
+                    if parsed.get('type') == 'close':
                         yield sse_event("done", {
                             "duration_ms": int((time.time() - start_time) * 1000)
                         })
@@ -123,11 +128,6 @@ def chat_sse():
                         "mode": metadata.get("mode", ""),
                         "confidence": metadata.get("confidence", 0),
                     }
-                    # Include removed_by and removes if present
-                    if "removed_by" in metadata:
-                        message_data["removed_by"] = metadata["removed_by"]
-                    if "removes" in metadata:
-                        message_data["removes"] = metadata["removes"]
                     yield sse_event("message", message_data)
                     message_received = True
                     yield sse_event("done", {
@@ -148,7 +148,11 @@ def chat_sse():
 
             # Fallback: if background thread is done but no pub/sub arrived
             if bg_done.is_set() and not message_received:
-                time.sleep(0.5)  # Brief grace period
+                # ACT triage sets this flag when a tool_worker job is pending.
+                # Keep the connection alive — the worker will publish when done.
+                if redis.get(f"sse_pending:{request_id}"):
+                    continue
+                time.sleep(0.5)  # Brief grace period (non-ACT paths)
                 # Try polling the output key directly
                 output_key = f"output:{request_id}"
                 fallback_data = redis.get(output_key)
@@ -161,11 +165,6 @@ def chat_sse():
                         "mode": metadata.get("mode", ""),
                         "confidence": metadata.get("confidence", 0),
                     }
-                    # Include removed_by and removes if present
-                    if "removed_by" in metadata:
-                        message_data["removed_by"] = metadata["removed_by"]
-                    if "removes" in metadata:
-                        message_data["removes"] = metadata["removes"]
                     yield sse_event("message", message_data)
                 elif bg_error:
                     yield sse_event("error", {

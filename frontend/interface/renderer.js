@@ -15,7 +15,6 @@ export class Renderer {
   constructor(spine) {
     this._spine = spine;
     this._userScrolledUp = false;
-    this._messagesByRemovalId = new Map(); // Track messages by removed_by ID
     this._ttsEnabled = false;
     this._activeForm = null;
     this._initScrollTracking();
@@ -52,7 +51,7 @@ export class Renderer {
   /**
    * Append a Chalie speech form.
    * @param {string} text
-   * @param {{topic?: string, duration_ms?: number, removed_by?: string, removes?: string}} [meta]
+   * @param {{topic?: string, duration_ms?: number}} [meta]
    */
   appendChalieForm(text, meta = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
@@ -62,21 +61,6 @@ export class Renderer {
 
     const metaRow = this._buildMetaRow(text, meta);
     el.appendChild(metaRow);
-
-    // Handle removed_by parameter — mark for pending removal
-    if (meta.removed_by) {
-      el.classList.add('speech-form--pending-removal');
-      this._messagesByRemovalId.set(meta.removed_by, el);
-    }
-
-    // Handle removes parameter — delete messages with matching removed_by
-    if (meta.removes) {
-      const removedEl = this._messagesByRemovalId.get(meta.removes);
-      if (removedEl) {
-        removedEl.remove();
-        this._messagesByRemovalId.delete(meta.removes);
-      }
-    }
 
     this._spine.appendChild(el);
     this._setActiveForm(el);
@@ -101,7 +85,7 @@ export class Renderer {
    * Replace a pending form's thinking dots with actual content.
    * @param {HTMLElement} form
    * @param {string} text
-   * @param {{topic?: string, duration_ms?: number, removed_by?: string, removes?: string}} [meta]
+   * @param {{topic?: string, duration_ms?: number}} [meta]
    */
   resolvePendingForm(form, text, meta = {}) {
     form.innerHTML = '';
@@ -111,24 +95,6 @@ export class Renderer {
 
     const metaRow = this._buildMetaRow(text, meta);
     form.appendChild(metaRow);
-
-    // Handle removed_by parameter — mark for pending removal
-    if (meta.removed_by) {
-      form.classList.add('speech-form--pending-removal');
-      this._messagesByRemovalId.set(meta.removed_by, form);
-    } else {
-      // If this form was marked for removal but no longer is, remove the class
-      form.classList.remove('speech-form--pending-removal');
-    }
-
-    // Handle removes parameter — delete messages with matching removed_by
-    if (meta.removes) {
-      const removedEl = this._messagesByRemovalId.get(meta.removes);
-      if (removedEl) {
-        removedEl.remove();
-        this._messagesByRemovalId.delete(meta.removes);
-      }
-    }
 
     this._setActiveForm(form);
     this._scrollToBottom();
@@ -162,15 +128,20 @@ export class Renderer {
   }
 
   /**
-   * Register a pending form under a removal ID immediately, before onDone fires.
-   * Allows the drift stream to find and remove the placeholder even when a
-   * tool follow-up arrives before resolvePendingForm has been called.
-   * @param {string} id — the removed_by token
-   * @param {HTMLElement} el — the pending form element
+   * Upgrade a pending (thinking dots) form to a brief placeholder phrase.
+   * Called after 2 seconds when the response is still in flight.
+   * @param {HTMLElement} form
    */
-  registerPendingRemoval(id, el) {
-    el.classList.add('speech-form--pending-removal');
-    this._messagesByRemovalId.set(id, el);
+  upgradePendingText(form) {
+    const phrases = ['Working on it...', 'One moment...', 'On it...', 'Thinking...'];
+    const text = phrases[Math.floor(Math.random() * phrases.length)];
+    const dots = form.querySelector('.thinking-indicator');
+    if (!dots) return; // already resolved
+    form.innerHTML = '';
+    const textEl = this._createEl('div', 'speech-form__text');
+    textEl.textContent = text;
+    textEl.style.opacity = '0.80';
+    form.appendChild(textEl);
   }
 
   /** Remove all children from the spine. */

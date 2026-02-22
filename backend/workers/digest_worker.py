@@ -27,6 +27,7 @@ from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
 from services.context_relevance_service import ContextRelevanceService
+from services.context_assembly_service import ContextAssemblyService
 from .memory_chunker_worker import memory_chunker_worker
 
 # Global session service instance (shared across worker invocations)
@@ -57,6 +58,16 @@ def get_context_relevance_service():
     if _context_relevance_service is None:
         _context_relevance_service = ContextRelevanceService()
     return _context_relevance_service
+
+
+_context_assembly_service = None
+
+
+def get_context_assembly_service():
+    global _context_assembly_service
+    if _context_assembly_service is None:
+        _context_assembly_service = ContextAssemblyService({})
+    return _context_assembly_service
 
 
 def get_orchestrator():
@@ -263,6 +274,16 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     except Exception as e:
         logging.warning(f"[Mode:{mode}] Context relevance computation failed: {e}, proceeding without inclusion_map")
 
+    assembled_context = None
+    try:
+        assembled_context = get_context_assembly_service().assemble(
+            prompt=text,
+            topic=topic,
+            thread_id=thread_id,
+        )
+    except Exception as e:
+        logging.warning(f"[Mode:{mode}] Context assembly failed: {e}")
+
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
@@ -275,6 +296,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
         thread_id=thread_id,
         returning_from_silence=returning_from_silence,
         inclusion_map=inclusion_map,
+        assembled_context=assembled_context,
     )
 
     # Router decided the mode, not the LLM
@@ -352,6 +374,29 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
 
     session_id = "session_placeholder"
 
+    # Compute context inclusion map for ACT mode (once, before loop)
+    act_inclusion_map = None
+    try:
+        context_relevance_service = get_context_relevance_service()
+        act_inclusion_map = context_relevance_service.compute_inclusion_map(
+            mode='ACT',
+            signals=signals or {},
+            classification=classification,
+            returning_from_silence=False,
+        )
+    except Exception as e:
+        logging.warning(f"[MODE:ACT] Context relevance computation failed: {e}")
+
+    assembled_context = None
+    try:
+        assembled_context = get_context_assembly_service().assemble(
+            prompt=text,
+            topic=topic,
+            thread_id=thread_id,
+        )
+    except Exception as e:
+        logging.warning(f"[MODE:ACT] Context assembly failed: {e}")
+
     # ACT loop — simplified, safety-capped at max_act_iterations
     # Repetition detection: if same action type called 3+ times consecutively, force exit
     consecutive_same_action = 0
@@ -359,19 +404,6 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
 
     while True:
         iteration_start = time.time()
-
-        # Compute context inclusion map for ACT mode
-        act_inclusion_map = None
-        try:
-            context_relevance_service = get_context_relevance_service()
-            act_inclusion_map = context_relevance_service.compute_inclusion_map(
-                mode='ACT',
-                signals=signals or {},
-                classification=classification,
-                returning_from_silence=False,
-            )
-        except Exception as e:
-            logging.warning(f"[MODE:ACT] Context relevance computation failed: {e}")
 
         # Generate action plan via ACT-specific prompt
         response_data = cortex_service.generate_response(
@@ -383,6 +415,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
             relevant_tools=relevant_tools,
             selected_tools=selected_tools,
             inclusion_map=act_inclusion_map,
+            assembled_context=assembled_context,
         )
 
         actions = response_data.get('actions', [])
@@ -628,23 +661,6 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
         try:
             orchestrator = get_orchestrator()
 
-            # Check if there's a temporary ACK to remove (from previous ACKNOWLEDGE mode)
-            removes_id = None
-            cycle_id = metadata.get('cycle_id') or metadata.get('root_cycle_id')
-            if cycle_id:
-                try:
-                    from services.redis_client import RedisClientService
-                    redis = RedisClientService.create_connection()
-                    removes_id = redis.get(f"temp_ack:{cycle_id}")
-                    if removes_id:
-                        if isinstance(removes_id, bytes):
-                            removes_id = removes_id.decode()
-                        # Clean up the mapping
-                        redis.delete(f"temp_ack:{cycle_id}")
-                        logging.debug(f"[DIGEST] Retrieved temp_id to remove: {removes_id}")
-                except Exception as e:
-                    logging.debug(f"[DIGEST] Failed to retrieve temp_id: {e}")
-
             context = {
                 'topic': topic,
                 'response': response_data.get('response', ''),
@@ -655,10 +671,6 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
                 'actions': response_data.get('actions', []),
                 'clarification_question': response_data.get('response', '') if response_data.get('mode') == 'CLARIFY' else None,
             }
-
-            # Pass removes if we found a temporary ACK to remove
-            if removes_id:
-                context['removes'] = removes_id
 
             mode = response_data.get('mode', 'RESPOND')
             logging.info(f"[FRONTAL CORTEX] Routing through orchestrator: {mode}")
@@ -718,24 +730,39 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
             logging.warning("[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using acknowledge config")
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
 
+        _cron_classification = {
+            'topic': f'cron_tool:{tool_name}',
+            'confidence': 10,
+            'similar_topic': '',
+            'topic_update': '',
+        }
+        inclusion_map = None
+        try:
+            inclusion_map = get_context_relevance_service().compute_inclusion_map(
+                mode='RESPOND', signals={}, classification=_cron_classification,
+            )
+        except Exception as e:
+            logging.warning(f"[CRON TOOL] Context relevance failed: {e}")
+
+        assembled_context = None
+        try:
+            assembled_context = get_context_assembly_service().assemble(
+                prompt=text, topic=f'cron_tool:{tool_name}', thread_id=thread_id,
+            )
+        except Exception as e:
+            logging.warning(f"[CRON TOOL] Context assembly failed: {e}")
+
         cortex_service = FrontalCortexService(scheduled_tool_config)
 
         # Generate response using the scheduled tool prompt
         response_data = cortex_service.generate_response(
             system_prompt_template=scheduled_tool_template,
             original_prompt=text,
-            classification={
-                'topic': f'cron_tool:{tool_name}',
-                'confidence': 10,
-                'similar_topic': '',
-                'topic_update': '',
-            },
+            classification=_cron_classification,
             chat_history=chat_history,
             thread_id=thread_id,
-            user_metadata={
-                'tool_name': tool_name,
-                'priority': priority,
-            },
+            inclusion_map=inclusion_map,
+            assembled_context=assembled_context,
         )
 
         # Always RESPOND mode for scheduled tools (bypass mode routing)
@@ -950,6 +977,22 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             logging.warning("[PROACTIVE] frontal-cortex-proactive.json not found, falling back to acknowledge config")
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
 
+        inclusion_map = None
+        try:
+            inclusion_map = get_context_relevance_service().compute_inclusion_map(
+                mode='RESPOND', signals={}, classification=classification,
+            )
+        except Exception as e:
+            logging.warning(f"[PROACTIVE] Context relevance failed: {e}")
+
+        assembled_context = None
+        try:
+            assembled_context = get_context_assembly_service().assemble(
+                prompt=drift_gist, topic=topic, thread_id=thread_id,
+            )
+        except Exception as e:
+            logging.warning(f"[PROACTIVE] Context assembly failed: {e}")
+
         cortex_service = FrontalCortexService(proactive_config)
         chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
@@ -959,6 +1002,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             classification=classification,
             chat_history=chat_history,
             thread_id=thread_id,
+            inclusion_map=inclusion_map,
+            assembled_context=assembled_context,
         )
 
         # Proactive messages always deliver as RESPOND
@@ -1159,6 +1204,22 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         except Exception:
             config = cortex_config
 
+        inclusion_map = None
+        try:
+            inclusion_map = get_context_relevance_service().compute_inclusion_map(
+                mode='RESPOND', signals={}, classification=classification,
+            )
+        except Exception as e:
+            logging.warning(f"[TOOL RESULT] Context relevance failed: {e}")
+
+        assembled_context = None
+        try:
+            assembled_context = get_context_assembly_service().assemble(
+                prompt=original_prompt, topic=topic, thread_id=thread_id,
+            )
+        except Exception as e:
+            logging.warning(f"[TOOL RESULT] Context assembly failed: {e}")
+
         cortex_service = FrontalCortexService(config)
         chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
@@ -1169,6 +1230,8 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
             chat_history=chat_history,
             act_history=act_history_context,
             thread_id=thread_id,
+            inclusion_map=inclusion_map,
+            assembled_context=assembled_context,
         )
 
         if not response_data.get('response', '').strip():
@@ -1182,29 +1245,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
 
         # Route through orchestrator
         try:
-            from services.redis_client import RedisClientService
-
             orchestrator = get_orchestrator()
-
-            # Retrieve temporary ID if this tool result has an associated ACK
-            removes_id = None
-            if tool_cycle_id:
-                try:
-                    redis = RedisClientService.create_connection()
-                    removes_id = redis.get(f"temp_ack:{tool_cycle_id}")
-                    if removes_id:
-                        if isinstance(removes_id, bytes):
-                            removes_id = removes_id.decode()
-                        # Clean up the mapping
-                        redis.delete(f"temp_ack:{tool_cycle_id}")
-                        logging.debug(f"[TOOL RESULT] Retrieved temp_id to remove: {removes_id}")
-                except Exception as e:
-                    logging.debug(f"[TOOL RESULT] Failed to retrieve temp_id: {e}")
-
-            # Create metadata copy to pass through
-            result_metadata = dict(metadata)
-            if removes_id:
-                result_metadata['removes'] = removes_id
 
             context = {
                 'topic': topic,
@@ -1212,9 +1253,8 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
                 'confidence': response_data.get('confidence', 0.7),
                 'generation_time': response_data.get('generation_time', 0.0),
                 'destination': destination,
-                'metadata': result_metadata,
+                'metadata': metadata,
                 'actions': [],
-                'removes': removes_id,  # Pass directly for handler access
             }
             orchestrator.route_path(mode='RESPOND', context=context)
         except Exception as e:
@@ -1425,42 +1465,9 @@ def _handle_act_triage(
     intent, intent_classifier, working_memory, thread_conv_service,
     context_warmth, exchange_id,
 ):
-    """Handle ACT branch — fast ack + spawn tool_worker with triage-selected tools."""
+    """Handle ACT branch — spawn tool_worker; SSE connection stays open until result arrives."""
     import logging
     from services.prompt_queue import PromptQueue
-    from services.redis_client import RedisClientService
-
-    # Determine ack style: external tools → action language, skills only → reflective
-    _all_tools_are_skills = all(
-        t in ('recall', 'memorize', 'introspect', 'associate', 'schedule', 'goal', 'focus', 'list', 'autobiography')
-        for t in triage_result.tools
-    ) if triage_result.tools else True
-
-    topic_phrase = intent_classifier.extract_topic_phrase(text) if hasattr(intent_classifier, 'extract_topic_phrase') else ''
-    try:
-        _redis = RedisClientService.create_connection()
-        ack_text = intent_classifier.select_template(
-            intent_type=intent.get('intent_type', 'question'),
-            complexity=intent.get('complexity', 'moderate'),
-            register=intent.get('register', 'neutral'),
-            user_id='default',
-            topic_phrase=topic_phrase,
-            is_reflective=_all_tools_are_skills,
-            redis_conn=_redis,
-        )
-    except Exception:
-        ack_text = "On it..."
-
-    orchestrator = get_orchestrator()
-    orchestrator.route_path('TOOL_SPAWN', {
-        'response': ack_text,
-        'topic': topic,
-        'destination': metadata.get('destination', 'web'),
-        'confidence': 0.5,
-        'metadata': metadata,
-    })
-
-    thread_conv_service.add_response(thread_id, ack_text, 0.0)
 
     # Create cycle records and spawn tool work
     try:
@@ -1474,11 +1481,6 @@ def _handle_act_triage(
             content=text, topic=topic,
             cycle_type='user_input', source='user',
         )
-        ack_cycle_id = cycle_service.create_cycle(
-            content=ack_text, topic=topic,
-            cycle_type='fast_response', source='system',
-            parent_cycle_id=user_cycle_id,
-        )
 
         tool_queue = PromptQueue(queue_name="tool-queue", worker_func=tool_worker)
         # Build relevant_tools list in the format tool_worker expects
@@ -1487,7 +1489,8 @@ def _handle_act_triage(
             for t in (triage_result.tools or [])
         ]
         tool_queue.enqueue({
-            'parent_cycle_id': ack_cycle_id,
+            'cycle_id': user_cycle_id,
+            'parent_cycle_id': user_cycle_id,
             'root_cycle_id': user_cycle_id,
             'topic': topic,
             'text': text,
@@ -1502,16 +1505,26 @@ def _handle_act_triage(
             },
         })
 
+        # Signal the SSE loop to keep waiting — tool_worker will deliver the response.
+        _sse_uuid = metadata.get('uuid')
+        if _sse_uuid:
+            try:
+                from services.redis_client import RedisClientService
+                _r = RedisClientService.create_connection()
+                _r.setex(f"sse_pending:{_sse_uuid}", 600, "1")
+            except Exception as _rf:
+                logging.warning(f"[DIGEST] Could not set sse_pending flag: {_rf}")
+
         logging.info(
-            f"[DIGEST] ACT triage: ack delivered, tool work spawned "
-            f"(tools={triage_result.tools}, user_cycle={user_cycle_id}, ack_cycle={ack_cycle_id})"
+            f"[DIGEST] ACT triage: tool work spawned, SSE held open "
+            f"(tools={triage_result.tools}, user_cycle={user_cycle_id})"
         )
     except Exception as _spawn_err:
         logging.error(f"[DIGEST] ACT spawn failed: {_spawn_err}")
 
     return {
-        'response': ack_text,
-        'mode': 'TOOL_SPAWN',
+        'response': '',
+        'mode': 'ACT',
         'confidence': 0.5,
         'generation_time': 0.0,
     }
@@ -2119,7 +2132,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0}
 
         elif triage_result.branch == 'act':
-            # ACT branch — fast ack + spawn tool_worker with triage-selected tools
+            # ACT branch — spawn tool_worker; SSE stays open until tool result arrives
             response_data = _handle_act_triage(
                 triage_result, text, topic, thread_id, metadata,
                 intent, intent_classifier, working_memory, thread_conv_service,

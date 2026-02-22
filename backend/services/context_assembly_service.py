@@ -199,7 +199,7 @@ class ContextAssemblyService:
         """Parse semantic_query results from act_history string."""
         import re
         concepts = []
-        pattern = r'-\s+([^:]+):\s+([^(]+)\s+\(strength:'
+        pattern = r'-\s+([^:]+):\s+([^(]+)\s+\((?:strength[:=]|confidence=)'
         matches = re.findall(pattern, act_history)
         for name, definition in matches:
             concepts.append({
