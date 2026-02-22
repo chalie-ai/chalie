@@ -24,7 +24,7 @@ CYCLE_LIMITS = {
 
 VALID_TYPES = {
     'user_input', 'fast_response', 'tool_work', 'tool_result',
-    'delegate_result', 'proactive_drift', 'act_followup',
+    'proactive_drift', 'act_followup',
 }
 VALID_STATUSES = {'pending', 'processing', 'completed', 'failed', 'cancelled', 'suppressed', 'expired'}
 
@@ -52,7 +52,7 @@ class CycleService:
             content: Message content
             topic: Topic name
             cycle_type: One of VALID_TYPES
-            source: Origin ('user', 'system', 'tool_worker', 'delegate_worker', 'drift_engine')
+            source: Origin ('user', 'system', 'tool_worker', 'drift_engine')
             parent_cycle_id: Parent cycle UUID (None for root cycles)
             intent: Classified intent metadata
             metadata: Additional metadata
@@ -289,7 +289,7 @@ class CycleService:
                 cursor.execute("""
                     SELECT COUNT(*) FROM message_cycles
                     WHERE status = 'processing'
-                    AND cycle_type IN ('tool_work', 'delegate_result')
+                    AND cycle_type IN ('tool_work')
                 """)
                 active_bg = cursor.fetchone()[0]
                 cursor.close()

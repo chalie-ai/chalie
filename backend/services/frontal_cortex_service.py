@@ -384,10 +384,6 @@ class FrontalCortexService:
             available_tools = ''
         result = result.replace('{{available_tools}}', available_tools)
 
-        # Available specialists for delegate skill
-        available_specialists = self._get_available_specialists()
-        result = result.replace('{{available_specialists}}', available_specialists)
-
         # Identity modulation (voice mapper)
         if _include('identity_modulation'):
             identity_modulation = self._get_identity_modulation()
@@ -862,10 +858,6 @@ class FrontalCortexService:
         except Exception as e:
             logging.debug(f"Skill registry not available: {e}")
             return ""
-
-    def _get_available_specialists(self) -> str:
-        """Specialists have been removed. Returns empty string."""
-        return ""
 
     def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
         """
