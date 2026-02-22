@@ -891,7 +891,7 @@ function renderToolCard(tool) {
     // Actions HTML
     let actionsHtml = '';
     if (!isBuilding) {
-        if (hasConfig && !isDisabled) {
+        if (hasConfig) {
             actionsHtml += `<button class="tool-card__btn" onclick="openToolSettings('${name}')" title="Settings">⚙ Settings</button>`;
         }
         if (isDisabled) {
@@ -1100,7 +1100,8 @@ async function openToolSettings(name) {
                         <label>${escapeHtml(fieldDef.label || key)}</label>
                         <textarea id="config_${key}"
                                   rows="5"
-                                  placeholder="${escapeHtml(fieldDef.placeholder || '')}">${escapeHtml(value)}</textarea>
+                                  placeholder="${escapeHtml(fieldDef.placeholder || '')}"
+                                  data-secret="${isSecret}">${escapeHtml(value)}</textarea>
                         ${hint ? `<p class="form-hint">${escapeHtml(hint)}</p>` : ''}
                     </div>
                 `;
@@ -1139,11 +1140,14 @@ async function saveToolSettings() {
     const inputs = document.querySelectorAll('#toolSettingsForm input[id^="config_"]');
     inputs.forEach(inp => {
         const key = inp.id.replace('config_', '');
+        // Skip secret fields still showing the server-side mask — don't overwrite stored value
+        if (inp.dataset.secret === 'true' && inp.value === '***') return;
         config[key] = inp.value;
     });
     const textareas = document.querySelectorAll('#toolSettingsForm textarea[id^="config_"]');
     textareas.forEach(ta => {
         const key = ta.id.replace('config_', '');
+        if (ta.dataset.secret === 'true' && ta.value === '***') return;
         config[key] = ta.value;
     });
 

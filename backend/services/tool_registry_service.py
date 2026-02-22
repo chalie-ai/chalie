@@ -41,7 +41,7 @@ class _CronToolWorker:
     STRIP_PATTERNS = [
         re.compile(r'\{[^}]*\}'),
         re.compile(
-            r'\b(recall|memorize|delegate|associate|introspect)\s*\(',
+            r'\b(recall|memorize|associate|introspect)\s*\(',
             re.IGNORECASE
         ),
         re.compile(r'ACTION\s*:', re.IGNORECASE),
@@ -271,7 +271,7 @@ class ToolRegistryService:
     STRIP_PATTERNS = [
         re.compile(r'\{[^}]*\}'),
         re.compile(
-            r'\b(recall|memorize|delegate|associate|introspect)\s*\(',
+            r'\b(recall|memorize|associate|introspect)\s*\(',
             re.IGNORECASE
         ),
         re.compile(r'ACTION\s*:', re.IGNORECASE),

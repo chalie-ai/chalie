@@ -28,7 +28,7 @@ backend/
 ├── configs/           # Configuration files (connections.json, agent configs, generated/)
 ├── migrations/        # Database migrations
 ├── prompts/           # LLM prompt templates (mode-specific)
-├── tools/             # MCP server and skill implementations
+├── tools/             # Skill implementations
 ├── tests/             # Test suite
 └── consumer.py        # Main supervisor process
 ```
@@ -74,11 +74,9 @@ frontend/
 - **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement
 - **`trust_evaluation_service.py`** — 5-axis trust scoring for tool outputs
-- **`sovereignty_service.py`** — Checks whether to delegate based on specialist EV
 
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
-- **`tuition_service.py`** — Learning from delegation outcomes (success → decision rules, failure → critique)
 - **`governance_service.py`** — System health monitoring and parameter adjustment
 
 #### Infrastructure
@@ -106,7 +104,6 @@ frontend/
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
-- **`delegate_skill.py`** — External specialist consultation (async)
 
 ## Worker Processes (`backend/workers/`)
 

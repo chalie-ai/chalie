@@ -19,7 +19,6 @@ class CostCalculatorService:
         'memorize': 1.5,
         'introspect': 1.0,
         'associate': 2.0,
-        'delegate': 2.5,
         # Backward-compat aliases
         'memory_query': 2.0,
         'memory_write': 1.5,

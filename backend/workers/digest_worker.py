@@ -1049,7 +1049,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
     """
     Handle follow-up from tool_worker after background ACT loop completes.
 
-    Similar to _handle_delegate_result — shortened pipeline:
+    Shortened pipeline (no classification, no user turn append, no reward eval):
     - No classification, no user turn append, no reward eval
     - Generates follow-up response via RESPOND mode with follow-up prompt
     - Routes through orchestrator for delivery

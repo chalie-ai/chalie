@@ -84,7 +84,6 @@ The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, s
 | `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
 | `autobiography` | narrative | <500ms | Retrieve synthesized user narrative covering identity, relationship arc, values, patterns, active threads |
 | `list` | lists | <50ms | Create and manage deterministic lists (shopping, to-do, chores); add/remove/check items, view, history |
-| `delegate` | delegation | variable | External specialist consultation (Phase 1: empty registry) |
 
 ### Backward Compatibility Aliases
 
