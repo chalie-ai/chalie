@@ -1414,8 +1414,7 @@ def _handle_social_triage(
     triage_result, text, topic, thread_id, metadata,
     intent, intent_classifier, working_memory, thread_conv_service,
 ):
-    """Handle social branch — template ack without LLM generation."""
-    from services.redis_client import RedisClientService
+    """Handle social branch — CANCEL/IGNORE fast exits only."""
 
     if triage_result.mode in ('CANCEL', 'IGNORE'):
         return {
@@ -1424,40 +1423,6 @@ def _handle_social_triage(
             'confidence': 1.0,
             'generation_time': 0.0,
         }
-
-    # ACKNOWLEDGE: template response
-    topic_phrase = intent_classifier.extract_topic_phrase(text) if hasattr(intent_classifier, 'extract_topic_phrase') else ''
-    try:
-        _redis = RedisClientService.create_connection()
-        ack_text = intent_classifier.select_template(
-            intent_type=intent.get('intent_type', 'greeting'),
-            complexity='simple',
-            register=intent.get('register', 'casual'),
-            user_id='default',
-            topic_phrase=topic_phrase,
-            is_reflective=False,
-            redis_conn=_redis,
-        )
-    except Exception:
-        ack_text = "Got it!"
-
-    orchestrator = get_orchestrator()
-    orchestrator.route_path('RESPOND', {
-        'response': ack_text,
-        'topic': topic,
-        'destination': metadata.get('destination', 'web'),
-        'confidence': 0.9,
-        'metadata': metadata,
-    })
-
-    thread_conv_service.add_response(thread_id, ack_text, 0.0)
-
-    return {
-        'response': ack_text,
-        'mode': 'ACKNOWLEDGE',
-        'confidence': 0.9,
-        'generation_time': 0.0,
-    }
 
 
 def _handle_act_triage(
@@ -2122,13 +2087,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
         # ── Branch dispatch ──
-        if triage_result.branch == 'social':
-            # Social branch — template ack, no LLM generation
+        if triage_result.branch == 'social' and triage_result.mode != 'ACKNOWLEDGE':
+            # Social branch — CANCEL/IGNORE fast exits only
             response_data = _handle_social_triage(
                 triage_result, text, topic, thread_id, metadata,
                 intent, intent_classifier, working_memory, thread_conv_service,
             )
-            is_fast_path_ack = (triage_result.mode in ('ACKNOWLEDGE', 'IGNORE', 'CANCEL'))
+            is_fast_path_ack = True
             routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0}
 
         elif triage_result.branch == 'act':
@@ -2156,7 +2121,12 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 intent=intent,
             )
             _forced_signals['_prompt_text'] = text
-            _forced_mode = 'CLARIFY' if triage_result.branch == 'clarify' else 'RESPOND'
+            if triage_result.mode == 'ACKNOWLEDGE':
+                _forced_mode = 'ACKNOWLEDGE'
+            elif triage_result.branch == 'clarify':
+                _forced_mode = 'CLARIFY'
+            else:
+                _forced_mode = 'RESPOND'
             response_data, routing_result = route_and_generate(
                 topic, text, classification, thread_conv_service,
                 cortex_config, cortex_prompt_map, mode_router, _forced_signals, fact_store,
@@ -2166,6 +2136,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 thread_id=thread_id,
                 returning_from_silence=returning_from_silence,
             )
+
+            # Social ACKNOWLEDGE — skip encoding (trivial content)
+            if triage_result.branch == 'social' and triage_result.mode == 'ACKNOWLEDGE':
+                is_fast_path_ack = True
 
     except Exception as _triage_ex:
         logging.error(f"[DIGEST] Triage dispatch failed: {_triage_ex}", exc_info=True)

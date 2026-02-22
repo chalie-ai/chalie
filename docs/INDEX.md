@@ -62,7 +62,9 @@ docs/
 
 ### Key Directories
 - **`backend/`** — Python backend (services, workers, API, configs, migrations)
-- **`frontend/interface/`** — Web UI code (HTML, CSS, JavaScript)
+- **`frontend/interface/`** — Main chat web UI (HTML, CSS, JavaScript)
+- **`frontend/brain/`** — Admin/cognitive dashboard
+- **`frontend/on-boarding/`** — Account setup wizard
 - **`backend/prompts/`** — LLM prompt templates (mode-specific)
 - **`backend/configs/`** — Configuration files and schemas
 - **`backend/migrations/`** — Database migration scripts
@@ -111,7 +113,7 @@ docs/
 
 - **Language**: Python 3.9+
 - **Databases**: PostgreSQL (+ pgvector extension), Redis
-- **Frontend**: Vanilla JavaScript with Bootstrap 5
+- **Frontend**: Vanilla JavaScript (Radiant design system)
 - **LLM Support**: Ollama, Anthropic, OpenAI, Google Gemini
 - **Port**: Backend API on 8080, Frontend on 8081
 - **Configuration**: env vars > .env file > JSON files > hardcoded defaults
@@ -153,7 +155,7 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 
 - **Issues**: Check GitHub issues or project backlog
 - **Contributing**: Create feature branch, add tests, follow existing patterns
-- **Questions**: Review relevant documentation section, check `.context.md` for recent work
+- **Questions**: Review relevant documentation section, check `docs/04-ARCHITECTURE.md` for recent work
 
 ## Document Status
 
@@ -164,7 +166,7 @@ All documentation reflects the current state of the codebase as of this date. Se
 **Recent Additions**:
 - New Innate Skills: `scheduler` (reminders/task management) and `autobiography` (synthesized user narrative retrieval)
 - New Innate Skill: `list` — deterministic list management (shopping, to-do, chores) with perfect recall and full event history
-- Updated 07-COGNITIVE-ARCHITECTURE.md: 8 innate skills now (was 7)
+- Updated 07-COGNITIVE-ARCHITECTURE.md: 9 innate skills now
 - Updated 04-ARCHITECTURE.md: Added list_service.py, list_skill.py; expanded memory hierarchy to include Lists layer
 - Updated 08-DATA-SCHEMAS.md: Added lists, list_items, list_events table schemas
 - 09-TOOLS.md: Comprehensive tools system documentation
