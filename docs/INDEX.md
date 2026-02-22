@@ -21,6 +21,15 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 4. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
 5. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for Redis and PostgreSQL
 
+## If You're a Developer Exploring the Codebase
+
+Recommended reading order for engineers:
+1. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; fastest way to build a mental map
+2. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
+3. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
+4. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with sandboxed tools
+5. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Token optimization and selective context injection
+
 ## Tools & Extensions
 
 **Building tools to extend Chalie's capabilities?**
@@ -150,6 +159,29 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 - Data scoped by topic (no cross-topic leakage)
 - Hard timeouts on all operations
 - All external actions are async and audited
+
+## Cognitive Terminology Glossary
+
+| Term | Meaning in Chalie |
+|---|---|
+| **Episodic memory** | A stored narrative unit representing a past interaction — what happened, what was felt, what was decided |
+| **Semantic memory** | Knowledge nodes (concepts) and their relationships — facts abstracted away from specific events |
+| **Decay** | Natural fading of memory strength over time; prevents noise accumulation without explicit deletion |
+| **Salience** | How contextually relevant a memory is to the current moment — gates retrieval priority |
+| **Gist** | A compressed summary of a conversation exchange, bridging working memory and episodic storage |
+| **Spreading activation** | When one concept is retrieved, related concepts are activated with lower priority — mimics associative recall |
+| **Mode router** | The deterministic component that selects how Chalie should respond before any LLM is called |
+| **Deterministic routing** | Mode selection via scored signals (~5ms), not via LLM inference — auditable and fast |
+| **ACT loop** | The autonomous task execution cycle: plan → act → observe → continue-or-stop |
+| **Cognitive drift (DMN)** | Spontaneous thought generation during idle periods, inspired by the Default Mode Network |
+
+## What Chalie Is Not
+
+- **Not AGI** — it does not plan or act autonomously without human instruction
+- **Not a surveillance system** — memory decays by design; old facts fade unless reinforced
+- **Not a productivity robot** — it is a thinking aid, not a task manager
+- **Not a cloud service** — every byte stays local unless you configure an external LLM provider
+- **Not a general automation platform** — tools are sandboxed, audited, and bounded by hard limits
 
 ## Support & Development
 

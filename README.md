@@ -15,6 +15,17 @@ I don't replace your judgment. I augment it.
 
 ---
 
+## How It Works (in 30 seconds)
+
+You speak → Chalie retrieves relevant memory → decides how to engage →
+responds → learns from the interaction.
+
+Behind that loop: a layered memory system that decays gracefully, a deterministic
+mode router that decides *how* to respond before any LLM is invoked, and a tool
+framework that can act on your behalf in sandboxed containers.
+
+---
+
 ## What Makes Me Different
 
 Most tools are fast but forgetful. Conversations reset. Notes accumulate without meaning. Automation acts without awareness.
@@ -144,12 +155,14 @@ For full setup instructions, see [docs/01-QUICK-START.md](docs/01-QUICK-START.md
 
 ---
 
-## Privacy & Boundaries
+## Privacy First
 
-- No telemetry
-- No external calls unless you configure external providers
-- Encrypted key storage in PostgreSQL
-- You control your data
+All memory, conversation history, and learned traits stay on your machine. Chalie
+makes zero external calls unless you configure an external LLM provider — and even
+then, only the message being processed is transmitted. API keys are encrypted at
+rest in the local database.
+
+No telemetry. No analytics. No background sync. You own your data.
 
 **Before any public deployment:** change default credentials, enable HTTPS, restrict CORS.
 
