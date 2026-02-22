@@ -241,6 +241,18 @@ def tool_worker(job_data: dict) -> str:
 
             actions = response_data.get('actions', [])
 
+            # Log what the LLM decided to do this iteration
+            if actions:
+                logger.debug(
+                    f"[TOOL WORKER] Iter {act_loop.iteration_number} actions: "
+                    f"{json.dumps([{k: v for k, v in a.items() if k != 'type'} | {'type': a.get('type')} for a in actions], default=str)}"
+                )
+                for a in actions:
+                    if a.get('type') == 'schedule':
+                        logger.info(f"[TOOL WORKER] Schedule action: {json.dumps(a, default=str)}")
+            else:
+                logger.debug(f"[TOOL WORKER] Iter {act_loop.iteration_number}: LLM returned no actions")
+
             # Repetition detection (type-based)
             if actions and len(actions) == 1:
                 current_type = actions[0].get('type', '')

@@ -34,6 +34,8 @@ def create_app():
     from .push import push_bp
     from .tools import tools_bp
     from .providers import providers_bp
+    from .scheduler import scheduler_bp
+    from .lists import lists_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -45,6 +47,8 @@ def create_app():
     app.register_blueprint(push_bp)
     app.register_blueprint(tools_bp)
     app.register_blueprint(providers_bp)
+    app.register_blueprint(scheduler_bp)
+    app.register_blueprint(lists_bp)
 
     logger.info("[REST API] All blueprints registered")
     return app

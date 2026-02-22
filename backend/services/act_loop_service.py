@@ -201,6 +201,12 @@ class ActLoopService:
                 f"[MODE:ACT] [ACT LOOP] Action {result['action_type']}: "
                 f"{result['status']} ({result['execution_time']:.2f}s)"
             )
+            # Log result content for schedule actions and for any error/unexpected results
+            result_str = str(result.get('result', ''))
+            if result['action_type'] == 'schedule' or result_str.startswith('Error:'):
+                logging.info(
+                    f"[MODE:ACT] [ACT LOOP] {result['action_type']} result: {result_str!r:.200}"
+                )
 
             # Harvest outputs for downstream chaining
             if result.get("status") == "success" and isinstance(result.get("result"), dict):

@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[TRIAGE]"
 
+# Innate action skill patterns — ACT is required even when no external tool is listed
+_INNATE_ACTION_PATTERNS = re.compile(
+    r'\b(remind\s+me|set\s+(a\s+)?(reminder|alarm|schedule)|schedule\s+(a\s+)?(reminder|task|message)|'
+    r'add\s+.{1,40}\s+to\s+(my\s+)?(list|shopping|to.?do)|remove\s+.{1,40}\s+from\s+(my\s+)?(list)|'
+    r'create\s+(a\s+)?goal|set\s+(a\s+)?goal|track\s+(my\s+)?goal|'
+    r'cancel\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
+    r'delete\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
+    r'turn\s+off\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
+    r'every\s+(morning|evening|day|hour|week|month|\d+\s+minutes?|few\s+hours?))\b',
+    re.IGNORECASE
+)
+
 # Social filter regex patterns (reused from IntentClassifierService)
 _GREETING_PATTERNS = re.compile(
     r'^(hey|hi|hello|yo|sup|what\'?s\s*up|howdy|hiya|heya|greetings|'
@@ -42,7 +54,7 @@ _CANCEL_PATTERNS = [
     re.compile(r'\bignore\s+that\b', re.IGNORECASE),
     re.compile(r'\bstop\s+(searching|looking|checking)\b', re.IGNORECASE),
     re.compile(r'\bforget\s+(it|about\s+it|that)\b', re.IGNORECASE),
-    re.compile(r'\bcancel\b', re.IGNORECASE),
+    re.compile(r'\bcancel\b(?!\s+(?:(?:my|all|the|a|this|that)\s+)?(?:reminder|alarm|schedule|task|notification|event|recurring|appointment)s?\b)', re.IGNORECASE),
     re.compile(r'\bdon\'?t\s+bother\b', re.IGNORECASE),
 ]
 
@@ -260,18 +272,31 @@ class CognitiveTriageService:
     def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext) -> TriageResult:
         """Deterministic sanity check rules. ~0ms."""
 
-        # Rule 1: ACT without any tools → assign first available tool, otherwise downgrade
+        # Rule 1: ACT without any tools → innate skill if matched, otherwise assign default tool or downgrade
         if result.branch == 'act' and not result.tools:
-            default_tool = self._pick_default_tool(ctx.tool_summaries)
-            if default_tool:
-                result.tools = [default_tool]
+            if _INNATE_ACTION_PATTERNS.search(text):
+                # Innate action skill (schedule/list/goal) — no external tool needed, keep ACT
                 result.self_eval_override = True
-                result.self_eval_reason = 'act_default_tool_assigned'
+                result.self_eval_reason = 'act_innate_skill'
             else:
-                result.branch = 'respond'
-                result.mode = 'RESPOND'
-                result.self_eval_override = True
-                result.self_eval_reason = 'act_without_tools'
+                default_tool = self._pick_default_tool(ctx.tool_summaries)
+                if default_tool:
+                    result.tools = [default_tool]
+                    result.self_eval_override = True
+                    result.self_eval_reason = 'act_default_tool_assigned'
+                else:
+                    result.branch = 'respond'
+                    result.mode = 'RESPOND'
+                    result.self_eval_override = True
+                    result.self_eval_reason = 'act_without_tools'
+
+        # Rule 1b: RESPOND but text is clearly an innate action request → escalate to ACT
+        if result.branch == 'respond' and _INNATE_ACTION_PATTERNS.search(text):
+            result.branch = 'act'
+            result.mode = 'ACT'
+            result.tools = []
+            result.self_eval_override = True
+            result.self_eval_reason = 'act_innate_skill_failsafe'
 
         # Rule 2: RESPOND on high-freshness question → escalate to ACT
         # Freshness risk alone is sufficient — if the answer requires live data, use tools.

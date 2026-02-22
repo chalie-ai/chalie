@@ -31,6 +31,11 @@ class ChalieApp {
     this._memoryCard = null;
     this._timelineCard = null;
 
+    // Scheduler trigger dedup: topic → timestamp of last card event (60s window)
+    this._recentToolCardTopics = new Map();
+    // Web Audio context (unlocked on first user gesture)
+    this._audioCtx = null;
+
     this._init();
   }
 
@@ -39,6 +44,15 @@ class ChalieApp {
     if (document.readyState === 'loading') {
       await new Promise(r => document.addEventListener('DOMContentLoaded', r));
     }
+
+    // Unlock AudioContext on first user gesture (required by browsers)
+    const unlockAudio = () => {
+      if (this._audioCtx && this._audioCtx.state === 'suspended') {
+        this._audioCtx.resume();
+      }
+      document.removeEventListener('click', unlockAudio);
+    };
+    document.addEventListener('click', unlockAudio);
 
     // Onboarding guard: redirect to on-boarding only for fresh installs (no account)
     try {
@@ -413,6 +427,10 @@ class ChalieApp {
       }
       const cardEl = this._toolResultCard.build(data);
       this.renderer.appendToolCard(cardEl);
+      // Track this topic so a follow-up reminder/task event doesn't double-render
+      if (data.topic) {
+        this._recentToolCardTopics.set(data.topic, Date.now());
+      }
       return;
     }
 
@@ -423,6 +441,12 @@ class ChalieApp {
     // is in flight — the chat SSE already renders the reply via resolvePendingForm.
     if (data.type === 'response' && this._isSending) return;
 
+    // Scheduler trigger events — render as styled trigger card or plain message
+    if (data.type === 'reminder' || data.type === 'task') {
+      this._handleSchedulerTrigger(data);
+      return;
+    }
+
     const meta = {
       topic: data.topic,
       type: data.type,
@@ -431,6 +455,85 @@ class ChalieApp {
 
     // Render in conversation spine as a Chalie message
     this.renderer.appendChalieForm(content, meta);
+  }
+
+  _handleSchedulerTrigger(data) {
+    // Expire stale entries from the tool card topic map (60s window)
+    const now = Date.now();
+    for (const [topic, ts] of this._recentToolCardTopics) {
+      if (now - ts > 60000) this._recentToolCardTopics.delete(topic);
+    }
+
+    const topic = data.topic;
+    const recentCard = topic && this._recentToolCardTopics.has(topic);
+
+    if (recentCard) {
+      // Tool card already visible — render as plain Chalie message to avoid duplication
+      this.renderer.appendChalieForm(data.content, { topic, type: data.type, ts: new Date() });
+      return;
+    }
+
+    // No tool card — render a styled trigger card and play sound
+    const cardEl = this._buildTriggerCard(data);
+    this.renderer.appendToolCard(cardEl);
+    this._playScheduleSound();
+  }
+
+  _buildTriggerCard(data) {
+    const label = data.type === 'task' ? 'Task' : 'Reminder';
+    const card = document.createElement('div');
+    card.className = 'tool-result-card';
+    card.setAttribute('data-tool', `scheduler_trigger`);
+
+    const body = document.createElement('div');
+    body.className = 'tool-result-card__body scheduler-trigger-card';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'scheduler-trigger-card__label';
+
+    const bellSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    bellSvg.setAttribute('width', '12');
+    bellSvg.setAttribute('height', '12');
+    bellSvg.setAttribute('viewBox', '0 0 24 24');
+    bellSvg.setAttribute('fill', '#00F0FF');
+    bellSvg.setAttribute('aria-hidden', 'true');
+    bellSvg.style.cssText = 'flex-shrink:0;opacity:0.85;vertical-align:middle;margin-right:4px;';
+    const bellPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    bellPath.setAttribute('d', 'M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z');
+    bellSvg.appendChild(bellPath);
+    labelEl.appendChild(bellSvg);
+    labelEl.appendChild(document.createTextNode(label));
+
+    const textEl = document.createElement('div');
+    textEl.className = 'scheduler-trigger-card__text';
+    textEl.textContent = data.content;
+
+    body.appendChild(labelEl);
+    body.appendChild(textEl);
+    card.appendChild(body);
+    return card;
+  }
+
+  _playScheduleSound() {
+    try {
+      if (!this._audioCtx) {
+        this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const ctx = this._audioCtx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880; // A5
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (_) {
+      // AudioContext unavailable or blocked — silently skip
+    }
   }
 
   async _requestNotificationPermission() {

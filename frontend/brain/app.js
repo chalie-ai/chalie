@@ -338,6 +338,10 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         renderVoice();
     } else if (tabName === 'embodiment') {
         loadEmbodiment();
+    } else if (tabName === 'scheduler') {
+        loadScheduler();
+    } else if (tabName === 'lists') {
+        loadLists();
     }
 });
 
@@ -1201,6 +1205,928 @@ document.getElementById('saveToolSettingsBtn').addEventListener('click', saveToo
 document.getElementById('browseMarketplaceBtn').addEventListener('click', (e) => {
     e.preventDefault();
     showToast('Chalie Marketplace coming soon!', 'info');
+});
+
+// ==========================================
+// Scheduler Tab
+// ==========================================
+let scheduleItems = [];
+let scheduleFilter = 'all';
+let scheduleOffset = 0;
+let scheduleTotal = 0;
+let editingScheduleId = null;
+let cancellingScheduleId = null;
+const SCHEDULE_LIMIT = 50;
+
+async function loadScheduler(append = false) {
+    if (!append) {
+        scheduleOffset = 0;
+        scheduleItems = [];
+        document.getElementById('schedulerList').innerHTML = '<div class="loading">Loading schedule…</div>';
+    }
+
+    try {
+        const params = new URLSearchParams({
+            status: scheduleFilter,
+            limit: SCHEDULE_LIMIT,
+            offset: scheduleOffset,
+        });
+        const res = await apiFetch(`/scheduler?${params}`);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to load schedule', 'error');
+            return;
+        }
+        const data = await res.json();
+        scheduleItems = append ? [...scheduleItems, ...data.items] : data.items;
+        scheduleTotal = data.total;
+        scheduleOffset = scheduleItems.length;
+        renderScheduler();
+    } catch (e) {
+        document.getElementById('schedulerList').innerHTML =
+            `<div class="empty-state"><h3>Error loading schedule</h3><p>${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+function renderScheduler() {
+    const list = document.getElementById('schedulerList');
+    const footer = document.getElementById('schedulerFooter');
+    const loadMoreBtn = document.getElementById('scheduleLoadMoreBtn');
+    const clearBtn = document.getElementById('clearHistoryBtn');
+
+    if (scheduleItems.length === 0) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <h3>Nothing scheduled</h3>
+                <p>Create a scheduled reminder or task and Chalie will act on it automatically.</p>
+            </div>`;
+        footer.style.display = 'none';
+        return;
+    }
+
+    if (scheduleFilter === 'all') {
+        list.innerHTML = renderAccordionList(scheduleItems);
+        list.querySelectorAll('.schedule-accordion-row').forEach(row => {
+            row.querySelector('.schedule-accordion-header').addEventListener('click', function (e) {
+                if (e.target.closest('button')) return;
+                toggleAccordionRow(row);
+            });
+        });
+    } else {
+        list.innerHTML = scheduleItems.map(renderScheduleCard).join('');
+    }
+
+    // Show/hide footer controls
+    footer.style.display = 'flex';
+    loadMoreBtn.style.display = scheduleItems.length < scheduleTotal ? '' : 'none';
+    const hasHistory = scheduleItems.some(i => i.status !== 'pending');
+    clearBtn.style.display = (scheduleFilter === 'all' || scheduleFilter !== 'pending') && hasHistory ? '' : 'none';
+}
+
+function renderScheduleCard(item) {
+    const msg = item.message || '';
+    const truncated = msg.length > 120 ? msg.slice(0, 120) + '…' : msg;
+    const due = item.due_at ? new Date(item.due_at).toLocaleString() : '—';
+    const lastFired = item.last_fired_at ? new Date(item.last_fired_at).toLocaleString() : null;
+    const isPending = item.status === 'pending';
+
+    const statusClass = {
+        pending: '--pending',
+        fired: '--fired',
+        failed: '--failed',
+        cancelled: '--cancelled',
+    }[item.status] || '';
+
+    const typeBadge = `<span class="schedule-badge --type-${escapeHtml(item.item_type)}">${escapeHtml(item.item_type)}</span>`;
+    const recurrBadge = item.recurrence
+        ? `<span class="schedule-badge --recurrence">${escapeHtml(formatRecurrence(item.recurrence))}</span>`
+        : '';
+    const firedInfo = lastFired
+        ? `<span class="schedule-card__last-fired">Last fired: ${lastFired}</span>`
+        : '';
+
+    const actions = isPending ? `
+        <button class="tool-card__btn" onclick="openEditSchedule('${escapeHtml(item.id)}')">Edit</button>
+        <button class="tool-card__btn --danger" onclick="confirmCancelSchedule('${escapeHtml(item.id)}')">Cancel</button>
+    ` : '';
+
+    return `
+        <div class="schedule-card">
+            <div class="schedule-card__body">
+                <div class="schedule-card__message">${escapeHtml(truncated)}</div>
+                <div class="schedule-card__meta">
+                    <span class="schedule-card__due">${due}</span>
+                    ${typeBadge}
+                    ${recurrBadge}
+                    ${firedInfo}
+                </div>
+            </div>
+            <div class="schedule-card__right">
+                <span class="schedule-card__status ${statusClass}">${escapeHtml(item.status)}</span>
+                <div class="schedule-card__actions">${actions}</div>
+            </div>
+        </div>
+    `;
+}
+
+function toLocalDatetimeString(date) {
+    // Formats a Date as "YYYY-MM-DDTHH:MM" in local timezone for datetime-local input
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function updateScheduleFormHints() {
+    const recurrence = document.getElementById('scheduleRecurrence').value;
+    const dueAtVal = document.getElementById('scheduleDueAt').value;
+    const label = document.getElementById('scheduleDueAtLabel');
+    const hint = document.getElementById('recurrenceHint');
+
+    // Recurrence-aware label
+    label.textContent = recurrence
+        ? 'First Occurrence & Recurring Time'
+        : 'Due Date & Time';
+
+    // Dynamic pattern hint
+    if (!recurrence || !dueAtVal) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+        return;
+    }
+
+    const date = new Date(dueAtVal);
+    if (isNaN(date.getTime())) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+        return;
+    }
+
+    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayName = DAYS[date.getDay()];
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dom = date.getDate();
+    const domSuffix = dom === 1 ? 'st' : dom === 2 ? 'nd' : dom === 3 ? 'rd' : 'th';
+
+    let pattern = '';
+    if (recurrence === 'interval') {
+        const mins = parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
+        if (mins >= 1 && mins <= 1440) {
+            const h = Math.floor(mins / 60), m = mins % 60;
+            const parts = [];
+            if (h > 0) parts.push(`${h}h`);
+            if (m > 0) parts.push(`${m}m`);
+            pattern = `Fires every ${parts.join(' ')} — starting ${timeStr}`;
+        }
+    } else {
+        const patterns = {
+            hourly:   'Fires every hour (use active window below to restrict hours)',
+            daily:    `Fires every day at ${timeStr}`,
+            weekdays: `Fires every weekday (Mon–Fri) at ${timeStr}`,
+            weekly:   `Fires every ${dayName} at ${timeStr}`,
+            monthly:  `Fires on the ${dom}${domSuffix} of every month at ${timeStr}`,
+        };
+        pattern = patterns[recurrence] || '';
+    }
+
+    if (pattern) {
+        hint.textContent = pattern;
+        hint.style.display = '';
+    } else {
+        hint.style.display = 'none';
+        hint.textContent = '';
+    }
+}
+
+function openCreateSchedule() {
+    editingScheduleId = null;
+    document.getElementById('scheduleModalTitle').textContent = 'New Schedule';
+    document.getElementById('scheduleForm').reset();
+
+    // Default due_at = +1 hour from now
+    const defaultDue = new Date(Date.now() + 60 * 60 * 1000);
+    document.getElementById('scheduleDueAt').value = toLocalDatetimeString(defaultDue);
+    document.getElementById('windowGroup').style.display = 'none';
+    document.getElementById('intervalGroup').style.display = 'none';
+    updateScheduleFormHints();
+
+    document.getElementById('scheduleModal').classList.remove('hidden');
+    document.getElementById('scheduleMessage').focus();
+}
+
+function openEditSchedule(id) {
+    const item = scheduleItems.find(i => i.id === id);
+    if (!item) return;
+
+    editingScheduleId = id;
+    document.getElementById('scheduleModalTitle').textContent = 'Edit Schedule';
+    document.getElementById('scheduleMessage').value = item.message || '';
+    document.getElementById('scheduleDueAt').value = item.due_at
+        ? toLocalDatetimeString(new Date(item.due_at))
+        : '';
+    document.getElementById('scheduleType').value = item.item_type || 'reminder';
+
+    // Decode interval:N recurrence
+    const rawRec = item.recurrence || '';
+    let displayRec = rawRec;
+    if (rawRec.startsWith('interval:')) {
+        displayRec = 'interval';
+        document.getElementById('scheduleIntervalMinutes').value = rawRec.split(':')[1] || '30';
+    }
+    document.getElementById('scheduleRecurrence').value = displayRec;
+    document.getElementById('scheduleWindowStart').value = item.window_start || '';
+    document.getElementById('scheduleWindowEnd').value = item.window_end || '';
+    document.getElementById('windowGroup').style.display = displayRec === 'hourly' ? '' : 'none';
+    document.getElementById('intervalGroup').style.display = displayRec === 'interval' ? '' : 'none';
+    updateScheduleFormHints();
+
+    document.getElementById('scheduleModal').classList.remove('hidden');
+    document.getElementById('scheduleMessage').focus();
+}
+
+document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const localValue = document.getElementById('scheduleDueAt').value;
+    if (!localValue) {
+        showToast('Due date is required', 'error');
+        return;
+    }
+
+    // Encode interval:N
+    let recurrenceValue = document.getElementById('scheduleRecurrence').value || null;
+    if (recurrenceValue === 'interval') {
+        const mins = parseInt(document.getElementById('scheduleIntervalMinutes').value, 10);
+        if (!mins || mins < 1 || mins > 1440) {
+            showToast('Interval must be between 1 and 1440 minutes', 'error');
+            return;
+        }
+        recurrenceValue = `interval:${mins}`;
+    }
+
+    const body = {
+        message: document.getElementById('scheduleMessage').value.trim(),
+        due_at: new Date(localValue).toISOString(),
+        item_type: document.getElementById('scheduleType').value,
+        recurrence: recurrenceValue,
+        window_start: document.getElementById('scheduleWindowStart').value || null,
+        window_end: document.getElementById('scheduleWindowEnd').value || null,
+    };
+
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+
+    try {
+        let res;
+        if (editingScheduleId) {
+            res = await apiFetch(`/scheduler/${editingScheduleId}`, { method: 'PUT', body: JSON.stringify(body) });
+        } else {
+            res = await apiFetch('/scheduler', { method: 'POST', body: JSON.stringify(body) });
+        }
+
+        const data = await res.json();
+        if (res.ok) {
+            document.getElementById('scheduleModal').classList.add('hidden');
+            showToast(editingScheduleId ? 'Schedule updated' : 'Schedule created', 'success');
+            await loadScheduler();
+        } else {
+            showToast(data.error || 'Failed to save schedule', 'error');
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+    }
+});
+
+function confirmCancelSchedule(id) {
+    cancellingScheduleId = id;
+    const item = scheduleItems.find(i => i.id === id);
+    const msg = item ? item.message : '';
+    const truncated = msg.length > 80 ? msg.slice(0, 80) + '…' : msg;
+    document.getElementById('cancelScheduleDesc').textContent =
+        `Cancel: "${truncated}"?`;
+    document.getElementById('cancelScheduleModal').classList.remove('hidden');
+}
+
+async function executeCancelSchedule() {
+    if (!cancellingScheduleId) return;
+    const id = cancellingScheduleId;
+    document.getElementById('cancelScheduleModal').classList.add('hidden');
+    cancellingScheduleId = null;
+
+    try {
+        const res = await apiFetch(`/scheduler/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Schedule cancelled', 'success');
+            await loadScheduler();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to cancel', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function clearHistory() {
+    try {
+        const res = await apiFetch('/scheduler/history', { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast(`Removed ${data.deleted} item(s)`, 'success');
+            await loadScheduler();
+        } else {
+            showToast(data.error || 'Failed to clear history', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function formatRecurrence(recurrence) {
+    if (!recurrence) return '';
+    if (recurrence.startsWith('interval:')) {
+        const mins = parseInt(recurrence.split(':')[1], 10);
+        if (isNaN(mins)) return recurrence;
+        const h = Math.floor(mins / 60), m = mins % 60;
+        if (h === 0) return `Every ${m}m`;
+        if (m === 0) return `Every ${h}h`;
+        return `Every ${h}h ${m}m`;
+    }
+    return recurrence;
+}
+
+function renderAccordionList(items) {
+    if (!items.length) return '';
+    // Group by group_id; preserve first-seen order
+    const groups = new Map();
+    for (const item of items) {
+        const gid = item.group_id || item.id;
+        if (!groups.has(gid)) groups.set(gid, []);
+        groups.get(gid).push(item);
+    }
+    const parts = [];
+    for (const [gid, groupItems] of groups) {
+        // Representative: pending first, then most recent by due_at
+        const rep = groupItems.find(i => i.status === 'pending')
+            || [...groupItems].sort((a, b) => new Date(b.due_at) - new Date(a.due_at))[0];
+        // Only accordion for recurring items; flat card for one-time
+        if (rep.recurrence) {
+            parts.push(renderAccordionRow(rep, gid));
+        } else {
+            parts.push(renderScheduleCard(rep));
+        }
+    }
+    return parts.join('');
+}
+
+function renderAccordionRow(item, groupId) {
+    const msg = item.message || '';
+    const truncated = msg.length > 120 ? msg.slice(0, 120) + '…' : msg;
+    const due = item.due_at ? new Date(item.due_at).toLocaleString() : '—';
+    const isPending = item.status === 'pending';
+    const statusClass = { pending: '--pending', fired: '--fired', failed: '--failed', cancelled: '--cancelled' }[item.status] || '';
+    const typeBadge = `<span class="schedule-badge --type-${escapeHtml(item.item_type)}">${escapeHtml(item.item_type)}</span>`;
+    const recurrBadge = `<span class="schedule-badge --recurrence">${escapeHtml(formatRecurrence(item.recurrence))}</span>`;
+    const actions = isPending ? `
+        <button class="tool-card__btn" onclick="openEditSchedule('${escapeHtml(item.id)}')">Edit</button>
+        <button class="tool-card__btn --danger" onclick="confirmCancelSchedule('${escapeHtml(item.id)}')">Cancel</button>
+    ` : '';
+    return `
+        <div class="schedule-accordion-row" data-group-id="${escapeHtml(groupId)}" data-loaded="false">
+            <div class="schedule-accordion-header">
+                <div class="schedule-card__body">
+                    <div class="schedule-card__message">${escapeHtml(truncated)}</div>
+                    <div class="schedule-card__meta">
+                        <span class="schedule-card__due">${isPending ? 'Next:' : 'Last:'} ${due}</span>
+                        ${typeBadge}${recurrBadge}
+                    </div>
+                </div>
+                <div class="schedule-card__right">
+                    <span class="schedule-card__status ${statusClass}">${escapeHtml(item.status)}</span>
+                    <div class="schedule-card__actions">${actions}</div>
+                    <span class="accordion-chevron">▸</span>
+                </div>
+            </div>
+            <div class="schedule-accordion-body" style="display:none">
+                <p class="form-hint fires-loading">Loading history…</p>
+            </div>
+        </div>
+    `;
+}
+
+function toggleAccordionRow(row) {
+    const body = row.querySelector('.schedule-accordion-body');
+    const chevron = row.querySelector('.accordion-chevron');
+    const isOpen = body.style.display !== 'none';
+    if (isOpen) {
+        body.style.display = 'none';
+        chevron.textContent = '▸';
+    } else {
+        body.style.display = '';
+        chevron.textContent = '▾';
+        if (row.dataset.loaded === 'false') {
+            row.dataset.loaded = 'true';
+            loadGroupFires(row.dataset.groupId, body);
+        }
+    }
+}
+
+async function loadGroupFires(groupId, container) {
+    try {
+        const res = await apiFetch(`/scheduler/group/${encodeURIComponent(groupId)}`);
+        if (!res.ok) {
+            container.innerHTML = '<p class="form-hint">Could not load history.</p>';
+            return;
+        }
+        const data = await res.json();
+        const items = data.items || [];
+        if (items.length === 0) {
+            container.innerHTML = '<p class="form-hint">No fire history yet.</p>';
+            return;
+        }
+        container.innerHTML = `<div class="fire-history-list">${
+            items.map(item => {
+                const d = item.due_at ? new Date(item.due_at).toLocaleString() : '—';
+                const sc = { pending: '--pending', fired: '--fired', failed: '--failed', cancelled: '--cancelled' }[item.status] || '';
+                return `<div class="fire-history-item">
+                    <span class="fire-history-item__status ${sc}">${escapeHtml(item.status)}</span>
+                    <span class="fire-history-item__date">${d}</span>
+                </div>`;
+            }).join('')
+        }</div>`;
+    } catch (e) {
+        container.innerHTML = '<p class="form-hint">Error loading history.</p>';
+    }
+}
+
+// Scheduler event listeners
+document.getElementById('newScheduleBtn').addEventListener('click', openCreateSchedule);
+
+document.getElementById('closeScheduleModal').addEventListener('click', () => {
+    document.getElementById('scheduleModal').classList.add('hidden');
+});
+document.getElementById('cancelScheduleFormBtn').addEventListener('click', () => {
+    document.getElementById('scheduleModal').classList.add('hidden');
+});
+document.getElementById('keepScheduleBtn').addEventListener('click', () => {
+    document.getElementById('cancelScheduleModal').classList.add('hidden');
+    cancellingScheduleId = null;
+});
+document.getElementById('confirmCancelScheduleBtn').addEventListener('click', executeCancelSchedule);
+document.getElementById('scheduleLoadMoreBtn').addEventListener('click', () => loadScheduler(true));
+document.getElementById('clearHistoryBtn').addEventListener('click', clearHistory);
+
+document.getElementById('scheduleRecurrence').addEventListener('change', (e) => {
+    const val = e.target.value;
+    document.getElementById('windowGroup').style.display = val === 'hourly' ? '' : 'none';
+    document.getElementById('intervalGroup').style.display = val === 'interval' ? '' : 'none';
+    updateScheduleFormHints();
+});
+
+document.getElementById('scheduleIntervalMinutes').addEventListener('input', updateScheduleFormHints);
+
+document.getElementById('scheduleDueAt').addEventListener('change', updateScheduleFormHints);
+
+document.querySelector('.scheduler-filters').addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-tab');
+    if (!btn) return;
+    document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    scheduleFilter = btn.dataset.filter;
+    loadScheduler();
+});
+
+// ==========================================
+// Lists Tab
+// ==========================================
+let userLists = [];
+let expandedListId = null;
+let expandedListData = null;
+let renamingListId = null;
+let deletingListId = null;
+
+async function loadLists() {
+    document.getElementById('listsContainer').innerHTML = '<div class="loading">Loading lists…</div>';
+    try {
+        const res = await apiFetch('/lists');
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            document.getElementById('listsContainer').innerHTML =
+                `<div class="empty-state"><h3>Error loading lists</h3><p>${escapeHtml(err.error || 'Unknown error')}</p></div>`;
+            return;
+        }
+        const data = await res.json();
+        userLists = data.items || [];
+        renderLists();
+    } catch (e) {
+        document.getElementById('listsContainer').innerHTML =
+            `<div class="empty-state"><h3>Error loading lists</h3><p>${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+function renderLists() {
+    const container = document.getElementById('listsContainer');
+    if (!container) return;
+    if (userLists.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <h3>No lists yet</h3>
+                <p>Create a list to get started, or add items by chatting with Chalie.</p>
+            </div>`;
+        return;
+    }
+    container.innerHTML = userLists.map(lst => renderListCard(lst)).join('');
+}
+
+function renderListCard(lst) {
+    const isExpanded = expandedListId === lst.id;
+    const total = lst.item_count || 0;
+    const checked = lst.checked_count || 0;
+    const pct = total > 0 ? Math.round((checked / total) * 100) : 0;
+
+    const progressHtml = total > 0 ? `
+        <div class="list-card__progress-bar">
+            <div class="list-card__progress-fill" style="width: ${pct}%"></div>
+        </div>` : '';
+
+    let expandedHtml = '';
+    if (isExpanded) {
+        if (expandedListData === null) {
+            expandedHtml = `<div class="list-card__items"><div class="loading" style="padding: 12px 0;">Loading items…</div></div>`;
+        } else {
+            const items = [...(expandedListData.items || [])].sort((a, b) => {
+                if (a.checked === b.checked) return 0;
+                return a.checked ? 1 : -1;
+            });
+
+            let itemsHtml = '';
+            if (items.length === 0) {
+                itemsHtml = '<p class="list-card__empty">No items yet. Add something below.</p>';
+            } else {
+                itemsHtml = items.map(item => `
+                    <div class="list-item ${item.checked ? 'list-item--checked' : ''}"
+                         data-list-id="${escapeHtml(lst.id)}"
+                         data-content="${escapeHtml(item.content)}">
+                        <label class="list-item__checkbox">
+                            <input type="checkbox" ${item.checked ? 'checked' : ''}>
+                            <span class="list-item__check-mark"></span>
+                        </label>
+                        <span class="list-item__content">${escapeHtml(item.content)}</span>
+                        <button class="list-item__remove"
+                                data-list-id="${escapeHtml(lst.id)}"
+                                data-content="${escapeHtml(item.content)}"
+                                title="Remove">✕</button>
+                    </div>
+                `).join('');
+            }
+
+            const addHtml = `
+                <div class="list-card__add-item">
+                    <input type="text"
+                           class="list-card__add-input"
+                           data-list-id="${escapeHtml(lst.id)}"
+                           id="addItemInput-${escapeHtml(lst.id)}"
+                           placeholder="Add item…"
+                           maxlength="500">
+                    <button class="btn btn-secondary list-card__add-btn"
+                            data-list-id="${escapeHtml(lst.id)}">Add</button>
+                </div>`;
+
+            expandedHtml = `<div class="list-card__items">${itemsHtml}${addHtml}</div>`;
+        }
+    }
+
+    return `
+        <div class="list-card ${isExpanded ? 'list-card--expanded' : ''}" data-list-id="${escapeHtml(lst.id)}">
+            <div class="list-card__header" data-list-id="${escapeHtml(lst.id)}">
+                <div class="list-card__title-row">
+                    <span class="list-card__name">${escapeHtml(lst.name)}</span>
+                    <span class="list-card__count">${total} item${total !== 1 ? 's' : ''}${checked > 0 ? ` · ${checked} done` : ''}</span>
+                </div>
+                <div class="list-card__header-actions">
+                    <button class="tool-card__btn"
+                            data-action="rename"
+                            data-list-id="${escapeHtml(lst.id)}"
+                            data-list-name="${escapeHtml(lst.name)}">Rename</button>
+                    <button class="tool-card__btn --danger"
+                            data-action="delete"
+                            data-list-id="${escapeHtml(lst.id)}"
+                            data-list-name="${escapeHtml(lst.name)}">Delete</button>
+                </div>
+            </div>
+            ${progressHtml}
+            ${expandedHtml}
+        </div>
+    `;
+}
+
+async function toggleListExpand(id) {
+    if (expandedListId === id) {
+        expandedListId = null;
+        expandedListData = null;
+        renderLists();
+        return;
+    }
+
+    expandedListId = id;
+    expandedListData = null;
+    renderLists();
+
+    try {
+        const res = await apiFetch(`/lists/${id}`);
+        if (res.ok) {
+            const data = await res.json();
+            expandedListData = data.item;
+        } else {
+            showToast('Failed to load list', 'error');
+            expandedListId = null;
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+        expandedListId = null;
+    }
+    renderLists();
+}
+
+async function refreshExpandedList(id) {
+    try {
+        const [summaryRes, detailRes] = await Promise.all([
+            apiFetch('/lists'),
+            apiFetch(`/lists/${id}`),
+        ]);
+
+        if (summaryRes.ok) {
+            const data = await summaryRes.json();
+            userLists = data.items || [];
+        }
+        if (detailRes.ok) {
+            const data = await detailRes.json();
+            expandedListData = data.item;
+        }
+        renderLists();
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function addListItem(listId) {
+    const input = document.getElementById(`addItemInput-${listId}`);
+    if (!input) return;
+    const content = input.value.trim();
+    if (!content) return;
+
+    try {
+        const res = await apiFetch(`/lists/${listId}/items`, {
+            method: 'POST',
+            body: JSON.stringify({ items: [content] }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            if (data.added === 0) {
+                showToast('Already on the list', 'info');
+            } else {
+                input.value = '';
+            }
+            await refreshExpandedList(listId);
+        } else {
+            showToast(data.error || 'Failed to add item', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function removeListItem(listId, content) {
+    try {
+        const res = await apiFetch(`/lists/${listId}/items/batch`, {
+            method: 'DELETE',
+            body: JSON.stringify({ items: [content] }),
+        });
+        if (res.ok) {
+            await refreshExpandedList(listId);
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to remove item', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function toggleListItem(listId, content, checked) {
+    const endpoint = checked ? 'check' : 'uncheck';
+    try {
+        const res = await apiFetch(`/lists/${listId}/items/${endpoint}`, {
+            method: 'PUT',
+            body: JSON.stringify({ items: [content] }),
+        });
+        if (res.ok) {
+            await refreshExpandedList(listId);
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to update item', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function openCreateList() {
+    document.getElementById('createListName').value = '';
+    document.getElementById('createListModal').classList.remove('hidden');
+    document.getElementById('createListName').focus();
+}
+
+function openRenameList(id, name) {
+    renamingListId = id;
+    document.getElementById('renameListName').value = name;
+    document.getElementById('renameListModal').classList.remove('hidden');
+    document.getElementById('renameListName').focus();
+}
+
+function openDeleteList(id, name) {
+    deletingListId = id;
+    document.getElementById('deleteListDesc').textContent = `Delete "${name}"? This cannot be undone.`;
+    document.getElementById('deleteListModal').classList.remove('hidden');
+}
+
+// ==========================================
+// Lists Event Delegation
+// ==========================================
+document.getElementById('listsContainer').addEventListener('click', (e) => {
+    // Rename button
+    const renameBtn = e.target.closest('[data-action="rename"]');
+    if (renameBtn) {
+        openRenameList(renameBtn.dataset.listId, renameBtn.dataset.listName);
+        return;
+    }
+
+    // Delete button
+    const deleteBtn = e.target.closest('[data-action="delete"]');
+    if (deleteBtn) {
+        openDeleteList(deleteBtn.dataset.listId, deleteBtn.dataset.listName);
+        return;
+    }
+
+    // Remove item button
+    const removeBtn = e.target.closest('.list-item__remove');
+    if (removeBtn) {
+        removeListItem(removeBtn.dataset.listId, removeBtn.dataset.content);
+        return;
+    }
+
+    // Add item button
+    const addBtn = e.target.closest('.list-card__add-btn');
+    if (addBtn) {
+        addListItem(addBtn.dataset.listId);
+        return;
+    }
+
+    // Toggle expand/collapse on header
+    const header = e.target.closest('.list-card__header');
+    if (header) {
+        toggleListExpand(header.dataset.listId);
+    }
+});
+
+document.getElementById('listsContainer').addEventListener('change', (e) => {
+    if (e.target.matches('.list-item__checkbox input[type="checkbox"]')) {
+        const item = e.target.closest('.list-item');
+        if (item) {
+            toggleListItem(item.dataset.listId, item.dataset.content, e.target.checked);
+        }
+    }
+});
+
+document.getElementById('listsContainer').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.classList.contains('list-card__add-input')) {
+        e.preventDefault();
+        addListItem(e.target.dataset.listId);
+    }
+});
+
+// ==========================================
+// Lists Modal Event Listeners
+// ==========================================
+document.getElementById('newListBtn').addEventListener('click', openCreateList);
+
+document.getElementById('closeCreateListModal').addEventListener('click', () => {
+    document.getElementById('createListModal').classList.add('hidden');
+});
+document.getElementById('cancelCreateListBtn').addEventListener('click', () => {
+    document.getElementById('createListModal').classList.add('hidden');
+});
+
+document.getElementById('createListForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('createListName').value.trim();
+    if (!name) return;
+
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+
+    try {
+        const res = await apiFetch('/lists', {
+            method: 'POST',
+            body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            document.getElementById('createListModal').classList.add('hidden');
+            showToast('List created', 'success');
+            // Pre-set expanded state so new list opens automatically
+            expandedListId = data.item.id;
+            expandedListData = data.item;
+            await loadLists();
+        } else {
+            showToast(data.error || 'Failed to create list', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create';
+    }
+});
+
+document.getElementById('closeRenameListModal').addEventListener('click', () => {
+    document.getElementById('renameListModal').classList.add('hidden');
+    renamingListId = null;
+});
+document.getElementById('cancelRenameListBtn').addEventListener('click', () => {
+    document.getElementById('renameListModal').classList.add('hidden');
+    renamingListId = null;
+});
+
+document.getElementById('renameListForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!renamingListId) return;
+    const name = document.getElementById('renameListName').value.trim();
+    if (!name) return;
+
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = 'Renaming…';
+
+    try {
+        const res = await apiFetch(`/lists/${renamingListId}/rename`, {
+            method: 'PUT',
+            body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            document.getElementById('renameListModal').classList.add('hidden');
+            showToast('List renamed', 'success');
+            const prevExpanded = renamingListId;
+            renamingListId = null;
+            if (expandedListId === prevExpanded) {
+                await refreshExpandedList(prevExpanded);
+            } else {
+                await loadLists();
+            }
+        } else {
+            showToast(data.error || 'Failed to rename list', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Rename';
+    }
+});
+
+document.getElementById('cancelDeleteListBtn').addEventListener('click', () => {
+    document.getElementById('deleteListModal').classList.add('hidden');
+    deletingListId = null;
+});
+
+document.getElementById('confirmDeleteListBtn').addEventListener('click', async () => {
+    if (!deletingListId) return;
+    const id = deletingListId;
+    document.getElementById('deleteListModal').classList.add('hidden');
+
+    try {
+        const res = await apiFetch(`/lists/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('List deleted', 'success');
+            if (expandedListId === id) {
+                expandedListId = null;
+                expandedListData = null;
+            }
+            deletingListId = null;
+            await loadLists();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to delete list', 'error');
+            deletingListId = null;
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+        deletingListId = null;
+    }
 });
 
 // ==========================================

@@ -164,6 +164,14 @@ class OutputService:
 
         self.redis.publish("output:events", json.dumps(event_payload))
 
+        # Buffer for catch-up on drift stream reconnect (same pattern as enqueue_text)
+        try:
+            self.redis.rpush('notifications:recent', json.dumps(event_payload))
+            self.redis.ltrim('notifications:recent', -200, -1)
+            self.redis.expire('notifications:recent', 86400)
+        except Exception as e:
+            logger.warning(f"Card notification buffer push failed: {e}")
+
         logger.info(
             f"Enqueued CARD output {output_id} for tool '{card_data.get('tool_name')}' "
             f"(topic={topic})"

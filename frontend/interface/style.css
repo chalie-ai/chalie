@@ -1346,3 +1346,41 @@ body {
 .tool-result-card__body {
   font-size: 0.9rem;
 }
+
+/* Scheduler card accent overrides */
+.tool-result-card[data-tool="scheduler"] {
+  border-left-color: #8A5CFF;
+}
+
+.tool-result-card[data-tool="scheduler_trigger"] {
+  border-left-color: #00F0FF;
+}
+
+/* Card entrance animation for scheduler cards */
+.tool-result-card[data-tool^="scheduler"] {
+  animation: cardFadeIn 180ms ease-out;
+}
+
+@keyframes cardFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Trigger card (built client-side for fired reminders/tasks) */
+.scheduler-trigger-card {
+  padding: 18px 16px;
+}
+
+.scheduler-trigger-card__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #00F0FF;
+  margin-bottom: 6px;
+}
+
+.scheduler-trigger-card__text {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #eae6f2;
+}
