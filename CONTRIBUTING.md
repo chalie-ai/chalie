@@ -6,21 +6,32 @@ Thank you for your interest in contributing to Chalie! This document outlines gu
 
 ### Frontend (Web Interface)
 
-All web interface code must be located in the `frontend/interface/` directory:
+The frontend consists of three independent applications:
 
 ```
 frontend/interface/
 ├── index.html          # Main HTML file
-├── css/
-│   └── styles.css      # All styling
-├── js/
-│   ├── app.js          # Main application logic
-│   ├── api.js          # API client
-│   └── utils.js        # Helper functions
-└── assets/             # Images, fonts, etc.
+├── app.js              # Main application logic
+├── api.js              # API client
+├── renderer.js         # Card and message rendering
+├── voice.js            # Voice interaction
+├── presence.js         # Presence/status indicators
+├── heartbeat.js        # Connection heartbeat
+├── sse.js              # Server-sent events
+├── sw.js               # Service worker
+├── style.css           # All styling
+├── manifest.json       # PWA manifest
+├── icons/              # Icon files
+└── cards/              # Reusable card components
+
+frontend/brain/
+└── Admin/cognitive dashboard
+
+frontend/on-boarding/
+└── Account setup wizard
 ```
 
-**Important**: Do NOT create interface code elsewhere. The `frontend/interface/` directory is the single source of truth for all UI code.
+**Important**: Do NOT create interface code elsewhere. Each frontend directory is self-contained.
 
 ### Backend
 
@@ -96,7 +107,7 @@ docker-compose logs -f backend
 
 1. Create blueprint in `backend/api/my_endpoint.py`
 2. Register in `backend/api/__init__.py`
-3. Add auth via `@require_api_key` decorator
+3. Add auth via `@require_session` decorator
 4. Test via curl or REST client
 
 ### Adding a New Service
