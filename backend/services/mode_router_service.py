@@ -586,11 +586,10 @@ class ModeRouterService:
 
     def _init_tiebreaker(self):
         """Lazy-initialize tie-breaker LLM."""
-        from services.llm_service import create_llm_service
+        from services.llm_service import create_refreshable_llm_service
         from services.config_service import ConfigService
 
-        tb_config = ConfigService.resolve_agent_config("mode-tiebreaker")
-        self._tiebreaker = create_llm_service(tb_config)
+        self._tiebreaker = create_refreshable_llm_service("mode-tiebreaker")
         self._tiebreaker_prompt = ConfigService.get_agent_prompt("mode-tiebreaker")
 
     def _build_tiebreaker_prompt(

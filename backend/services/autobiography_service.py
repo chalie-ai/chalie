@@ -624,10 +624,9 @@ def autobiography_synthesis_worker(shared_state=None) -> None:
     check_interval = 300  # Check every 5 minutes if synthesis needed
 
     try:
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_lightweight_db_service
 
-        db_config = get_merged_db_config()
-        db = DatabaseService(db_config)
+        db = get_lightweight_db_service()
         service = AutobiographyService(db)
 
         last_synthesis = time.time()

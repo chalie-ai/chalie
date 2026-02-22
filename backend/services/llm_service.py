@@ -152,6 +152,75 @@ def create_llm_service(config: dict):
     return primary
 
 
+class RefreshableLLMService:
+    """
+    LLM service wrapper that auto-refreshes when provider configuration changes.
+
+    Detects provider cache version changes (via Redis invalidation) and re-creates
+    the underlying LLM client, so workers don't need to restart when providers change
+    via the Brain UI.
+    """
+
+    def __init__(self, agent_name: str):
+        self._agent_name = agent_name
+        self._version = None  # Last seen provider cache version
+        self._service = None  # Underlying LLM service
+
+    def _ensure_fresh(self):
+        """Re-create the underlying service if the provider cache version has changed."""
+        from services.provider_cache_service import ProviderCacheService
+        from services.config_service import ConfigService
+
+        # Warm cache and get current version
+        ProviderCacheService.get_providers()
+        current_version = ProviderCacheService._version
+
+        if current_version != self._version:
+            logger.debug(
+                f"[RefreshableLLM] Provider version changed ({self._version} → {current_version}), "
+                f"re-creating LLM service for agent '{self._agent_name}'"
+            )
+            config = ConfigService.resolve_agent_config(self._agent_name)
+            primary = _build_service(config)
+
+            # Handle fallback provider
+            fallback_name = config.get('fallback_provider')
+            if fallback_name:
+                try:
+                    providers = ConfigService.get_providers()
+                    if fallback_name in providers:
+                        fallback_config = dict(providers[fallback_name])
+                        fallback = _build_service(fallback_config)
+                        primary = FallbackLLMService(primary, fallback)
+                except Exception as e:
+                    logger.warning(f"[RefreshableLLM] Failed to load fallback '{fallback_name}': {e}")
+
+            self._service = primary
+            self._version = current_version
+
+    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        self._ensure_fresh()
+        return self._service.send_message(system_prompt, user_message, stream=stream)
+
+
+def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
+    """
+    Create an LLM service that auto-refreshes when provider configuration changes.
+
+    Use this instead of create_llm_service() for long-lived services that store
+    the LLM client as an instance variable. The underlying client is re-created
+    automatically when the provider cache version changes (e.g., after a provider
+    is added, updated, or reassigned via the Brain UI).
+
+    Args:
+        agent_name: Agent config name (e.g., 'cognitive-drift', 'mode-reflection')
+
+    Returns:
+        RefreshableLLMService that transparently re-creates its client on changes.
+    """
+    return RefreshableLLMService(agent_name)
+
+
 class AnthropicService:
     """Anthropic Claude API client."""
 

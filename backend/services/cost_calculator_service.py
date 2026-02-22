@@ -48,23 +48,19 @@ class CostCalculatorService:
         """Load action weights from procedural memory."""
         try:
             from services.procedural_memory_service import ProceduralMemoryService
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
             from services.config_service import ConfigService
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
-            try:
-                proc_config = ConfigService.get_agent_config("procedural-memory")
-                proc_memory = ProceduralMemoryService(db_service, proc_config)
-                self._procedural_weights = proc_memory.get_all_policy_weights()
+            db_service = get_shared_db_service()
+            proc_config = ConfigService.get_agent_config("procedural-memory")
+            proc_memory = ProceduralMemoryService(db_service, proc_config)
+            self._procedural_weights = proc_memory.get_all_policy_weights()
 
-                if self._procedural_weights:
-                    logging.info(
-                        f"[COST CALC] Loaded {len(self._procedural_weights)} "
-                        f"procedural weights"
-                    )
-            finally:
-                db_service.close_pool()
+            if self._procedural_weights:
+                logging.info(
+                    f"[COST CALC] Loaded {len(self._procedural_weights)} "
+                    f"procedural weights"
+                )
         except Exception as e:
             logging.debug(f"[COST CALC] Procedural memory not available: {e}")
             self._procedural_weights = None

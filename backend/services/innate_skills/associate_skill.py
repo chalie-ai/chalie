@@ -34,10 +34,9 @@ def handle_associate(topic: str, params: dict) -> str:
     try:
         from services.semantic_retrieval_service import SemanticRetrievalService
         from services.embedding_service import get_embedding_service
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
+        db_service = get_shared_db_service()
         embedding_service = get_embedding_service()
         retrieval_service = SemanticRetrievalService(db_service, embedding_service)
 

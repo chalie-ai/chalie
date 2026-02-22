@@ -154,10 +154,9 @@ def _get_recent_modes(topic: str) -> list:
     """Get last N mode selections from routing decisions."""
     try:
         from services.routing_decision_service import RoutingDecisionService
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
+        db_service = get_shared_db_service()
         service = RoutingDecisionService(db_service)
 
         decisions = service.get_recent_decisions(hours=1, limit=5)
@@ -177,38 +176,34 @@ def _get_skill_stats(topic: str) -> dict:
     """
     try:
         from services.procedural_memory_service import ProceduralMemoryService
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
-        try:
-            service = ProceduralMemoryService(db_service)
+        db_service = get_shared_db_service()
+        service = ProceduralMemoryService(db_service)
 
-            stats = {}
-            # Query all actions dynamically
-            all_weights = service.get_all_policy_weights()
-            for action_name in all_weights:
-                action_stats = service.get_action_stats(action_name)
-                if action_stats:
-                    attempts = action_stats.get('total_attempts', 0)
-                    successes = action_stats.get('total_successes', 0)
-                    failures = attempts - successes
-                    avg_reward = action_stats.get('avg_reward', 0) or 0
+        stats = {}
+        # Query all actions dynamically
+        all_weights = service.get_all_policy_weights()
+        for action_name in all_weights:
+            action_stats = service.get_action_stats(action_name)
+            if action_stats:
+                attempts = action_stats.get('total_attempts', 0)
+                successes = action_stats.get('total_successes', 0)
+                failures = attempts - successes
+                avg_reward = action_stats.get('avg_reward', 0) or 0
 
-                    # Bayesian smoothed reliability (Laplace smoothing)
-                    smoothed_reliability = (successes + 1) / (attempts + 2) if attempts > 0 else 0.5
+                # Bayesian smoothed reliability (Laplace smoothing)
+                smoothed_reliability = (successes + 1) / (attempts + 2) if attempts > 0 else 0.5
 
-                    stats[action_name] = {
-                        "weight": round(action_stats.get('weight', 1.0), 3),
-                        "successes": successes,
-                        "failures": failures,
-                        "avg_reward": round(avg_reward, 2),
-                        "reliability": round(smoothed_reliability, 3),
-                    }
+                stats[action_name] = {
+                    "weight": round(action_stats.get('weight', 1.0), 3),
+                    "successes": successes,
+                    "failures": failures,
+                    "avg_reward": round(avg_reward, 2),
+                    "reliability": round(smoothed_reliability, 3),
+                }
 
-            return stats
-        finally:
-            db_service.close_pool()
+        return stats
 
     except Exception as e:
         logger.warning(f"[INTROSPECT] skill stats failed: {e}")
@@ -246,15 +241,11 @@ def _get_active_goals_count() -> int:
     """Get count of active + progressing goals."""
     try:
         from services.goal_service import GoalService
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
-        try:
-            service = GoalService(db_service)
-            return len(service.get_active_goals(limit=50))
-        finally:
-            db_service.close_pool()
+        db_service = get_shared_db_service()
+        service = GoalService(db_service)
+        return len(service.get_active_goals(limit=50))
     except Exception as e:
         logger.debug(f"[INTROSPECT] active goals count failed: {e}")
         return 0
@@ -275,15 +266,11 @@ def _get_communication_style() -> dict:
     """Get detected communication style dimensions."""
     try:
         from services.user_trait_service import UserTraitService
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
-        try:
-            service = UserTraitService(db_service)
-            return service.get_communication_style()
-        finally:
-            db_service.close_pool()
+        db_service = get_shared_db_service()
+        service = UserTraitService(db_service)
+        return service.get_communication_style()
     except Exception as e:
         logger.debug(f"[INTROSPECT] communication style failed: {e}")
         return {}
@@ -298,10 +285,9 @@ def _get_recall_failure_rate(topic: str) -> float:
     """
     try:
         from services.procedural_memory_service import ProceduralMemoryService
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_shared_db_service
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
+        db_service = get_shared_db_service()
         service = ProceduralMemoryService(db_service)
 
         # Get per-topic context stats from procedural memory's context_stats column

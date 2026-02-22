@@ -228,7 +228,7 @@ class ExperienceAssimilationService:
 
     def _store_episode(self, observation: dict, topic: str, user_prompt: str, tool_outputs: list):
         """Store a reflection observation as an episodic memory."""
-        from services.database_service import DatabaseService, get_merged_db_config
+        from services.database_service import get_lightweight_db_service
         from services.episodic_storage_service import EpisodicStorageService
         from services.embedding_service import get_embedding_service
 
@@ -262,8 +262,7 @@ class ExperienceAssimilationService:
             },
         }
 
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
+        db_service = get_lightweight_db_service()
         try:
             storage = EpisodicStorageService(db_service)
             episode_id = storage.store_episode(episode_data)

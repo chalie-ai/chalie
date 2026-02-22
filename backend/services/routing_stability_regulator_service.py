@@ -22,7 +22,7 @@ from decimal import Decimal
 
 import numpy as np
 
-from services.database_service import DatabaseService, get_merged_db_config
+from services.database_service import get_lightweight_db_service
 from services.routing_decision_service import RoutingDecisionService
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class RoutingStabilityRegulator:
     }
 
     def __init__(self, db=None):
-        self.db = db or DatabaseService(get_merged_db_config())
+        self.db = db or get_lightweight_db_service()
         self.decision_service = RoutingDecisionService(self.db)
         os.makedirs(GENERATED_CONFIG_DIR, exist_ok=True)
 

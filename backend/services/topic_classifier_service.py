@@ -12,7 +12,7 @@ import numpy as np
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple, Optional
 
-from services.database_service import DatabaseService, get_merged_db_config
+from services.database_service import get_shared_db_service
 from services.config_service import ConfigService
 from services.embedding_service import EmbeddingService
 
@@ -72,7 +72,7 @@ class TopicClassifierService:
     RECENCY_BONUS = 0.15               # Similarity boost for recently-active topic
 
     def __init__(self):
-        self.db = DatabaseService(get_merged_db_config())
+        self.db = get_shared_db_service()
 
         # Load adaptive weights (or use defaults)
         self._load_weights()

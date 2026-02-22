@@ -418,20 +418,16 @@ class FrontalCortexService:
         try:
             from services.identity_service import IdentityService
             from services.voice_mapper_service import VoiceMapperService
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
-            try:
-                identity = IdentityService(db_service)
-                mapper = VoiceMapperService()
+            db_service = get_shared_db_service()
+            identity = IdentityService(db_service)
+            mapper = VoiceMapperService()
 
-                vectors = identity.get_vectors()
-                identity.check_coherence()
-                modulation = mapper.generate_modulation(vectors)
-                return modulation if modulation else "Engage naturally as a peer."
-            finally:
-                db_service.close_pool()
+            vectors = identity.get_vectors()
+            identity.check_coherence()
+            modulation = mapper.generate_modulation(vectors)
+            return modulation if modulation else "Engage naturally as a peer."
         except Exception as e:
             logging.warning(f"Identity modulation unavailable: {e}")
             return "Engage naturally as a peer."
@@ -459,22 +455,18 @@ class FrontalCortexService:
         """
         try:
             from services.user_trait_service import UserTraitService, INJECTION_THRESHOLD
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
-            try:
-                trait_service = UserTraitService(db_service)
-                effective_threshold = (
-                    injection_threshold_override
-                    if injection_threshold_override is not None
-                    else INJECTION_THRESHOLD
-                )
-                return trait_service.get_traits_for_prompt(
-                    prompt, injection_threshold=effective_threshold
-                )
-            finally:
-                db_service.close_pool()
+            db_service = get_shared_db_service()
+            trait_service = UserTraitService(db_service)
+            effective_threshold = (
+                injection_threshold_override
+                if injection_threshold_override is not None
+                else INJECTION_THRESHOLD
+            )
+            return trait_service.get_traits_for_prompt(
+                prompt, injection_threshold=effective_threshold
+            )
         except ImportError:
             return ""
         except Exception as e:
@@ -633,15 +625,11 @@ class FrontalCortexService:
         """
         try:
             from services.goal_service import GoalService
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
-            try:
-                goal_service = GoalService(db_service)
-                return goal_service.get_goals_for_prompt(topic=topic)
-            finally:
-                db_service.close_pool()
+            db_service = get_shared_db_service()
+            goal_service = GoalService(db_service)
+            return goal_service.get_goals_for_prompt(topic=topic)
         except Exception as e:
             logging.debug(f"Active goals not available: {e}")
             return ""
@@ -655,15 +643,11 @@ class FrontalCortexService:
         """
         try:
             from services.list_service import ListService
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
-            try:
-                list_service = ListService(db_service)
-                return list_service.get_lists_for_prompt()
-            finally:
-                db_service.close_pool()
+            db_service = get_shared_db_service()
+            list_service = ListService(db_service)
+            return list_service.get_lists_for_prompt()
         except Exception as e:
             logging.debug(f"Active lists not available: {e}")
             return ""
@@ -679,52 +663,48 @@ class FrontalCortexService:
         """
         try:
             from services.user_trait_service import UserTraitService
-            from services.database_service import DatabaseService, get_merged_db_config
+            from services.database_service import get_shared_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
-            try:
-                trait_service = UserTraitService(db_service)
-                style = trait_service.get_communication_style()
-                if not style:
-                    return ""
+            db_service = get_shared_db_service()
+            trait_service = UserTraitService(db_service)
+            style = trait_service.get_communication_style()
+            if not style:
+                return ""
 
-                def _verbosity_label(v):
-                    if v <= 3: return "terse"
-                    if v <= 6: return "balanced"
-                    return "detailed"
+            def _verbosity_label(v):
+                if v <= 3: return "terse"
+                if v <= 6: return "balanced"
+                return "detailed"
 
-                def _directness_label(v):
-                    if v <= 3: return "indirect"
-                    if v <= 6: return "moderate"
-                    return "direct"
+            def _directness_label(v):
+                if v <= 3: return "indirect"
+                if v <= 6: return "moderate"
+                return "direct"
 
-                def _formality_label(v):
-                    if v <= 3: return "casual"
-                    if v <= 6: return "neutral"
-                    return "formal"
+            def _formality_label(v):
+                if v <= 3: return "casual"
+                if v <= 6: return "neutral"
+                return "formal"
 
-                def _abstraction_label(v):
-                    if v <= 3: return "concrete"
-                    if v <= 6: return "mixed"
-                    return "abstract"
+            def _abstraction_label(v):
+                if v <= 3: return "concrete"
+                if v <= 6: return "mixed"
+                return "abstract"
 
-                labels = []
-                if 'verbosity' in style:
-                    labels.append(f"verbosity: {_verbosity_label(style['verbosity'])}")
-                if 'directness' in style:
-                    labels.append(f"directness: {_directness_label(style['directness'])}")
-                if 'formality' in style:
-                    labels.append(f"formality: {_formality_label(style['formality'])}")
-                if 'abstraction_level' in style:
-                    labels.append(f"abstraction: {_abstraction_label(style['abstraction_level'])}")
+            labels = []
+            if 'verbosity' in style:
+                labels.append(f"verbosity: {_verbosity_label(style['verbosity'])}")
+            if 'directness' in style:
+                labels.append(f"directness: {_directness_label(style['directness'])}")
+            if 'formality' in style:
+                labels.append(f"formality: {_formality_label(style['formality'])}")
+            if 'abstraction_level' in style:
+                labels.append(f"abstraction: {_abstraction_label(style['abstraction_level'])}")
 
-                if not labels:
-                    return ""
+            if not labels:
+                return ""
 
-                return "## User Communication Style\n" + ", ".join(labels)
-            finally:
-                db_service.close_pool()
+            return "## User Communication Style\n" + ", ".join(labels)
         except Exception as e:
             logging.debug(f"Communication style not available: {e}")
             return ""
