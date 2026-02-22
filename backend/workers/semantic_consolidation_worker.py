@@ -7,7 +7,7 @@ import logging
 import json
 from services.database_service import DatabaseService
 from services.config_service import ConfigService
-from services.llm_service import create_llm_service
+from services.llm_service import create_refreshable_llm_service
 from services.semantic_storage_service import SemanticStorageService
 from services.semantic_consolidation_service import SemanticConsolidationService
 
@@ -18,14 +18,11 @@ class SemanticConsolidationWorker:
     def __init__(self):
         """Initialize worker with required services."""
         # Load configs
-        from services.database_service import get_merged_db_config
-
-        semantic_config = ConfigService.resolve_agent_config("semantic-memory")
-        db_config = get_merged_db_config()
+        from services.database_service import get_lightweight_db_service
 
         # Initialize services
-        self.db_service = DatabaseService(db_config)
-        self.llm_service = create_llm_service(semantic_config)
+        self.db_service = get_lightweight_db_service()
+        self.llm_service = create_refreshable_llm_service("semantic-memory")
         self.storage_service = SemanticStorageService(self.db_service)
         self.consolidation_service = SemanticConsolidationService(
             self.llm_service,

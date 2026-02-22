@@ -81,13 +81,13 @@ class ProviderCacheService:
                 if p.get('timeout'):
                     providers_dict[p['name']]['timeout'] = p['timeout']
 
-            # Fetch job assignments
+            # Fetch job assignments (skip assignments pointing to inactive/deleted providers)
             job_assignments = {}
             try:
                 all_assignments = service.get_all_job_assignments()
                 for assignment in all_assignments:
                     provider = service.get_provider_by_id(assignment['provider_id'])
-                    if provider:
+                    if provider and provider.get('is_active', True):
                         job_assignments[assignment['job_name']] = provider['name']
             except Exception as e:
                 logger.debug(f"[ProviderCache] Could not load job assignments: {e}")

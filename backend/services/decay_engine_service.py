@@ -97,10 +97,9 @@ class DecayEngineService:
             Number of episodes updated
         """
         try:
-            from .database_service import DatabaseService, get_merged_db_config
+            from .database_service import get_lightweight_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
+            db_service = get_lightweight_db_service()
 
             try:
                 with db_service.connection() as conn:
@@ -201,10 +200,9 @@ class DecayEngineService:
             Number of concepts updated
         """
         try:
-            from .database_service import DatabaseService, get_merged_db_config
+            from .database_service import get_lightweight_db_service
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
+            db_service = get_lightweight_db_service()
 
             try:
                 with db_service.connection() as conn:
@@ -313,11 +311,10 @@ class DecayEngineService:
             dict: {decayed: int, deleted: int}
         """
         try:
-            from .database_service import DatabaseService, get_merged_db_config
+            from .database_service import get_lightweight_db_service
             from .user_trait_service import UserTraitService
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
+            db_service = get_lightweight_db_service()
             try:
                 trait_service = UserTraitService(db_service)
                 return trait_service.apply_decay()
@@ -337,11 +334,10 @@ class DecayEngineService:
             Number of goals moved to dormant
         """
         try:
-            from .database_service import DatabaseService, get_merged_db_config
+            from .database_service import get_lightweight_db_service
             from .goal_service import GoalService
 
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
+            db_service = get_lightweight_db_service()
             try:
                 goal_service = GoalService(db_service)
                 return goal_service.apply_dormancy()
@@ -356,9 +352,8 @@ class DecayEngineService:
     def _apply_identity_inertia(self) -> int:
         """Apply inertia: pull identity activations toward baselines."""
         try:
-            from .database_service import DatabaseService, get_merged_db_config
-            db_config = get_merged_db_config()
-            db_service = DatabaseService(db_config)
+            from .database_service import get_lightweight_db_service
+            db_service = get_lightweight_db_service()
             try:
                 from .identity_service import IdentityService
                 identity = IdentityService(db_service)

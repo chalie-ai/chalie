@@ -220,14 +220,13 @@ def episodic_memory_worker(job_data: dict) -> str:
             return "Skipped — timeout reached with 0 enriched exchanges"
 
         # Load configs
-        from services.database_service import get_merged_db_config
+        from services.database_service import get_lightweight_db_service
 
         config = ConfigService.resolve_agent_config("episodic-memory")
         prompt_template = ConfigService.get_agent_prompt("episodic-memory")
 
         # Initialize services
-        db_config = get_merged_db_config()
-        database_service = DatabaseService(db_config)
+        database_service = get_lightweight_db_service()
         storage_service = EpisodicStorageService(database_service)
         ollama_service = create_llm_service(config)
         salience_service = SalienceService(config)
