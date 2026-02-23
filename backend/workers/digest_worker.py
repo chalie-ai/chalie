@@ -1594,6 +1594,79 @@ def _try_proactive_engagement_correlation(text: str, topic: str):
         logging.debug(f"[PROACTIVE ENGAGEMENT] Correlation failed: {e}")
 
 
+_FORK_RESPONSE_PATTERNS = {
+    'prefers_concise': [r'\b(quick|short|brief|summary|tldr|just.{0,10}(main|key|quick))\b'],
+    'prefers_depth': [r'\b(deep|deeper|detail|more|elaborate|explore|full|thorough)\b'],
+    'enjoys_challenge': [r'\b(challenge|push back|harder|stress.test|poke holes|counterpoint|disagree)\b'],
+}
+
+
+def _detect_fork_response(text: str, thread_id: str):
+    """
+    Detect if the user's message is a response to a previously offered fork.
+
+    If a fork was pending (adaptive_fork_pending:{thread_id} Redis key exists),
+    pattern-match the user's reply and store the corresponding micro-preference.
+    """
+    import re as _re
+    try:
+        from services.redis_client import RedisClientService
+        from services.database_service import get_shared_db_service
+        from services.user_trait_service import UserTraitService
+
+        redis_conn = RedisClientService.create_connection()
+        fork_type = redis_conn.get(f"adaptive_fork_pending:{thread_id}")
+        if not fork_type:
+            return
+
+        # Match user response to a micro-preference
+        text_lower = text.lower()
+        for pref_key, patterns in _FORK_RESPONSE_PATTERNS.items():
+            if any(_re.search(p, text_lower) for p in patterns):
+                db_service = get_shared_db_service()
+                trait_service = UserTraitService(db_service)
+                trait_service.store_trait(
+                    trait_key=pref_key,
+                    trait_value='true',
+                    confidence=0.75,
+                    category='micro_preference',
+                    source='explicit',
+                    is_literal=True,
+                )
+                logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")
+                # Clear the pending key
+                redis_conn.delete(f"adaptive_fork_pending:{thread_id}")
+                break
+    except Exception as e:
+        logging.debug(f"[DIGEST] Fork response detection failed: {e}")
+
+
+def _store_adaptive_signals(thread_id: str, text: str, signals: dict = None):
+    """
+    Store a minimal snapshot of current exchange signals to Redis for use by
+    AdaptiveLayerService (energy mirroring, cognitive load).
+
+    Key: adaptive_signals:{thread_id}, TTL: 300s
+    """
+    import json as _json
+    try:
+        from services.redis_client import RedisClientService
+        import re as _re
+
+        redis_conn = RedisClientService.create_connection()
+        snapshot = {
+            'prompt_token_count': len(text.split()) if text else 0,
+            'explicit_feedback': signals.get('explicit_feedback') if signals else None,
+        }
+        redis_conn.setex(
+            f"adaptive_signals:{thread_id}",
+            300,
+            _json.dumps(snapshot),
+        )
+    except Exception as e:
+        logging.debug(f"[DIGEST] Adaptive signal storage failed: {e}")
+
+
 def digest_worker(text: str, metadata: dict = None) -> str:
     """
     Main worker function that processes prompts through classification and response generation.
@@ -1753,6 +1826,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         communicate.record_user_interaction()
     except Exception:
         pass
+
+    # Step 3f: Detect fork responses and store adaptive signals
+    _detect_fork_response(text, thread_id)
+    _store_adaptive_signals(thread_id, text)
 
     # ═══════════════════════════════════════════════════════════
     # PHASE B: RETRIEVAL (context assembly)
@@ -2124,6 +2201,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 intent=intent,
             )
             _forced_signals['_prompt_text'] = text
+            # Update adaptive signals now that explicit_feedback is known
+            _store_adaptive_signals(thread_id, text, signals=_forced_signals)
             if triage_result.mode == 'ACKNOWLEDGE':
                 _forced_mode = 'ACKNOWLEDGE'
             elif triage_result.branch == 'clarify':

@@ -1,10 +1,11 @@
 """
 CommunicateAction — Decides whether a drift thought is worth sharing with the user.
 
-Three gates must pass:
+Four gates must pass:
   1. Quality gate: thought type, activation energy, topic relevance, novelty
   2. Timing gate: min/max idle, quiet hours, session requirement, activity histogram
   3. Engagement gate: one-at-a-time, rolling score, backoff, auto-pause, recovery
+  4. Cognitive load gate: holds back when user is showing high-load / disengagement signals
 
 When all gates pass, the thought is enqueued as a candidate. The best candidate
 is delivered through the full digest pipeline (mode router as final judge).
@@ -596,11 +597,34 @@ class CommunicateAction(AutonomousAction):
         logger.info(f"{LOG_PREFIX} Delivering deferred thought: [{best.get('type')}]")
         return best
 
+    # ── Gate 4: Cognitive load ────────────────────────────────────
+
+    def _cognitive_load_gate(self, thought: ThoughtContext) -> Tuple[bool, Dict]:
+        """
+        Block proactive delivery when user shows high cognitive load signals.
+
+        Estimates load from reply length trend in recent working memory.
+        If the last user reply is very short AND dropped sharply vs the prior
+        reply, the user is likely disengaging — hold off on proactive messages.
+        """
+        try:
+            wm = WorkingMemoryService(max_turns=4)
+            turns = wm.get_recent_turns(thought.seed_topic)
+            user_lengths = [len(t.get('content', '')) for t in (turns or [])
+                            if t.get('role', 'user') != 'assistant']
+            if len(user_lengths) >= 2:
+                last, prev = user_lengths[-1], user_lengths[-2]
+                if last < 25 and prev > 0 and (last / max(prev, 1)) < 0.3:
+                    return (False, {'load_state': 'HIGH', 'reason': 'declining_short_replies'})
+        except Exception:
+            pass
+        return (True, {'load_state': 'NORMAL'})
+
     # ── Main interface ────────────────────────────────────────────
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
         """
-        Evaluate all three gates. Returns (score, eligible).
+        Evaluate all four gates. Returns (score, eligible).
 
         Always records activation energy for self-calibration.
         If quality passes but timing/engagement don't, adds to candidate queue.
@@ -630,6 +654,13 @@ class CommunicateAction(AutonomousAction):
         engagement_passes, engagement_details = self._engagement_passes(thought)
         if not engagement_passes:
             # Quality + timing passed but engagement blocked — add to candidate queue
+            self._add_candidate(thought, quality_score)
+            return (0.0, False)
+
+        # Gate 4: Cognitive load — don't interrupt a disengaging user
+        load_passes, load_details = self._cognitive_load_gate(thought)
+        if not load_passes:
+            logger.debug(f"{LOG_PREFIX} Cognitive load gate blocked: {load_details}")
             self._add_candidate(thought, quality_score)
             return (0.0, False)
 

@@ -57,6 +57,7 @@ class ContextRelevanceService:
         'identity_modulation': 100,
         'onboarding_nudge': 80,
         'warm_return_hint': 80,
+        'adaptive_directives': 150,
     }
 
     def __init__(self, config_path: Optional[str] = None):

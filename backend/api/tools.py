@@ -4,7 +4,6 @@ Tools blueprint — /tools endpoints for listing tools and managing their config
 
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -60,7 +59,6 @@ def install_tool():
         # Get tools directory
         registry = ToolRegistryService()
         tools_dir = registry.tools_dir
-        tools_disabled_dir = tools_dir.parent / "tools_disabled"
 
         # Determine source: git URL or ZIP upload
         git_url = None
@@ -210,12 +208,6 @@ def install_tool():
                     "error": f"Tool '{tool_name}' already installed"
                 }), 409
 
-            if tools_disabled_dir.exists() and (tools_disabled_dir / tool_name).exists():
-                return jsonify({
-                    "ok": False,
-                    "error": f"Tool '{tool_name}' already exists (disabled)"
-                }), 409
-
             # Check if already installing
             if tool_name in registry.get_all_build_statuses():
                 return jsonify({
@@ -269,29 +261,25 @@ def disable_tool(tool_name: str):
     """
     try:
         from services.tool_registry_service import ToolRegistryService
+        from services.tool_config_service import ToolConfigService
+        from services.database_service import get_shared_db_service
 
         registry = ToolRegistryService()
         tools_dir = registry.tools_dir
-        tools_disabled_dir = tools_dir.parent / "tools_disabled"
 
         tool_path = tools_dir / tool_name
         if not tool_path.exists():
             return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
 
-        # Ensure tools_disabled directory exists
-        tools_disabled_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(tool_path / "manifest.json") as f:
+                actual_name = json.load(f).get("name", tool_name)
+        except Exception:
+            actual_name = tool_name
 
-        # Move to tools_disabled
-        disabled_path = tools_disabled_dir / tool_name
-        if disabled_path.exists():
-            shutil.rmtree(str(disabled_path))
-
-        os.rename(str(tool_path), str(disabled_path))
-        logger.info(f"[TOOLS API] Disabled tool: {tool_name}")
-
-        # Unregister from registry
-        registry.unregister_tool(tool_name)
-
+        ToolConfigService(get_shared_db_service())._set_enabled_flag(actual_name, enabled=False)
+        registry.unregister_tool(actual_name)
+        logger.info(f"[TOOLS API] Disabled tool: {actual_name}")
         return jsonify({"ok": True}), 200
 
     except Exception as e:
@@ -311,34 +299,34 @@ def enable_tool(tool_name: str):
     """
     try:
         from services.tool_registry_service import ToolRegistryService
+        from services.tool_config_service import ToolConfigService
+        from services.database_service import get_shared_db_service
 
         registry = ToolRegistryService()
         tools_dir = registry.tools_dir
-        tools_disabled_dir = tools_dir.parent / "tools_disabled"
 
-        disabled_path = tools_disabled_dir / tool_name
-        if not disabled_path.exists():
-            return jsonify({"error": f"Disabled tool '{tool_name}' not found"}), 404
-
-        # Move back to tools
         tool_path = tools_dir / tool_name
-        if tool_path.exists():
-            shutil.rmtree(str(tool_path))
+        if not tool_path.exists():
+            return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
 
-        os.rename(str(disabled_path), str(tool_path))
-        logger.info(f"[TOOLS API] Enabled tool: {tool_name}")
+        try:
+            with open(tool_path / "manifest.json") as f:
+                actual_name = json.load(f).get("name", tool_name)
+        except Exception:
+            actual_name = tool_name
 
-        # Trigger async rebuild
+        config_svc = ToolConfigService(get_shared_db_service())
+
+        if config_svc.is_tool_enabled(actual_name):
+            return jsonify({"error": f"Tool '{tool_name}' is not disabled"}), 400
+
+        config_svc._set_enabled_flag(actual_name, enabled=True)
+
         if not registry.register_tool_async(tool_path):
-            return jsonify({
-                "error": f"Tool '{tool_name}' is already being installed"
-            }), 409
+            return jsonify({"error": f"Tool '{tool_name}' is already being built"}), 409
 
-        return jsonify({
-            "ok": True,
-            "status": "building",
-            "tool_name": tool_name
-        }), 200
+        logger.info(f"[TOOLS API] Enabled tool: {actual_name}")
+        return jsonify({"ok": True, "status": "building", "tool_name": actual_name}), 200
 
     except Exception as e:
         logger.error(f"[TOOLS API] Enable error: {e}", exc_info=True)
@@ -375,7 +363,6 @@ def list_tools():
 
         registry = ToolRegistryService()
         tools_dir = registry.tools_dir
-        tools_disabled_dir = tools_dir.parent / "tools_disabled"
 
         # DB access is best-effort
         try:
@@ -429,7 +416,7 @@ def list_tools():
                 "category": manifest.get("category", ""),
                 "trigger_type": trigger.get("type", ""),
                 "status": status,
-                "config_keys": list(stored_config.keys()),
+                "config_keys": [k for k in stored_config.keys() if k not in ToolConfigService.RESERVED_KEYS],
                 "config_schema": config_schema_array,
                 "has_sandbox": bool(manifest.get("sandbox")),
                 "last_error": None,
@@ -483,88 +470,43 @@ def list_tools():
             })
             processed_names.add(name)
 
-        # 3. Disabled tools (in tools_disabled/)
-        if tools_disabled_dir.exists():
-            for tool_dir in sorted(tools_disabled_dir.iterdir()):
-                if not tool_dir.is_dir():
-                    continue
-                if tool_dir.name in processed_names:
-                    continue
-
-                name = tool_dir.name
-                manifest = {}
-                icon = "⚙"
-                description = ""
-                category = ""
-                config_schema = []
-
-                manifest_path = tool_dir / "manifest.json"
-                if manifest_path.exists():
-                    try:
-                        with open(manifest_path, "r") as f:
-                            manifest = json.load(f)
-                        icon = manifest.get("icon", "⚙")
-                        description = manifest.get("description", "")
-                        category = manifest.get("category", "")
-                        schema_dict = manifest.get("config_schema", {})
-                        # Handle array format
-                        if isinstance(schema_dict, list):
-                            schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
-                        config_schema = _normalize_config_schema(schema_dict)
-                    except Exception:
-                        pass
-
-                result.append({
-                    "name": name,
-                    "display_name": name.replace("_", " ").title(),
-                    "icon": icon,
-                    "description": description,
-                    "category": category,
-                    "trigger_type": manifest.get("trigger", {}).get("type", ""),
-                    "status": "disabled",
-                    "config_schema": config_schema,
-                    "last_error": None,
-                })
-                processed_names.add(name)
-
-        # 4. Filesystem scan for missed tools (safety net)
-        # Find any tools in tools/ that have manifest.json + Dockerfile but weren't processed
+        # 3. Filesystem scan: disabled tools + safety net for tools that failed to load
         if tools_dir.exists():
             for tool_dir in sorted(tools_dir.iterdir()):
-                if not tool_dir.is_dir():
-                    continue
-                if tool_dir.name in processed_names:
-                    continue
-                if tool_dir.name.startswith("_") or tool_dir.name.startswith("."):
+                if not tool_dir.is_dir() or tool_dir.name.startswith(("_", ".")):
                     continue
 
                 manifest_path = tool_dir / "manifest.json"
                 dockerfile_path = tool_dir / "Dockerfile"
-
-                # Only include if both manifest and Dockerfile exist
                 if not (manifest_path.exists() and dockerfile_path.exists()):
                     continue
-
-                name = tool_dir.name
-                manifest = {}
-                icon = "⚙"
-                description = ""
-                category = ""
-                config_schema = []
 
                 try:
                     with open(manifest_path, "r") as f:
                         manifest = json.load(f)
-                    icon = manifest.get("icon", "⚙")
-                    description = manifest.get("description", "")
-                    category = manifest.get("category", "")
-                    schema_dict = manifest.get("config_schema", {})
-                    # Handle array format
-                    if isinstance(schema_dict, list):
-                        schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
-                    config_schema = _normalize_config_schema(schema_dict)
+                    name = manifest.get("name", tool_dir.name)
                 except Exception:
-                    pass
+                    name = tool_dir.name
+                    manifest = {}
+
+                if name in processed_names:
+                    continue
+
+                stored_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
+                if stored_config.get("_enabled", "true").lower() == "false":
+                    status = "disabled"
+                    last_error = None
+                else:
+                    status = "error"
+                    last_error = "Tool failed to load at startup"
+
+                icon = manifest.get("icon", "⚙")
+                description = manifest.get("description", "")
+                category = manifest.get("category", "")
+                schema_dict = manifest.get("config_schema", {})
+                if isinstance(schema_dict, list):
+                    schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
+                config_schema = _normalize_config_schema(schema_dict)
 
                 result.append({
                     "name": name,
@@ -573,9 +515,9 @@ def list_tools():
                     "description": description,
                     "category": category,
                     "trigger_type": manifest.get("trigger", {}).get("type", ""),
-                    "status": "error",
+                    "status": status,
                     "config_schema": config_schema,
-                    "last_error": "Tool failed to load at startup",
+                    "last_error": last_error,
                 })
                 processed_names.add(name)
 
@@ -606,9 +548,11 @@ def get_tool_config(tool_name: str):
         db = get_shared_db_service()
         config = ToolConfigService(db).get_tool_config(tool_name)
 
-        # Mask secrets in response
+        # Mask secrets in response; filter internal reserved keys
         masked = {}
         for key, value in config.items():
+            if key in ToolConfigService.RESERVED_KEYS:
+                continue
             field_def = schema.get(key, {})
             masked[key] = "***" if field_def.get("secret", False) else value
 
@@ -670,7 +614,10 @@ def set_tool_config(tool_name: str):
             return jsonify({"error": "No config keys provided"}), 400
 
         db = get_shared_db_service()
-        saved = ToolConfigService(db).set_tool_config(tool_name, data)
+        try:
+            saved = ToolConfigService(db).set_tool_config(tool_name, data)
+        except ValueError as ve:
+            return jsonify({"error": str(ve)}), 400
 
         if not saved:
             logger.error(f"[REST API] ToolConfigService.set_tool_config returned False for {tool_name}")

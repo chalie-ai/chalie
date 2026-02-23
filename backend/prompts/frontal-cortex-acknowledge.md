@@ -12,6 +12,8 @@ Your task: give a brief, warm social acknowledgment. Keep it short and natural.
 
 {{communication_style}}
 
+{{adaptive_directives}}
+
 {{active_lists}}
 
 ## Client Context
