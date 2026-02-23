@@ -526,6 +526,136 @@ body {
   color: var(--text-secondary);
 }
 
+/* Blockquotes */
+.speech-form--chalie .speech-form__text blockquote {
+  margin: 0.75em 0;
+  padding: 0.6em 1em;
+  border-left: 3px solid rgba(138, 92, 255, 0.30);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.speech-form--chalie .speech-form__text blockquote p {
+  margin: 0;
+}
+
+/* Horizontal rules */
+.speech-form--chalie .speech-form__text hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  margin: 1em 0;
+}
+
+/* Tables */
+.speech-form--chalie .speech-form__text table {
+  display: block;
+  overflow-x: auto;
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75em 0;
+  font-size: 0.88em;
+}
+
+.speech-form--chalie .speech-form__text th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid rgba(138, 92, 255, 0.20);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.speech-form--chalie .speech-form__text td {
+  padding: 0.4em 0.75em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.speech-form--chalie .speech-form__text tr:last-child td {
+  border-bottom: none;
+}
+
+.speech-form--chalie .speech-form__text tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Strikethrough */
+.speech-form--chalie .speech-form__text del {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+/* Task lists (GFM checkboxes) */
+.speech-form--chalie .speech-form__text ul:has(> li > input[type="checkbox"]) {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 0.2em;
+}
+
+.speech-form--chalie .speech-form__text input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid rgba(255, 255, 255, 0.20);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.03);
+  vertical-align: middle;
+  margin-right: 0.5em;
+  position: relative;
+  top: -1px;
+  pointer-events: none;
+}
+
+.speech-form--chalie .speech-form__text input[type="checkbox"]:checked {
+  background: rgba(138, 92, 255, 0.25);
+  border-color: rgba(138, 92, 255, 0.50);
+}
+
+.speech-form--chalie .speech-form__text input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent-primary);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+/* Nested lists */
+.speech-form--chalie .speech-form__text li > ul,
+.speech-form--chalie .speech-form__text li > ol {
+  margin: 0.25rem 0 0.25rem 1.2em;
+}
+
+/* H4–H6 */
+.speech-form--chalie .speech-form__text h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.9em 0 0.4em;
+  color: var(--text-primary);
+  font-size: 0.90em;
+  letter-spacing: 0.01em;
+}
+
+.speech-form--chalie .speech-form__text h5,
+.speech-form--chalie .speech-form__text h6 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.8em 0 0.3em;
+  color: var(--text-secondary);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .speech-form__meta {
   display: flex;
   align-items: center;
