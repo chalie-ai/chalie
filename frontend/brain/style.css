@@ -299,10 +299,21 @@ body::before {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 14px 20px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 220ms ease;
+}
+
+.job-card:hover {
+    border-color: rgba(255, 255, 255, 0.10);
+}
+
+.job-card__top {
     display: flex;
     align-items: center;
     gap: 16px;
+    padding: 14px 20px;
 }
 
 .job-info {
@@ -384,6 +395,48 @@ body::before {
 
 .save-indicator.visible {
     opacity: 1;
+}
+
+.job-card__meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.job-meta-item {
+    font-size: 11px;
+    color: rgba(234, 230, 242, 0.45);
+    white-space: nowrap;
+}
+
+.job-meta-icon {
+    font-size: 10px;
+    opacity: 0.6;
+    margin-right: 3px;
+}
+
+.job-meta-sep {
+    width: 1px;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+}
+
+.job-strengths {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.job-strength {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(138, 92, 255, 0.06);
+    color: rgba(234, 230, 242, 0.50);
+    white-space: nowrap;
 }
 
 /* Modals */
@@ -1686,7 +1739,11 @@ body::before {
         padding: 20px 16px;
     }
 
-    .job-card {
+    .job-card__top {
+        flex-wrap: wrap;
+    }
+
+    .job-card__meta {
         flex-wrap: wrap;
     }
 

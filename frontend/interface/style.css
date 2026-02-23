@@ -429,8 +429,101 @@ body {
 }
 
 .speech-form__text {
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Scoped markdown styles — only inside Chalie messages */
+.speech-form--chalie .speech-form__text p {
+  margin: 0 0 0.75em;
+  line-height: var(--line-height);
+}
+
+.speech-form--chalie .speech-form__text p:last-child {
+  margin-bottom: 0;
+}
+
+.speech-form--chalie .speech-form__text h1,
+.speech-form--chalie .speech-form__text h2,
+.speech-form--chalie .speech-form__text h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.9em 0 0.4em;
+  color: var(--text-primary);
+}
+
+.speech-form--chalie .speech-form__text h1:first-child,
+.speech-form--chalie .speech-form__text h2:first-child,
+.speech-form--chalie .speech-form__text h3:first-child {
+  margin-top: 0;
+}
+
+.speech-form--chalie .speech-form__text h1 { font-size: 1.15em; }
+.speech-form--chalie .speech-form__text h2 { font-size: 1.05em; }
+.speech-form--chalie .speech-form__text h3 { font-size: 0.95em; letter-spacing: 0.01em; }
+
+.speech-form--chalie .speech-form__text ul,
+.speech-form--chalie .speech-form__text ol {
+  margin: 0.5em 0 0.75em 1.4em;
+  padding: 0;
+}
+
+.speech-form--chalie .speech-form__text ul { list-style: disc; }
+.speech-form--chalie .speech-form__text ol { list-style: decimal; }
+
+.speech-form--chalie .speech-form__text li {
+  margin-bottom: 0.25em;
+  line-height: var(--line-height);
+}
+
+.speech-form--chalie .speech-form__text code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.speech-form--chalie .speech-form__text pre {
+  margin: 0.75em 0;
+  padding: var(--space-md);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.speech-form--chalie .speech-form__text pre code {
+  font-size: 0.82em;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+}
+
+.speech-form--chalie .speech-form__text a {
+  color: var(--accent-primary);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(138, 92, 255, 0.30);
+  transition: color 220ms ease, border-color 220ms ease;
+}
+
+.speech-form--chalie .speech-form__text a:hover {
+  color: #9B6FFF;
+  border-bottom-color: rgba(138, 92, 255, 0.70);
+}
+
+.speech-form--chalie .speech-form__text strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.speech-form--chalie .speech-form__text em {
+  font-style: italic;
+  color: var(--text-secondary);
 }
 
 .speech-form__meta {
