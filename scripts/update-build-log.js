@@ -116,7 +116,7 @@ async function callClaude(payload) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.CLAUDE_CODE_OAUTH_TOKEN}`,
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       }
     };
