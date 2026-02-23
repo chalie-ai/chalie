@@ -323,65 +323,77 @@ if __name__ == "__main__":
         logging.warning(f"[System] Embedding model preload failed: {e}")
         logging.warning("[System] Continuing without preload (will load on first embedding request)")
 
-    # 5.5. INITIALIZE EPISODIC MEMORY DATABASE
-    # Check if episodic memory database exists, create if not
-    try:
-        logging.debug("Checking episodic memory database...")
-        from services.database_service import get_merged_db_config
+    # 5.5. INITIALIZE DATABASE
+    # Wait for postgres to be ready, then create database and schema if needed.
+    # This is FATAL — the app cannot function without a database.
+    import time
+    from services.database_service import get_merged_db_config
 
-        # Get merged database config (connections.json overrides episodic-memory.json)
-        db_config = get_merged_db_config()
-        episodic_config = ConfigService.resolve_agent_config("episodic-memory")
+    db_config = get_merged_db_config()
+    episodic_config = ConfigService.resolve_agent_config("episodic-memory")
 
-        # Create database service for admin connection
-        admin_config = db_config.copy()
-        admin_db = admin_config.pop('database')
-        admin_config['database'] = 'postgres'
+    # Create database service for admin connection
+    admin_config = db_config.copy()
+    admin_db = admin_config.pop('database')
+    admin_config['database'] = 'postgres'
 
-        admin_database_service = DatabaseService(admin_config)
-        embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
-        schema_service = SchemaService(admin_database_service, embedding_dimensions)
-
-        # Check if database exists
-        if not schema_service.database_exists(admin_db):
-            logging.info(f"Database '{admin_db}' does not exist, creating...")
-            schema_service.create_database(admin_db)
-            logging.info(f"✓ Database '{admin_db}' created")
-        else:
-            logging.info(f"✓ Database '{admin_db}' exists")
-
-        # Connect to the actual database
-        database_service = DatabaseService(db_config)
-        schema_service = SchemaService(database_service, embedding_dimensions)
-
-        # Initialize schema (idempotent)
-        current_version = schema_service.schema_version()
-        if current_version == 0:
-            logging.info("Initializing episodic memory schema...")
-            schema_service.initialize_schema()
-            logging.info("✓ Schema initialized")
-        else:
-            logging.info(f"✓ Schema up to date (version {current_version})")
-
-        # Run pending migrations
-        logging.info("Checking for pending database migrations...")
-        database_service.run_pending_migrations()
-
-        # Initialize API key in settings table (auto-generate if not present)
+    # Wait for postgres to accept connections (up to 30s)
+    max_retries = 15
+    for attempt in range(1, max_retries + 1):
         try:
-            from services.settings_service import SettingsService
-            settings_service = SettingsService(database_service)
-            api_key = settings_service.get_api_key_or_generate()
-            logging.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
+            admin_database_service = DatabaseService(admin_config)
+            with admin_database_service.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+            logging.info(f"[DB] Postgres is ready (attempt {attempt}/{max_retries})")
+            break
         except Exception as e:
-            logging.warning(f"Settings initialization failed: {e}")
+            if attempt == max_retries:
+                logging.error(f"[DB] Postgres not reachable after {max_retries} attempts: {e}")
+                raise SystemExit(1)
+            logging.warning(f"[DB] Waiting for postgres (attempt {attempt}/{max_retries}): {e}")
+            time.sleep(2)
 
-        database_service.close_pool()
-        admin_database_service.close_pool()
+    embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
+    schema_service = SchemaService(admin_database_service, embedding_dimensions)
 
+    # Check if database exists
+    if not schema_service.database_exists(admin_db):
+        logging.info(f"Database '{admin_db}' does not exist, creating...")
+        schema_service.create_database(admin_db)
+        logging.info(f"✓ Database '{admin_db}' created")
+    else:
+        logging.info(f"✓ Database '{admin_db}' exists")
+
+    # Connect to the actual database
+    database_service = DatabaseService(db_config)
+    schema_service = SchemaService(database_service, embedding_dimensions)
+
+    # Initialize schema (idempotent)
+    current_version = schema_service.schema_version()
+    if current_version == 0:
+        logging.info("Initializing episodic memory schema...")
+        schema_service.initialize_schema()
+        logging.info("✓ Schema initialized")
+    else:
+        logging.info(f"✓ Schema up to date (version {current_version})")
+
+    # Run pending migrations
+    logging.info("Checking for pending database migrations...")
+    database_service.run_pending_migrations()
+
+    # Initialize API key in settings table (auto-generate if not present)
+    try:
+        from services.settings_service import SettingsService
+        settings_service = SettingsService(database_service)
+        api_key = settings_service.get_api_key_or_generate()
+        logging.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
     except Exception as e:
-        logging.warning(f"Episodic memory initialization failed: {e}")
-        logging.warning("Continuing without episodic memory...")
+        logging.warning(f"Settings initialization failed: {e}")
+
+    database_service.close_pool()
+    admin_database_service.close_pool()
 
     # Initialize and run
     manager = WorkerManager()
