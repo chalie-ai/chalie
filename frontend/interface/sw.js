@@ -3,7 +3,7 @@
  */
 
 // Cache version: use deploy date for easy debugging (bump on each release)
-const CACHE_VERSION = '2026.02.19';
+const CACHE_VERSION = '2026.02.23';
 const SHELL_CACHE = `chalie-shell-${CACHE_VERSION}`;
 const CDN_CACHE = `chalie-cdn-${CACHE_VERSION}`;
 
@@ -11,6 +11,7 @@ const SHELL_ASSETS = [
   '/', '/index.html', '/manifest.json',
   '/app.js', '/api.js', '/sse.js', '/renderer.js',
   '/presence.js', '/voice.js', '/tools.js', '/style.css',
+  '/markdown.js', '/lib/marked.esm.js',
   '/icons/icon.png',
   '/cards/base.js', '/cards/memory.js', '/cards/timeline.js',
   '/cards/reminders.js', '/cards/weather.js', '/cards/digest.js',
