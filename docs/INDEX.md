@@ -12,6 +12,9 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 **Setting up Chalie for the first time?** Follow these guides in order:
 1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini)
 
+**Running multiple instances on the same host?**
+- **[11-MULTI-INSTANCE-SETUP.md](11-MULTI-INSTANCE-SETUP.md)** — Configure PORT and COMPOSE_PROJECT_NAME for parallel stacks
+
 ## Understanding the System
 
 **Want to understand how Chalie works?** Read these in order:
@@ -60,14 +63,15 @@ docs/
 ├── 07-COGNITIVE-ARCHITECTURE.md      ← Mode router & cognition
 ├── 08-DATA-SCHEMAS.md                ← Data structures
 ├── 09-TOOLS.md                       ← Tools system & creation guide
-└── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
+├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
+└── 11-MULTI-INSTANCE-SETUP.md        ← Running multiple instances on one host
 ```
 
 ### Important Project Files (Not in docs/)
 - **`CLAUDE.md`** — Project instructions for Claude Code (development guidance)
 - **`README.md`** — Root-level project overview (mirrors 01-QUICK-START.md)
-- **`docker-compose.yml`** — Service definitions and port mappings
-- **`.env.example`** — Configuration template with defaults
+- **`docker-compose.yml`** — Service definitions and port mappings (supports PORT variable for multi-instance)
+- **`.env.example`** — Configuration template with defaults (PORT, POSTGRES_PASSWORD, SESSION_SECRET_KEY, COOKIE_SECURE)
 
 ### Key Directories
 - **`backend/`** — Python backend (services, workers, API, configs, migrations)
