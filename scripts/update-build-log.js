@@ -106,25 +106,76 @@ function formatCommitsForPrompt(commits) {
     .join('\n\n');
 }
 
-async function callClaude(systemPrompt, userPrompt) {
+async function callGemini(systemPrompt, userPrompt) {
+  const https = require('https');
+
   return new Promise((resolve, reject) => {
-    const prompt = `${systemPrompt}\n\nUser: ${userPrompt}`;
+    const apiKey = process.env.GEMINI_API_KEY;
+    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
-    try {
-      const result = execSync(
-        `echo ${JSON.stringify(prompt).replace(/"/g, '\\"')} | claude --model claude-haiku-4-5-20251001 --raw-output`,
-        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      try {
-        const parsed = JSON.parse(result.trim());
-        resolve(parsed);
-      } catch (e) {
-        reject(new Error(`Failed to parse Claude response: ${e.message}\nResponse: ${result}`));
-      }
-    } catch (error) {
-      reject(new Error(`Claude CLI error: ${error.message}`));
+    if (!apiKey) {
+      return reject(new Error('GEMINI_API_KEY environment variable not set'));
     }
+
+    const payload = JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: userPrompt
+            }
+          ]
+        }
+      ],
+      system_instruction: {
+        parts: [
+          {
+            text: systemPrompt
+          }
+        ]
+      }
+    });
+
+    const options = {
+      hostname: 'generativelanguage.googleapis.com',
+      port: 443,
+      path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': payload.length
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try {
+            const response = JSON.parse(data);
+            const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (!text) {
+              return reject(new Error('No text in Gemini response'));
+            }
+            const parsed = JSON.parse(text);
+            resolve(parsed);
+          } catch (e) {
+            reject(new Error(`Failed to parse response: ${e.message}`));
+          }
+        } else {
+          reject(new Error(`API error ${res.statusCode}: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
   });
 }
 
@@ -152,11 +203,11 @@ ${commitsText}`;
   // Retry once on failure
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await callClaude(systemPrompt, userPrompt);
+      const response = await callGemini(systemPrompt, userPrompt);
       return response;
     } catch (error) {
       if (attempt === 0) {
-        console.log('Claude API call failed, retrying...');
+        console.log('Gemini API call failed, retrying...');
         // Wait a bit before retry
         await new Promise(resolve => setTimeout(resolve, 1000));
       } else {
