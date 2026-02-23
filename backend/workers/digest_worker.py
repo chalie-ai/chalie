@@ -314,7 +314,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     return response_data
 
 
-def generate_with_act_loop(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map, mode_router, signals, metadata=None, context_warmth=1.0, relevant_tools=None, selected_tools=None, thread_id=None):
+def generate_with_act_loop(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map, mode_router, signals, metadata=None, context_warmth=1.0, relevant_tools=None, selected_tools=None, selected_skills=None, thread_id=None):
     """
     Run ACT loop: execute actions, then re-route to terminal mode for response.
 
@@ -414,6 +414,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
             act_history=act_loop.get_history_context(),
             relevant_tools=relevant_tools,
             selected_tools=selected_tools,
+            selected_skills=selected_skills,
             inclusion_map=act_inclusion_map,
             assembled_context=assembled_context,
         )
@@ -559,8 +560,8 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
 
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, fact_store, metadata=None, context_warmth=1.0,
-                       pre_routing_result=None, relevant_tools=None, selected_tools=None, thread_id=None,
-                       returning_from_silence=False):
+                       pre_routing_result=None, relevant_tools=None, selected_tools=None,
+                       selected_skills=None, thread_id=None, returning_from_silence=False):
     """
     Main routing + generation function.
 
@@ -629,6 +630,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             metadata=metadata, context_warmth=context_warmth,
             relevant_tools=relevant_tools,
             selected_tools=selected_tools,
+            selected_skills=selected_skills,
             thread_id=thread_id,
         )
     elif selected_mode == 'IGNORE':
@@ -1466,6 +1468,7 @@ def _handle_act_triage(
                 'tool_hints': triage_result.tools,
                 'relevant_tools': _relevant_for_worker,
                 'triage_selected_tools': triage_result.tools,
+                'triage_selected_skills': triage_result.skills,
                 'exchange_id': exchange_id,
             },
         })
@@ -2133,6 +2136,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 metadata=metadata, context_warmth=context_warmth,
                 pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal},
                 selected_tools=triage_result.tools if triage_result.tools else None,
+                selected_skills=triage_result.skills if triage_result.skills else None,
                 thread_id=thread_id,
                 returning_from_silence=returning_from_silence,
             )

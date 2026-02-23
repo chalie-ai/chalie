@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[TRIAGE]"
 
+# Cognitive primitives — always selected for ACT regardless of prompt compliance
+_PRIMITIVES = ['recall', 'memorize', 'introspect']
+_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'goal', 'focus', 'autobiography'}
+MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
+
 # Innate action skill patterns — ACT is required even when no external tool is listed
 _INNATE_ACTION_PATTERNS = re.compile(
     r'\b(remind\s+me|set\s+(a\s+)?(reminder|alarm|schedule)|schedule\s+(a\s+)?(reminder|task|message)|'
@@ -92,6 +97,7 @@ class TriageResult:
     branch: str                   # 'social' | 'respond' | 'clarify' | 'act'
     mode: str                     # 'ACKNOWLEDGE' | 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'
     tools: List[str]              # tool names, only meaningful for ACT
+    skills: List[str]             # innate skill names selected for ACT
     confidence_internal: float    # 0-1: confidence memory is sufficient
     confidence_tool_need: float   # 0-1: confidence external tools required
     freshness_risk: float         # 0-1: risk answer needs recent/real-time data
@@ -156,6 +162,7 @@ class CognitiveTriageService:
             branch='social',
             mode=mode,
             tools=[],
+            skills=[],
             confidence_internal=1.0,
             confidence_tool_need=0.0,
             freshness_risk=0.0,
@@ -200,10 +207,35 @@ class CognitiveTriageService:
 
             branch = self._mode_to_branch(mode)
 
+            # Parse and validate skills
+            raw_skills = data.get('skills', [])
+            if isinstance(raw_skills, str):
+                raw_skills = [raw_skills] if raw_skills else []
+
+            # Whitelist filter — drop hallucinated or misspelled names
+            skills = [s for s in raw_skills if isinstance(s, str) and s in _VALID_SKILLS]
+
+            # De-duplicate while preserving first-seen order
+            skills = list(dict.fromkeys(skills))
+
+            # Enforce cognitive primitives for ACT — do not rely on prompt compliance alone
+            if mode == 'ACT':
+                for p in reversed(_PRIMITIVES):
+                    if p not in skills:
+                        skills.insert(0, p)
+
+            # Canonical ordering — primitives first, contextual sorted and capped
+            primitives_in = [s for s in _PRIMITIVES if s in skills]
+            contextual = sorted(s for s in skills if s not in _PRIMITIVES)[:MAX_CONTEXTUAL_SKILLS]
+            skills = primitives_in + contextual
+
+            logger.info(f"{LOG_PREFIX} mode={mode} tools={[t for t in tools if isinstance(t, str)]} skills={skills}")
+
             return TriageResult(
                 branch=branch,
                 mode=mode,
                 tools=[t for t in tools if isinstance(t, str)],
+                skills=skills,
                 confidence_internal=min(1.0, max(0.0, confidence_internal)),
                 confidence_tool_need=min(1.0, max(0.0, confidence_tool_need)),
                 freshness_risk=min(1.0, max(0.0, freshness_risk)),
@@ -247,6 +279,7 @@ class CognitiveTriageService:
             branch=branch,
             mode=mode,
             tools=[],
+            skills=list(_PRIMITIVES) if branch == 'act' else [],
             confidence_internal=0.3 if branch == 'act' else 0.6,
             confidence_tool_need=0.8 if branch == 'act' else 0.2,
             freshness_risk=freshness,
@@ -276,6 +309,9 @@ class CognitiveTriageService:
         if result.branch == 'act' and not result.tools:
             if _INNATE_ACTION_PATTERNS.search(text):
                 # Innate action skill (schedule/list/goal) — no external tool needed, keep ACT
+                # Ensure primitives are present (may arrive here from heuristic_fallback)
+                if not result.skills:
+                    result.skills = list(_PRIMITIVES)
                 result.self_eval_override = True
                 result.self_eval_reason = 'act_innate_skill'
             else:
@@ -297,6 +333,15 @@ class CognitiveTriageService:
             result.tools = []
             result.self_eval_override = True
             result.self_eval_reason = 'act_innate_skill_failsafe'
+            # Ensure primitives + detect likely contextual skill from keyword match
+            if not result.skills:
+                result.skills = list(_PRIMITIVES)
+            lower = text.lower()
+            if not any(s for s in result.skills if s not in _PRIMITIVES):
+                if any(w in lower for w in ['remind', 'schedule', 'alarm', 'every morning', 'every day']):
+                    result.skills.append('schedule')
+                elif any(w in lower for w in ['add to', 'remove from', 'my list', 'shopping']):
+                    result.skills.append('list')
 
         # Rule 2: RESPOND on high-freshness question → escalate to ACT
         # Freshness risk alone is sufficient — if the answer requires live data, use tools.
@@ -306,6 +351,8 @@ class CognitiveTriageService:
                 and ctx.tool_summaries):
             result.branch = 'act'
             result.mode = 'ACT'
+            if not result.skills:
+                result.skills = list(_PRIMITIVES)
             result.self_eval_override = True
             result.self_eval_reason = 'act_failsafe'
 

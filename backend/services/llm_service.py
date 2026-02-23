@@ -342,19 +342,21 @@ class GeminiService:
         if stream:
             raise NotImplementedError("Streaming not yet supported")
 
-        import google.generativeai as genai
+        from google import genai
 
         api_key = _resolve_api_key(self._config)
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name=self.model,
-            system_instruction=system_prompt,
-        )
+        client = genai.Client(api_key=api_key)
 
         start_time = time.time()
 
         def _call():
-            return model.generate_content(user_message)
+            return client.models.generate_content(
+                model=self.model,
+                contents=user_message,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                ),
+            )
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)

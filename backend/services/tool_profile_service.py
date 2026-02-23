@@ -19,19 +19,12 @@ import hashlib
 import json
 import logging
 import time
+from collections import defaultdict
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[TOOL PROFILE]"
-
-# Domain grouping for triage prompt injection
-TOOL_DOMAINS = {
-    "Information Retrieval": ["duckduckgo_search", "web_read", "youtube", "tmdb_search", "tmdb_recommend", "reddit_digest", "reddit_monitor"],
-    "Environment & Location": ["weather", "geo_location", "date_time"],
-    "Communication": ["telegram"],
-    "System & Automation": ["ssh", "is_it_down"],
-}
 
 # Innate skill descriptions
 SKILL_DESCRIPTIONS = {
@@ -141,8 +134,8 @@ class ToolProfileService:
                 """
                 INSERT INTO tool_capability_profiles
                     (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                     anti_scenarios, complementary_skills, embedding, manifest_hash, updated_at)
-                VALUES (%s, 'tool', %s, %s, %s, %s, %s, %s, %s, NOW())
+                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain, updated_at)
+                VALUES (%s, 'tool', %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (tool_name) DO UPDATE SET
                     tool_type = 'tool',
                     short_summary = EXCLUDED.short_summary,
@@ -152,6 +145,7 @@ class ToolProfileService:
                     complementary_skills = EXCLUDED.complementary_skills,
                     embedding = EXCLUDED.embedding,
                     manifest_hash = EXCLUDED.manifest_hash,
+                    domain = EXCLUDED.domain,
                     updated_at = NOW()
                 """,
                 (
@@ -163,6 +157,7 @@ class ToolProfileService:
                     json.dumps(profile_data.get('complementary_skills', [])),
                     embedding_str,
                     manifest_hash,
+                    profile_data.get('domain', 'Other'),
                 )
             )
             logger.info(f"{LOG_PREFIX} Upserted profile for {tool_name}")
@@ -232,8 +227,8 @@ class ToolProfileService:
                 """
                 INSERT INTO tool_capability_profiles
                     (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                     anti_scenarios, complementary_skills, embedding, manifest_hash, updated_at)
-                VALUES (%s, 'skill', %s, %s, %s, %s, %s, %s, %s, NOW())
+                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain, updated_at)
+                VALUES (%s, 'skill', %s, %s, %s, %s, %s, %s, %s, 'Innate Skill', NOW())
                 ON CONFLICT (tool_name) DO UPDATE SET
                     tool_type = 'skill',
                     short_summary = EXCLUDED.short_summary,
@@ -243,6 +238,7 @@ class ToolProfileService:
                     complementary_skills = EXCLUDED.complementary_skills,
                     embedding = EXCLUDED.embedding,
                     manifest_hash = EXCLUDED.manifest_hash,
+                    domain = EXCLUDED.domain,
                     updated_at = NOW()
                 """,
                 (
@@ -409,11 +405,11 @@ class ToolProfileService:
         return summaries
 
     def _build_triage_summaries(self) -> str:
-        """Build domain-grouped tool summaries from profiles table."""
+        """Build domain-grouped tool summaries from profiles table (DB-driven, tool-agnostic)."""
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary FROM tool_capability_profiles ORDER BY tool_name"
+                "SELECT tool_name, tool_type, short_summary, domain FROM tool_capability_profiles ORDER BY domain, tool_name"
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to fetch profiles: {e}")
@@ -425,33 +421,20 @@ class ToolProfileService:
         if not rows:
             return ""
 
-        # Build lookup
-        profile_map = {r['tool_name']: r['short_summary'] for r in rows}
-        tool_types = {r['tool_name']: r['tool_type'] for r in rows}
-
         # Filter to only external tools (skills are always available, not listed in triage)
-        tool_rows = {name: summary for name, summary in profile_map.items() if tool_types.get(name) == 'tool'}
+        by_domain = defaultdict(list)
+        for r in rows:
+            if r['tool_type'] == 'tool':
+                domain = r.get('domain') or 'Other'
+                by_domain[domain].append(f"- {r['tool_name']}: {r['short_summary']}")
+
+        if not by_domain:
+            return ""
 
         lines = []
-        placed = set()
-
-        for domain, tool_names in TOOL_DOMAINS.items():
-            domain_lines = []
-            for tool_name in tool_names:
-                if tool_name in tool_rows:
-                    domain_lines.append(f"- {tool_name}: {tool_rows[tool_name]}")
-                    placed.add(tool_name)
-            if domain_lines:
-                lines.append(f"## {domain}")
-                lines.extend(domain_lines)
-                lines.append("")
-
-        # Undomained tools
-        undomained = [(name, summary) for name, summary in tool_rows.items() if name not in placed]
-        if undomained:
-            lines.append("## Other")
-            for name, summary in undomained:
-                lines.append(f"- {name}: {summary}")
+        for domain in sorted(by_domain.keys()):
+            lines.append(f"## {domain}")
+            lines.extend(by_domain[domain])
             lines.append("")
 
         return "\n".join(lines).strip()
@@ -549,7 +532,13 @@ class ToolProfileService:
                 if self.check_staleness(skill_name, manifest_hash):
                     self.build_skill_profile(skill_name, skill_desc)
                 else:
-                    logger.debug(f"{LOG_PREFIX} Skill {skill_name} profile is current")
+                    # Rebuild if domain column was added but not yet populated
+                    profile = self.get_full_profile(skill_name)
+                    if profile and not profile.get('domain'):
+                        logger.info(f"{LOG_PREFIX} Rebuilding skill {skill_name} profile (missing domain)")
+                        self.build_skill_profile(skill_name, skill_desc)
+                    else:
+                        logger.debug(f"{LOG_PREFIX} Skill {skill_name} profile is current")
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} Bootstrap failed for skill {skill_name}: {e}")
 
@@ -564,7 +553,13 @@ class ToolProfileService:
                     if self.check_staleness(tool_name, current_hash):
                         self.build_profile(tool_name, manifest)
                     else:
-                        logger.debug(f"{LOG_PREFIX} Tool {tool_name} profile is current")
+                        # Rebuild if domain column was added but not yet populated
+                        profile = self.get_full_profile(tool_name)
+                        if profile and not profile.get('domain'):
+                            logger.info(f"{LOG_PREFIX} Rebuilding tool {tool_name} profile (missing domain)")
+                            self.build_profile(tool_name, manifest)
+                        else:
+                            logger.debug(f"{LOG_PREFIX} Tool {tool_name} profile is current")
                 except Exception as e:
                     logger.warning(f"{LOG_PREFIX} Bootstrap failed for tool {tool_name}: {e}")
         except Exception as e:

@@ -112,7 +112,7 @@ class TestSelfEvalRules:
         )
         defaults.update(kwargs)
         return TriageResult(
-            branch=branch, mode=mode, tools=tools or [], **defaults
+            branch=branch, mode=mode, tools=tools or [], skills=[], **defaults
         )
 
     def _make_context(self, **kwargs):
@@ -135,7 +135,8 @@ class TestSelfEvalRules:
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         result = self._make_result('act', 'ACT', tools=[])
-        ctx = self._make_context()
+        # Empty tool_summaries so _pick_default_tool returns '' → triggers downgrade
+        ctx = self._make_context(tool_summaries='')
         result = svc._self_evaluate(result, "search for something", ctx)
         assert result.branch == 'respond'
         assert result.mode == 'RESPOND'
@@ -331,7 +332,8 @@ class TestTriageFull:
 
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
-        ctx = self._make_context()
+        # Empty tool_summaries so _pick_default_tool returns '' → downgrade fires
+        ctx = self._make_context(tool_summaries='')
         result = svc.triage("do something external", ctx)
         assert result.branch == 'respond'  # Downgraded by self-eval
         assert result.self_eval_override is True
