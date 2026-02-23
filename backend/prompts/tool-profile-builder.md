@@ -9,7 +9,8 @@ You are analyzing a tool to build its capability profile.
 Generate JSON with exactly these fields:
 {
   "short_summary": "One sentence (max 100 chars) describing what this tool does",
-  "full_profile": "2-3 paragraphs: what it does, when useful, key limitations",
+  "domain": "Broad category — choose the best fit: Information Retrieval | Environment & Location | Communication | System & Automation | Entertainment & Media | Productivity | Other",
+  "full_profile": "2-3 paragraphs: what it does, when useful, key limitations. End with a one-line invocation example: Invoke as: {\"type\": \"<tool_name_from_manifest>\", \"<primary_param>\": \"example value\"}",
   "usage_scenarios": ["50 specific user messages where this tool is the right choice"],
   "anti_scenarios": ["Specific examples of when NOT to use this tool"],
   "complementary_skills": ["skill names that work well alongside this tool"]
@@ -23,5 +24,8 @@ Think exhaustively about usage_scenarios. Include:
 - Cross-domain scenarios ("planning a trip" → weather + search + schedule)
 - Paraphrased versions of the same need (users phrase things many ways)
 - Questions that imply real-time data needs
+
+For the invocation example at the end of full_profile: use the exact tool name from the manifest's "name" field and the most important parameter name from "parameters". Example format:
+Invoke as: {"type": "weather", "location": "London"}
 
 Return only valid JSON, no markdown fences, no commentary.

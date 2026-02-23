@@ -109,6 +109,7 @@ class FrontalCortexService:
         assembled_context: dict = None,
         relevant_tools: list = None,
         selected_tools: list = None,
+        selected_skills: list = None,
         thread_id: str = None,
         returning_from_silence: bool = False,
         inclusion_map: dict = None,
@@ -144,6 +145,7 @@ class FrontalCortexService:
             assembled_context=assembled_context,
             relevant_tools=relevant_tools,
             selected_tools=selected_tools,
+            selected_skills=selected_skills,
             thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             inclusion_map=inclusion_map,
@@ -260,6 +262,7 @@ class FrontalCortexService:
         assembled_context: dict = None,
         relevant_tools: list = None,
         selected_tools: list = None,
+        selected_skills: list = None,
         thread_id: str = None,
         returning_from_silence: bool = False,
         inclusion_map: dict = None,
@@ -308,12 +311,16 @@ class FrontalCortexService:
         result = result.replace('{{facts}}', facts_context if _include('facts') else '')
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 
-        # Get available skills (only if included)
-        if _include('available_skills'):
-            available_skills = self._get_available_skills()
-        else:
-            available_skills = ''
-        result = result.replace('{{available_skills}}', available_skills)
+        # Template integrity guard — warn when skills were selected but template has no placeholder
+        if selected_skills and '{{injected_skills}}' not in template:
+            logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")
+
+        # Inject selected skill docs — always replace placeholder; empty string when no skills selected
+        injected_skills = self._get_injected_skills(selected_skills or [])
+        result = result.replace('{{injected_skills}}', injected_skills)
+
+        # Legacy {{available_skills}} — removed from ACT template; kept as no-op for other templates
+        result = result.replace('{{available_skills}}', '')
 
         # Available tools (dynamic, from tool registry — filtered when selected_tools or relevant_tools provided)
         if _include('available_tools'):
@@ -723,6 +730,33 @@ class FrontalCortexService:
             logging.debug(f"Client context not available: {e}")
             return ""
 
+    def _get_injected_skills(self, skills: list) -> str:
+        """
+        Load skill doc files for the selected skills and concatenate them.
+
+        Each skill maps to backend/prompts/skills/{skill}.md. Missing files are
+        logged as warnings but do not raise — the prompt continues without them.
+
+        Args:
+            skills: List of innate skill names (e.g. ['recall', 'memorize', 'schedule'])
+
+        Returns:
+            str: Concatenated skill docs separated by double newlines, or '' if empty.
+        """
+        if not skills:
+            return ''
+        import os
+        skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts', 'skills')
+        parts = []
+        for skill in skills:
+            path = os.path.join(skills_dir, f'{skill}.md')
+            try:
+                with open(path) as f:
+                    parts.append(f.read())
+            except FileNotFoundError:
+                logging.warning(f"[FRONTAL CORTEX] No skill doc file for '{skill}' at {path}")
+        return '\n\n'.join(parts)
+
     def _get_available_skills(self) -> str:
         """
         Get available innate skills from the dispatcher for prompt injection.
@@ -768,7 +802,7 @@ class FrontalCortexService:
                 ][:5]
 
             if tool_names:
-                # Try to get rich profiles first
+                # Try to get rich profiles first (inject full_profile for triage-selected tools)
                 try:
                     from services.tool_profile_service import ToolProfileService
                     profiles = ToolProfileService().get_profiles_for_tools(tool_names)
@@ -776,9 +810,9 @@ class FrontalCortexService:
                         lines = []
                         for p in profiles:
                             name = p.get('tool_name', '')
-                            summary = p.get('short_summary', '')
-                            lines.append(f"- {name}: {summary}")
-                        return "\n".join(lines)
+                            full_profile = p.get('full_profile', '') or p.get('short_summary', '')
+                            lines.append(f"### {name}\n{full_profile}")
+                        return "\n\n".join(lines)
                 except Exception:
                     pass
 

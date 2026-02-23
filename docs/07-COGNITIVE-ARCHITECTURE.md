@@ -217,14 +217,27 @@ Used for: offline tuning, detecting unstable routing regions, hysteresis trigger
 
 The ACT loop executes internal actions with safety limits. No decision gate or net value evaluation — the router already decided this is an ACT situation.
 
+### Triage-Driven Skill Injection
+
+The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder. The `CognitiveTriageService` decides which of the 9 innate skills to inject into each ACT prompt — only the relevant skill docs are included, reducing prompt size significantly.
+
+**Cognitive primitives** (`recall`, `memorize`, `introspect`) are always injected for ACT regardless of triage output. Up to 3 contextual skills are added based on triage reasoning.
+
+**Skill doc files** live in `backend/prompts/skills/{skill}.md` — one file per skill. `FrontalCortexService._get_injected_skills()` loads only the selected files at call time.
+
+**Triage output** (JSON field `"skills": [...]`) is validated through a whitelist (`_VALID_SKILLS`), deduplicated, primitives enforced, and contextual skills sorted and capped at `MAX_CONTEXTUAL_SKILLS = 3`. The result flows from `CognitiveTriageService` → `TriageResult.skills` → `context_snapshot['triage_selected_skills']` → `tool_worker` / `generate_with_act_loop` → `FrontalCortexService.generate_response(selected_skills=...)`.
+
+**Token impact:** ACT static template ~300 tokens (was ~2,787). Typical ACT call injects ~300–550 tokens of skill docs (4 files) vs. ~1,200 tokens always before.
+
 ### Flow
 1. Router selects ACT mode
-2. LLM generates actions via `frontal-cortex-act.md` (action planning only)
-3. Execute actions, append results to history
-4. Check continuation: timeout or max_iterations (default 5) → stop
-5. Otherwise loop (LLM re-plans with action results in context)
-6. After loop ends → **re-route** through router (excluding ACT) → terminal mode
-7. Generate terminal response via `generate_for_mode()`
+2. Triage selects skills (primitives + contextual); injected into `frontal-cortex-act.md` via `{{injected_skills}}`
+3. LLM generates actions via `frontal-cortex-act.md` (action planning only)
+4. Execute actions, append results to history
+5. Check continuation: timeout or max_iterations (default 5) → stop
+6. Otherwise loop (LLM re-plans with action results in context)
+7. After loop ends → **re-route** through router (excluding ACT) → terminal mode
+8. Generate terminal response via `generate_for_mode()`
 
 ### Continuation Check (Simplified)
 ```python

@@ -173,6 +173,9 @@ def tool_worker(job_data: dict) -> str:
         # Relevant tools from embedding-based scoring (passed from digest_worker)
         relevant_tools = context_snapshot.get('relevant_tools', None) or None
 
+        # Triage-selected innate skills (passed from digest_worker via context_snapshot)
+        selected_skills = context_snapshot.get('triage_selected_skills', None) or None
+
         # Repetition similarity threshold for embedding-based dedup
         repetition_sim_threshold = cortex_config.get('act_repetition_similarity_threshold', 0.85)
 
@@ -235,6 +238,7 @@ def tool_worker(job_data: dict) -> str:
                 chat_history=chat_history,
                 act_history=act_loop.get_history_context(),
                 relevant_tools=relevant_tools,
+                selected_skills=selected_skills,
                 assembled_context=assembled_context,
                 inclusion_map=inclusion_map,
             )
