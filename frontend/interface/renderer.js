@@ -1,6 +1,7 @@
 /**
  * Conversation spine DOM renderer.
  */
+import { parseMarkdown } from './markdown.js';
 
 const SPEAK_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
   <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
@@ -56,7 +57,7 @@ export class Renderer {
   appendChalieForm(text, meta = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.textContent = text;
+    textEl.innerHTML = parseMarkdown(text);
     el.appendChild(textEl);
 
     const metaRow = this._buildMetaRow(text, meta);
@@ -90,7 +91,7 @@ export class Renderer {
   resolvePendingForm(form, text, meta = {}) {
     form.innerHTML = '';
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.textContent = text;
+    textEl.innerHTML = parseMarkdown(text);
     form.appendChild(textEl);
 
     const metaRow = this._buildMetaRow(text, meta);
