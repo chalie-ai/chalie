@@ -136,6 +136,8 @@ async function callGemini(systemPrompt, userPrompt) {
       }
     });
 
+    const payloadBuffer = Buffer.from(payload, 'utf8');
+
     const options = {
       hostname: 'generativelanguage.googleapis.com',
       port: 443,
@@ -143,7 +145,7 @@ async function callGemini(systemPrompt, userPrompt) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': payload.length
+        'Content-Length': payloadBuffer.length
       }
     };
 
@@ -158,10 +160,12 @@ async function callGemini(systemPrompt, userPrompt) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           try {
             const response = JSON.parse(data);
-            const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            let text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
             if (!text) {
               return reject(new Error('No text in Gemini response'));
             }
+            // Strip markdown code fences if present
+            text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
             const parsed = JSON.parse(text);
             resolve(parsed);
           } catch (e) {
@@ -174,7 +178,7 @@ async function callGemini(systemPrompt, userPrompt) {
     });
 
     req.on('error', reject);
-    req.write(payload);
+    req.write(payloadBuffer);
     req.end();
   });
 }
