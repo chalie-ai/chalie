@@ -32,23 +32,30 @@ let pollTimer = null;           // setInterval id for build polling
 // LLM Jobs
 // ==========================================
 const JOBS = [
-    { id: 'frontal-cortex', name: 'Frontal Cortex', desc: 'Core reasoning engine; orchestrates all response modes.', badge: '≥ 30B', badgeClass: 'badge-30b' },
-    { id: 'frontal-cortex-respond', name: 'Respond Mode', desc: 'Primary voice of Chalie in normal conversation.', badge: '≥ 30B', badgeClass: 'badge-30b' },
-    { id: 'frontal-cortex-act', name: 'Act Mode', desc: 'Plans and executes multi-step tool actions. Requires strong reasoning.', badge: '≥ 30B', badgeClass: 'badge-30b' },
-    { id: 'frontal-cortex-clarify', name: 'Clarify Mode', desc: 'Asks clarifying questions when intent is ambiguous.', badge: '≥ 14B', badgeClass: 'badge-14b' },
-    { id: 'frontal-cortex-proactive', name: 'Proactive Mode', desc: 'Translates spontaneous thoughts into outreach messages.', badge: '≥ 14B', badgeClass: 'badge-14b' },
-    { id: 'mode-reflection', name: 'Mode Reflection', desc: 'Peer-reviews routing decisions during idle time.', badge: '≥ 14B', badgeClass: 'badge-14b' },
-    { id: 'frontal-cortex-acknowledge', name: 'Acknowledge Mode', desc: 'Brief acknowledgments for greetings and simple inputs.', badge: '8B+', badgeClass: 'badge-8b' },
-    { id: 'cognitive-triage', name: 'Cognitive Triage', desc: 'Routes user input to optimal cognitive branch (RESPOND/CLARIFY/ACT). Lightweight model preferred.', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'memory-chunker', name: 'Memory Chunker', desc: 'Extracts gists, facts, and traits from exchanges. Runs async.', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'episodic-memory', name: 'Episodic Memory', desc: 'Synthesises sessions into episodic narratives for long-term recall.', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'semantic-memory', name: 'Semantic Memory', desc: 'Extracts concepts and relationships to build the knowledge graph.', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'autobiography', name: 'Autobiography Synthesis', desc: 'Generates personal narrative summaries from stored memories (6h cycle).', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'experience-assimilation', name: 'Experience Assimilation', desc: 'Evaluates tool outputs for novel knowledge worth storing.', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'cognitive-drift', name: 'Cognitive Drift (DMN)', desc: 'Generates spontaneous thoughts during idle (Default Mode Network).', badge: '4B sufficient', badgeClass: 'badge-4b' },
-    { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Resolves ambiguous routing with binary A-vs-B decision. Must be fast.', badge: '4B sufficient', badgeClass: 'badge-4b' },
-    { id: 'fact-store', name: 'Fact Store', desc: 'Extracts and stores atomic facts from exchanges. Runs async.', badge: '8B sufficient', badgeClass: 'badge-8b' },
-    { id: 'topic-namer', name: 'Topic Namer', desc: 'Generates short display names for conversation topics.', badge: '4B sufficient', badgeClass: 'badge-4b' },
+    // ── Tier 1: ≥ 30B ──────────────────────────────────────
+    { id: 'autobiography',            name: 'Autobiography Synthesis',  desc: 'Synthesises personal narrative prose from all memory layers (6h cycle).',               badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~7.7K',    frequency: 'Every 6 hours',            strengths: ['Reasoning', 'Creative Writing', 'Synthesis'] },
+    { id: 'frontal-cortex',           name: 'Frontal Cortex',           desc: 'Core reasoning engine; orchestrates all response modes.',                                badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5K',      frequency: 'Once per message',          strengths: ['Reasoning', 'Structured Output', 'Context Following'] },
+    { id: 'frontal-cortex-act',       name: 'Act Mode',                 desc: 'Plans and executes multi-step tool actions. Up to 7 iterations per invocation.',          badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5.4K ×N', frequency: 'Per message (ACT mode)',    strengths: ['Strong Reasoning', 'Structured Output', 'Planning'] },
+    { id: 'frontal-cortex-respond',   name: 'Respond Mode',             desc: 'Primary conversational voice of Chalie in normal conversation.',                          badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5.2K',    frequency: 'Once per message',          strengths: ['Reasoning', 'Structured Output', 'Natural Language'] },
+
+    // ── Tier 2: ≥ 14B ──────────────────────────────────────
+    { id: 'cognitive-drift',          name: 'Cognitive Drift (DMN)',     desc: 'Generates spontaneous thoughts during idle windows (Default Mode Network).',              badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~1.2K',    frequency: 'Idle (every 5–10 min)',    strengths: ['Reasoning', 'Creativity'] },
+    { id: 'episodic-memory',          name: 'Episodic Memory',           desc: 'Synthesises sessions into episodic narratives for long-term recall.',                     badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~6.8K',    frequency: 'Batch consolidation',      strengths: ['Reasoning', 'Structured Output', 'Narrative Synthesis'] },
+    { id: 'frontal-cortex-clarify',   name: 'Clarify Mode',             desc: 'Asks clarifying questions when user intent is ambiguous.',                                badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~2.6K',    frequency: 'Per message (CLARIFY)',     strengths: ['Reasoning', 'Structured Output'] },
+    { id: 'frontal-cortex-proactive', name: 'Proactive Mode',           desc: 'Translates spontaneous thoughts into outreach messages.',                                 badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~3K',      frequency: 'Idle triggered',           strengths: ['Reasoning', 'Natural Language', 'Structured Output'] },
+    { id: 'mode-reflection',          name: 'Mode Reflection',          desc: 'Peer-reviews routing decisions during idle time (nightly batch).',                         badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~1.5K',    frequency: 'Nightly batch',            strengths: ['Reasoning', 'Structured Output', 'Analysis'] },
+    { id: 'semantic-memory',          name: 'Semantic Memory',           desc: 'Extracts concepts and relationships to build the knowledge graph.',                       badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~5.6K',    frequency: 'Per exchange (async)',      strengths: ['Reasoning', 'Structured Output', 'Knowledge Extraction'] },
+
+    // ── Tier 3: 8B sufficient ───────────────────────────────
+    { id: 'cognitive-triage',           name: 'Cognitive Triage',          desc: 'Routes user input to optimal cognitive branch (RESPOND/CLARIFY/ACT). Lightweight preferred.', badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.6K', frequency: 'Once per message',      strengths: ['Structured Output', 'Classification'] },
+    { id: 'experience-assimilation',    name: 'Experience Assimilation',   desc: 'Evaluates tool outputs for novel knowledge worth storing.',                               badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.4K', frequency: 'Post-tool execution',   strengths: ['Structured Output', 'Classification'] },
+    { id: 'fact-store',                 name: 'Fact Store',                desc: 'Extracts and stores atomic facts from exchanges. Runs async.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
+    { id: 'frontal-cortex-acknowledge', name: 'Acknowledge Mode',          desc: 'Brief acknowledgments for greetings and simple inputs.',                                  badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.9K', frequency: 'Per message (ACK mode)', strengths: ['Structured Output'] },
+    { id: 'memory-chunker',             name: 'Memory Chunker',            desc: 'Extracts gists, facts, and traits from exchanges. Runs async.',                           badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~4.1K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
+
+    // ── Tier 4: 4B sufficient ───────────────────────────────
+    { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Resolves ambiguous routing with binary A-vs-B decision. Must be fast.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~600',  frequency: '<5% of messages',    strengths: ['Fast Inference', 'Classification'] },
+    { id: 'topic-namer',     name: 'Topic Namer',     desc: 'Generates short display names for conversation topics.',               badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~550',  frequency: '5–10% of messages',  strengths: ['Fast Inference'] },
 ];
 
 // ==========================================
@@ -605,19 +612,35 @@ function renderCognition() {
             `<option value="${p.id}" ${p.id === currentAssignment ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
         ).join('');
 
+        const strengthTags = (job.strengths || []).map(s =>
+            `<span class="job-strength">${escapeHtml(s)}</span>`
+        ).join('');
+
         return `
             <div class="job-card">
-                <div class="job-info">
-                    <div class="job-name">${escapeHtml(job.name)}</div>
-                    <div class="job-desc">${escapeHtml(job.desc)}</div>
+                <div class="job-card__top">
+                    <div class="job-info">
+                        <div class="job-name">${escapeHtml(job.name)}</div>
+                        <div class="job-desc">${escapeHtml(job.desc)}</div>
+                    </div>
+                    <span class="job-badge ${job.badgeClass}">${escapeHtml(job.badge)}</span>
+                    <div class="job-assign">
+                        <select class="provider-select" data-job="${job.id}" onchange="assignJob('${job.id}', this)">
+                            <option value="">-- Select provider --</option>
+                            ${options}
+                        </select>
+                        <span class="save-indicator" id="save-${job.id}">Saved ✓</span>
+                    </div>
                 </div>
-                <span class="job-badge ${job.badgeClass}">${escapeHtml(job.badge)}</span>
-                <div class="job-assign">
-                    <select class="provider-select" data-job="${job.id}" onchange="assignJob('${job.id}', this)">
-                        <option value="">-- Select provider --</option>
-                        ${options}
-                    </select>
-                    <span class="save-indicator" id="save-${job.id}">Saved ✓</span>
+                <div class="job-card__meta">
+                    <span class="job-meta-item" title="Average tokens per invocation">
+                        <i class="fa-solid fa-bolt job-meta-icon"></i> ${escapeHtml(job.tokens)} tokens
+                    </span>
+                    <span class="job-meta-item" title="Usage frequency">
+                        <i class="fa-regular fa-clock job-meta-icon"></i> ${escapeHtml(job.frequency)}
+                    </span>
+                    <span class="job-meta-sep"></span>
+                    <div class="job-strengths">${strengthTags}</div>
                 </div>
             </div>
         `;
