@@ -1,5 +1,5 @@
 # Environment & secrets
-.env
+*.env
 *.key
 backend/.env
 backend/.key
