@@ -98,8 +98,8 @@ class AutobiographyService:
 
                 # Count total episodes
                 result = session.execute(
-                    text("SELECT COUNT(*) FROM episodes WHERE user_id = :user_id"),
-                    {"user_id": user_id}
+                    text("SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"),
+                    {}
                 )
                 total_episodes = result.scalar() or 0
 
@@ -115,9 +115,9 @@ class AutobiographyService:
                 result = session.execute(
                     text("""
                     SELECT COUNT(*) FROM episodes
-                    WHERE user_id = :user_id AND created_at > :cursor
+                    WHERE created_at > :cursor AND deleted_at IS NULL
                     """),
-                    {"user_id": user_id, "cursor": current[1]}
+                    {"cursor": current[1]}
                 )
                 new_episode_count = result.scalar() or 0
 
@@ -156,20 +156,20 @@ class AutobiographyService:
                     query = text("""
                         SELECT gist, action, outcome, emotion, salience, topic, created_at
                         FROM episodes
-                        WHERE user_id = :user_id AND created_at > :cursor
+                        WHERE created_at > :cursor AND deleted_at IS NULL
                         ORDER BY salience DESC
                         LIMIT 50
                     """)
-                    params = {"user_id": user_id, "cursor": since_cursor}
+                    params = {"cursor": since_cursor}
                 else:
                     query = text("""
                         SELECT gist, action, outcome, emotion, salience, topic, created_at
                         FROM episodes
-                        WHERE user_id = :user_id
+                        WHERE deleted_at IS NULL
                         ORDER BY salience DESC
                         LIMIT 50
                     """)
-                    params = {"user_id": user_id}
+                    params = {}
 
                 result = session.execute(query, params)
                 for row in result.fetchall():
@@ -334,9 +334,9 @@ class AutobiographyService:
                     # Get newest episode timestamp for cursor
                     result = session.execute(
                         text("""
-                        SELECT MAX(created_at) FROM episodes WHERE user_id = :user_id
+                        SELECT MAX(created_at) FROM episodes WHERE deleted_at IS NULL
                         """),
-                        {"user_id": user_id}
+                        {}
                     )
                     newest_episode = result.scalar()
 
