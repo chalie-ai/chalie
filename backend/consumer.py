@@ -181,6 +181,37 @@ class WorkerManager:
                 self.shutdown_all()
 
 
+def _migrate_tools_disabled(tools_dir, db):
+    """One-time startup migration: move tools from legacy tools_disabled/ back to tools/
+    and write _enabled=false to DB for each. Safe to call on every startup (no-op if gone)."""
+    import json as _json
+    import shutil as _shutil
+    from pathlib import Path as _Path
+    disabled_dir = _Path(tools_dir).parent / "tools_disabled"
+    if not disabled_dir.exists():
+        return
+    from services.tool_config_service import ToolConfigService
+    config_svc = ToolConfigService(db)
+    for entry in sorted(disabled_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        dest = _Path(tools_dir) / entry.name
+        if dest.exists():
+            _shutil.rmtree(str(dest))
+        _shutil.move(str(entry), str(dest))
+        try:
+            with open(dest / "manifest.json") as f:
+                tool_name = _json.load(f).get("name", entry.name)
+        except Exception:
+            tool_name = entry.name
+        config_svc._set_enabled_flag(tool_name, enabled=False)
+        logging.info(f"[Startup] Migrated disabled tool '{tool_name}' → tools/ with _enabled=false")
+    try:
+        disabled_dir.rmdir()
+    except OSError:
+        pass
+
+
 class ToolScannerThread:
     """
     Daemon thread that scans backend/tools/ every TOOL_SCANNER_INTERVAL_SECONDS (default 30)
@@ -266,6 +297,14 @@ class ToolScannerThread:
                 continue
             if not tool_name or tool_name in known or tool_name in building or tool_name in locked:
                 continue
+            try:
+                from services.tool_config_service import ToolConfigService
+                from services.database_service import get_shared_db_service
+                if not ToolConfigService(get_shared_db_service()).is_tool_enabled(tool_name):
+                    logging.debug(f"[ToolScanner] Ignoring disabled tool '{tool_name}'")
+                    continue
+            except Exception:
+                pass
             logging.info(f"[ToolScanner] Discovered new tool '{tool_name}', starting build")
             try:
                 self._registry.register_tool_async(entry)
@@ -292,6 +331,7 @@ if __name__ == "__main__":
     from services.config_service import ConfigService
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
+    from services.growth_pattern_service import growth_pattern_worker
     from services.topic_stability_regulator_service import topic_stability_regulator_worker
     from services.cognitive_drift_engine import cognitive_drift_worker
     from services.routing_stability_regulator_service import routing_stability_regulator_worker
@@ -456,6 +496,12 @@ if __name__ == "__main__":
         worker_func=decay_engine_worker
     )
 
+    # Register growth pattern awareness service (30-min cycle, longitudinal style shift detection)
+    manager.register_service(
+        worker_id="growth-pattern-service",
+        worker_func=growth_pattern_worker
+    )
+
     # Register homeostatic stability regulator service (runs every 24h)
     manager.register_service(
         worker_id="topic-stability-regulator-service",
@@ -529,6 +575,15 @@ if __name__ == "__main__":
         )
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
+
+    # One-time migration: move tools_disabled/ → tools/ with _enabled=false in DB
+    try:
+        from pathlib import Path as _MigPath
+        from services.database_service import get_shared_db_service as _get_db
+        _tools_dir = _MigPath(__file__).parent / "tools"
+        _migrate_tools_disabled(_tools_dir, _get_db())
+    except Exception as _mig_err:
+        logging.warning(f"[Consumer] tools_disabled migration failed: {_mig_err}")
 
     # Register cron-triggered tools as background services
     try:

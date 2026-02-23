@@ -5,11 +5,13 @@
   "timeout": 360,
   "check_interval": 300,
   "seed_weights": {
-    "decaying": 0.4,
-    "recent": 0.3,
-    "salient": 0.2,
-    "random": 0.1
+    "decaying": 0.35,
+    "recent": 0.25,
+    "salient": 0.15,
+    "insight": 0.15,
+    "random": 0.10
   },
+  "insight_sessions_cap": 5,
   "max_activation_depth": 2,
   "max_activated_concepts": 5,
   "episode_lookback_hours": 168,
@@ -32,6 +34,7 @@
       "type_bonuses": {
         "question": 1.3,
         "hypothesis": 1.2,
+        "insight": 1.4,
         "reflection": 0.8
       },
       "bootstrap_threshold": 0.6,
@@ -86,6 +89,7 @@
     "long_gap_probability": "Chance of extended silence between drifts (realism)",
     "min_activation_energy": "Minimum spreading activation score to produce a thought",
     "decaying_reinforce_bump": "Strength bump for decaying concepts on successful drift only",
+    "insight_sessions_cap": "Minimum drift cycles between insight seed selections (throttle to avoid over-surfacing pattern observations)",
     "autonomous_actions.communicate": "Config for proactive messaging action. enabled=false to disable outreach entirely.",
     "autonomous_actions.reflect": "Config for internal reflection action. Enriches drift thoughts with associations, stores as reflection gists. type_repeat_decay penalizes consecutive same-type reflections."
   }

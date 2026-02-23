@@ -96,7 +96,7 @@ class CognitiveDriftEngine:
 
         # Config values
         self.seed_weights = self.config.get('seed_weights', {
-            'decaying': 0.40, 'recent': 0.30, 'salient': 0.20, 'random': 0.10
+            'decaying': 0.35, 'recent': 0.25, 'salient': 0.15, 'insight': 0.15, 'random': 0.10
         })
         self.max_activation_depth = self.config.get('max_activation_depth', 2)
         self.max_activated_concepts = self.config.get('max_activated_concepts', 5)
@@ -314,7 +314,7 @@ class CognitiveDriftEngine:
         """
         Weighted random seed selection with cooldown retry.
 
-        Strategies: decaying (40%), recent (30%), salient (20%), random (10%).
+        Strategies: decaying (35%), recent (25%), salient (15%), insight (15%), random (10%).
         Retries up to 3 times on cooldown hit.
         """
         strategies = list(self.seed_weights.keys())
@@ -348,6 +348,8 @@ class CognitiveDriftEngine:
                 return self._seed_recent()
             elif strategy == 'salient':
                 return self._seed_salient()
+            elif strategy == 'insight':
+                return self._seed_insight()
             elif strategy == 'random':
                 return self._seed_random()
         except Exception as e:
@@ -501,6 +503,81 @@ class CognitiveDriftEngine:
             'seed_type': 'random',
             'topic': row[3] or 'general',
         }
+
+    def _seed_insight(self) -> Optional[Dict[str, Any]]:
+        """
+        Select seed from recurring interaction patterns: topics that appear
+        3+ times in the interaction log, suggesting friction or unresolved interest.
+        Caps to 1 insight seed per configured session count to avoid over-surfacing.
+        """
+        insight_cap = self.config.get('insight_sessions_cap', 5)
+        last_insight_key = f"drift:insight_seed:last_used"
+        last_used_epoch = self.redis.get(last_insight_key)
+        if last_used_epoch:
+            # Check if enough drift cycles have passed (approximate: cap * check_interval)
+            elapsed = time.time() - float(last_used_epoch)
+            min_gap = insight_cap * self.check_interval
+            if elapsed < min_gap:
+                logger.debug(f"{LOG_PREFIX} Insight seed throttled (last used {elapsed:.0f}s ago)")
+                return None
+
+        try:
+            with self.db_service.connection() as conn:
+                cursor = conn.cursor()
+
+                # Find topics recurring 3+ times in the last 7 days
+                cursor.execute("""
+                    SELECT topic, COUNT(*) AS cnt
+                    FROM interaction_log
+                    WHERE created_at > NOW() - INTERVAL '7 days'
+                      AND topic IS NOT NULL
+                      AND topic != 'general'
+                    GROUP BY topic
+                    HAVING COUNT(*) >= 3
+                    ORDER BY cnt DESC
+                    LIMIT 5
+                """)
+                recurring = cursor.fetchall()
+
+                if not recurring:
+                    cursor.close()
+                    return None
+
+                # Weight by occurrence count, pick topic
+                topics = [row[0] for row in recurring]
+                weights = [float(row[1]) for row in recurring]
+                chosen_topic = random.choices(topics, weights=weights, k=1)[0]
+
+                # Find a concept associated with the recurring topic
+                cursor.execute("""
+                    SELECT id, concept_name, definition, domain
+                    FROM semantic_concepts
+                    WHERE deleted_at IS NULL
+                      AND confidence >= 0.4
+                      AND (domain = %s OR concept_name ILIKE %s)
+                    ORDER BY strength DESC
+                    LIMIT 5
+                """, (chosen_topic, f'%{chosen_topic}%'))
+                rows = cursor.fetchall()
+                cursor.close()
+
+            if not rows:
+                return None
+
+            self.redis.set(last_insight_key, str(time.time()), ex=insight_cap * self.check_interval * 2)
+
+            row = random.choice(rows)
+            return {
+                'concept_id': str(row[0]),
+                'concept_name': row[1],
+                'definition': row[2],
+                'seed_type': 'insight',
+                'topic': chosen_topic,
+            }
+
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Insight seed selection failed: {e}")
+            return None
 
     # ── Decaying concept reinforcement ───────────────────────────────
 

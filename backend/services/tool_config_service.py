@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 class ToolConfigService:
+    RESERVED_KEYS = {"_enabled"}
+
     def __init__(self, database_service):
         self.db = database_service
 
@@ -35,6 +37,33 @@ class ToolConfigService:
             logger.debug(f"[TOOL CONFIG] get_tool_config('{tool_name}'): {e}")
             return {}
 
+    def is_tool_enabled(self, tool_name: str) -> bool:
+        """Return True if the tool is enabled (default), False if _enabled=false in DB."""
+        cfg = self.get_tool_config(tool_name)
+        return cfg.get("_enabled", "true").lower() != "false"
+
+    def _set_enabled_flag(self, tool_name: str, enabled: bool) -> bool:
+        """Write _enabled flag directly, bypassing the reserved-key guard."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                value = "true" if enabled else "false"
+                cursor.execute(
+                    """
+                    INSERT INTO tool_configs (tool_name, config_key, config_value)
+                    VALUES (%s, '_enabled', %s)
+                    ON CONFLICT (tool_name, config_key)
+                    DO UPDATE SET config_value = EXCLUDED.config_value,
+                                  updated_at = NOW()
+                    """,
+                    (tool_name, value)
+                )
+                cursor.close()
+            return True
+        except Exception as e:
+            logger.error(f"[TOOL CONFIG] _set_enabled_flag('{tool_name}', {enabled}): {e}", exc_info=True)
+            return False
+
     def set_tool_config(self, tool_name: str, config: dict) -> bool:
         """
         Upsert config key-value pairs for a tool.
@@ -45,7 +74,13 @@ class ToolConfigService:
 
         Returns:
             True on success, False on error.
+
+        Raises:
+            ValueError: If any key in config is a reserved internal key.
         """
+        reserved = set(config.keys()) & self.RESERVED_KEYS
+        if reserved:
+            raise ValueError(f"Reserved config keys cannot be set directly: {sorted(reserved)}")
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()

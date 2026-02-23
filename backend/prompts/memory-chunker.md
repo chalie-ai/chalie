@@ -65,6 +65,11 @@ You only extract state from observed interaction.
     "directness": 0,
     "formality": 0,
     "abstraction_level": 0,
+    "emotional_valence": 0,
+    "certainty_level": 0,
+    "challenge_appetite": 0,
+    "depth_preference": 0,
+    "pacing": 0,
     "confidence": 0
   }
 }
@@ -94,11 +99,16 @@ You only extract state from observed interaction.
 - Facts overlap with user_traits on purpose: traits describe the person, facts describe the world
 
 # Communication Style Detection
-- Analyse the user's message style across four dimensions (1–10 scale):
+- Analyse the user's message style across nine dimensions (1–10 scale):
   - `verbosity`: 1 = very terse (single words/short phrases), 10 = very verbose (long detailed paragraphs)
   - `directness`: 1 = very indirect/hedged, 10 = very direct/assertive
   - `formality`: 1 = very casual/colloquial, 10 = very formal/professional
   - `abstraction_level`: 1 = highly concrete/specific, 10 = highly abstract/conceptual
+  - `emotional_valence`: 1 = purely analytical/logical, 10 = highly emotional/feeling-driven
+  - `certainty_level`: 1 = very uncertain/hedging/questioning, 10 = very confident/declarative
+  - `challenge_appetite`: 1 = seeks reassurance/validation, 10 = actively seeks challenge/counterpoints
+  - `depth_preference`: 1 = surface-level/practical/action-oriented, 10 = deep/exploratory/philosophical
+  - `pacing`: 1 = rapid-fire short messages, 10 = slow deliberate long messages
 - `confidence`: 0–10, how confident you are the style is detectable in this exchange (0 = not enough signal)
 - Score 0 across all dimensions if the exchange is too short or ambiguous to detect style
 - This captures how the user communicates, not what they say

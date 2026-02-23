@@ -390,6 +390,16 @@ class FrontalCortexService:
             communication_style = ''
         result = result.replace('{{communication_style}}', communication_style)
 
+        # Adaptive response directives (style-driven behavioral hints)
+        if _include('adaptive_directives'):
+            adaptive_directives = self._get_adaptive_directives(
+                original_prompt=original_prompt,
+                thread_id=thread_id,
+            )
+        else:
+            adaptive_directives = ''
+        result = result.replace('{{adaptive_directives}}', adaptive_directives)
+
         # Active goals (persistent directional goals)
         if _include('active_goals'):
             active_goals = self._get_active_goals(topic)
@@ -714,6 +724,55 @@ class FrontalCortexService:
             return "## User Communication Style\n" + ", ".join(labels)
         except Exception as e:
             logging.debug(f"Communication style not available: {e}")
+            return ""
+
+    def _get_adaptive_directives(self, original_prompt: str = "", thread_id: str = None) -> str:
+        """
+        Get adaptive response directives based on detected user interaction style.
+
+        Returns:
+            str: Formatted directive block or empty string
+        """
+        try:
+            from services.adaptive_layer_service import AdaptiveLayerService
+            from services.database_service import get_shared_db_service
+            from services.working_memory_service import WorkingMemoryService
+
+            db_service = get_shared_db_service()
+            service = AdaptiveLayerService(db_service)
+
+            # Get raw working memory turns for cognitive load estimation
+            working_memory_turns = []
+            if thread_id:
+                try:
+                    wm_service = WorkingMemoryService()
+                    working_memory_turns = wm_service.get_recent_turns(thread_id) or []
+                except Exception:
+                    pass
+
+            # Build current signals — start with prompt length, augment from Redis snapshot
+            current_signals = {
+                'prompt_token_count': len(original_prompt.split()) if original_prompt else 0,
+            }
+            if thread_id:
+                try:
+                    from services.redis_client import RedisClientService
+                    import json as _json
+                    _redis = RedisClientService.create_connection()
+                    _snapshot_raw = _redis.get(f"adaptive_signals:{thread_id}")
+                    if _snapshot_raw:
+                        _snapshot = _json.loads(_snapshot_raw)
+                        current_signals.update(_snapshot)
+                except Exception:
+                    pass
+
+            return service.generate_directives(
+                thread_id=thread_id,
+                working_memory_turns=working_memory_turns,
+                current_signals=current_signals,
+            )
+        except Exception as e:
+            logging.debug(f"Adaptive directives not available: {e}")
             return ""
 
     def _get_client_context(self) -> str:
