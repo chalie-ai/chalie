@@ -19,6 +19,8 @@ You do NOT:
 
 {{communication_style}}
 
+{{adaptive_directives}}
+
 {{active_lists}}
 
 ## Client Context

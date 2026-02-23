@@ -413,6 +413,52 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 ---
 
+## Adaptive Layer
+
+The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
+
+### Style Detection (9 dimensions)
+
+The `memory_chunker_worker` extracts 9 communication style dimensions per exchange and merges them into a user trait using Exponential Moving Average (EMA). Cold-start uses a faster 0.5/0.5 EMA for the first 5 observations; stable state uses 0.3/0.7.
+
+| Dimension | Meaning |
+|-----------|---------|
+| verbosity | Preference for short vs. long responses (1-10) |
+| directness | Indirect suggestion vs. clear assertion (1-10) |
+| formality | Casual vs. formal register (1-10) |
+| abstraction_level | Concrete action vs. abstract reasoning (1-10) |
+| emotional_valence | Logical vs. emotional framing (1-10) |
+| certainty_level | Hedging/questioning vs. declarative/confident (1-10) |
+| challenge_appetite | Seeks validation vs. seeks counterpoints (1-10) |
+| depth_preference | Surface/practical vs. deep/exploratory (1-10) |
+| pacing | Rapid short messages vs. slow deliberate ones (1-10) |
+
+### Directive Generation (rule-based, sub-1ms)
+
+`AdaptiveLayerService.generate_directives()` uses a slot system to prevent over-biasing:
+- **Pacing slot** — always included if eligible
+- **Cognitive slots** — top 2 of: verbosity, directness, depth_preference, challenge_appetite (by salience)
+- **Emotional slot** — only when emotional_valence or certainty_level salience > 1.5
+- **Load slot** — replaces first slot when cognitive load is HIGH/OVERLOAD
+- **Cold-start gate** — no directives until `_observation_count >= 2`
+
+### Supporting Systems
+
+| System | Description |
+|--------|-------------|
+| **Micro-preferences** | Regex-extracted explicit format requests stored as `micro_preference` traits. Faster decay (0.015/cycle) than style dimensions. |
+| **Challenge calibration** | `challenge_tolerance` trait tracks how the user reacts to pushback (positive → increase, negative → decrease). Appetite sets the ceiling; tolerance calibrates within it. |
+| **Energy mirroring** | Per-request comparison of baseline verbosity vs. current message length. Fires when deviation is notable. |
+| **Interaction forks** | Offered when style dimensions are in the ambiguous mid-range (4-7). Conversational choice points ("I can..."), 5-exchange cooldown. |
+| **Cognitive load regulation** | Estimates load from working-memory turn length trends and question density. HIGH/OVERLOAD → simplify-and-structure directive takes first slot. |
+| **Growth pattern awareness** | 30-min background service comparing current style against a slowly-updated baseline. Persistent shifts (3+ cycles) stored as `growth_signal:{dim}` traits and surfaced sparingly as growth reflections (24h cooldown). |
+
+### Priority Note
+
+All adaptive directives carry a trailing line: *"When these directives conflict with your identity voice, your voice takes priority."* Identity vectors (`identity_modulation`) always outrank adaptive directives.
+
+---
+
 ## Glossary
 
 - **Mode Router:** Deterministic mathematical function that selects engagement mode from observable signals

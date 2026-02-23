@@ -345,6 +345,26 @@ class ToolRegistryService:
             logger.info("[TOOL REGISTRY] No tools found")
             return
 
+        # Filter out DB-disabled tools before building
+        try:
+            from services.tool_config_service import ToolConfigService
+            from services.database_service import get_shared_db_service
+            config_svc = ToolConfigService(get_shared_db_service())
+            filtered = []
+            for (entry, manifest_path) in candidates:
+                try:
+                    with open(manifest_path) as f:
+                        tool_name = json.load(f).get("name", entry.name)
+                    if not config_svc.is_tool_enabled(tool_name):
+                        logger.info(f"[TOOL REGISTRY] Skipping disabled tool '{tool_name}'")
+                        continue
+                except Exception:
+                    pass
+                filtered.append((entry, manifest_path))
+            candidates = filtered
+        except Exception as e:
+            logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
+
         # Build images in parallel (up to 4 concurrent)
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(self._load_tool, d, m): d.name for d, m in candidates}

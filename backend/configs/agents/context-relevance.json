@@ -7,6 +7,7 @@
       "onboarding_nudge": true,
       "user_traits": true,
       "communication_style": true,
+      "adaptive_directives": true,
       "active_goals": true,
       "active_lists": true,
       "client_context": true,
@@ -27,6 +28,7 @@
       "onboarding_nudge": true,
       "user_traits": true,
       "communication_style": true,
+      "adaptive_directives": true,
       "active_goals": false,
       "active_lists": true,
       "client_context": true,
@@ -47,6 +49,7 @@
       "onboarding_nudge": false,
       "user_traits": false,
       "communication_style": true,
+      "adaptive_directives": false,
       "active_goals": true,
       "active_lists": true,
       "client_context": true,
@@ -67,6 +70,7 @@
       "onboarding_nudge": false,
       "user_traits": true,
       "communication_style": true,
+      "adaptive_directives": true,
       "active_goals": false,
       "active_lists": true,
       "client_context": false,
@@ -87,7 +91,8 @@
     "episodic_memory": ["gists"],
     "focus": ["active_goals"],
     "onboarding_nudge": ["identity_context"],
-    "warm_return_hint": ["identity_context"]
+    "warm_return_hint": ["identity_context"],
+    "adaptive_directives": ["communication_style"]
   },
   "signal_rules": {
     "episodic_memory": [

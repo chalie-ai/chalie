@@ -236,7 +236,9 @@ def _extract_and_store_communication_style(memory_chunk: dict, metadata: dict):
 
     dimensions = {
         k: comm_style[k]
-        for k in ('verbosity', 'directness', 'formality', 'abstraction_level')
+        for k in ('verbosity', 'directness', 'formality', 'abstraction_level',
+                  'emotional_valence', 'certainty_level', 'challenge_appetite',
+                  'depth_preference', 'pacing')
         if k in comm_style and isinstance(comm_style[k], (int, float)) and comm_style[k] > 0
     }
     if not dimensions:
@@ -250,13 +252,21 @@ def _extract_and_store_communication_style(memory_chunk: dict, metadata: dict):
 
     # Load existing style for EMA merge
     existing = trait_service.get_communication_style()
+    observation_count = existing.get('_observation_count', 0) if existing else 0
+
+    # Use faster convergence during cold start (first 5 observations)
+    ema_weight = 0.5 if observation_count < 5 else 0.3
+
     if existing:
         merged = {}
         for dim, val in dimensions.items():
             old_val = existing.get(dim, val)
-            merged[dim] = round(0.3 * val + 0.7 * old_val, 2)
+            merged[dim] = round(ema_weight * val + (1 - ema_weight) * old_val, 2)
     else:
         merged = {k: round(float(v), 2) for k, v in dimensions.items()}
+
+    # Track observation count to manage cold-start EMA weight
+    merged['_observation_count'] = observation_count + 1
 
     trait_service.store_trait(
         trait_key='communication_style',
@@ -266,7 +276,162 @@ def _extract_and_store_communication_style(memory_chunk: dict, metadata: dict):
         source='inferred',
         is_literal=True,
     )
-    logging.info(f"[memory_chunker] Stored communication_style: {merged} (confidence={confidence:.2f})")
+    logging.info(f"[memory_chunker] Stored communication_style: {merged} (confidence={confidence:.2f}, obs={merged['_observation_count']})")
+
+
+# Micro-preference detection patterns: (regex, trait_key)
+_MICRO_PREF_PATTERNS = [
+    (r'\b(bullet|list|points)\s*(please|format|version|form)?\b', 'prefers_bullet_format'),
+    (r'\b(short|brief|quick)\s*(version|answer|summary|response)?\b', 'prefers_concise'),
+    (r'\b(too\s+much|too\s+long|too\s+verbose|too\s+detailed)\b', 'prefers_concise'),
+    (r'\b(detail|explain\s+more|elaborate|expand|deeper|more\s+depth)\b', 'prefers_depth'),
+    (r'\btoo\s+(short|brief|vague)\b', 'prefers_depth'),
+    (r'\b(challenge\s+me|push\s+back|devil.s\s+advocate|stress.test|counterpoint)\b', 'enjoys_challenge'),
+]
+
+
+def _extract_and_store_micro_preferences(prompt_message: str):
+    """
+    Detect explicit format/style requests in the user's message and store them
+    as micro-preference traits.
+
+    No LLM call — pure regex on the user's message text.
+    Uses existing store_trait() reinforcement mechanism for repeated signals.
+
+    Args:
+        prompt_message: The user's raw message text from the exchange.
+    """
+    import re as _re
+
+    if not prompt_message or not isinstance(prompt_message, str):
+        return
+
+    text = prompt_message.lower()
+
+    matched = []
+    for pattern, trait_key in _MICRO_PREF_PATTERNS:
+        if _re.search(pattern, text):
+            matched.append(trait_key)
+
+    if not matched:
+        return
+
+    try:
+        from services.user_trait_service import UserTraitService
+        from services.database_service import get_shared_db_service
+
+        db_service = get_shared_db_service()
+        trait_service = UserTraitService(db_service)
+
+        for trait_key in matched:
+            trait_service.store_trait(
+                trait_key=trait_key,
+                trait_value='true',
+                confidence=0.7,
+                category='micro_preference',
+                source='explicit',
+                is_literal=True,
+            )
+
+        logging.info(f"[memory_chunker] Stored micro-preferences: {matched}")
+    except Exception as e:
+        logging.warning(f"[memory_chunker] Micro-preference storage failed: {e}")
+
+
+_CHALLENGE_POSITIVE_PATTERNS = [
+    r'\b(but what about|on the other hand|interesting point|good point|hmm.{0,10}but)\b',
+    r'\b(what if|why not|how would|let.s explore|dig deeper|go deeper)\b',
+    r'\b(fair enough|you.re right.{0,10}but|I see.{0,10}however|that.s true.{0,10}but)\b',
+]
+_CHALLENGE_NEGATIVE_PATTERNS = [
+    r'\b(whatever|fine|ok move on|let.s just|anyway|never\s*mind)\b',
+    r'\b(that.s not what I|you.re missing the point|no[,.]|just stop)\b',
+    r'\bthat.s (too much|not helpful|off track|beside the point)\b',
+]
+_CHALLENGE_ASSISTANT_INDICATORS = [
+    r'\b(on the other hand|devil.s advocate|counterpoint|have you considered|push back|challenge)\b',
+    r'\b(however|but consider|what if instead|the flip side|alternative view)\b',
+]
+
+
+def _detect_challenge_reaction(prompt_message: str, response_message: str):
+    """
+    Detect how the user reacted to challenge in the previous response and
+    update challenge_tolerance accordingly.
+
+    Fires only when the assistant's response contains challenge indicators.
+    No LLM call — regex pattern matching on exchange text.
+
+    Args:
+        prompt_message: The user's message (reaction to check)
+        response_message: The assistant's previous response (checked for challenge content)
+    """
+    import re as _re
+
+    if not prompt_message or not response_message:
+        return
+
+    # Only fire if assistant's response contained challenge content
+    response_lower = response_message.lower()
+    had_challenge = any(
+        _re.search(p, response_lower)
+        for p in _CHALLENGE_ASSISTANT_INDICATORS
+    )
+    if not had_challenge:
+        return
+
+    # Classify user's reaction
+    user_lower = prompt_message.lower()
+    is_positive = any(_re.search(p, user_lower) for p in _CHALLENGE_POSITIVE_PATTERNS)
+    is_negative = any(_re.search(p, user_lower) for p in _CHALLENGE_NEGATIVE_PATTERNS)
+
+    if not is_positive and not is_negative:
+        return  # Neutral — no update
+
+    try:
+        from services.user_trait_service import UserTraitService
+        from services.database_service import get_shared_db_service
+        import json as _json
+
+        db_service = get_shared_db_service()
+        trait_service = UserTraitService(db_service)
+
+        # Read existing tolerance
+        existing_rows = None
+        try:
+            with db_service.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT trait_value FROM user_traits WHERE user_id = 'primary' "
+                    "AND trait_key = 'challenge_tolerance' LIMIT 1"
+                )
+                row = cursor.fetchone()
+                cursor.close()
+                existing_rows = float(row[0]) if row else None
+        except Exception:
+            pass
+
+        current = existing_rows if existing_rows is not None else 5.0
+
+        # Apply slow EMA update (0.2 new + 0.8 old)
+        if is_positive:
+            new_val = round(0.2 * min(current + 1.5, 10.0) + 0.8 * current, 2)
+            direction = 'positive'
+        else:
+            new_val = round(0.2 * max(current - 1.5, 1.0) + 0.8 * current, 2)
+            direction = 'negative'
+
+        trait_service.store_trait(
+            trait_key='challenge_tolerance',
+            trait_value=str(new_val),
+            confidence=0.6,
+            category='micro_preference',
+            source='inferred',
+            is_literal=True,
+        )
+        logging.info(f"[memory_chunker] challenge_tolerance updated: {current} → {new_val} ({direction} reaction)")
+    except Exception as e:
+        logging.warning(f"[memory_chunker] Challenge reaction detection failed: {e}")
 
 
 def _apply_identity_reinforcement(topic: str, memory_chunk: dict):
@@ -442,6 +607,22 @@ def memory_chunker_worker(job_data: dict) -> str:
                 raise
             except Exception as e:
                 logging.warning(f"[memory_chunker] Communication style extraction failed: {e}")
+
+            # Detect explicit micro-preferences from user's message (no LLM call)
+            try:
+                _extract_and_store_micro_preferences(prompt_message)
+            except TimeoutError:
+                raise
+            except Exception as e:
+                logging.warning(f"[memory_chunker] Micro-preference extraction failed: {e}")
+
+            # Detect challenge reaction and update challenge_tolerance (no LLM call)
+            try:
+                _detect_challenge_reaction(prompt_message, response_message)
+            except TimeoutError:
+                raise
+            except Exception as e:
+                logging.warning(f"[memory_chunker] Challenge reaction detection failed: {e}")
 
             return f"Topic '{topic}' | Memory chunk generated in {generation_time:.2f}s"
 
