@@ -1,0 +1,44 @@
+name: Update build log
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  update-build-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Chalie
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for git log
+
+      - name: Checkout chalie-web
+        uses: actions/checkout@v4
+        with:
+          repository: chalie-ai/chalie-web
+          token: ${{ secrets.CHALIE_WEB_TOKEN }}
+          path: chalie-web
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run build log updater
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: node scripts/update-build-log.js
+
+      - name: Commit and push
+        working-directory: chalie-web
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/build-log/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(build-log): update $(date -u +%Y-%m-%d)"
+            git push origin main
+          else
+            echo "No changes to commit"
+          fi
