@@ -2,7 +2,6 @@
 
 const { execSync } = require('child_process');
 const fs = require('fs');
-const https = require('https');
 
 // Get today's date in UTC
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -107,43 +106,25 @@ function formatCommitsForPrompt(commits) {
     .join('\n\n');
 }
 
-async function callClaude(payload) {
+async function callClaude(systemPrompt, userPrompt) {
   return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'api.anthropic.com',
-      port: 443,
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+    const prompt = `${systemPrompt}\n\nUser: ${userPrompt}`;
+
+    try {
+      const result = execSync(
+        `echo ${JSON.stringify(prompt).replace(/"/g, '\\"')} | claude --model claude-haiku-4-5-20251001 --raw-output`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      try {
+        const parsed = JSON.parse(result.trim());
+        resolve(parsed);
+      } catch (e) {
+        reject(new Error(`Failed to parse Claude response: ${e.message}\nResponse: ${result}`));
       }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try {
-            resolve(JSON.parse(data));
-          } catch (e) {
-            reject(new Error(`Failed to parse response: ${e.message}`));
-          }
-        } else {
-          reject(new Error(`API error ${res.statusCode}: ${data}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(JSON.stringify(payload));
-    req.end();
+    } catch (error) {
+      reject(new Error(`Claude CLI error: ${error.message}`));
+    }
   });
 }
 
@@ -168,24 +149,11 @@ Return ONLY valid JSON, nothing else:
 ${isTrivial ? 'Note: These are primarily maintenance commits.\n\n' : ''}Today's commits:
 ${commitsText}`;
 
-  const payload = {
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content: userPrompt
-      }
-    ]
-  };
-
   // Retry once on failure
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await callClaude(payload);
-      const content = response.content[0].text;
-      return JSON.parse(content);
+      const response = await callClaude(systemPrompt, userPrompt);
+      return response;
     } catch (error) {
       if (attempt === 0) {
         console.log('Claude API call failed, retrying...');
