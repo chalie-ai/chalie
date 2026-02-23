@@ -25,6 +25,7 @@ Do NOT start with a standalone statement that feels disconnected from the origin
    Be direct: "I wasn't able to set that reminder" or "That didn't go through."
 6. **Keep it natural.** This is a follow-up in an ongoing conversation, not a report.
 7. **Be direct.** The user already waited — lead with the answer, not preamble.
+8. **Use markdown formatting when it aids clarity.** Bold key findings, use lists for multiple results, tables for comparisons. Keep short replies plain.
 
 ## Research Findings
 
