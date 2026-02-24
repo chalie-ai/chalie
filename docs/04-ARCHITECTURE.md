@@ -66,6 +66,9 @@ frontend/
 - **`semantic_storage_service.py`** — PostgreSQL CRUD for semantic concepts
 - **`gist_storage_service.py`** — Redis-backed short-term memory with deduplication
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
+- **`moment_service.py`** — Pinned message bookmarks with LLM-enriched context, pgvector semantic search, and salience boosting; stores user-pinned Chalie responses as permanent, searchable moments via `moments` table
+- **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs; boosts related episode salience on seal
+- **`moment_card_service.py`** — Inline HTML card emission for moment display in the conversation spine
 
 #### Autonomous Behavior
 - **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle
@@ -108,7 +111,7 @@ frontend/
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-8 built-in cognitive skills for the ACT loop:
+9 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
@@ -117,6 +120,7 @@ frontend/
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
 - **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
+- **`moment_skill.py`** — Natural language moment recall ("Do you remember...") and listing via pgvector search
 
 ## Worker Processes (`backend/workers/`)
 
@@ -140,6 +144,7 @@ frontend/
 - **Triage Calibration** — Triage correctness scoring (24h cycle)
 - **Profile Enrichment** — Tool profile enrichment (6h cycle)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
+- **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 
 ## Data Flow Pipeline
 

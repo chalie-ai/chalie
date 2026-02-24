@@ -712,6 +712,34 @@ body {
   color: var(--text-primary);
 }
 
+/* Remember (pin) button */
+.speech-form__remember-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast), box-shadow var(--duration-fast);
+  display: flex;
+  align-items: center;
+}
+
+.speech-form__remember-btn:hover {
+  color: var(--accent-primary);
+}
+
+.speech-form__remember-btn--active {
+  color: var(--accent-primary);
+  box-shadow: 0 0 8px rgba(138, 92, 255, 0.35);
+  cursor: default;
+}
+
+.speech-form__remember-btn:disabled:not(.speech-form__remember-btn--active) {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Thinking indicator */
 .thinking-indicator {
   display: flex;
@@ -1606,4 +1634,236 @@ body {
   font-size: 15px;
   line-height: 1.6;
   color: #eae6f2;
+}
+
+/* ==========================================================================
+   Moment Search Overlay
+   ========================================================================== */
+
+.moment-search-dialog {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: rgba(6, 8, 14, 0.96);
+  color: var(--text-primary);
+  z-index: 100;
+}
+
+.moment-search-dialog::backdrop {
+  background: transparent;
+}
+
+.moment-search-dialog__content {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: var(--space-xl) var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.moment-search-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-lg);
+}
+
+.moment-search-dialog__title {
+  font-size: var(--font-size-xl);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.moment-search-dialog__close {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast);
+}
+
+.moment-search-dialog__close:hover {
+  color: var(--text-primary);
+}
+
+.moment-search-dialog__input {
+  width: 100%;
+  padding: 14px 18px;
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--duration-fast);
+  box-sizing: border-box;
+}
+
+.moment-search-dialog__input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.moment-search-dialog__input:focus {
+  border-color: rgba(138, 92, 255, 0.45);
+}
+
+.moment-search-dialog__results {
+  margin-top: var(--space-lg);
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.moment-search-dialog__empty {
+  text-align: center;
+  font-size: var(--font-size-base);
+  color: var(--text-tertiary);
+  padding: var(--space-xl) 0;
+}
+
+/* Shimmer loading placeholder */
+.moment-search-dialog__shimmer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.moment-search-dialog__shimmer > div {
+  height: 72px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.02) 25%,
+    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0.02) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ==========================================================================
+   Moment Card (client-side)
+   ========================================================================== */
+
+.moment-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent-primary);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.moment-card:hover {
+  border-color: rgba(138, 92, 255, 0.30);
+  box-shadow: 0 0 12px rgba(138, 92, 255, 0.06);
+}
+
+.moment-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.moment-card__message {
+  border-left: 2px solid var(--accent-primary);
+  padding-left: 12px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  /* Clamp long messages */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.moment-card__summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.moment-card__gists {
+  margin-bottom: 10px;
+}
+
+.moment-card__gist-item {
+  font-size: 13px;
+  color: rgba(234, 230, 242, 0.45);
+  line-height: 1.5;
+  padding: 2px 0 2px 14px;
+  position: relative;
+}
+
+.moment-card__gist-item::before {
+  content: '\2022';
+  position: absolute;
+  left: 0;
+  color: rgba(234, 230, 242, 0.30);
+}
+
+.moment-card__footer {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+/* Toast notification */
+.chalie-toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 20px;
+  font-size: 14px;
+  color: var(--text-primary);
+  z-index: 200;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chalie-toast--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chalie-toast__undo {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: var(--font-family);
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(138, 92, 255, 0.4);
 }
