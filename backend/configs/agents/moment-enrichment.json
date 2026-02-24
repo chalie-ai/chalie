@@ -1,0 +1,12 @@
+{
+  "temperature": 0.4,
+  "max_predict_tokens": 300,
+  "format": "",
+  "timeout": 60,
+  "comments": {
+    "temperature": "Low temperature (0.4) for specific, factual summaries — avoids generic phrasing",
+    "max_predict_tokens": "Sufficient for a 3-6 word title or 1-2 sentence summary",
+    "format": "Empty string — free prose output, no JSON constraint",
+    "timeout": "Short timeout — moment enrichment is non-blocking background work"
+  }
+}
