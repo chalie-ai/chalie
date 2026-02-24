@@ -122,11 +122,13 @@ def chat_sse():
                 if output_data:
                     output = json.loads(output_data)
                     metadata = output.get("metadata", {})
+                    original_meta = metadata.get("metadata", {})
                     message_data = {
                         "text": metadata.get("response", ""),
                         "topic": output.get("topic", ""),
                         "mode": metadata.get("mode", ""),
                         "confidence": metadata.get("confidence", 0),
+                        "exchange_id": original_meta.get("exchange_id", ""),
                     }
                     yield sse_event("message", message_data)
                     message_received = True
@@ -159,11 +161,13 @@ def chat_sse():
                 if fallback_data:
                     output = json.loads(fallback_data)
                     metadata = output.get("metadata", {})
+                    original_meta = metadata.get("metadata", {})
                     message_data = {
                         "text": metadata.get("response", ""),
                         "topic": output.get("topic", ""),
                         "mode": metadata.get("mode", ""),
                         "confidence": metadata.get("confidence", 0),
+                        "exchange_id": original_meta.get("exchange_id", ""),
                     }
                     yield sse_event("message", message_data)
                 elif bg_error:

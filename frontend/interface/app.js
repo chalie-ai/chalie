@@ -10,6 +10,8 @@ import { ClientHeartbeat } from './heartbeat.js';
 import { MemoryCard } from './cards/memory.js';
 import { TimelineCard } from './cards/timeline.js';
 import { ToolResultCard } from './cards/tool_result.js';
+import { MomentSearch } from './moment_search.js';
+import { MomentCard } from './cards/moment.js';
 
 class ChalieApp {
   constructor() {
@@ -30,6 +32,7 @@ class ChalieApp {
     // Cards
     this._memoryCard = null;
     this._timelineCard = null;
+    this._momentSearch = null;
 
     // Scheduler trigger dedup: topic → timestamp of last card event (60s window)
     this._recentToolCardTopics = new Map();
@@ -80,6 +83,7 @@ class ChalieApp {
     this._initVoice();
     this._initCards();
     this._initTools();
+    this._initMoments();
     this._initInput();
     this._initPwaDialog();
     this._initAmbientCanvas();
@@ -207,6 +211,143 @@ class ChalieApp {
   }
 
   // ---------------------------------------------------------------------------
+  // Moments
+  // ---------------------------------------------------------------------------
+
+  _initMoments() {
+    // Search overlay
+    const backendHost = this._backendHost;
+    this._momentSearch = new MomentSearch((path) => {
+      const base = backendHost ? backendHost.replace(/\/$/, '') : '';
+      return fetch(base + path, { credentials: 'same-origin' });
+    });
+
+    // Recall button in header
+    document.getElementById('recallBtn')?.addEventListener('click', () => {
+      this._momentSearch.open();
+    });
+
+    // Pin moment event (from remember button on Chalie messages)
+    let pinDebounce = 0;
+    document.addEventListener('chalie:pin-moment', async (e) => {
+      const now = Date.now();
+      if (now - pinDebounce < 250) return; // 250ms debounce
+      pinDebounce = now;
+
+      const { text, meta } = e.detail;
+      const body = {
+        message_text: text,
+        exchange_id: meta.exchange_id || '',
+        topic: meta.topic || '',
+        thread_id: meta.thread_id || '',
+      };
+
+      try {
+        const base = backendHost ? backendHost.replace(/\/$/, '') : '';
+        const res = await fetch(base + '/moments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(body),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const momentId = data.item?.id;
+          const isDuplicate = data.duplicate;
+
+          const msg = isDuplicate ? 'Already remembered' : 'Remembered';
+          this._showToast(msg, momentId ? () => this._undoMoment(momentId) : null);
+        }
+      } catch (err) {
+        console.warn('Pin moment failed:', err);
+      }
+    });
+
+    // Show moment event (from search overlay click)
+    document.addEventListener('chalie:show-moment', (e) => {
+      const { moment } = e.detail;
+      const card = new MomentCard(moment);
+      this.renderer.appendToolCard(card.build());
+    });
+
+    // First-use hint (one-time)
+    if (!localStorage.getItem('moments_hint_shown')) {
+      this._showMomentsHintOnFirstResponse();
+    }
+  }
+
+  async _undoMoment(momentId) {
+    try {
+      const base = this._backendHost ? this._backendHost.replace(/\/$/, '') : '';
+      await fetch(base + `/moments/${momentId}/forget`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+    } catch (err) {
+      console.warn('Undo moment failed:', err);
+    }
+  }
+
+  _showToast(message, onUndo) {
+    // Remove existing toast
+    document.querySelector('.chalie-toast')?.remove();
+
+    const toast = document.createElement('div');
+    toast.className = 'chalie-toast';
+    toast.innerHTML = `<span>${message}</span>`;
+
+    if (onUndo) {
+      const undoBtn = document.createElement('button');
+      undoBtn.className = 'chalie-toast__undo';
+      undoBtn.textContent = 'Undo';
+      undoBtn.addEventListener('click', () => {
+        onUndo();
+        toast.remove();
+      });
+      toast.appendChild(undoBtn);
+    }
+
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('chalie-toast--visible'));
+
+    setTimeout(() => {
+      toast.classList.remove('chalie-toast--visible');
+      setTimeout(() => toast.remove(), 250);
+    }, 4000);
+  }
+
+  _showMomentsHintOnFirstResponse() {
+    // Wait for first Chalie response to show hint
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.classList?.contains('speech-form--chalie')) {
+            const btn = node.querySelector('.speech-form__remember-btn');
+            if (btn && !localStorage.getItem('moments_hint_shown')) {
+              localStorage.setItem('moments_hint_shown', '1');
+              observer.disconnect();
+
+              // Show tooltip near the button
+              const hint = document.createElement('div');
+              hint.className = 'chalie-toast';
+              hint.innerHTML = '<span>Remember important answers to find them later.</span>';
+              document.body.appendChild(hint);
+              requestAnimationFrame(() => hint.classList.add('chalie-toast--visible'));
+              setTimeout(() => {
+                hint.classList.remove('chalie-toast--visible');
+                setTimeout(() => hint.remove(), 250);
+              }, 5000);
+            }
+            return;
+          }
+        }
+      }
+    });
+    observer.observe(document.getElementById('conversationSpine'), { childList: true });
+  }
+
+  // ---------------------------------------------------------------------------
   // Input Handling
   // ---------------------------------------------------------------------------
 
@@ -320,7 +461,7 @@ class ChalieApp {
       onMessage: (data) => {
         clearTimeout(pendingUpgradeTimer);
         responseText = data.text;
-        responseMeta = { topic: data.topic };
+        responseMeta = { topic: data.topic, exchange_id: data.exchange_id };
         this.presence.setState('responding');
       },
       onError: (data) => {
@@ -367,7 +508,11 @@ class ChalieApp {
           this.renderer.appendUserForm(exchange.prompt, exchange.timestamp);
         }
         if (exchange.response) {
-          this.renderer.appendChalieForm(exchange.response, { topic: exchange.topic, ts: exchange.timestamp });
+          this.renderer.appendChalieForm(exchange.response, {
+            topic: exchange.topic,
+            ts: exchange.timestamp,
+            exchange_id: exchange.id,
+          });
         }
       }
     } catch (err) {
