@@ -1794,20 +1794,37 @@ body {
   font-size: 14px;
   color: var(--text-primary);
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* markdown elements inside the pinned message */
+.moment-card__message p { margin: 0 0 8px; }
+.moment-card__message p:last-child { margin-bottom: 0; }
+.moment-card__message ul,
+.moment-card__message ol { margin: 0 0 8px; padding-left: 20px; }
+.moment-card__message li { margin-bottom: 2px; }
+.moment-card__message strong { color: var(--text-primary); }
+.moment-card__message code {
+  font-family: monospace;
+  font-size: 13px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
 .moment-card__message--collapsed {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  max-height: 4.8em; /* ~3 lines at 1.6 line-height */
   overflow: hidden;
+  /* Fade out the bottom edge to signal more content */
+  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
 }
 
 .moment-card__message--expanded {
-  display: block;
+  max-height: none;
   overflow: visible;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .moment-card__message-toggle {
@@ -1852,9 +1869,37 @@ body {
 }
 
 .moment-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 12px;
   color: var(--text-tertiary);
-  margin-top: 4px;
+  margin-top: 8px;
+}
+
+.moment-card__forget-btn {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-fast);
+}
+
+.moment-card__forget-btn:hover {
+  color: #e06c6c;
+}
+
+@keyframes momentFadeOut {
+  from { opacity: 1; transform: scaleY(1); max-height: 600px; }
+  to   { opacity: 0; transform: scaleY(0.95); max-height: 0; margin: 0; padding: 0; }
+}
+
+.moment-card--forgetting {
+  animation: momentFadeOut 300ms ease forwards;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 /* Toast notification */
