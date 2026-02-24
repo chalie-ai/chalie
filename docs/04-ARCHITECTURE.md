@@ -69,7 +69,9 @@ frontend/
 
 #### Autonomous Behavior
 - **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle
-- **`autonomous_actions/`** — Decision routing, communication, reflection with multiple gates
+- **`autonomous_actions/`** — Decision routing, communication, reflection, thread seeding with multiple gates
+- **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
+- **`curiosity_pursuit_service.py`** — Background worker exploring active threads via ACT loop
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
 #### Tool Integration
@@ -106,7 +108,7 @@ frontend/
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-9 built-in cognitive skills for the ACT loop:
+8 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
@@ -114,7 +116,6 @@ frontend/
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
-- **`goal_skill.py`** — Persistent directional goals: create, list, update, progress, check_in (<100ms)
 - **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
 
 ## Worker Processes (`backend/workers/`)
@@ -138,6 +139,7 @@ frontend/
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
 - **Triage Calibration** — Triage correctness scoring (24h cycle)
 - **Profile Enrichment** — Tool profile enrichment (6h cycle)
+- **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 
 ## Data Flow Pipeline
 

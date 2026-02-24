@@ -127,6 +127,7 @@ class CognitiveDriftEngine:
         from services.autonomous_actions.nothing_action import NothingAction
         from services.autonomous_actions.communicate_action import CommunicateAction
         from services.autonomous_actions.reflect_action import ReflectAction
+        from services.autonomous_actions.seed_thread_action import SeedThreadAction
 
         router = ActionDecisionRouter()
 
@@ -134,6 +135,11 @@ class CognitiveDriftEngine:
         router.register(NothingAction())
 
         action_config = self.config.get('autonomous_actions', {})
+
+        # Register SEED_THREAD (priority 6, above REFLECT=5)
+        seed_config = action_config.get('seed_thread', {})
+        if seed_config.get('enabled', True):
+            router.register(SeedThreadAction(config=seed_config))
 
         # Register COMMUNICATE if enabled
         communicate_config = action_config.get('communicate', {})
@@ -822,6 +828,7 @@ class CognitiveDriftEngine:
             extra={
                 'activated_concepts': activated or [],
                 'grounding_episode': grounding_episode,
+                'seed_type': seed.get('seed_type', 'unknown'),
             },
         )
 

@@ -6,22 +6,22 @@ The **Context Relevance Pre-Parser** is a deterministic, rule-based service that
 
 ## Motivation
 
-Previously, **every response generation** retrieved and injected ALL context nodes (episodic memory, identity, user traits, facts, gists, goals, focus, tools, skills, etc.) into every prompt — regardless of whether the mode-specific template even referenced them.
+Previously, **every response generation** retrieved and injected ALL context nodes (episodic memory, identity, user traits, facts, gists, focus, tools, skills, etc.) into every prompt — regardless of whether the mode-specific template even referenced them.
 
 ### Example Waste
 An ACKNOWLEDGE for "Hey!" would trigger:
 - PostgreSQL vector search for episodic memory
 - Redis reads for facts, gists, working memory
-- Goal and skill registry queries
+- Skill registry queries
 
 None of which the ACKNOWLEDGE template even uses.
 
 ### Expected Savings
 | Mode | I/O Skipped | Token Savings |
 |------|-------------|---------------|
-| ACKNOWLEDGE | 5 Redis reads, 1 PG vector search, goal/skill queries | ~1500-3000 |
-| CLARIFY (warm) | 1 PG vector search, goal/skill queries | ~500-1500 |
-| RESPOND (greeting) | 1 PG vector search, goal/focus queries | ~800-2000 |
+| ACKNOWLEDGE | 5 Redis reads, 1 PG vector search, skill queries | ~1500-3000 |
+| CLARIFY (warm) | 1 PG vector search, skill queries | ~500-1500 |
+| RESPOND (greeting) | 1 PG vector search, focus queries | ~800-2000 |
 | ACT | Identity/trait lookups | ~300-800 |
 
 **Pre-parser execution**: < 0.5ms (pure dict lookups).
@@ -47,7 +47,6 @@ All context nodes supported:
 - `onboarding_nudge`
 - `user_traits`
 - `communication_style`
-- `active_goals`
 - `active_lists`
 - `client_context`
 - `focus`
@@ -132,7 +131,6 @@ Dependency graph; if a child is included, parents auto-include:
 {
   "dependencies": {
     "episodic_memory": ["gists"],
-    "focus": ["active_goals"],
     "available_tools": ["available_skills"],
     "onboarding_nudge": ["identity_context"],
     "warm_return_hint": ["identity_context"]
@@ -175,7 +173,7 @@ Force-include under specific conditions:
   "soft_recovery_budget": 1500,
   "soft_recovery_priority": [
     "episodic_memory", "working_memory", "world_state", "facts",
-    "active_goals", "active_lists", "focus", "gists"
+    "active_lists", "focus", "gists"
   ]
 }
 ```
@@ -265,7 +263,7 @@ Fields:
 
 Comprehensive unit tests cover:
 - Template mask correctness per mode
-- Signal rule triggers (warm clarify excludes episodic, greeting excludes episodic/goals)
+- Signal rule triggers (warm clarify excludes episodic, greeting excludes episodic)
 - Soft vs hard exclusion behavior
 - Dependency graph resolution with circular detection
 - Soft recovery priority ordering

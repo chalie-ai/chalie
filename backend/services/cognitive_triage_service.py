@@ -26,14 +26,13 @@ LOG_PREFIX = "[TRIAGE]"
 
 # Cognitive primitives — always selected for ACT regardless of prompt compliance
 _PRIMITIVES = ['recall', 'memorize', 'introspect']
-_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'goal', 'focus', 'autobiography'}
+_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography'}
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
 
 # Innate action skill patterns — ACT is required even when no external tool is listed
 _INNATE_ACTION_PATTERNS = re.compile(
     r'\b(remind\s+me|set\s+(a\s+)?(reminder|alarm|schedule)|schedule\s+(a\s+)?(reminder|task|message)|'
     r'add\s+.{1,40}\s+to\s+(my\s+)?(list|shopping|to.?do)|remove\s+.{1,40}\s+from\s+(my\s+)?(list)|'
-    r'create\s+(a\s+)?goal|set\s+(a\s+)?goal|track\s+(my\s+)?goal|'
     r'cancel\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
     r'delete\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
     r'turn\s+off\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
@@ -308,7 +307,7 @@ class CognitiveTriageService:
         # Rule 1: ACT without any tools → innate skill if matched, otherwise assign default tool or downgrade
         if result.branch == 'act' and not result.tools:
             if _INNATE_ACTION_PATTERNS.search(text):
-                # Innate action skill (schedule/list/goal) — no external tool needed, keep ACT
+                # Innate action skill (schedule/list) — no external tool needed, keep ACT
                 # Ensure primitives are present (may arrive here from heuristic_fallback)
                 if not result.skills:
                     result.skills = list(_PRIMITIVES)

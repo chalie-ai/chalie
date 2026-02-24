@@ -341,6 +341,7 @@ if __name__ == "__main__":
     from services.thread_expiry_service import thread_expiry_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
+    from services.curiosity_pursuit_service import curiosity_pursuit_worker
 
     # 5. RESOLVE HOSTNAMES (BEFORE FORKING)
     # This prevents DNS lookup segfaults in child processes on macOS
@@ -554,6 +555,12 @@ if __name__ == "__main__":
     manager.register_service(
         worker_id="autobiography-synthesis-service",
         worker_func=autobiography_synthesis_worker
+    )
+
+    # Register curiosity pursuit service (6h cycle, explores curiosity threads)
+    manager.register_service(
+        worker_id="curiosity-pursuit-service",
+        worker_func=curiosity_pursuit_worker
     )
 
     # Register triage calibration service (24h cycle, computes correctness scores)

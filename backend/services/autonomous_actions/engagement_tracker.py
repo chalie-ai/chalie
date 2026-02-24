@@ -106,6 +106,9 @@ class EngagementTracker:
 
         self._update_engagement_state(pending_id, outcome, score)
 
+        # Route feedback to curiosity thread if this was a thread surfacing
+        self._route_thread_feedback(outcome, score)
+
         logger.info(
             f"{LOG_PREFIX} Proactive response scored: {outcome} "
             f"(similarity={similarity:.3f}, words={word_count}, score={score:.2f})"
@@ -205,6 +208,46 @@ class EngagementTracker:
             engagement = 1.0
 
         self.redis.set(_key(self.user_id, 'engagement_score'), str(round(engagement, 3)))
+
+    def _route_thread_feedback(self, outcome: str, score: float):
+        """
+        If the pending proactive message was from a curiosity thread,
+        route the engagement feedback to CuriosityThreadService.
+
+        Score mapping:
+          - engaged (1.0) → thread reinforced
+          - acknowledged (0.5) → mild positive
+          - dismissed (0.0) → mild negative signal
+          - ignored → 0.0 (neutral, not punitive)
+        """
+        try:
+            thread_id = self.redis.get(_key(self.user_id, 'pending_thread_id'))
+            if not thread_id:
+                return
+
+            # Map outcome to thread engagement score
+            # ignored = 0.0 (neutral) per plan: absence of signal, not negative
+            thread_score_map = {
+                'engaged': 1.0,
+                'acknowledged': 0.5,
+                'dismissed': 0.0,
+                'ignored': 0.0,
+            }
+            mapped = thread_score_map.get(outcome, 0.5)
+
+            from services.curiosity_thread_service import CuriosityThreadService
+            CuriosityThreadService().update_engagement(thread_id, mapped)
+
+            # Clean up
+            self.redis.delete(_key(self.user_id, 'pending_thread_id'))
+
+            logger.info(
+                f"{LOG_PREFIX} Routed feedback to thread {thread_id}: "
+                f"{outcome} → {mapped:.1f}"
+            )
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Thread feedback routing failed: {e}")
 
     def store_pending_content(self, proactive_id: str, content: str, embedding: list = None):
         """

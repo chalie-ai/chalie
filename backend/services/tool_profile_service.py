@@ -34,7 +34,6 @@ SKILL_DESCRIPTIONS = {
     'associate': 'Find related concepts, explore connections, brainstorm associations between ideas',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
     'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
-    'goal': 'Create, update, and track personal goals and objectives',
     'focus': 'Start and manage deep focus or work sessions, Pomodoro-style timers',
     'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
 }

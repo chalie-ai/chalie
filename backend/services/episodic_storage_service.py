@@ -77,6 +77,14 @@ class EpisodicStorageService:
                 cursor.close()
 
                 logging.info(f"Stored episode {episode_id} for topic '{episode_data['topic']}'")
+
+                # Notify curiosity pursuit service for conversational reinforcement
+                try:
+                    from services.curiosity_pursuit_service import CuriosityPursuitService
+                    CuriosityPursuitService().on_new_episode(episode_data)
+                except Exception:
+                    pass  # Non-fatal — reinforcement is opportunistic
+
                 return str(episode_id)
 
         except Exception as e:

@@ -39,8 +39,7 @@ def handle_introspect(topic: str, params: dict) -> str:
     state["recall_failure_rate"] = _get_recall_failure_rate(topic)
     state["tool_details"] = _get_tool_details()
 
-    # Cross-feature signals (Phase 5)
-    state["active_goals_count"] = _get_active_goals_count()
+    # Cross-feature signals
     state["focus_active"] = _get_focus_active(params.get('thread_id', topic))
     state["communication_style"] = _get_communication_style()
 
@@ -237,20 +236,6 @@ def _get_tool_details() -> dict:
         return {}
 
 
-def _get_active_goals_count() -> int:
-    """Get count of active + progressing goals."""
-    try:
-        from services.goal_service import GoalService
-        from services.database_service import get_shared_db_service
-
-        db_service = get_shared_db_service()
-        service = GoalService(db_service)
-        return len(service.get_active_goals(limit=50))
-    except Exception as e:
-        logger.debug(f"[INTROSPECT] active goals count failed: {e}")
-        return 0
-
-
 def _get_focus_active(thread_id: str) -> bool:
     """Check if a focus session is active for this thread."""
     try:
@@ -319,7 +304,6 @@ def _format_state(state: Dict, topic: str) -> str:
     lines.append(f"  recall_failure_rate: {state['recall_failure_rate']}")
 
     # Cross-feature signals
-    lines.append(f"  active_goals_count: {state.get('active_goals_count', 0)}")
     lines.append(f"  focus_active: {state.get('focus_active', False)}")
     comm_style = state.get('communication_style', {})
     if comm_style:

@@ -200,10 +200,9 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
 
 **Recent Additions**:
-- New Innate Skills: `scheduler` (reminders/task management) and `autobiography` (synthesized user narrative retrieval)
-- New Innate Skill: `list` — deterministic list management (shopping, to-do, chores) with perfect recall and full event history
-- Updated 07-COGNITIVE-ARCHITECTURE.md: 9 innate skills now
-- Updated 04-ARCHITECTURE.md: Added list_service.py, list_skill.py; expanded memory hierarchy to include Lists layer
-- Updated 08-DATA-SCHEMAS.md: Added lists, list_items, list_events table schemas
+- Curiosity Threads: Replaced user-facing goals with self-directed exploration threads (learning and behavioral) seeded from cognitive drift
+- New services: `curiosity_thread_service.py`, `curiosity_pursuit_service.py`, `seed_thread_action.py`
+- Updated 07-COGNITIVE-ARCHITECTURE.md: 8 innate skills (removed goal)
+- Updated 08-DATA-SCHEMAS.md: Replaced goals table with curiosity_threads table
+- Updated 04-ARCHITECTURE.md: Added curiosity thread and pursuit services
 - 09-TOOLS.md: Comprehensive tools system documentation
-- Updated 08-DATA-SCHEMAS.md: Removed outdated file-based storage references

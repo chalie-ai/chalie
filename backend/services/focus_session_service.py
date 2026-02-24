@@ -42,7 +42,6 @@ class FocusSessionService:
         thread_id: str,
         description: str,
         topic: str = "",
-        goal_id: Optional[str] = None,
         source: str = 'explicit',
     ) -> bool:
         """
@@ -52,7 +51,6 @@ class FocusSessionService:
             thread_id: Thread identifier
             description: What the user is focusing on
             topic: Topic associated with focus
-            goal_id: Optional goal this focus session relates to
             source: 'explicit' (user declared) or 'inferred' (auto-detected)
 
         Returns:
@@ -69,7 +67,6 @@ class FocusSessionService:
             session = {
                 "description": description,
                 "topic": topic,
-                "goal_id": goal_id,
                 "source": source,
                 "embedding": embedding,
             }

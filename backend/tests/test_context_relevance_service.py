@@ -45,7 +45,6 @@ class TestContextRelevanceService:
                     'working_memory': True,
                     'facts': True,
                     'gists': True,
-                    'active_goals': True,
                     'identity_context': True,
                 },
                 'ACKNOWLEDGE': {
@@ -93,7 +92,6 @@ class TestContextRelevanceService:
         signals = {
             'greeting_pattern': True,
         }
-        # With a greeting and no budget, active_goals should be soft-excluded
         result = service.compute_inclusion_map(
             mode='RESPOND',
             signals=signals,
@@ -101,7 +99,7 @@ class TestContextRelevanceService:
         )
         # Note: with budget headroom, soft exclusions may be recovered
         # This tests that the signal rule is being evaluated
-        assert 'active_goals' in result
+        assert isinstance(result, dict)
 
     def test_signal_rule_hard_exclusion_not_recovered(self, service):
         """Test that hard-excluded nodes are never recovered."""
@@ -120,6 +118,16 @@ class TestContextRelevanceService:
 
     def test_soft_exclusion_recovery_with_budget(self, minimal_config):
         """Test that soft-excluded nodes are recovered when budget allows."""
+        minimal_config['signal_rules'] = {
+            'facts': [
+                {
+                    'when': {'greeting_pattern': True},
+                    'strength': 'soft'
+                }
+            ]
+        }
+        minimal_config['soft_recovery_priority'] = ['facts']
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump(minimal_config, f)
             config_path = f.name
@@ -136,13 +144,13 @@ class TestContextRelevanceService:
             signals=signals,
             token_budget_remaining=10000
         )
-        # active_goals was soft-excluded but should be recovered due to budget
-        assert result.get('active_goals') is True or result.get('active_goals') is None
+        # facts was soft-excluded but should be recovered due to budget
+        assert result.get('facts') is True
 
     def test_soft_exclusion_not_recovered_without_budget(self, minimal_config):
         """Test that soft-excluded nodes stay excluded when budget is low."""
         minimal_config['signal_rules'] = {
-            'active_goals': [
+            'facts': [
                 {
                     'when': {'greeting_pattern': True},
                     'strength': 'soft'
@@ -150,6 +158,7 @@ class TestContextRelevanceService:
             ]
         }
         minimal_config['soft_recovery_budget'] = 5000
+        minimal_config['soft_recovery_priority'] = ['facts']
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump(minimal_config, f)
@@ -165,21 +174,8 @@ class TestContextRelevanceService:
             signals=signals,
             token_budget_remaining=100  # Very low
         )
-        # active_goals should stay excluded with low budget
-        # (or be True if template doesn't exclude it)
-
-    def test_dependency_auto_includes_parent(self, service):
-        """Test that including a child auto-includes its parent dependency."""
-        signals = {}
-        result = service.compute_inclusion_map(
-            mode='RESPOND',
-            signals=signals
-        )
-
-        # focus depends on active_goals
-        # If focus is included, active_goals must be included
-        if result.get('focus') is True:
-            assert result.get('active_goals') is True
+        # facts should stay excluded with low budget
+        assert result.get('facts') is False
 
     def test_dependency_episodic_to_gists(self, service):
         """Test that episodic_memory depends on gists."""
