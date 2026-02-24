@@ -142,10 +142,10 @@ def _poll_and_fire():
 
 
 def _fire_item(item: dict):
-    """Fire a due item — directly or via LLM pipeline depending on is_prompt."""
+    """Fire a due item — directly or via LLM pipeline depending on item_type."""
     message = item.get("message", "")
-    source = item.get("item_type", "reminder")
-    is_prompt = item.get("is_prompt", False)
+    source = item.get("item_type", "notification")
+    is_prompt = (source == "prompt")
 
     if is_prompt:
         # Route through digest_worker → cognitive triage → LLM (original behaviour)
@@ -208,7 +208,7 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
 
     return {
         "id": uuid.uuid4().hex[:8],
-        "item_type": item.get("item_type", "reminder"),
+        "item_type": item.get("item_type", "notification"),
         "message": item.get("message", ""),
         "due_at": next_due,
         "recurrence": recurrence,
@@ -217,7 +217,7 @@ def _build_recurrence(item: dict, fired_at: datetime) -> dict:
         "topic": item.get("topic"),
         "created_by_session": item.get("created_by_session"),
         "group_id": item.get("group_id") or item.get("id"),  # inherit group, fall back to own id
-        "is_prompt": item.get("is_prompt", False),
+        "is_prompt": item.get("item_type", "notification") == "prompt",
     }
 
 

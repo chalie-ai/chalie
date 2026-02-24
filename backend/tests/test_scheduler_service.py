@@ -1,176 +1,163 @@
 """
 Tests for backend/services/scheduler_service.py
+
+Covers pure-computation functions (_calculate_next_due, _build_recurrence, _fire_item).
+Poll/DB tests require PostgreSQL and are covered by integration tests.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
-import sqlite3
 import services.scheduler_service as scheduler_svc
 
 
 @pytest.mark.unit
-class TestSchedulerService:
-    """Test scheduler service background worker."""
+class TestCalculateNextDue:
+    """Test _calculate_next_due recurrence logic."""
 
-    @pytest.fixture(autouse=True)
-    def setup_temp_db(self, tmp_path, monkeypatch):
-        """Setup temporary database for each test."""
-        data_dir = tmp_path / "data"
-        data_dir.mkdir()
-        db_path = data_dir / "scheduler.db"
-        monkeypatch.setattr(scheduler_svc, '_DATA_DIR', data_dir)
-        monkeypatch.setattr(scheduler_svc, '_DB_PATH', db_path)
-        yield db_path
-
-    def _create_item(self, db_path, item_id="test1", due_at=None, recurrence=None):
-        """Helper to create a test item."""
-        if due_at is None:
-            due_at = (datetime.now() - timedelta(minutes=1)).isoformat()
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS scheduled_items (
-                id TEXT PRIMARY KEY,
-                type TEXT NOT NULL DEFAULT 'reminder',
-                message TEXT NOT NULL,
-                due_at TEXT NOT NULL,
-                recurrence TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                last_fired_at TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_status_due ON scheduled_items(status, due_at)
-        """)
-        cursor.execute("""
-            INSERT INTO scheduled_items (id, type, message, due_at, recurrence, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (item_id, "reminder", "Test message", due_at, recurrence, "pending"))
-        conn.commit()
-        conn.close()
-
-    def test_poll_finds_due_items(self, setup_temp_db):
-        """Poll should find due items."""
-        self._create_item(setup_temp_db, due_at=(datetime.now() - timedelta(minutes=5)).isoformat())
-
-        with patch('services.scheduler_service.PromptQueue') as mock_queue:
-            scheduler_svc._poll_and_fire()
-
-            # Queue should have been created
-            assert mock_queue.called
-
-    def test_poll_fires_item_to_queue(self, setup_temp_db):
-        """Poll should enqueue due items."""
-        self._create_item(setup_temp_db, due_at=(datetime.now() - timedelta(minutes=5)).isoformat())
-
-        with patch('services.scheduler_service.PromptQueue') as mock_queue_class:
-            mock_queue = MagicMock()
-            mock_queue_class.return_value = mock_queue
-
-            scheduler_svc._poll_and_fire()
-
-            # Enqueue should have been called
-            assert mock_queue.enqueue.called
-
-    def test_poll_marks_fired(self, setup_temp_db):
-        """Fired items should be marked with status='fired'."""
-        self._create_item(setup_temp_db, item_id="fired1", due_at=(datetime.now() - timedelta(minutes=5)).isoformat())
-
-        with patch('services.scheduler_service.PromptQueue'):
-            scheduler_svc._poll_and_fire()
-
-        # Check status in DB
-        conn = sqlite3.connect(str(setup_temp_db))
-        cursor = conn.cursor()
-        cursor.execute("SELECT status FROM scheduled_items WHERE id = ?", ("fired1",))
-        row = cursor.fetchone()
-        conn.close()
-
-        assert row[0] == "fired"
-
-    def test_recurrence_daily(self, setup_temp_db):
-        """Daily recurrence should add 1 day."""
-        due_at = datetime(2024, 1, 15, 10, 0)
+    def test_daily(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
         next_due = scheduler_svc._calculate_next_due(due_at, "daily")
-        assert next_due == datetime(2024, 1, 16, 10, 0)
+        assert next_due == datetime(2024, 1, 16, 10, 0, tzinfo=timezone.utc)
 
-    def test_recurrence_weekly(self, setup_temp_db):
-        """Weekly recurrence should add 7 days."""
-        due_at = datetime(2024, 1, 15, 10, 0)
+    def test_weekly(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
         next_due = scheduler_svc._calculate_next_due(due_at, "weekly")
-        assert next_due == datetime(2024, 1, 22, 10, 0)
+        assert next_due == datetime(2024, 1, 22, 10, 0, tzinfo=timezone.utc)
 
-    def test_recurrence_monthly(self, setup_temp_db):
-        """Monthly recurrence should add 1 month."""
-        due_at = datetime(2024, 1, 15, 10, 0)
+    def test_monthly(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
         next_due = scheduler_svc._calculate_next_due(due_at, "monthly")
-        assert next_due == datetime(2024, 2, 15, 10, 0)
+        assert next_due == datetime(2024, 2, 15, 10, 0, tzinfo=timezone.utc)
 
-    def test_recurrence_monthly_clamping(self, setup_temp_db):
-        """Jan 31 → Feb should clamp to Feb 28."""
-        due_at = datetime(2024, 1, 31, 10, 0)
+    def test_monthly_clamping(self):
+        """Jan 31 → Feb should clamp to Feb 29 in leap year."""
+        due_at = datetime(2024, 1, 31, 10, 0, tzinfo=timezone.utc)
         next_due = scheduler_svc._calculate_next_due(due_at, "monthly")
         assert next_due.month == 2
         assert next_due.day == 29  # 2024 is leap year
 
-    def test_recurrence_weekdays(self, setup_temp_db):
-        """Weekdays should skip Saturday/Sunday."""
-        # Friday
-        friday = datetime(2024, 1, 19, 10, 0)
+    def test_weekdays_skips_weekend(self):
+        """Friday should advance to Monday."""
+        friday = datetime(2024, 1, 19, 10, 0, tzinfo=timezone.utc)
         next_due = scheduler_svc._calculate_next_due(friday, "weekdays")
-        # Should be Monday (skip Sat/Sun)
-        assert next_due.weekday() < 5
+        assert next_due.weekday() < 5  # not Saturday or Sunday
+        assert next_due.weekday() == 0  # Monday
 
-    def test_no_recurrence_one_time(self, setup_temp_db):
-        """No recurrence should not create new item."""
-        next_item = scheduler_svc._create_recurrence(
-            {"id": "test", "due_at": "2024-01-15T10:00:00", "recurrence": None},
-            datetime.now()
-        )
-        assert next_item is None
+    def test_interval(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
+        next_due = scheduler_svc._calculate_next_due(due_at, "interval:30")
+        assert next_due == datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc)
 
-    def test_fire_item_metadata(self, setup_temp_db):
-        """Fired item should have correct metadata."""
+    def test_interval_60_min(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
+        next_due = scheduler_svc._calculate_next_due(due_at, "interval:60")
+        assert next_due == datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+
+    def test_hourly_no_window(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
+        next_due = scheduler_svc._calculate_next_due(due_at, "hourly")
+        assert next_due == datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+
+    def test_hourly_within_window(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
+        next_due = scheduler_svc._calculate_next_due(due_at, "hourly", "09:00", "17:00")
+        assert next_due == datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
+
+    def test_hourly_past_window_end(self):
+        """Past window end should advance to next day's window start."""
+        due_at = datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc)
+        next_due = scheduler_svc._calculate_next_due(due_at, "hourly", "09:00", "17:00")
+        assert next_due.day == 16
+        assert next_due.hour == 9
+
+    def test_unknown_recurrence_returns_none(self):
+        due_at = datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc)
+        result = scheduler_svc._calculate_next_due(due_at, "unknown")
+        assert result is None
+
+
+@pytest.mark.unit
+class TestBuildRecurrence:
+    """Test _build_recurrence next-occurrence generation."""
+
+    def test_no_recurrence_returns_none(self):
         item = {
-            "id": "test",
-            "type": "reminder",
-            "message": "Test message",
-            "due_at": "2024-01-15T10:00:00"
+            "id": "test1", "item_type": "notification", "message": "hello",
+            "due_at": datetime(2024, 1, 15, 10, 0, tzinfo=timezone.utc),
+            "recurrence": None, "topic": "general", "created_by_session": None,
+            "group_id": "test1", "is_prompt": False,
         }
+        result = scheduler_svc._build_recurrence(item, datetime.now(timezone.utc))
+        assert result is None
 
-        with patch('services.scheduler_service.PromptQueue') as mock_queue_class:
+    def test_daily_next_occurrence(self):
+        item = {
+            "id": "abc12345", "item_type": "notification", "message": "Daily standup",
+            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
+            "recurrence": "daily", "topic": "work", "created_by_session": None,
+            "group_id": "abc12345", "is_prompt": False,
+        }
+        result = scheduler_svc._build_recurrence(item, datetime(2024, 1, 15, 9, 1, tzinfo=timezone.utc))
+        assert result is not None
+        assert result["due_at"] == datetime(2024, 1, 16, 9, 0, tzinfo=timezone.utc)
+        assert result["item_type"] == "notification"
+        assert result["group_id"] == "abc12345"
+        assert result["id"] != "abc12345"
+
+    def test_prompt_type_preserved(self):
+        item = {
+            "id": "xyz99", "item_type": "prompt", "message": "Check my progress",
+            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
+            "recurrence": "daily", "topic": "goals", "created_by_session": None,
+            "group_id": "xyz99", "is_prompt": True,
+        }
+        result = scheduler_svc._build_recurrence(item, datetime(2024, 1, 15, 9, 1, tzinfo=timezone.utc))
+        assert result is not None
+        assert result["item_type"] == "prompt"
+        assert result["is_prompt"] is True
+
+
+@pytest.mark.unit
+class TestFireItem:
+    """Test _fire_item delivery routing."""
+
+    def test_notification_uses_output_service(self):
+        """Notification items should bypass LLM and go directly to OutputService."""
+        item = {
+            "id": "notif1",
+            "item_type": "notification",
+            "message": "Take your medicine",
+            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
+            "topic": "health",
+            "is_prompt": False,
+        }
+        with patch('services.output_service.OutputService') as mock_output_cls:
+            mock_output = MagicMock()
+            mock_output_cls.return_value = mock_output
+            scheduler_svc._fire_item(item)
+            assert mock_output.enqueue_text.called
+            call_kwargs = mock_output.enqueue_text.call_args[1]
+            assert call_kwargs["mode"] == "NOTIFICATION"
+            assert call_kwargs["response"] == "Take your medicine"
+
+    def test_prompt_uses_llm_pipeline(self):
+        """Prompt items should be routed through the LLM pipeline via PromptQueue."""
+        item = {
+            "id": "prompt1",
+            "item_type": "prompt",
+            "message": "How did I do this week?",
+            "due_at": datetime(2024, 1, 15, 9, 0, tzinfo=timezone.utc),
+            "topic": "reflection",
+            "is_prompt": True,
+        }
+        with patch('services.prompt_queue.PromptQueue') as mock_queue_cls, \
+             patch('services.client_context_service.ClientContextService') as mock_ctx, \
+             patch('workers.digest_worker.digest_worker'):
             mock_queue = MagicMock()
-            mock_queue_class.return_value = mock_queue
-
-            scheduler_svc._fire_item(item, datetime.now())
-
-            # Check enqueue call
-            call_args = mock_queue.enqueue.call_args[0][0]
-            assert call_args['metadata']['source'] == "reminder"
-            assert call_args['metadata']['destination'] == "web"
-
-    def test_poll_empty_table(self, setup_temp_db):
-        """Empty table should not error."""
-        # Create empty DB
-        conn = sqlite3.connect(str(setup_temp_db))
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS scheduled_items (
-                id TEXT PRIMARY KEY,
-                type TEXT,
-                message TEXT,
-                due_at TEXT,
-                recurrence TEXT,
-                status TEXT,
-                created_at TEXT,
-                last_fired_at TEXT
-            )
-        """)
-        conn.commit()
-        conn.close()
-
-        # Should not error
-        with patch('services.scheduler_service.PromptQueue'):
-            scheduler_svc._poll_and_fire()
+            mock_queue_cls.return_value = mock_queue
+            mock_ctx.return_value.format_for_prompt.return_value = ""
+            scheduler_svc._fire_item(item)
+            assert mock_queue.enqueue.called
+            enqueue_args = mock_queue.enqueue.call_args[0]
+            assert enqueue_args[0] == "How did I do this week?"

@@ -618,7 +618,7 @@ class ChalieApp {
     if (data.type === 'response' && this._isSending) return;
 
     // Scheduler trigger events — render as styled trigger card or plain message
-    if (data.type === 'reminder' || data.type === 'task') {
+    if (data.type === 'notification') {
       this._handleSchedulerTrigger(data);
       return;
     }
@@ -656,7 +656,7 @@ class ChalieApp {
   }
 
   _buildTriggerCard(data) {
-    const label = data.type === 'task' ? 'Task' : 'Reminder';
+    const label = 'Notification';
     const card = document.createElement('div');
     card.className = 'tool-result-card';
     card.setAttribute('data-tool', `scheduler_trigger`);

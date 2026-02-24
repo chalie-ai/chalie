@@ -196,8 +196,8 @@ class SchedulerCardService:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _type_badge(self, item_type: str) -> str:
-        color = "#fbbf24" if item_type == "task" else "#8A5CFF"
-        label = "task" if item_type == "task" else "reminder"
+        color = "#00F0FF" if item_type == "prompt" else "#8A5CFF"
+        label = "prompt" if item_type == "prompt" else "notification"
         return (
             f'<span style="font-size:11px;font-weight:500;letter-spacing:0.4px;'
             f'text-transform:uppercase;padding:2px 7px;border-radius:4px;'
