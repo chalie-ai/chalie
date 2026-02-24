@@ -44,7 +44,7 @@ def _create(topic: str, params: dict) -> str:
 
         logger.debug(
             f"{LOG_PREFIX} _create called — message={params.get('message', '')!r:.80}, "
-            f"due_at={params.get('due_at', '')!r}, item_type={params.get('item_type', 'reminder')!r}, "
+            f"due_at={params.get('due_at', '')!r}, item_type={params.get('item_type', 'notification')!r}, "
             f"recurrence={params.get('recurrence')!r}"
         )
 
@@ -78,9 +78,9 @@ def _create(topic: str, params: dict) -> str:
             )
             return f"Error: due_at must be in the future (current time: {now.isoformat()})"
 
-        item_type = params.get("item_type", "reminder").lower()
-        if item_type not in ("reminder", "task"):
-            return f"Error: item_type must be 'reminder' or 'task', got {item_type}"
+        item_type = params.get("item_type", "notification").lower()
+        if item_type not in ("notification", "prompt"):
+            return f"Error: item_type must be 'notification' or 'prompt', got {item_type}"
 
         recurrence = params.get("recurrence")
         if recurrence:
@@ -125,18 +125,20 @@ def _create(topic: str, params: dict) -> str:
         db = get_shared_db_service()
         item_id = uuid.uuid4().hex[:8]
 
+        is_prompt = (item_type == "prompt")
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO scheduled_items
                   (id, item_type, message, due_at, recurrence, window_start, window_end,
-                   status, topic, created_by_session, created_at, group_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, NOW(), %s)
+                   status, topic, created_by_session, created_at, group_id, is_prompt)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, NOW(), %s, %s)
             """, (
                 item_id, item_type, message, due_at,
                 recurrence, window_start, window_end,
                 topic, None,
                 item_id,  # group_id = own id (root of new series)
+                is_prompt,
             ))
             conn.commit()
 

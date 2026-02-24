@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 scheduler_bp = Blueprint("scheduler", __name__)
 
 _VALID_STATUSES = {"pending", "fired", "failed", "cancelled"}
-_VALID_TYPES = {"reminder", "task"}
+_VALID_TYPES = {"notification", "prompt"}
 _VALID_RECURRENCES = {"daily", "weekly", "monthly", "weekdays", "hourly"}
 _INTERVAL_PREFIX = "interval:"
 
@@ -72,7 +72,7 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if require_future and due_at <= datetime.now(timezone.utc):
         return None, "due_at must be in the future"
 
-    item_type = (data.get("item_type") or "reminder").strip()
+    item_type = (data.get("item_type") or "notification").strip()
     if item_type not in _VALID_TYPES:
         return None, f"item_type must be one of: {', '.join(sorted(_VALID_TYPES))}"
 
@@ -103,7 +103,7 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if window_end and not window_start:
         return None, "window_start is required when window_end is set"
 
-    is_prompt = bool(data.get("is_prompt", False))
+    is_prompt = (item_type == "prompt")
 
     return {
         "message": message,

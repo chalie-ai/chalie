@@ -1448,7 +1448,7 @@ function openEditSchedule(id) {
     document.getElementById('scheduleDueAt').value = item.due_at
         ? toLocalDatetimeString(new Date(item.due_at))
         : '';
-    document.getElementById('scheduleType').value = item.item_type || 'reminder';
+    document.getElementById('scheduleType').value = item.item_type || 'notification';
 
     // Decode interval:N recurrence
     const rawRec = item.recurrence || '';
