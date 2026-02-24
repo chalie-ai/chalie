@@ -27,11 +27,30 @@ export class MomentCard {
     titleEl.textContent = this._data.title || 'Moment';
     card.appendChild(titleEl);
 
-    // 2. Pinned message (quoted block)
-    const messageEl = document.createElement('div');
-    messageEl.className = 'moment-card__message';
-    messageEl.textContent = this._data.message_text || '';
-    card.appendChild(messageEl);
+    // 2. Pinned message — collapsible quoted block
+    const messageText = this._data.message_text || '';
+    if (messageText) {
+      const messageWrap = document.createElement('div');
+      messageWrap.className = 'moment-card__message-wrap';
+
+      const messageEl = document.createElement('div');
+      messageEl.className = 'moment-card__message moment-card__message--collapsed';
+      messageEl.textContent = messageText;
+      messageWrap.appendChild(messageEl);
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'moment-card__message-toggle';
+      toggleBtn.textContent = 'Show more';
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const expanded = messageEl.classList.toggle('moment-card__message--expanded');
+        messageEl.classList.toggle('moment-card__message--collapsed', !expanded);
+        toggleBtn.textContent = expanded ? 'Show less' : 'Show more';
+      });
+      messageWrap.appendChild(toggleBtn);
+
+      card.appendChild(messageWrap);
+    }
 
     // 3. Summary
     if (this._data.summary) {

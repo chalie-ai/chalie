@@ -1784,18 +1784,45 @@ body {
   margin-bottom: 10px;
 }
 
+.moment-card__message-wrap {
+  margin-bottom: 10px;
+}
+
 .moment-card__message {
   border-left: 2px solid var(--accent-primary);
   padding-left: 12px;
-  margin-bottom: 10px;
   font-size: 14px;
   color: var(--text-primary);
   line-height: 1.6;
-  /* Clamp long messages */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.moment-card__message--collapsed {
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.moment-card__message--expanded {
+  display: block;
+  overflow: visible;
+}
+
+.moment-card__message-toggle {
+  background: none;
+  border: none;
+  padding: 4px 0 0 14px;
+  font-size: 12px;
+  color: var(--accent-primary);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity var(--duration-fast);
+}
+
+.moment-card__message-toggle:hover {
+  opacity: 1;
 }
 
 .moment-card__summary {
