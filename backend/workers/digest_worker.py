@@ -1908,6 +1908,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         "classification_time": classification_time,
     })
 
+    # Inject exchange_id into metadata so it flows through to SSE output
+    metadata['exchange_id'] = exchange_id
+
     # Update thread with current topic
     thread_service.update_topic(thread_id, topic)
     thread_service.increment_exchange_count(thread_id)

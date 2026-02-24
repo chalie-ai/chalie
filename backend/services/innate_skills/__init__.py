@@ -16,6 +16,7 @@ from services.innate_skills.scheduler_skill import handle_scheduler
 from services.innate_skills.autobiography_skill import handle_autobiography
 from services.innate_skills.focus_skill import handle_focus
 from services.innate_skills.list_skill import handle_list
+from services.innate_skills.moment_skill import handle_moment
 
 
 def register_innate_skills(dispatcher) -> None:
@@ -34,6 +35,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["autobiography"] = lambda topic, action: handle_autobiography(topic, action)
     dispatcher.handlers["focus"] = lambda topic, action: handle_focus(topic, action)
     dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)
+    dispatcher.handlers["moment"] = lambda topic, action: handle_moment(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)

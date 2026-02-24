@@ -175,7 +175,39 @@ class FrontalCortexService:
                 response_data = json.loads(stripped)
             except json.JSONDecodeError:
                 fixed = re.sub(r'\\([^"\\/bfnrtu])', r'\1', stripped)
-                response_data = json.loads(fixed)  # propagates if still invalid
+                try:
+                    response_data = json.loads(fixed)
+                except json.JSONDecodeError:
+                    # Recovery layer 1: try to extract a {…} object embedded in prose
+                    brace_start = fixed.find('{')
+                    brace_end = fixed.rfind('}')
+                    if brace_start != -1 and brace_end > brace_start:
+                        candidate = fixed[brace_start:brace_end + 1]
+                        try:
+                            response_data = json.loads(candidate)
+                            logging.warning(
+                                "[FRONTAL CORTEX] Extracted JSON from prose response "
+                                f"(offset {brace_start}–{brace_end})"
+                            )
+                        except json.JSONDecodeError:
+                            response_data = None
+                    else:
+                        response_data = None
+
+                    if response_data is None:
+                        # Recovery layer 2: LLM returned pure prose — wrap it as RESPOND.
+                        # Prefer original response_text over stripped to preserve any
+                        # formatting the model intended.
+                        prose = response_text.strip()
+                        if prose:
+                            logging.warning(
+                                "[FRONTAL CORTEX] LLM returned prose instead of JSON — "
+                                "wrapping as RESPOND (first 80 chars): "
+                                f"{prose[:80]!r}"
+                            )
+                            response_data = {"response": prose, "modifiers": []}
+                        else:
+                            raise  # re-raise original JSONDecodeError (empty response)
 
             # Extract fields (mode-specific prompts produce simpler output)
             mode = response_data.get('mode', 'RESPOND')

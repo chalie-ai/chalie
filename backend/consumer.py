@@ -563,6 +563,13 @@ if __name__ == "__main__":
         worker_func=curiosity_pursuit_worker
     )
 
+    # Register moment enrichment service (5min poll, enriches pinned moments)
+    from services.moment_enrichment_service import moment_enrichment_worker
+    manager.register_service(
+        worker_id="moment-enrichment-service",
+        worker_func=moment_enrichment_worker
+    )
+
     # Register triage calibration service (24h cycle, computes correctness scores)
     try:
         from services.triage_calibration_service import triage_calibration_worker

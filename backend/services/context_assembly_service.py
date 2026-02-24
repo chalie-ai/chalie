@@ -16,6 +16,7 @@ class ContextAssemblyService:
     # Default weights for each memory type (higher = more important)
     DEFAULT_WEIGHTS = {
         'working_memory': 1.0,
+        'moments': 0.95,
         'facts': 0.9,
         'gists': 0.8,
         'episodes': 0.7,
@@ -72,6 +73,7 @@ class ContextAssemblyService:
         # Use thread_id for working memory if available
         wm_identifier = thread_id if thread_id else topic
         sections['working_memory'] = self._get_working_memory(wm_identifier)
+        sections['moments'] = self._get_moments(prompt)
         sections['facts'] = self._get_facts(topic)
         sections['gists'] = self._get_gists(topic)
         sections['episodes'] = self._get_episodes(prompt, topic, act_history)
@@ -106,6 +108,44 @@ class ContextAssemblyService:
             return wm.get_formatted_context(identifier)
         except Exception as e:
             logging.debug(f"[CONTEXT] Working memory unavailable: {e}")
+            return ""
+
+    def _get_moments(self, prompt: str) -> str:
+        """Retrieve relevant pinned moments via semantic search."""
+        try:
+            from services.moment_service import MomentService
+            from services.database_service import get_shared_db_service
+
+            db_service = get_shared_db_service()
+            service = MomentService(db_service)
+            moments = service.search_moments(prompt, limit=2)
+
+            if not moments:
+                return ""
+
+            # Only include moments above similarity threshold (distance < 0.6)
+            relevant = [m for m in moments if m.get("distance", 1.0) < 0.6]
+            if not relevant:
+                return ""
+
+            lines = ["## Pinned Moments"]
+            for m in relevant:
+                summary = m.get("summary") or m.get("message_text", "")[:100]
+                pinned_at = m.get("pinned_at")
+                date_str = ""
+                if pinned_at:
+                    try:
+                        if hasattr(pinned_at, 'strftime'):
+                            date_str = pinned_at.strftime("%d %b %Y")
+                        else:
+                            date_str = str(pinned_at)[:10]
+                    except Exception:
+                        date_str = ""
+                lines.append(f"- {summary} (pinned {date_str})")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logging.debug(f"[CONTEXT] Moments unavailable: {e}")
             return ""
 
     def _get_facts(self, topic: str) -> str:
@@ -224,7 +264,7 @@ class ContextAssemblyService:
         Returns:
             Budget-constrained sections
         """
-        memory_types = ['working_memory', 'facts', 'gists', 'episodes', 'concepts', 'previous_session']
+        memory_types = ['working_memory', 'moments', 'facts', 'gists', 'episodes', 'concepts', 'previous_session']
 
         # Sort by weight ascending (trim lowest weight first)
         sorted_types = sorted(memory_types, key=lambda t: self.weights.get(t, 0.5))
