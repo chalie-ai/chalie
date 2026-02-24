@@ -524,8 +524,8 @@ class MomentService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Title generation failed, using fallback: {e}")
 
-        # Fallback: first 60 chars of message
-        return message_text[:60].strip() + ("..." if len(message_text) > 60 else "")
+        # Fallback: never use the message text itself — it will repeat verbatim in the card
+        return "Pinned Moment"
 
     def _reverse_salience_boost(self, moment: Dict[str, Any]) -> None:
         """Reverse salience boosts applied when this moment was pinned."""
