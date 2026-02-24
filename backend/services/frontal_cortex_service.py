@@ -400,13 +400,6 @@ class FrontalCortexService:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
 
-        # Active goals (persistent directional goals)
-        if _include('active_goals'):
-            active_goals = self._get_active_goals(topic)
-        else:
-            active_goals = ''
-        result = result.replace('{{active_goals}}', active_goals)
-
         # Active lists (deterministic list state)
         if _include('active_lists'):
             active_lists = self._get_active_lists()
@@ -630,27 +623,6 @@ class FrontalCortexService:
             logging.debug(f"Focus context not available: {e}")
             return ""
 
-    def _get_active_goals(self, topic: str = "") -> str:
-        """
-        Get active goals formatted for prompt injection.
-
-        Args:
-            topic: Current topic for relevance filtering
-
-        Returns:
-            str: Formatted active goals section or empty string
-        """
-        try:
-            from services.goal_service import GoalService
-            from services.database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            goal_service = GoalService(db_service)
-            return goal_service.get_goals_for_prompt(topic=topic)
-        except Exception as e:
-            logging.debug(f"Active goals not available: {e}")
-            return ""
-
     def _get_active_lists(self) -> str:
         """
         Get active lists formatted for prompt injection.
@@ -829,7 +801,7 @@ class FrontalCortexService:
         try:
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "goal", "focus", "list"]
+            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list"]
             available = [s for s in innate if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)

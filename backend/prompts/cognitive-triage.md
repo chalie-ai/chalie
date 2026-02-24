@@ -14,13 +14,12 @@ Available innate skills:
 - associate: explore concept relationships and graph traversal
 - schedule: manage reminders, recurring tasks, timed events
 - list: manage named lists (shopping, to-do, chores, etc.)
-- goal: create and track persistent long-horizon goals
 - focus: declare and manage deep work / focus sessions
 - autobiography: retrieve accumulated user life narrative
 
 Routing rules:
-- ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, a tool listed above, OR the user wants an action performed via a built-in action skill (set/create/cancel a reminder or schedule, add/remove items from a list, create or update a goal). For action skill requests leave tools=[].
-- RESPOND: I can answer fully from training knowledge or memory with high confidence. Use for timeless facts, opinions, math, definitions, advice, conceptual questions, personal context already in working memory, or when the user is asking ABOUT schedules/lists/goals (not requesting an action on them).
+- ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, a tool listed above, OR the user wants an action performed via a built-in action skill (set/create/cancel a reminder or schedule, add/remove items from a list). For action skill requests leave tools=[].
+- RESPOND: I can answer fully from training knowledge or memory with high confidence. Use for timeless facts, opinions, math, definitions, advice, conceptual questions, personal context already in working memory, or when the user is asking ABOUT schedules/lists (not requesting an action on them).
 - CLARIFY: the request is genuinely too vague to route without more information.
 - For ACT mode: always include recall, memorize, introspect in skills[]. Add others only when the message or context clearly calls for them.
 

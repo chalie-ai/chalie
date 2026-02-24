@@ -81,7 +81,7 @@ The visual language is inspired by "blockbuster dark UI" (JARVIS, Tron Legacy, K
 - Messages in chronological order
 - System messages (Chalie) on left with thin violet top-edge gradient
 - User messages on right with distinct background
-- Support for cards: scheduled items, lists, goals, etc.
+- Support for cards: scheduled items, lists, etc.
 - Scroll depth fade at top/bottom
 
 ### Prompt Box (80px, fixed bottom)

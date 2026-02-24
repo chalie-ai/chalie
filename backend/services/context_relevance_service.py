@@ -46,7 +46,6 @@ class ContextRelevanceService:
         'facts': 300,
         'user_traits': 300,
         'world_state': 300,
-        'active_goals': 300,
         'active_lists': 400,
         'identity_context': 150,
         'focus': 150,

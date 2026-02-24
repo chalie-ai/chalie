@@ -8,7 +8,6 @@
       "user_traits": true,
       "communication_style": true,
       "adaptive_directives": true,
-      "active_goals": true,
       "active_lists": true,
       "client_context": true,
       "focus": true,
@@ -29,7 +28,6 @@
       "user_traits": true,
       "communication_style": true,
       "adaptive_directives": true,
-      "active_goals": false,
       "active_lists": true,
       "client_context": true,
       "focus": true,
@@ -50,7 +48,6 @@
       "user_traits": false,
       "communication_style": true,
       "adaptive_directives": false,
-      "active_goals": true,
       "active_lists": true,
       "client_context": true,
       "focus": true,
@@ -71,7 +68,6 @@
       "user_traits": true,
       "communication_style": true,
       "adaptive_directives": true,
-      "active_goals": false,
       "active_lists": true,
       "client_context": false,
       "focus": false,
@@ -89,7 +85,7 @@
   },
   "dependencies": {
     "episodic_memory": ["gists"],
-    "focus": ["active_goals"],
+    "focus": [],
     "onboarding_nudge": ["identity_context"],
     "warm_return_hint": ["identity_context"],
     "adaptive_directives": ["communication_style"]
@@ -152,20 +148,6 @@
         "when": {
           "greeting_pattern": true,
           "prompt_token_count_lt": 6
-        },
-        "strength": "hard"
-      }
-    ],
-    "active_goals": [
-      {
-        "when": {
-          "greeting_pattern": true
-        },
-        "strength": "soft"
-      },
-      {
-        "when": {
-          "information_density_lt": 0.2
         },
         "strength": "hard"
       }
@@ -250,7 +232,6 @@
     "working_memory",
     "world_state",
     "facts",
-    "active_goals",
     "active_lists",
     "focus",
     "gists"

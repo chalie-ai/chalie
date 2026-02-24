@@ -14,7 +14,7 @@ def handle_focus(topic: str, params: dict) -> str:
     Manage focus sessions for the current thread.
 
     Actions:
-    - set: Declare a focus session with a description (and optional goal_id)
+    - set: Declare a focus session with a description
     - check: Return current focus status + distraction signal for latest message
     - clear: End the current focus session
 
@@ -54,19 +54,15 @@ def _handle_set(service, thread_id: str, topic: str, params: dict) -> str:
     if not description:
         return "[FOCUS] 'description' is required to set focus."
 
-    goal_id = params.get('goal_id')
-
     success = service.set_focus(
         thread_id=thread_id,
         description=description,
         topic=topic,
-        goal_id=goal_id,
         source='explicit',
     )
 
     if success:
-        goal_note = f" (linked to goal: {goal_id})" if goal_id else ""
-        return f"[FOCUS] Focus set: '{description}'{goal_note}"
+        return f"[FOCUS] Focus set: '{description}'"
     else:
         return "[FOCUS] Failed to set focus session."
 

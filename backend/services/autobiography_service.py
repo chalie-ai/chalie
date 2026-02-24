@@ -148,7 +148,6 @@ class AutobiographyService:
                     "traits": [],
                     "concepts": [],
                     "relationships": [],
-                    "goals": [],
                 }
 
                 # Gather episodes (≤50, sorted by salience DESC)
@@ -245,21 +244,6 @@ class AutobiographyService:
                         "strength": row[3]
                     })
 
-                # Gather active goals for synthesis context
-                try:
-                    from services.goal_service import GoalService
-                    goal_service = GoalService(self.db)
-                    goals = goal_service.get_active_goals(user_id, limit=10)
-                    for g in goals:
-                        inputs["goals"].append({
-                            "title": g["title"],
-                            "status": g["status"],
-                            "priority": g["priority"],
-                            "last_mentioned": g["last_mentioned"].isoformat() if g.get("last_mentioned") else None,
-                        })
-                except Exception as ge:
-                    logger.debug(f"[AUTOBIOGRAPHY] Goals not available for synthesis: {ge}")
-
                 return inputs
         except Exception as e:
             logger.error(f"[AUTOBIOGRAPHY] Error gathering synthesis inputs: {e}")
@@ -268,7 +252,6 @@ class AutobiographyService:
                 "traits": [],
                 "concepts": [],
                 "relationships": [],
-                "goals": [],
             }
 
     def synthesize(self, user_id: str = "primary") -> bool:
@@ -355,14 +338,6 @@ class AutobiographyService:
                         f"v{self.get_current_narrative(user_id)['version']} "
                         f"({synthesis_ms}ms)"
                     )
-
-                    # Post-synthesis: infer goals from narrative (non-fatal)
-                    try:
-                        from services.goal_service import GoalService
-                        goal_service = GoalService(self.db)
-                        goal_service.infer_goals_from_autobiography(narrative, user_id)
-                    except Exception as ge:
-                        logger.warning(f"[AUTOBIOGRAPHY] Goal inference non-fatal error: {ge}")
 
                     # Post-synthesis: compute growth delta and reinforce stable traits (non-fatal)
                     try:
@@ -510,14 +485,6 @@ class AutobiographyService:
                 lines.append(
                     f"- {concept['name']}: {concept['definition']} "
                     f"(strength: {concept['strength']:.2f}, domain: {concept['domain']})"
-                )
-
-        if inputs.get("goals"):
-            lines.append("\n## Active Goals\n")
-            for goal in inputs["goals"]:
-                last = f", last mentioned: {goal['last_mentioned']}" if goal.get('last_mentioned') else ""
-                lines.append(
-                    f"- [{goal['priority']}] {goal['title']} ({goal['status']}{last})"
                 )
 
         return "\n".join(lines)
