@@ -218,7 +218,8 @@ def tool_worker(job_data: dict) -> str:
         # ACT loop
         consecutive_same_action = 0
         last_action_type = None
-        recent_action_texts = []  # For embedding-based smart repetition
+        recent_action_entries = []  # (fingerprint_text, action_types_set) tuples
+        termination_reason = None
 
         while True:
             # Check cancellation each iteration
@@ -257,76 +258,89 @@ def tool_worker(job_data: dict) -> str:
             else:
                 logger.debug(f"[TOOL WORKER] Iter {act_loop.iteration_number}: LLM returned no actions")
 
-            # Repetition detection (type-based)
-            if actions and len(actions) == 1:
+            # No actions → log and break (nothing to execute)
+            if not actions:
+                logger.info("[TOOL WORKER] No actions, exiting ACT loop")
+                termination_reason = 'no_actions'
+                act_loop.log_iteration(
+                    started_at=iteration_start,
+                    completed_at=time.time(),
+                    chosen_mode='ACT',
+                    chosen_confidence=response_data.get('confidence', 0.5),
+                    actions_executed=[],
+                    frontal_cortex_response=response_data,
+                    termination_reason=termination_reason,
+                    decision_data={'net_value': 0.0, 'total_cost': act_loop.fatigue, 'iteration_cost': 0.0},
+                )
+                act_loop.iteration_number += 1
+                break
+
+            # ── Execute actions FIRST (always execute current iteration) ──
+            actions_executed = act_loop.execute_actions(
+                topic=topic,
+                actions=actions
+            )
+            act_loop.append_results(actions_executed)
+
+            # Track fingerprint + types for repetition detection
+            current_fingerprint = _action_fingerprint(actions)
+            current_types = _action_types(actions)
+            recent_action_entries.append((current_fingerprint, current_types))
+
+            # Accumulate fatigue
+            fatigue_added = act_loop.accumulate_fatigue(actions_executed, act_loop.iteration_number)
+
+            # Estimate net value (for cortex_iterations logging + strategy analysis)
+            iteration_net_value = ActLoopService.estimate_net_value(actions_executed, act_loop.iteration_number)
+
+            # Record per-skill outcomes to procedural memory
+            from services.skill_outcome_recorder import record_skill_outcomes
+            record_skill_outcomes(actions_executed, topic)
+
+            # ── Post-execution termination checks ──
+            termination_reason = None
+
+            # 1. Type-based repetition (≥3 consecutive same single action)
+            if len(actions) == 1:
                 current_type = actions[0].get('type', '')
                 if current_type == last_action_type:
                     consecutive_same_action += 1
                 else:
                     consecutive_same_action = 1
                 last_action_type = current_type
-            elif actions:
+            else:
                 consecutive_same_action = 0
                 last_action_type = None
 
             if consecutive_same_action >= 3:
                 logger.warning(f"[TOOL WORKER] Repetition detected: '{last_action_type}' x{consecutive_same_action}")
                 termination_reason = 'repetition_detected'
-                can_continue = False
-            else:
-                # Embedding-based smart repetition check
-                smart_repeat = False
-                if actions and recent_action_texts:
-                    try:
-                        from services.embedding_service import get_embedding_service
-                        import numpy as np
-                        emb_service = get_embedding_service()
-                        current_action_text = _action_fingerprint(actions)
-                        current_vec = emb_service.generate_embedding_np(current_action_text)
-                        for prev_text in recent_action_texts[-3:]:
-                            prev_vec = emb_service.generate_embedding_np(prev_text)
-                            sim = float(np.dot(current_vec, prev_vec))
-                            if sim > repetition_sim_threshold:
-                                logger.warning(f"[TOOL WORKER] Smart repetition: sim={sim:.3f} > {repetition_sim_threshold}")
-                                smart_repeat = True
-                                break
-                    except Exception:
-                        pass
 
-                if smart_repeat:
-                    termination_reason = 'smart_repetition'
-                    can_continue = False
-                else:
-                    can_continue, termination_reason = act_loop.can_continue()
+            # 2. Embedding-based smart repetition (same-type only)
+            if not termination_reason and len(recent_action_entries) > 1:
+                try:
+                    from services.embedding_service import get_embedding_service
+                    import numpy as np
+                    emb_service = get_embedding_service()
+                    current_vec = emb_service.generate_embedding_np(current_fingerprint)
+                    for prev_fingerprint, prev_types in recent_action_entries[-4:-1]:  # last 3 prior
+                        # Only compare if action types overlap
+                        if not current_types & prev_types:
+                            continue
+                        prev_vec = emb_service.generate_embedding_np(prev_fingerprint)
+                        sim = float(np.dot(current_vec, prev_vec))
+                        if sim > repetition_sim_threshold:
+                            logger.warning(f"[TOOL WORKER] Smart repetition (same-type): sim={sim:.3f} > {repetition_sim_threshold}")
+                            termination_reason = 'smart_repetition'
+                            break
+                except Exception:
+                    pass
 
-            # Execute actions
-            actions_executed = []
-            fatigue_added = 0.0
-            iteration_net_value = 0.0
-            if can_continue and actions:
-                actions_executed = act_loop.execute_actions(
-                    topic=topic,
-                    actions=actions
-                )
-                act_loop.append_results(actions_executed)
-
-                # Track action fingerprint for smart repetition
-                recent_action_texts.append(_action_fingerprint(actions))
-
-                # Accumulate fatigue
-                fatigue_added = act_loop.accumulate_fatigue(actions_executed, act_loop.iteration_number)
-
-                # Estimate net value (for cortex_iterations logging + strategy analysis)
-                iteration_net_value = ActLoopService.estimate_net_value(actions_executed, act_loop.iteration_number)
-
-                # Record per-skill outcomes to procedural memory
-                from services.skill_outcome_recorder import record_skill_outcomes
-                record_skill_outcomes(actions_executed, topic)
-
-            elif not actions:
-                logger.info("[TOOL WORKER] No actions, exiting ACT loop")
-                termination_reason = 'no_actions'
-                can_continue = False
+            # 3. Fatigue / timeout / max iterations
+            if not termination_reason:
+                can_continue, fatigue_reason = act_loop.can_continue()
+                if not can_continue:
+                    termination_reason = fatigue_reason
 
             # Log iteration
             iteration_end = time.time()
@@ -337,7 +351,7 @@ def tool_worker(job_data: dict) -> str:
                 chosen_confidence=response_data.get('confidence', 0.5),
                 actions_executed=actions_executed,
                 frontal_cortex_response=response_data,
-                termination_reason=termination_reason if not can_continue else None,
+                termination_reason=termination_reason,
                 decision_data={
                     'net_value': iteration_net_value,
                     'total_cost': act_loop.fatigue,
@@ -347,7 +361,7 @@ def tool_worker(job_data: dict) -> str:
 
             act_loop.iteration_number += 1
 
-            if not can_continue:
+            if termination_reason:
                 break
 
         # Batch write iterations
@@ -540,6 +554,11 @@ def _action_fingerprint(actions: list) -> str:
         query = a.get('query', a.get('text', a.get('input', '')))
         parts.append(f"{action_type}: {query}")
     return ' | '.join(parts)
+
+
+def _action_types(actions: list) -> set:
+    """Extract the set of action types from an action list."""
+    return {a.get('type', 'unknown') for a in actions}
 
 
 def _get_cycle_service():
