@@ -25,8 +25,6 @@ You do NOT:
 
 {{adaptive_directives}}
 
-{{active_goals}}
-
 (Lists shown below are read-only context. You CANNOT add, remove, or modify list items in RESPOND mode.)
 {{active_lists}}
 

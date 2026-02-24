@@ -75,7 +75,7 @@ class DecayEngineService:
         identity_count = self._apply_identity_inertia()
         external_count = self._decay_external_knowledge()
         trait_stats = self._decay_user_traits()
-        goal_dormancy = self._apply_goal_dormancy()
+        thread_dormancy = self._apply_thread_dormancy()
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
@@ -84,7 +84,7 @@ class DecayEngineService:
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
             f"traits={trait_stats.get('decayed', 0)} decayed/{trait_stats.get('deleted', 0)} deleted, "
-            f"goals={goal_dormancy} moved to dormant"
+            f"threads={thread_dormancy} dormancy-applied"
         )
 
     def _decay_episodic(self) -> int:
@@ -326,27 +326,23 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] User trait decay failed: {e}")
             return {'decayed': 0, 'deleted': 0}
 
-    def _apply_goal_dormancy(self) -> int:
+    def _apply_thread_dormancy(self) -> int:
         """
-        Move goals not mentioned in 30 days to dormant status.
+        Apply dormancy rules to curiosity threads.
+
+        Active threads not explored in 45 days → dormant.
+        Dormant + engagement < 0.2 + dormant > 60 days → abandoned.
 
         Returns:
-            Number of goals moved to dormant
+            Number of threads transitioned
         """
         try:
-            from .database_service import get_lightweight_db_service
-            from .goal_service import GoalService
-
-            db_service = get_lightweight_db_service()
-            try:
-                goal_service = GoalService(db_service)
-                return goal_service.apply_dormancy()
-            finally:
-                db_service.close_pool()
+            from .curiosity_thread_service import CuriosityThreadService
+            return CuriosityThreadService().apply_dormancy()
         except ImportError:
             return 0
         except Exception as e:
-            logger.error(f"[DECAY ENGINE] Goal dormancy failed: {e}")
+            logger.error(f"[DECAY ENGINE] Thread dormancy failed: {e}")
             return 0
 
     def _apply_identity_inertia(self) -> int:

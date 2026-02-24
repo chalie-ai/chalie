@@ -169,18 +169,22 @@ CREATE TABLE scheduled_items (
 );
 ```
 
-### Goals
+### Curiosity Threads
 ```sql
-CREATE TABLE goals (
+CREATE TABLE curiosity_threads (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     title TEXT NOT NULL,
-    description TEXT,
-    status TEXT DEFAULT 'active',  -- active, completed, abandoned
-    progress FLOAT DEFAULT 0.0,
-    target_date TIMESTAMP,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    rationale TEXT,
+    thread_type TEXT NOT NULL CHECK (thread_type IN ('learning', 'behavioral')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'dormant', 'abandoned')),
+    seed_topic TEXT,
+    learning_notes JSONB NOT NULL DEFAULT '[]',
+    last_explored_at TIMESTAMPTZ,
+    exploration_count INTEGER NOT NULL DEFAULT 0,
+    last_surfaced_at TIMESTAMPTZ,
+    engagement_score FLOAT NOT NULL DEFAULT 0.5,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 

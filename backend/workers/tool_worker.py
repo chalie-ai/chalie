@@ -439,7 +439,7 @@ def tool_worker(job_data: dict) -> str:
             perf_service = ToolPerformanceService()
             for action in act_loop.get_history_context() if hasattr(act_loop, 'get_history_context') else []:
                 action_type = action.get('action_type', '') if isinstance(action, dict) else ''
-                if action_type and action_type not in ('recall', 'memorize', 'introspect', 'associate', 'schedule', 'goal', 'focus', 'list', 'autobiography', 'introspect'):
+                if action_type and action_type not in ('recall', 'memorize', 'introspect', 'associate', 'schedule', 'focus', 'list', 'autobiography'):
                     action_success = action.get('status') == 'success' if isinstance(action, dict) else False
                     action_latency = float(action.get('latency_ms', 0)) if isinstance(action, dict) else 0.0
                     perf_service.record_invocation(

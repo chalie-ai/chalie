@@ -28,8 +28,6 @@ You do NOT:
 
 {{communication_style}}
 
-{{active_goals}}
-
 {{active_lists}}
 
 ────────────────────────────────
