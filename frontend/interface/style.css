@@ -1891,6 +1891,12 @@ body {
   color: #e06c6c;
 }
 
+.moment-card--pending-forget {
+  opacity: 0.35;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+}
+
 @keyframes momentFadeOut {
   from { opacity: 1; transform: scaleY(1); max-height: 600px; }
   to   { opacity: 0; transform: scaleY(0.95); max-height: 0; margin: 0; padding: 0; }
