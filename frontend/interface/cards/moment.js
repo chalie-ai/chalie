@@ -4,6 +4,8 @@
  * Used by both the search overlay results and drift-stream card events.
  * Matches the backend MomentCardService structure.
  */
+import { parseMarkdown } from '../markdown.js';
+
 export class MomentCard {
   /**
    * @param {Object} data — moment data from the API
@@ -27,7 +29,7 @@ export class MomentCard {
     titleEl.textContent = this._data.title || 'Moment';
     card.appendChild(titleEl);
 
-    // 2. Pinned message — collapsible quoted block
+    // 2. Pinned message — collapsible quoted block with markdown rendering
     const messageText = this._data.message_text || '';
     if (messageText) {
       const messageWrap = document.createElement('div');
@@ -35,7 +37,7 @@ export class MomentCard {
 
       const messageEl = document.createElement('div');
       messageEl.className = 'moment-card__message moment-card__message--collapsed';
-      messageEl.textContent = messageText;
+      messageEl.innerHTML = parseMarkdown(messageText);
       messageWrap.appendChild(messageEl);
 
       const toggleBtn = document.createElement('button');
@@ -74,13 +76,30 @@ export class MomentCard {
       card.appendChild(gistsEl);
     }
 
-    // 5. Pinned time
+    // 5. Footer: pinned time + forget button
+    const footerEl = document.createElement('div');
+    footerEl.className = 'moment-card__footer';
+
     if (this._data.pinned_at) {
-      const footerEl = document.createElement('div');
-      footerEl.className = 'moment-card__footer';
-      footerEl.textContent = `Pinned ${this._formatDate(this._data.pinned_at)}`;
-      card.appendChild(footerEl);
+      const timeEl = document.createElement('span');
+      timeEl.textContent = `Pinned ${this._formatDate(this._data.pinned_at)}`;
+      footerEl.appendChild(timeEl);
     }
+
+    if (this._data.id) {
+      const forgetBtn = document.createElement('button');
+      forgetBtn.className = 'moment-card__forget-btn';
+      forgetBtn.textContent = 'Forget';
+      forgetBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.dispatchEvent(new CustomEvent('chalie:forget-moment', {
+          detail: { momentId: this._data.id, cardElement: card }
+        }));
+      });
+      footerEl.appendChild(forgetBtn);
+    }
+
+    card.appendChild(footerEl);
 
     return card;
   }
