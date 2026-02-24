@@ -1295,14 +1295,14 @@ body::before {
     text-transform: capitalize;
 }
 
-.schedule-badge.--type-reminder {
+.schedule-badge.--type-notification {
     background: rgba(138, 92, 255, 0.08);
     color: #9E74FF;
 }
 
-.schedule-badge.--type-task {
-    background: rgba(245, 158, 11, 0.10);
-    color: var(--warning);
+.schedule-badge.--type-prompt {
+    background: rgba(0, 240, 255, 0.08);
+    color: #00F0FF;
 }
 
 .schedule-badge.--recurrence {
