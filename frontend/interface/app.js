@@ -272,26 +272,34 @@ class ChalieApp {
     });
 
     // Forget moment event (from Forget button on a moment card)
-    document.addEventListener('chalie:forget-moment', async (e) => {
+    document.addEventListener('chalie:forget-moment', (e) => {
       const { momentId, cardElement } = e.detail;
 
-      // Animate card out immediately
-      cardElement.classList.add('moment-card--forgetting');
-      setTimeout(() => cardElement.remove(), 310);
+      // Dim the card to signal pending deletion — don't remove it yet
+      cardElement.classList.add('moment-card--pending-forget');
 
-      try {
-        const base = backendHost ? backendHost.replace(/\/$/, '') : '';
-        await fetch(base + `/moments/${momentId}/forget`, {
-          method: 'POST',
-          credentials: 'same-origin',
-        });
-        this._showToast('Forgotten');
-      } catch (err) {
-        console.warn('Forget moment failed:', err);
-        // Restore the card if the request failed
-        cardElement.classList.remove('moment-card--forgetting');
-        cardElement.style.removeProperty('animation');
-      }
+      // Schedule actual forget after the undo window
+      const forgetTimer = setTimeout(async () => {
+        cardElement.classList.remove('moment-card--pending-forget');
+        cardElement.classList.add('moment-card--forgetting');
+        setTimeout(() => cardElement.remove(), 310);
+
+        try {
+          const base = backendHost ? backendHost.replace(/\/$/, '') : '';
+          await fetch(base + `/moments/${momentId}/forget`, {
+            method: 'POST',
+            credentials: 'same-origin',
+          });
+        } catch (err) {
+          console.warn('Forget moment failed:', err);
+        }
+      }, 10000);
+
+      // Undo — cancel the timer and restore the card
+      this._showToast('Forgotten', () => {
+        clearTimeout(forgetTimer);
+        cardElement.classList.remove('moment-card--pending-forget');
+      }, 10000);
     });
 
     // First-use hint (one-time)
@@ -312,7 +320,7 @@ class ChalieApp {
     }
   }
 
-  _showToast(message, onUndo) {
+  _showToast(message, onUndo, duration = 4000) {
     // Remove existing toast
     document.querySelector('.chalie-toast')?.remove();
 
@@ -337,7 +345,7 @@ class ChalieApp {
     setTimeout(() => {
       toast.classList.remove('chalie-toast--visible');
       setTimeout(() => toast.remove(), 250);
-    }, 4000);
+    }, duration);
   }
 
   _showMomentsHintOnFirstResponse() {
