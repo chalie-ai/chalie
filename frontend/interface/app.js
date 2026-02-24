@@ -271,6 +271,29 @@ class ChalieApp {
       this.renderer.appendToolCard(card.build());
     });
 
+    // Forget moment event (from Forget button on a moment card)
+    document.addEventListener('chalie:forget-moment', async (e) => {
+      const { momentId, cardElement } = e.detail;
+
+      // Animate card out immediately
+      cardElement.classList.add('moment-card--forgetting');
+      setTimeout(() => cardElement.remove(), 310);
+
+      try {
+        const base = backendHost ? backendHost.replace(/\/$/, '') : '';
+        await fetch(base + `/moments/${momentId}/forget`, {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        this._showToast('Forgotten');
+      } catch (err) {
+        console.warn('Forget moment failed:', err);
+        // Restore the card if the request failed
+        cardElement.classList.remove('moment-card--forgetting');
+        cardElement.style.removeProperty('animation');
+      }
+    });
+
     // First-use hint (one-time)
     if (!localStorage.getItem('moments_hint_shown')) {
       this._showMomentsHintOnFirstResponse();
