@@ -173,6 +173,44 @@ class TestSelfEvalRules:
         assert result.mode == 'ACT'
         assert result.self_eval_reason == 'act_tool_deferred_to_loop'
 
+    def test_rule5_url_in_message_escalates_to_act(self):
+        """RESPOND + URL in message + tools available → escalate to ACT."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('respond', 'RESPOND')
+        ctx = self._make_context(tool_summaries='## Info\n- web_read: read URLs')
+        result = svc._self_evaluate(result, "open https://github.com/chalie-ai/chalie", ctx)
+        assert result.branch == 'act'
+        assert result.mode == 'ACT'
+        assert result.self_eval_reason == 'act_url_detected'
+
+    def test_rule5_url_no_escalation_without_tools(self):
+        """RESPOND + URL but no tools → stays RESPOND."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('respond', 'RESPOND')
+        ctx = self._make_context(tool_summaries='')
+        result = svc._self_evaluate(result, "check https://example.com", ctx)
+        assert result.branch == 'respond'
+
+    def test_rule5_url_already_act_not_modified(self):
+        """ACT + URL → no change (already ACT)."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('act', 'ACT', tools=['web_read'])
+        ctx = self._make_context()
+        result = svc._self_evaluate(result, "read https://example.com", ctx)
+        assert result.branch == 'act'
+        assert result.self_eval_reason == ''  # No override needed
+
+    def test_heuristic_fallback_url_gives_act(self):
+        """Heuristic fallback with URL in message → ACT."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        ctx = self._make_context()
+        result = svc._heuristic_fallback("visit https://example.com/page", ctx)
+        assert result.branch == 'act'
+
     def test_rule2_act_failsafe_escalates_respond_to_act(self):
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()

@@ -546,10 +546,10 @@ class ToolProfileService:
                 if self.check_staleness(skill_name, manifest_hash):
                     self.build_skill_profile(skill_name, skill_desc)
                 else:
-                    # Rebuild if domain column was added but not yet populated
+                    # Rebuild if new columns were added but not yet populated
                     profile = self.get_full_profile(skill_name)
-                    if profile and not profile.get('domain'):
-                        logger.info(f"{LOG_PREFIX} Rebuilding skill {skill_name} profile (missing domain)")
+                    if profile and self._profile_needs_rebuild(profile):
+                        logger.info(f"{LOG_PREFIX} Rebuilding skill {skill_name} profile (missing fields)")
                         self.build_skill_profile(skill_name, skill_desc)
                     else:
                         logger.debug(f"{LOG_PREFIX} Skill {skill_name} profile is current")
@@ -567,10 +567,10 @@ class ToolProfileService:
                     if self.check_staleness(tool_name, current_hash):
                         self.build_profile(tool_name, manifest)
                     else:
-                        # Rebuild if domain column was added but not yet populated
+                        # Rebuild if new columns were added but not yet populated
                         profile = self.get_full_profile(tool_name)
-                        if profile and not profile.get('domain'):
-                            logger.info(f"{LOG_PREFIX} Rebuilding tool {tool_name} profile (missing domain)")
+                        if profile and self._profile_needs_rebuild(profile):
+                            logger.info(f"{LOG_PREFIX} Rebuilding tool {tool_name} profile (missing fields)")
                             self.build_profile(tool_name, manifest)
                         else:
                             logger.debug(f"{LOG_PREFIX} Tool {tool_name} profile is current")
@@ -701,6 +701,16 @@ class ToolProfileService:
             'complementary_skills': [],
             'triage_triggers': [],
         }
+
+    @staticmethod
+    def _profile_needs_rebuild(profile: dict) -> bool:
+        """Check if a profile is missing fields added after initial build."""
+        if not profile.get('domain'):
+            return True
+        triggers = profile.get('triage_triggers')
+        if not triggers or triggers == []:
+            return True
+        return False
 
     def _invalidate_cache(self):
         """Invalidate the triage summaries Redis cache."""
