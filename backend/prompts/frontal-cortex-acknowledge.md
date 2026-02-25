@@ -14,6 +14,8 @@ Your task: give a brief, warm social acknowledgment. Keep it short and natural.
 
 {{adaptive_directives}}
 
+{{spark_guidance}}
+
 {{active_lists}}
 
 ## Client Context

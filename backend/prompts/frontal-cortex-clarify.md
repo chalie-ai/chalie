@@ -21,6 +21,8 @@ You do NOT:
 
 {{adaptive_directives}}
 
+{{spark_guidance}}
+
 {{active_lists}}
 
 ## Client Context

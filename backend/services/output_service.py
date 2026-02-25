@@ -76,6 +76,9 @@ class OutputService:
             'tool_followup': 'tool_followup',
             'reminder': 'reminder',
             'task': 'task',
+            'spark_welcome': 'drift',
+            'spark_suggest': 'drift',
+            'spark_nurture': 'drift',
         }
         event_type = source_type_map.get(source, 'response')
 
