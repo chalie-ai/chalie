@@ -20,6 +20,8 @@ class ChalieApp {
     this._healthRetryTimeout = null;
     this._driftSource = null;
     this._deferredInstallPrompt = null;
+    this._isFirstContact = false;
+    this._sparkOverlayTimeout = null;
 
     // Modules
     this.api = new ApiClient(() => this._backendHost);
@@ -507,8 +509,19 @@ class ChalieApp {
         if (responseText) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
+          if (pendingForm.isConnected) {
+            // Normal path: pending bubble still in the DOM
+            this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
+          } else {
+            // Card arrived via drift stream first — pending form was already removed.
+            // Append the synthesis as a new message so it isn't silently lost.
+            this.renderer.appendChalieForm(responseText, responseMeta);
+          }
           this._pendingForm = null;
+          // Notify if user switched away while waiting for the response
+          if (!document.hasFocus()) {
+            this._notifyBackground(responseText);
+          }
         } else {
           // card-only: keep the pending bubble visible until the card arrives via drift stream
           this.renderer.upgradePendingText(pendingForm); // no-op if already upgraded
@@ -532,7 +545,11 @@ class ChalieApp {
   async _loadRecentConversation() {
     try {
       const data = await this.api.getRecentConversation();
-      if (!data.exchanges || data.exchanges.length === 0) return;
+      if (!data.exchanges || data.exchanges.length === 0) {
+        // Empty conversation — check if this is a first-contact scenario
+        await this._checkSparkOverlay();
+        return;
+      }
 
       for (const exchange of data.exchanges) {
         if (exchange.prompt) {
@@ -552,6 +569,61 @@ class ChalieApp {
       }
       // Otherwise silently fail — conversation history is nice-to-have
     }
+  }
+
+  async _checkSparkOverlay() {
+    try {
+      const status = await this.api._get('/conversation/spark-status');
+      if (!status.needs_welcome) return;
+
+      this._isFirstContact = true;
+      this._showSparkOverlay();
+    } catch (_) {
+      // Spark status unavailable — don't show overlay
+    }
+  }
+
+  _showSparkOverlay() {
+    const overlay = document.getElementById('sparkOverlay');
+    const spine = document.getElementById('conversationSpine');
+    const dock = document.querySelector('.input-dock');
+    if (!overlay) return;
+
+    overlay.classList.remove('hidden');
+    if (spine) spine.style.display = 'none';
+    if (dock) dock.style.display = 'none';
+
+    // Skip button
+    const skipBtn = overlay.querySelector('.spark-overlay__skip');
+    if (skipBtn) {
+      skipBtn.addEventListener('click', () => this._dismissSparkOverlay(), { once: true });
+    }
+
+    // Timeout fallback: dismiss after 12s even if no welcome arrives
+    this._sparkOverlayTimeout = setTimeout(() => this._dismissSparkOverlay(), 12000);
+  }
+
+  _dismissSparkOverlay() {
+    if (this._sparkOverlayTimeout) {
+      clearTimeout(this._sparkOverlayTimeout);
+      this._sparkOverlayTimeout = null;
+    }
+
+    const overlay = document.getElementById('sparkOverlay');
+    const spine = document.getElementById('conversationSpine');
+    const dock = document.querySelector('.input-dock');
+
+    if (overlay && !overlay.classList.contains('hidden')) {
+      overlay.classList.add('spark-overlay--fading');
+      setTimeout(() => {
+        overlay.classList.add('hidden');
+        overlay.classList.remove('spark-overlay--fading');
+      }, 220);
+    }
+
+    if (spine) spine.style.display = '';
+    if (dock) dock.style.display = '';
+    this._isFirstContact = false;
   }
 
   // ---------------------------------------------------------------------------
@@ -595,6 +667,11 @@ class ChalieApp {
   }
 
   _handleEvent(data) {
+    // Spark first-contact: dismiss overlay when the welcome message arrives
+    if (this._isFirstContact && data.type === 'drift' && data.content) {
+      this._dismissSparkOverlay();
+    }
+
     // Tool result card event
     if (data.type === 'card') {
       if (this._pendingForm) {
@@ -616,6 +693,11 @@ class ChalieApp {
     // Ignore 'response' events from the drift stream while a /chat SSE request
     // is in flight — the chat SSE already renders the reply via resolvePendingForm.
     if (data.type === 'response' && this._isSending) return;
+
+    // System notification + sound when tab is not focused
+    if (!document.hasFocus()) {
+      this._notifyBackground(content);
+    }
 
     // Scheduler trigger events — render as styled trigger card or plain message
     if (data.type === 'notification') {
@@ -712,6 +794,35 @@ class ChalieApp {
     }
   }
 
+  /**
+   * Show system notification + play sound when the tab is not focused.
+   * Uses ServiceWorkerRegistration.showNotification() so the tag deduplicates
+   * against push notifications from sw.js (both use 'chalie-message').
+   */
+  _notifyBackground(text) {
+    if (Notification.permission !== 'granted') return;
+
+    const body = text.length > 200 ? text.slice(0, 200) + '…' : text;
+
+    // System notification via SW registration (shared tag prevents duplicates with push)
+    if (navigator.serviceWorker?.controller) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.showNotification('Chalie', {
+          body,
+          tag: 'chalie-message',
+          data: { url: '/' },
+        });
+      }).catch(() => {});
+    } else {
+      // Fallback: Notification API directly (no SW available)
+      try { new Notification('Chalie', { body, tag: 'chalie-message' }); } catch (_) {}
+    }
+
+    // Audible chime — Web Audio may be throttled in hidden tabs but works
+    // when the window is just unfocused (another app in foreground).
+    this._playScheduleSound();
+  }
+
   async _requestNotificationPermission() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
 
@@ -779,8 +890,19 @@ class ChalieApp {
         if (!this._driftSource || this._driftSource.readyState === EventSource.CLOSED) {
           this._connectDriftStream();
         }
+        // Dismiss stale notifications now that the user is back
+        this._dismissNotifications();
       }
     });
+  }
+
+  _dismissNotifications() {
+    if (!navigator.serviceWorker?.controller) return;
+    navigator.serviceWorker.ready.then(reg => {
+      reg.getNotifications({ tag: 'chalie-message' }).then(notes => {
+        notes.forEach(n => n.close());
+      });
+    }).catch(() => {});
   }
 
   // ---------------------------------------------------------------------------
