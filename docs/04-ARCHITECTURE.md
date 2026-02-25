@@ -71,20 +71,28 @@ frontend/
 - **`moment_card_service.py`** — Inline HTML card emission for moment display in the conversation spine
 
 #### Autonomous Behavior
-- **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle
-- **`autonomous_actions/`** — Decision routing, communication, reflection, thread seeding with multiple gates
+- **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle; attention-gated (skips when user in deep focus)
+- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, SuggestAction (skill-matched proactive suggestions), NurtureAction (gentle phase-appropriate presence), ReflectAction, SeedThreadAction
+- **`spark_state_service.py`** — Tracks relationship phase progression (first_contact → surface → exploratory → connected → graduated)
+- **`spark_welcome_service.py`** — First-contact welcome message triggered on first SSE connection; runs once per lifecycle
 - **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
 - **`curiosity_pursuit_service.py`** — Background worker exploring active threads via ACT loop
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
+#### Ambient Awareness
+- **`ambient_inference_service.py`** — Deterministic inference engine (<1ms, zero LLM): place, attention, energy, mobility, tempo, device_context from browser telemetry + behavioral signals; thresholds loaded from `configs/agents/ambient-inference.json`
+- **`place_learning_service.py`** — Accumulates place fingerprints (geohash ~1km, never raw coords) in `place_fingerprints` table; learned patterns override heuristics after 20+ observations
+- **`client_context_service.py`** — Rich client context with location history ring buffer (12 entries), place transition detection, session re-entry detection (>30min absence), demographic trait seeding from locale, and circadian hourly interaction counts
+
 #### Tool Integration
 - **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement
-- **`tool_registry_service.py`** — Tool discovery and metadata management
-- **`tool_container_service.py`** — Container lifecycle and execution
-- **`tool_config_service.py`** — Tool configuration persistence
+- **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol)
+- **`tool_container_service.py`** — Container lifecycle; `run()` for single-shot, `run_interactive()` for bidirectional tool↔Chalie dialog (JSON-lines stdout, Chalie responses via stdin)
+- **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
 - **`tool_performance_service.py`** — Performance metrics tracking
 - **`tool_profile_service.py`** — Tool capability caching and profiles
+- **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
@@ -132,7 +140,9 @@ frontend/
 
 ### Services/Daemons
 - **REST API Worker** — Flask REST API on port 8080
-- **Cognitive Drift Engine** — Generates spontaneous thoughts during worker idle
+- **Cognitive Drift Engine** — Generates spontaneous thoughts during worker idle (attention-gated: skips when user in deep focus)
+- **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
+- **Place Learning Service** — Accumulates place fingerprints in PostgreSQL; learned patterns override heuristics after 20+ observations
 - **Decay Engine** — Periodic memory decay cycle
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Routing Reflection** — Idle-time peer review of routing decisions
