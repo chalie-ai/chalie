@@ -13,8 +13,12 @@ from typing import Optional, Dict, Any
 
 @dataclass
 class ThoughtContext:
-    """Context passed to each action's should_execute and execute methods."""
-    thought_type: str           # 'reflection', 'question', 'hypothesis'
+    """Context passed to each action's should_execute and execute methods.
+
+    Extended with event fields for event-bridge-driven autonomous actions.
+    When thought_type='event', the event_* fields carry context change data.
+    """
+    thought_type: str           # 'reflection', 'question', 'hypothesis', 'event'
     thought_content: str        # The synthesized thought text
     activation_energy: float    # Max activation score from spreading activation
     seed_concept: str           # Name of the seed concept

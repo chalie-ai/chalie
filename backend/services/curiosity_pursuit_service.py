@@ -218,10 +218,9 @@ class CuriosityPursuitService:
             return None
 
         try:
-            from services.llm_service import create_llm_service
+            from services.background_llm_queue import create_background_llm_proxy
 
-            config = ConfigService.resolve_agent_config("cognitive-drift")
-            llm = create_llm_service(config)
+            llm = create_background_llm_proxy("cognitive-drift")
 
             prompt = (
                 f"Summarize these internal exploration results about '{thread['seed_topic']}' "
@@ -293,12 +292,11 @@ class CuriosityPursuitService:
         Returns the surprise message or None if too thin/boring.
         """
         try:
-            from services.llm_service import create_llm_service
+            from services.background_llm_queue import create_background_llm_proxy
             from services.user_trait_service import UserTraitService
             from services.database_service import get_shared_db_service
 
-            config = ConfigService.resolve_agent_config("cognitive-drift")
-            llm = create_llm_service(config)
+            llm = create_background_llm_proxy("cognitive-drift")
 
             # Load surprise prompt
             prompt_path = os.path.join(

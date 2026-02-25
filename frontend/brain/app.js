@@ -213,6 +213,9 @@ async function loadData() {
 
     await loadAssignments();
     renderMain();
+
+    // Handle OAuth callback URL parameters
+    handleOAuthCallback();
 }
 
 // ==========================================
@@ -918,10 +921,14 @@ function renderToolCard(tool) {
     };
     const statusInfo = statusBadgeMap[status] || { label: status, class: '' };
 
+    // OAuth status
+    const hasOAuth = tool.auth_type === 'oauth2';
+    const oauthConnected = tool.oauth_connected;
+
     // Actions HTML
     let actionsHtml = '';
     if (!isBuilding) {
-        if (hasConfig) {
+        if (hasConfig || hasOAuth) {
             actionsHtml += `<button class="tool-card__btn" onclick="openToolSettings('${name}')" title="Settings">⚙ Settings</button>`;
         }
         if (isDisabled) {
@@ -944,6 +951,16 @@ function renderToolCard(tool) {
         `;
     }
 
+    // OAuth badge HTML
+    let oauthBadgeHtml = '';
+    if (hasOAuth) {
+        if (oauthConnected) {
+            oauthBadgeHtml = `<span class="oauth-badge --connected">${escapeHtml(tool.auth_provider_hint || 'OAuth')} Connected</span>`;
+        } else {
+            oauthBadgeHtml = `<span class="oauth-badge --disconnected">Not Connected</span>`;
+        }
+    }
+
     return `
         <div class="tool-card ${isBuilding ? '--building' : ''} ${isDisabled ? '--disabled' : ''} ${hasError ? '--error' : ''}">
             <div class="tool-card__header">
@@ -955,6 +972,7 @@ function renderToolCard(tool) {
             </div>
             <p class="tool-card__desc">${escapeHtml(tool.description)}</p>
             ${errorHtml}
+            ${oauthBadgeHtml}
             <div class="tool-card__footer">
                 <span class="tool-card__status ${statusInfo.class}">${statusInfo.label}</span>
                 <div class="tool-card__actions">
@@ -1156,6 +1174,66 @@ async function openToolSettings(name) {
             formHtml += '<p style="color: var(--text-muted); font-size: 12px; margin-top: 12px;"><em>Configuration is stored securely and encrypted.</em></p>';
         }
 
+        // OAuth section — generic, reads auth_type from tool listing data
+        const toolInfo = embodyTools.find(t => t.name === name);
+        if (toolInfo && toolInfo.auth_type === 'oauth2') {
+            const providerHint = toolInfo.auth_provider_hint || 'OAuth';
+            const hasCredentials = !!(config.client_id && config.client_id !== '***' && config.client_id !== '') ||
+                                   !!(config.client_secret && config.client_secret === '***');
+
+            formHtml += `<div class="oauth-section" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">`;
+
+            // Setup guide when credentials are empty
+            if (!hasCredentials) {
+                const callbackUrl = `${window.location.origin}/api/tools/${name}/oauth/callback`;
+                formHtml += `
+                    <div class="oauth-setup-guide">
+                        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">
+                            Setup ${escapeHtml(providerHint)} Credentials
+                        </div>
+                        <ol style="font-size:12px;color:var(--text-muted);line-height:1.8;padding-left:18px;margin:0 0 12px 0">
+                            <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">console.cloud.google.com</a></li>
+                            <li>Create a new project (or select an existing one)</li>
+                            <li>Enable APIs:
+                                <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">Gmail</a>,
+                                <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">Calendar</a>,
+                                <a href="https://console.cloud.google.com/apis/library/tasks.googleapis.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">Tasks</a>
+                            </li>
+                            <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent-hover)">Credentials</a> &rarr; Create OAuth Client ID &rarr; Web application</li>
+                            <li>Add redirect URI: <code style="font-size:11px;color:var(--accent-hover);background:rgba(138,92,255,0.08);padding:2px 6px;border-radius:3px">${escapeHtml(callbackUrl)}</code></li>
+                            <li>Paste Client ID and Client Secret in the fields above, then click Save</li>
+                        </ol>
+                    </div>`;
+            }
+
+            // OAuth connect/disconnect status
+            formHtml += `<div id="oauthStatusArea" style="margin-top:12px">`;
+            if (toolInfo.oauth_connected) {
+                formHtml += `
+                    <div class="oauth-status --connected">
+                        <i class="fas fa-check-circle" style="color:var(--success);margin-right:6px"></i>
+                        <span>${escapeHtml(providerHint)} account connected</span>
+                        <button class="tool-card__btn --danger" style="margin-left:auto" onclick="disconnectOAuth('${name}')">Disconnect</button>
+                    </div>`;
+            } else if (hasCredentials) {
+                formHtml += `
+                    <div class="oauth-status --ready">
+                        <span style="color:var(--text-muted);font-size:13px">Account not connected</span>
+                        <button class="btn btn-primary" style="margin-left:auto;font-size:12px;padding:6px 14px" onclick="startOAuth('${name}')">
+                            Connect ${escapeHtml(providerHint)} Account
+                        </button>
+                    </div>`;
+            } else {
+                formHtml += `
+                    <div class="oauth-status --pending">
+                        <span style="color:var(--text-muted);font-size:12px;font-style:italic">
+                            Save your credentials above, then connect your account
+                        </span>
+                    </div>`;
+            }
+            formHtml += `</div></div>`;
+        }
+
         document.getElementById('toolSettingsForm').innerHTML = formHtml;
         document.getElementById('toolSettingsModal').classList.remove('hidden');
     } catch (e) {
@@ -1197,6 +1275,77 @@ async function saveToolSettings() {
         }
     } catch (e) {
         showToast('Error: ' + e.message, 'error');
+    }
+}
+
+// ==========================================
+// OAuth Functions (generic, tool-agnostic)
+// ==========================================
+async function startOAuth(toolName) {
+    try {
+        const res = await apiFetch(`/tools/${toolName}/oauth/start`);
+        if (!res.ok) {
+            const err = await res.json();
+            showToast(err.error || 'Failed to start OAuth', 'error');
+            return;
+        }
+        const data = await res.json();
+        if (data.auth_url) {
+            // Open OAuth URL in popup window
+            const popup = window.open(data.auth_url, 'oauth_popup', 'width=600,height=700,scrollbars=yes');
+            if (!popup) {
+                // Popup blocked — redirect in same window
+                window.location.href = data.auth_url;
+            }
+        }
+    } catch (e) {
+        showToast('Error starting OAuth: ' + e.message, 'error');
+    }
+}
+
+async function disconnectOAuth(toolName) {
+    try {
+        const res = await apiFetch(`/tools/${toolName}/oauth/disconnect`, { method: 'POST' });
+        if (res.ok) {
+            showToast('Account disconnected', 'success');
+            // Close settings modal and reload tools
+            document.getElementById('toolSettingsModal').classList.add('hidden');
+            settingsTool = null;
+            await loadEmbodiment();
+        } else {
+            const err = await res.json();
+            showToast(err.error || 'Failed to disconnect', 'error');
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+// Handle OAuth callback parameters on page load
+function handleOAuthCallback() {
+    const params = new URLSearchParams(window.location.search);
+    const oauthSuccess = params.get('oauth_success');
+    const oauthError = params.get('oauth_error');
+    const toolName = params.get('tool');
+
+    if (oauthSuccess === 'true' && toolName) {
+        showToast(`${toolName.replace(/_/g, ' ')} account connected successfully`, 'success');
+        // Clean URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        // Reload tools to reflect new status
+        loadEmbodiment();
+        // If this was opened in a popup, close it and refresh parent
+        if (window.opener) {
+            window.opener.loadEmbodiment();
+            window.close();
+        }
+    } else if (oauthError) {
+        showToast(`OAuth error: ${oauthError}`, 'error');
+        window.history.replaceState({}, document.title, window.location.pathname);
+        if (window.opener) {
+            window.opener.showToast(`OAuth error: ${oauthError}`, 'error');
+            window.close();
+        }
     }
 }
 

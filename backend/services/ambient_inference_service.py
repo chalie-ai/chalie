@@ -42,12 +42,13 @@ class AmbientInferenceService:
         self._redis = RedisClientService.create_connection()
         self._place_learning = place_learning_service
 
-    def infer(self, ctx: dict) -> dict:
+    def infer(self, ctx: dict, emit_events: bool = False) -> dict:
         """
         Run all inferences from client context.
 
         Args:
             ctx: Full client context dict from Redis (includes device, behavioral, etc.)
+            emit_events: If True, emit event bridge events on state transitions
 
         Returns:
             dict with keys: place, attention, energy, mobility, tempo, device_context.
@@ -59,7 +60,7 @@ class AmbientInferenceService:
                 "mobility": None, "tempo": None, "device_context": None,
             }
 
-        return {
+        results = {
             "place": self._infer_place(ctx),
             "attention": self._infer_attention(ctx),
             "energy": self._infer_energy(ctx),
@@ -67,6 +68,86 @@ class AmbientInferenceService:
             "tempo": self._infer_tempo(ctx),
             "device_context": self._infer_device_context(ctx),
         }
+
+        if emit_events:
+            self._emit_transition_events(results)
+
+        return results
+
+    def _emit_transition_events(self, inferences: dict):
+        """Emit event bridge events for state transitions."""
+        try:
+            from services.event_bridge_service import EventBridgeService, BridgeEvent
+
+            bridge = EventBridgeService()
+            prev = self._get_previous_inferences()
+
+            if not prev:
+                self._store_inferences(inferences)
+                return
+
+            if inferences.get('place') and inferences['place'] != prev.get('place'):
+                bridge.submit_event(BridgeEvent(
+                    event_type='place_transition',
+                    from_state=prev.get('place'),
+                    to_state=inferences['place'],
+                    confidence=0.75,
+                ))
+
+            if inferences.get('attention') and inferences['attention'] != prev.get('attention'):
+                if inferences['attention'] == 'deep_focus' and prev.get('attention') != 'deep_focus':
+                    bridge.submit_event(BridgeEvent(
+                        event_type='attention_deepened',
+                        from_state=prev.get('attention'),
+                        to_state='deep_focus',
+                        confidence=0.80,
+                    ))
+                else:
+                    bridge.submit_event(BridgeEvent(
+                        event_type='attention_shift',
+                        from_state=prev.get('attention'),
+                        to_state=inferences['attention'],
+                        confidence=0.65,
+                    ))
+
+            if inferences.get('energy') and inferences['energy'] != prev.get('energy'):
+                if inferences['energy'] == 'low':
+                    bridge.submit_event(BridgeEvent(
+                        event_type='energy_low',
+                        from_state=prev.get('energy'),
+                        to_state='low',
+                        confidence=0.60,
+                    ))
+                else:
+                    bridge.submit_event(BridgeEvent(
+                        event_type='energy_change',
+                        from_state=prev.get('energy'),
+                        to_state=inferences['energy'],
+                        confidence=0.60,
+                    ))
+
+            self._store_inferences(inferences)
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Event emission failed: {e}")
+
+    def _get_previous_inferences(self) -> dict:
+        """Retrieve previous inference results from Redis."""
+        try:
+            raw = self._redis.get("ambient:prev_inferences")
+            return json.loads(raw) if raw else {}
+        except Exception:
+            return {}
+
+    def _store_inferences(self, inferences: dict):
+        """Store current inferences for next comparison."""
+        try:
+            self._redis.setex(
+                "ambient:prev_inferences", 3600,
+                json.dumps({k: v for k, v in inferences.items() if v is not None})
+            )
+        except Exception:
+            pass
 
     # ── Place ──────────────────────────────────────────────────────────
 

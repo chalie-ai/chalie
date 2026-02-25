@@ -329,8 +329,8 @@ class MomentService:
         )
 
         try:
-            from services.llm_service import create_refreshable_llm_service
-            llm = create_refreshable_llm_service("moment-enrichment")
+            from services.background_llm_queue import create_background_llm_proxy
+            llm = create_background_llm_proxy("moment-enrichment")
             response = llm.send_message(system_prompt, user_message)
             summary = response.text.strip()
 
@@ -510,8 +510,8 @@ class MomentService:
     def _generate_title(self, message_text: str) -> str:
         """Auto-generate a short title from message text via LLM."""
         try:
-            from services.llm_service import create_refreshable_llm_service
-            llm = create_refreshable_llm_service("moment-enrichment")
+            from services.background_llm_queue import create_background_llm_proxy
+            llm = create_background_llm_proxy("moment-enrichment")
             response = llm.send_message(
                 "Generate a short title (3-6 words) for this pinned message. "
                 "Be specific and direct. No quotes, no punctuation at the end. "

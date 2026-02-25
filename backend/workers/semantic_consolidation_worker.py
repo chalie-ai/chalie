@@ -7,7 +7,7 @@ import logging
 import json
 from services.database_service import DatabaseService
 from services.config_service import ConfigService
-from services.llm_service import create_refreshable_llm_service
+from services.background_llm_queue import create_background_llm_proxy
 from services.semantic_storage_service import SemanticStorageService
 from services.semantic_consolidation_service import SemanticConsolidationService
 
@@ -22,7 +22,7 @@ class SemanticConsolidationWorker:
 
         # Initialize services
         self.db_service = get_lightweight_db_service()
-        self.llm_service = create_refreshable_llm_service("semantic-memory")
+        self.llm_service = create_background_llm_proxy("semantic-memory")
         self.storage_service = SemanticStorageService(self.db_service)
         self.consolidation_service = SemanticConsolidationService(
             self.llm_service,

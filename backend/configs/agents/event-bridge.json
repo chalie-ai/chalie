@@ -1,0 +1,27 @@
+{
+  "stabilization_window_seconds": 90,
+  "aggregation_window_seconds": 60,
+  "confidence_threshold": 0.6,
+  "cooldowns": {
+    "place_transition": 2700,
+    "attention_shift": 1800,
+    "energy_change": 7200,
+    "session_start": 0,
+    "session_resume": 900,
+    "item_approaching": 0,
+    "item_due": 0,
+    "phase_transition": 1800
+  },
+  "interrupt_priority": {
+    "item_due": "critical",
+    "place_transition": "normal",
+    "attention_shift": "normal",
+    "energy_change": "low",
+    "session_start": "normal",
+    "session_resume": "normal",
+    "item_approaching": "normal",
+    "phase_transition": "low"
+  },
+  "silent_events": ["attention_deepened", "energy_low"],
+  "focus_gate_bypass": ["item_due"]
+}

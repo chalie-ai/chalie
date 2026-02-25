@@ -16,12 +16,17 @@ Available innate skills:
 - list: manage named lists (shopping, to-do, chores, etc.)
 - focus: declare and manage deep work / focus sessions
 - autobiography: retrieve accumulated user life narrative
+- persistent_task: create, manage, or check on multi-session background tasks (research projects, ongoing compilations, long-running work)
 
 Routing rules:
-- ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, a tool listed above, OR the user wants an action performed via a built-in action skill (set/create/cancel a reminder or schedule, add/remove items from a list). For action skill requests leave tools=[].
+- ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, a tool listed above, OR the user wants an action performed via a built-in action skill. For action skill requests set tools=[] and include the relevant skill in skills[].
 - RESPOND: I can answer fully from training knowledge or memory with high confidence. Use for timeless facts, opinions, math, definitions, advice, conceptual questions, personal context already in working memory, or when the user is asking ABOUT schedules/lists (not requesting an action on them).
 - CLARIFY: the request is genuinely too vague to route without more information.
-- For ACT mode: always include recall, memorize, introspect in skills[]. Add others only when the message or context clearly calls for them.
+- For ACT mode: always include recall, memorize, introspect in skills[]. Add the specific contextual skill when the intent is clear:
+  - "remind me" / "set a reminder" / "every morning" → schedule
+  - "add X to my list" / "remove from shopping list" → list
+  - "start a focus session" / "am I focused" → focus
+  - "research this over the next few days" / "task status" → persistent_task
 
 Critical bias: when in doubt between RESPOND and ACT, choose ACT. Accuracy matters more than speed.
 freshness_risk scale: 0.0 = timeless/opinion → 1.0 = live event results, today's data, current status.
