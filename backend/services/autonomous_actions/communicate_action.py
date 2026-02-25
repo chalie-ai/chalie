@@ -303,8 +303,8 @@ class CommunicateAction(AutonomousAction):
             details['rejected'] = 'context_stale'
             return (False, details)
 
-        # 4. Quiet hours check
-        current_hour = datetime.now().hour
+        # 4. Quiet hours check (use client timezone, not server time)
+        current_hour = self._get_user_hour()
         details['current_hour'] = current_hour
 
         if self._is_quiet_hours(current_hour):
@@ -323,6 +323,19 @@ class CommunicateAction(AutonomousAction):
             return hour >= start or hour < end
         else:
             return start <= hour < end
+
+    def _get_user_hour(self) -> int:
+        """Get current hour in the user's timezone (falls back to server time)."""
+        try:
+            from services.client_context_service import ClientContextService
+            from zoneinfo import ZoneInfo
+            ctx = ClientContextService().get()
+            tz = ctx.get("timezone")
+            if tz:
+                return datetime.now(ZoneInfo(tz)).hour
+        except Exception:
+            pass
+        return datetime.now().hour
 
     # ── Gate 3: Engagement ────────────────────────────────────────
 
@@ -547,7 +560,7 @@ class CommunicateAction(AutonomousAction):
         Called by the drift engine at the start of each cycle.
         Returns the best deferred thought if ready for delivery, else None.
         """
-        current_hour = datetime.now().hour
+        current_hour = self._get_user_hour()
 
         # Only process if we just exited quiet hours
         if self._is_quiet_hours(current_hour):
@@ -848,8 +861,8 @@ class CommunicateAction(AutonomousAction):
         now = time.time()
         self.redis.set(_key(self.user_id, 'last_interaction_ts'), str(now))
 
-        # Update activity histogram
-        current_hour = datetime.now().hour
+        # Update activity histogram (use client timezone)
+        current_hour = self._get_user_hour()
         hist_key = _key(self.user_id, 'activity_histogram')
         self.redis.hincrby(hist_key, f'hour_{current_hour}', 1)
 
