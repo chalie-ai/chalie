@@ -432,6 +432,11 @@ body {
   word-break: break-word;
 }
 
+/* Preserve newlines in user-typed messages */
+.speech-form--user .speech-form__text {
+  white-space: pre-wrap;
+}
+
 /* Scoped markdown styles — only inside Chalie messages */
 .speech-form--chalie .speech-form__text p {
   margin: 0 0 0.75em;
