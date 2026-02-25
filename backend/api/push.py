@@ -115,7 +115,7 @@ def push_unsubscribe():
         return jsonify({'error': 'Failed to remove subscription'}), 500
 
 
-def send_push_to_all(title, body, tag='chalie-drift'):
+def send_push_to_all(title, body, tag='chalie-message'):
     """Send a web push notification to all stored subscriptions."""
     try:
         from pywebpush import webpush, WebPushException

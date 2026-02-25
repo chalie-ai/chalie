@@ -89,6 +89,16 @@ You only extract state from observed interaction.
 - Category guide: name/identity → core, family/friends → relationship, height/appearance → physical, tastes/habits → preference, everything else → general
 - If no user traits are revealed, return an empty array
 
+## Demographic Traits (extract when naturally mentioned — never probe)
+- **age** or **age_range**: only from explicit statements ("I'm 32"), birthday mentions, or clear life stage references ("my kids are in college"). Source: "explicit", confidence: 8-10.
+- **gender**: only from explicit self-referential statements ("as a woman...", "I'm a guy"). Never infer from writing style. Never infer from third-party pronoun usage. Source: "explicit".
+- **culture**: heritage, cultural references, holidays, food traditions. Source: "inferred" unless directly stated.
+- **religion**: beliefs, practices, holidays, places of worship. Source: "inferred" unless directly stated.
+- **education_level**: infer from content complexity — sharing senior-level code suggests technical background; legal documents suggest professional background; vocabulary and topic depth are legitimate signals. Source: "inferred", confidence: 3-4.
+- **relationship_status**: only from explicit mentions (partner, spouse, family structure). Source: "explicit".
+
+CRITICAL: Only extract demographic traits when the user naturally reveals them. Never probe or ask. Source as "inferred" unless the user makes a direct statement ("I am X"), in which case use "explicit" with high confidence.
+
 # Fact Extraction
 - Extract atomic, verifiable facts about the user, world, or conversation context
 - A fact is a key-value pair (e.g., preferred_language: Python, location: Malta)
