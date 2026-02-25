@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class ToolConfigService:
-    RESERVED_KEYS = {"_enabled", "_webhook_key"}
+    RESERVED_KEYS = {
+        "_enabled", "_webhook_key",
+        "_oauth_access_token", "_oauth_refresh_token",
+        "_oauth_token_expires_at", "_oauth_connected_at", "_oauth_scopes",
+    }
 
     def __init__(self, database_service):
         self.db = database_service

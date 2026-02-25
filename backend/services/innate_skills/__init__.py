@@ -17,6 +17,7 @@ from services.innate_skills.autobiography_skill import handle_autobiography
 from services.innate_skills.focus_skill import handle_focus
 from services.innate_skills.list_skill import handle_list
 from services.innate_skills.moment_skill import handle_moment
+from services.innate_skills.persistent_task_skill import handle_persistent_task
 
 
 def register_innate_skills(dispatcher) -> None:
@@ -36,6 +37,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["focus"] = lambda topic, action: handle_focus(topic, action)
     dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)
     dispatcher.handlers["moment"] = lambda topic, action: handle_moment(topic, action)
+    dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)

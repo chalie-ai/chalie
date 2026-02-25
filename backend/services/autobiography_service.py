@@ -402,12 +402,10 @@ class AutobiographyService:
             Synthesized narrative string or None on failure
         """
         try:
-            from services.llm_service import create_llm_service
+            from services.background_llm_queue import create_background_llm_proxy
             from services.config_service import ConfigService
 
-            # Load biography synthesis config
-            config = ConfigService.get_agent_config("autobiography")
-            llm = create_llm_service(config)
+            llm = create_background_llm_proxy("autobiography")
 
             # Read synthesis prompt
             import os
@@ -424,20 +422,10 @@ class AutobiographyService:
             user_prompt = self._build_synthesis_prompt(inputs, current_narrative)
 
             # Call LLM
-            response = llm.generate(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-            )
+            response = llm.send_message(system_prompt, user_prompt)
+            if response:
+                return response.text.strip()
 
-            if response and isinstance(response, str):
-                return response.strip()
-
-            if isinstance(response, dict) and "content" in response:
-                return response["content"].strip()
-
-            logger.error(f"[AUTOBIOGRAPHY] Unexpected LLM response format: {type(response)}")
             return None
 
         except Exception as e:

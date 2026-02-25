@@ -54,6 +54,7 @@ class _CronToolWorker:
         self.image = tool_config["image"]
         self.sandbox = tool_config.get("sandbox", {})
         manifest = tool_config.get("manifest", {})
+        self._auth = manifest.get("auth", {})
         output_config = manifest.get("output", {})
         self.card_enabled = output_config.get("card", {}).get("enabled", False)
         self.card_config = output_config.get("card", {}) if self.card_enabled else None
@@ -88,6 +89,17 @@ class _CronToolWorker:
                     settings = ToolConfigService(get_shared_db_service()).get_tool_config(self.tool_name)
                 except Exception:
                     settings = {}
+
+                # OAuth token refresh for cron tools
+                auth = self._auth
+                if auth.get("type") == "oauth2" and settings.get("_oauth_access_token"):
+                    try:
+                        from services.oauth_service import OAuthService
+                        fresh = OAuthService().refresh_if_needed(self.tool_name, auth)
+                        if fresh:
+                            settings["_oauth_access_token"] = fresh
+                    except Exception as e:
+                        _log.warning(f"[TOOL CRON] OAuth refresh failed for '{self.tool_name}': {e}")
 
                 from services.tool_container_service import ToolContainerService
                 raw_telemetry = {}
@@ -527,6 +539,17 @@ class ToolRegistryService:
             if "prompt" not in trigger:
                 raise ValueError("Cron trigger must have a 'prompt' field")
 
+        # Validate optional auth block
+        auth = manifest.get("auth")
+        if auth:
+            if auth.get("type") not in ("oauth2",):
+                raise ValueError(f"Unknown auth type: {auth.get('type')}")
+            if auth["type"] == "oauth2":
+                required_auth = {"authorization_url", "token_url", "scopes"}
+                missing_auth = required_auth - set(auth.keys())
+                if missing_auth:
+                    raise ValueError(f"OAuth2 auth missing fields: {missing_auth}")
+
         if manifest.get("name") != dir_name:
             logger.warning(
                 f"[TOOL REGISTRY] Tool name '{manifest.get('name')}' "
@@ -539,6 +562,25 @@ class ToolRegistryService:
                 f"[TOOL REGISTRY] Tool '{manifest.get('name', dir_name)}' has no 'documentation' field. "
                 f"Add 'documentation' for richer capability profiles."
             )
+
+    def _refresh_oauth_token(self, tool_name: str, manifest: dict, settings: dict) -> dict:
+        """Refresh OAuth token if manifest declares auth.type == 'oauth2'.
+
+        Returns the settings dict with a fresh _oauth_access_token if refreshed.
+        """
+        auth = manifest.get("auth", {})
+        if auth.get("type") != "oauth2":
+            return settings
+        if not settings.get("_oauth_access_token"):
+            return settings
+        try:
+            from services.oauth_service import OAuthService
+            fresh_token = OAuthService().refresh_if_needed(tool_name, auth)
+            if fresh_token:
+                settings["_oauth_access_token"] = fresh_token
+        except Exception as e:
+            logger.warning(f"[TOOL REGISTRY] OAuth refresh failed for '{tool_name}': {e}")
+        return settings
 
     def _build_telemetry(self, raw_telemetry: dict) -> dict:
         """Flatten telemetry from client context into contract format."""
@@ -598,6 +640,9 @@ class ToolRegistryService:
             settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
         except Exception:
             settings = {}
+
+        # OAuth token refresh — if manifest declares auth.type == "oauth2"
+        settings = self._refresh_oauth_token(tool_name, manifest, settings)
 
         # Get raw telemetry and flatten for tool payload
         raw_telemetry = {}
@@ -1126,6 +1171,9 @@ class ToolRegistryService:
             settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
         except Exception:
             settings = {}
+
+        # OAuth token refresh
+        settings = self._refresh_oauth_token(tool_name, manifest, settings)
 
         raw_telemetry = {}
         try:

@@ -294,6 +294,7 @@ class ClientContextService:
             db = DatabaseService()
             place_learning = PlaceLearningService(db)
             inference = AmbientInferenceService(place_learning_service=place_learning)
+            inference.infer(new_ctx, emit_events=True)
             old_place = inference._infer_place(old_ctx)
             new_place = inference._infer_place(new_ctx)
 
@@ -313,6 +314,7 @@ class ClientContextService:
     def _check_session_reentry(self, cached_ctx: dict):
         """Detect if user returned after extended absence (>30min)."""
         if not cached_ctx:
+            self._emit_session_event('session_start')
             return
 
         saved_at = cached_ctx.get("saved_at", 0)
@@ -327,8 +329,22 @@ class ClientContextService:
                     "returned_at": time.time(),
                 }))
                 logging.debug(f"[CLIENT CONTEXT] Session re-entry detected (absent {age:.0f}s)")
+                self._emit_session_event('session_resume', {'absent_seconds': int(age)})
             except Exception as e:
                 logging.debug(f"[CLIENT CONTEXT] Re-entry flag failed: {e}")
+
+    def _emit_session_event(self, event_type: str, payload: dict = None):
+        """Emit a session event to the event bridge."""
+        try:
+            from services.event_bridge_service import EventBridgeService, BridgeEvent
+            bridge = EventBridgeService()
+            bridge.submit_event(BridgeEvent(
+                event_type=event_type,
+                confidence=0.95,
+                payload=payload or {},
+            ))
+        except Exception as e:
+            logging.debug(f"[CLIENT CONTEXT] Event bridge emission failed: {e}")
 
     def is_session_reentry(self) -> bool:
         """Check if the user just returned from an extended absence."""

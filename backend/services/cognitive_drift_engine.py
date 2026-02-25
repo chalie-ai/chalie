@@ -37,7 +37,7 @@ from services.semantic_storage_service import SemanticStorageService
 from services.semantic_retrieval_service import SemanticRetrievalService
 from services.episodic_retrieval_service import EpisodicRetrievalService
 from services.embedding_service import EmbeddingService
-from services.llm_service import create_refreshable_llm_service
+from services.background_llm_queue import create_background_llm_proxy
 from services.database_service import get_lightweight_db_service
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class CognitiveDriftEngine:
         self.gist_storage = GistStorageService()
 
         # LLM for thought synthesis — refreshable so provider changes take effect without restart
-        self.ollama = create_refreshable_llm_service("cognitive-drift")
+        self.ollama = create_background_llm_proxy("cognitive-drift")
 
         # Load prompt template + soul axioms
         self.prompt_template = ConfigService.get_agent_prompt("cognitive-drift")

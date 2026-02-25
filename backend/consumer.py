@@ -342,6 +342,7 @@ if __name__ == "__main__":
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
     from services.curiosity_pursuit_service import curiosity_pursuit_worker
+    from workers.persistent_task_worker import persistent_task_worker
 
     # 5. RESOLVE HOSTNAMES (BEFORE FORKING)
     # This prevents DNS lookup segfaults in child processes on macOS
@@ -563,11 +564,24 @@ if __name__ == "__main__":
         worker_func=curiosity_pursuit_worker
     )
 
+    # Register persistent task worker (30min cycle, multi-session ACT tasks)
+    manager.register_service(
+        worker_id="persistent-task-worker",
+        worker_func=persistent_task_worker
+    )
+
     # Register moment enrichment service (5min poll, enriches pinned moments)
     from services.moment_enrichment_service import moment_enrichment_worker
     manager.register_service(
         worker_id="moment-enrichment-service",
         worker_func=moment_enrichment_worker
+    )
+
+    # Register background LLM worker (single process — serializes all background provider calls)
+    from workers.background_llm_worker import background_llm_worker
+    manager.register_service(
+        worker_id="background-llm-worker",
+        worker_func=background_llm_worker
     )
 
     # Register triage calibration service (24h cycle, computes correctness scores)

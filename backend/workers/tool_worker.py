@@ -13,7 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-INNATE_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule'}
+INNATE_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'persistent_task'}
 
 
 def _is_ephemeral_tool(tool_name: str) -> bool:
@@ -280,6 +280,73 @@ def tool_worker(job_data: dict) -> str:
                 topic=topic,
                 actions=actions
             )
+
+            # ── Critic verification step ──
+            from services.critic_service import CriticService, MAX_CRITIC_RETRIES, CRITIC_FATIGUE_COST
+            if not hasattr(act_loop, '_critic'):
+                act_loop._critic = CriticService()
+            critic = act_loop._critic
+
+            critic_corrected = []
+            for idx, result in enumerate(actions_executed):
+                action_spec = actions[idx] if idx < len(actions) else {}
+                action_type = result.get('action_type', 'unknown')
+
+                if critic.should_skip(action_type, result):
+                    critic_corrected.append(result)
+                    continue
+
+                retries = 0
+                current_result = result
+                while retries < MAX_CRITIC_RETRIES:
+                    verdict = critic.evaluate(
+                        original_request=text,
+                        action_type=action_type,
+                        action_intent=action_spec,
+                        action_result=current_result,
+                    )
+                    act_loop.fatigue += CRITIC_FATIGUE_COST
+
+                    if verdict.get('verified', True):
+                        break
+
+                    correction = verdict.get('correction')
+                    if not correction:
+                        if not critic.is_safe_action(action_type):
+                            logger.info(f"[TOOL WORKER] Critic escalation for {action_type}: {verdict.get('issue', 'unknown')}")
+                        break
+
+                    correction_entry = {
+                        'action_type': action_type,
+                        'status': 'critic_correction',
+                        'result': critic.format_correction_entry(
+                            action_type=action_type,
+                            original_result=str(current_result.get('result', '')),
+                            correction=correction,
+                            final_result=correction,
+                        ),
+                        'execution_time': 0.0, 'confidence': 0.0,
+                        'notes': f"critic correction attempt {retries + 1}",
+                    }
+                    act_loop.append_results([correction_entry])
+
+                    if critic.is_safe_action(action_type):
+                        from services.act_dispatcher_service import ActDispatcherService
+                        retry_dispatcher = ActDispatcherService(timeout=act_loop.per_action_timeout)
+                        corrected_action = {**action_spec, '_critic_correction': correction}
+                        current_result = retry_dispatcher.dispatch_action(topic, corrected_action)
+                    else:
+                        logger.info(f"[TOOL WORKER] Critic correction for consequential {action_type}, not retrying")
+                        break
+
+                    retries += 1
+                    if retries >= MAX_CRITIC_RETRIES:
+                        critic.oscillation_events += 1
+                        logger.warning(f"[TOOL WORKER] Critic MAX_RETRIES reached for {action_type}")
+
+                critic_corrected.append(current_result)
+
+            actions_executed = critic_corrected
             act_loop.append_results(actions_executed)
 
             # Track fingerprint + types for repetition detection
@@ -377,9 +444,11 @@ def tool_worker(job_data: dict) -> str:
             except Exception as e:
                 logger.error(f"[TOOL WORKER] Failed to log iterations: {e}")
 
-        # Log fatigue telemetry
+        # Log fatigue telemetry (including critic metrics)
         telemetry = act_loop.get_fatigue_telemetry()
         telemetry['termination_reason'] = termination_reason
+        if hasattr(act_loop, '_critic'):
+            telemetry.update(act_loop._critic.get_telemetry())
         logger.info(f"[TOOL WORKER] Fatigue telemetry: {telemetry}")
         try:
             from services.interaction_log_service import InteractionLogService
