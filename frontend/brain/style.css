@@ -1729,6 +1729,80 @@ body::before {
     }
 }
 
+/* ==========================================
+   OAuth UI — Generic styles for any tool
+   ========================================== */
+
+.oauth-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-top: -4px;
+}
+
+.oauth-badge.--connected {
+    background: rgba(52, 211, 153, 0.12);
+    color: var(--success);
+}
+
+.oauth-badge.--disconnected {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+}
+
+.oauth-section {
+    margin-top: 20px;
+}
+
+.oauth-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.oauth-status.--connected {
+    background: rgba(52, 211, 153, 0.06);
+    border: 1px solid rgba(52, 211, 153, 0.15);
+}
+
+.oauth-status.--ready {
+    background: rgba(138, 92, 255, 0.04);
+    border: 1px solid rgba(138, 92, 255, 0.12);
+}
+
+.oauth-status.--pending {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
+}
+
+.oauth-setup-guide {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.oauth-setup-guide ol {
+    margin: 0;
+}
+
+.oauth-setup-guide a {
+    color: var(--accent-hover);
+    text-decoration: none;
+}
+
+.oauth-setup-guide a:hover {
+    text-decoration: underline;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
     .header-inner {

@@ -609,6 +609,12 @@ def list_tools():
             if trigger.get("type") == "webhook":
                 tool_entry["webhook_url"] = f"/api/tools/webhook/{name}"
                 tool_entry["webhook_key_set"] = bool(stored_config.get("_webhook_key"))
+            # OAuth status — generic, reads from manifest auth block
+            auth_block = manifest.get("auth", {})
+            if auth_block.get("type"):
+                tool_entry["auth_type"] = auth_block["type"]
+                tool_entry["auth_provider_hint"] = auth_block.get("provider_hint", "")
+                tool_entry["oauth_connected"] = bool(stored_config.get("_oauth_access_token"))
             result.append(tool_entry)
             processed_names.add(name)
 
@@ -868,3 +874,148 @@ def test_tool(tool_name: str):
     except Exception as e:
         logger.error(f"[REST API] tools test error: {e}", exc_info=True)
         return jsonify({"error": "Failed to test tool"}), 500
+
+
+# ------------------------------------------------------------------
+# OAuth2 endpoints — generic, tool-agnostic
+# ------------------------------------------------------------------
+
+@tools_bp.route("/tools/<tool_name>/oauth/start", methods=["GET"])
+@require_session
+def oauth_start(tool_name: str):
+    """Generate OAuth2 authorization URL for a tool.
+
+    Returns {"auth_url": "...", "state": "..."}.
+    """
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.oauth_service import OAuthService
+
+        registry = ToolRegistryService()
+        tool = registry.tools.get(tool_name)
+        if not tool:
+            return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
+
+        manifest_auth = tool["manifest"].get("auth")
+        if not manifest_auth or manifest_auth.get("type") != "oauth2":
+            return jsonify({"error": f"Tool '{tool_name}' does not use OAuth2"}), 400
+
+        # Build redirect URI from request origin
+        redirect_uri = request.args.get("redirect_uri")
+        if not redirect_uri:
+            # Derive from request host
+            scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+            host = request.headers.get("X-Forwarded-Host", request.host)
+            redirect_uri = f"{scheme}://{host}/api/tools/{tool_name}/oauth/callback"
+
+        result = OAuthService().get_auth_url(tool_name, manifest_auth, redirect_uri)
+        return jsonify(result), 200
+
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    except Exception as e:
+        logger.error(f"[TOOLS API] OAuth start error for '{tool_name}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to start OAuth flow"}), 500
+
+
+@tools_bp.route("/tools/<tool_name>/oauth/callback", methods=["GET"])
+def oauth_callback(tool_name: str):
+    """OAuth2 callback — exchanges authorization code for tokens.
+
+    No @require_session: the user arrives from an external redirect.
+    CSRF protection via cryptographic state token validated against Redis.
+
+    On success, redirects to Brain admin with a success message.
+    On error, redirects to Brain admin with an error message.
+    """
+    try:
+        from services.oauth_service import OAuthService
+
+        code = request.args.get("code")
+        state = request.args.get("state")
+        error = request.args.get("error")
+
+        # Build Brain admin redirect URL
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        brain_url = f"{scheme}://{host}/brain/"
+
+        if error:
+            error_desc = request.args.get("error_description", error)
+            logger.warning(f"[TOOLS API] OAuth callback error for '{tool_name}': {error_desc}")
+            from flask import redirect as flask_redirect
+            return flask_redirect(f"{brain_url}?oauth_error={error_desc}&tool={tool_name}")
+
+        if not code or not state:
+            from flask import redirect as flask_redirect
+            return flask_redirect(f"{brain_url}?oauth_error=Missing+code+or+state&tool={tool_name}")
+
+        result = OAuthService().exchange_code(state, code)
+
+        from flask import redirect as flask_redirect
+        return flask_redirect(f"{brain_url}?oauth_success=true&tool={tool_name}")
+
+    except ValueError as ve:
+        logger.warning(f"[TOOLS API] OAuth callback validation error: {ve}")
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        brain_url = f"{scheme}://{host}/brain/"
+        from flask import redirect as flask_redirect
+        return flask_redirect(f"{brain_url}?oauth_error={str(ve)[:200]}&tool={tool_name}")
+    except Exception as e:
+        logger.error(f"[TOOLS API] OAuth callback error for '{tool_name}': {e}", exc_info=True)
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        brain_url = f"{scheme}://{host}/brain/"
+        from flask import redirect as flask_redirect
+        return flask_redirect(f"{brain_url}?oauth_error=Internal+error&tool={tool_name}")
+
+
+@tools_bp.route("/tools/<tool_name>/oauth/status", methods=["GET"])
+@require_session
+def oauth_status(tool_name: str):
+    """Return OAuth connection status for a tool."""
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.oauth_service import OAuthService
+
+        registry = ToolRegistryService()
+        tool = registry.tools.get(tool_name)
+        if not tool:
+            return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
+
+        manifest_auth = tool["manifest"].get("auth")
+        if not manifest_auth or manifest_auth.get("type") != "oauth2":
+            return jsonify({"error": f"Tool '{tool_name}' does not use OAuth2"}), 400
+
+        status = OAuthService().get_oauth_status(tool_name)
+        status["provider_hint"] = manifest_auth.get("provider_hint", "")
+        return jsonify(status), 200
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] OAuth status error for '{tool_name}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to get OAuth status"}), 500
+
+
+@tools_bp.route("/tools/<tool_name>/oauth/disconnect", methods=["POST"])
+@require_session
+def oauth_disconnect(tool_name: str):
+    """Remove all OAuth tokens for a tool."""
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.oauth_service import OAuthService
+
+        registry = ToolRegistryService()
+        tool = registry.tools.get(tool_name)
+        if not tool:
+            return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
+
+        ok = OAuthService().disconnect(tool_name)
+        if ok:
+            return jsonify({"disconnected": True, "tool_name": tool_name}), 200
+        else:
+            return jsonify({"error": "Failed to disconnect"}), 500
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] OAuth disconnect error for '{tool_name}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to disconnect OAuth"}), 500

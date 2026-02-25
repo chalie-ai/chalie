@@ -211,7 +211,7 @@ class ExperienceAssimilationService:
 
     def _reflect(self, user_prompt: str, tool_outputs: list) -> dict:
         """Call LLM to evaluate tool outputs for novel knowledge."""
-        from services.llm_service import create_llm_service
+        from services.background_llm_queue import create_background_llm_proxy
 
         tool_outputs_text = "\n\n".join(
             f"[{o['tool']}]\n{o['result']}" for o in tool_outputs
@@ -221,7 +221,7 @@ class ExperienceAssimilationService:
             .replace('{{user_prompt}}', user_prompt) \
             .replace('{{tool_outputs}}', tool_outputs_text)
 
-        llm = create_llm_service(self.llm_config)
+        llm = create_background_llm_proxy("experience-assimilation")
         response = llm.send_message("", prompt).text
 
         return json.loads(response)

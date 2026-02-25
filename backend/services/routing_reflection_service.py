@@ -19,7 +19,7 @@ from typing import Dict, Any, Optional, List
 
 from services.redis_client import RedisClientService
 from services.config_service import ConfigService
-from services.llm_service import create_refreshable_llm_service
+from services.background_llm_queue import create_background_llm_proxy
 from services.database_service import get_lightweight_db_service
 from services.routing_decision_service import RoutingDecisionService
 
@@ -59,7 +59,7 @@ class RoutingReflectionService:
         self.decision_service = RoutingDecisionService(self.db_service)
 
         # LLM for reflection — refreshable so provider changes take effect without restart
-        self.ollama = create_refreshable_llm_service("mode-reflection")
+        self.ollama = create_background_llm_proxy("mode-reflection")
 
         # Load reflection prompt
         self.prompt_template = ConfigService.get_agent_prompt("mode-reflection")
