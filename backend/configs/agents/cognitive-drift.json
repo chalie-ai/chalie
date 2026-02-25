@@ -1,6 +1,5 @@
 {
   "temperature": 0.8,
-  "max_predict_tokens": 150,
   "format": "json",
   "timeout": 360,
   "check_interval": 300,

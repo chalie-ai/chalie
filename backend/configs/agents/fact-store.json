@@ -1,6 +1,5 @@
 {
   "temperature": 0.1,
-  "max_predict_tokens": 512,
   "timeout": 360,
   "format": "json",
   "ttl_minutes": 1440,

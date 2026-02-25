@@ -1,6 +1,5 @@
 {
   "format": "text",
   "temperature": 0.1,
-  "timeout": 30,
-  "max_predict_tokens": 64
+  "timeout": 30
 }

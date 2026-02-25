@@ -1,7 +1,6 @@
 {
   "_comment": "PROACTIVE mode: Translate drift thought into conversational outreach (1-2 sentences)",
   "temperature": 0.6,
-  "max_predict_tokens": 256,
   "timeout": 180,
   "format": "json",
   "min_gist_confidence": 7,

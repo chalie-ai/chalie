@@ -1,7 +1,6 @@
 {
   "temperature": 0.3,
   "timeout": 300,
-  "max_predict_tokens": 128,
   "format": "json",
   "keep_alive": "5m",
   "batch_size": 5,
