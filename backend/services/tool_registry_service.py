@@ -58,6 +58,7 @@ class _CronToolWorker:
         self.card_enabled = output_config.get("card", {}).get("enabled", False)
         self.card_config = output_config.get("card", {}) if self.card_enabled else None
         self.tool_dir = tool_config["dir"]
+        self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 
     def __call__(self, shared_state=None):
         _log = logging.getLogger(__name__)
@@ -114,10 +115,16 @@ class _CronToolWorker:
 
                 # Load persisted tool state from Redis (survives container restarts)
                 tool_state = {}
-                state_key = f"tool_cron_state:{self.tool_name}"
+                state_key = f"tool_state:{self.tool_name}"
+                old_state_key = f"tool_cron_state:{self.tool_name}"
                 try:
                     from services.redis_client import RedisClientService as _RCS
                     _state_redis = _RCS.create_connection()
+                    # Migration: copy old key to new key on first access
+                    if not _state_redis.exists(state_key) and _state_redis.exists(old_state_key):
+                        old_val = _state_redis.get(old_state_key)
+                        if old_val:
+                            _state_redis.setex(state_key, 7 * 24 * 3600, old_val)
                     state_json = _state_redis.get(state_key)
                     if state_json:
                         tool_state = json.loads(state_json)
@@ -125,7 +132,25 @@ class _CronToolWorker:
                     pass
 
                 payload = {"params": {"_state": tool_state}, "settings": settings, "telemetry": flattened_telemetry}
-                result = ToolContainerService().run(self.image, payload, sandbox_config=self.sandbox)
+
+                # Track interactive turns for final-turn memory storage
+                dialog_turns = []
+
+                def _on_tool_output(dialog_result):
+                    from workers.digest_worker import process_tool_dialog
+                    request_text = dialog_result.get("text", "")
+                    response = process_tool_dialog(
+                        text=request_text,
+                        tool_name=self.tool_name,
+                        trigger_prompt=self.prompt_template,
+                    )
+                    dialog_turns.append({"request": request_text, "response": response})
+                    return response
+
+                result = ToolContainerService().run_interactive(
+                    self.image, payload, sandbox_config=self.sandbox,
+                    timeout=self.timeout, on_tool_output=_on_tool_output,
+                )
 
                 # Persist returned state back to Redis (7-day TTL)
                 if isinstance(result, dict) and "_state" in result:
@@ -136,7 +161,56 @@ class _CronToolWorker:
                     except Exception as e:
                         _log.warning(f"[TOOL CRON] {self.tool_name}: failed to persist state: {e}")
 
-                # Extract text and html from formalized contract output
+                # Store final-turn dialog memory if interactive turns occurred
+                if dialog_turns:
+                    try:
+                        from workers.digest_worker import store_tool_dialog_memory
+                        store_tool_dialog_memory(self.tool_name, dialog_turns)
+                    except Exception as e:
+                        _log.warning(f"[TOOL CRON] {self.tool_name}: failed to store dialog memory: {e}")
+
+                # --- Formalized output routing ---
+                output_type = result.get("output") if isinstance(result, dict) else None
+
+                if output_type is not None:
+                    # New contract: route by output field
+                    if output_type == "card":
+                        result_html = result.get("html")
+                        result_title = result.get("title")
+                        if result_html:
+                            try:
+                                from services.card_renderer_service import CardRendererService
+                                from services.output_service import OutputService
+                                card_cfg = result.get("card_config") or {}
+                                card_data = CardRendererService().render_tool_html(
+                                    self.tool_name, result_html,
+                                    result_title or card_cfg.get("title", self.tool_name), card_cfg
+                                )
+                                if card_data:
+                                    OutputService().enqueue_card("cron", card_data, {})
+                            except Exception as e:
+                                _log.warning(f"[TOOL CRON] {self.tool_name}: card render failed: {e}")
+                    elif output_type == "prompt":
+                        result_text = self._sanitize_output(result.get("text", ""))
+                        if len(result_text) > self.MAX_OUTPUT_CHARS:
+                            result_text = result_text[:self.MAX_OUTPUT_CHARS]
+                        if result_text:
+                            full_prompt = f"{self.prompt_template}\n\n--- Tool Data ---\n{result_text}"
+                            from services.prompt_queue import PromptQueue
+                            from workers.digest_worker import digest_worker
+                            queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+                            queue.enqueue(full_prompt, {
+                                "source": f"cron_tool:{self.tool_name}",
+                                "tool_name": self.tool_name,
+                                "destination": "web",
+                                "priority": result.get("priority", "normal"),
+                            })
+                    # output_type == "tool": already resolved via run_interactive callback
+                    # output_type is null or anything else: silent
+                    _log.info(f"[TOOL CRON] {self.tool_name} executed (output={output_type!r})")
+                    continue
+
+                # --- Legacy output routing (backward compat: no "output" field) ---
                 result_text = ""
                 result_html = None
                 result_title = None
@@ -473,7 +547,10 @@ class ToolRegistryService:
         city, country = "", ""
         if "," in loc_name:
             city, country = [p.strip() for p in loc_name.split(",", 1)]
-        return {
+
+        device = raw_telemetry.get("device") or {}
+
+        result = {
             "lat": loc.get("lat"),
             "lon": loc.get("lon"),
             "location_name": raw_telemetry.get("location_name", ""),
@@ -483,6 +560,16 @@ class ToolRegistryService:
             "locale": raw_telemetry.get("locale", ""),
             "language": raw_telemetry.get("language", ""),
         }
+
+        # Device context — so tools can tailor output to user's device
+        if device_class := device.get("class"):
+            result["device_class"] = device_class
+        if platform := device.get("platform"):
+            result["platform"] = platform
+        if "pwa" in device:
+            result["pwa"] = device["pwa"]
+
+        return result
 
     def invoke(self, tool_name: str, topic: str, params: dict) -> str:
         """
@@ -1002,6 +1089,89 @@ class ToolRegistryService:
         Returns a _CronToolWorker instance (picklable with spawn start method).
         """
         return _CronToolWorker(tool_config)
+
+    def invoke_webhook(self, tool_name: str, webhook_body: dict, dialog_callback=None) -> dict:
+        """
+        Invoke a webhook-triggered tool.
+
+        Loads state from Redis, builds payload with _webhook key, runs container
+        interactively (so "tool" output dialogs work), persists returned state.
+
+        Args:
+            tool_name: Registered tool name (must have trigger.type == "webhook").
+            webhook_body: Parsed JSON body from the webhook POST.
+            dialog_callback: Optional callable(result_dict) -> str for "tool" output.
+                If None, "tool" output is treated as silent.
+
+        Returns:
+            Final result dict from container.
+
+        Raises:
+            ValueError: If tool not found or not a webhook trigger.
+        """
+        tool = self.tools.get(tool_name)
+        if not tool:
+            raise ValueError(f"Unknown tool: {tool_name}")
+
+        manifest = tool["manifest"]
+        trigger = manifest.get("trigger", {})
+        if trigger.get("type") != "webhook":
+            raise ValueError(
+                f"Tool '{tool_name}' is not a webhook tool (type={trigger.get('type')})"
+            )
+
+        try:
+            from services.tool_config_service import ToolConfigService
+            from services.database_service import get_shared_db_service
+            settings = ToolConfigService(get_shared_db_service()).get_tool_config(tool_name)
+        except Exception:
+            settings = {}
+
+        raw_telemetry = {}
+        try:
+            from services.client_context_service import ClientContextService
+            raw_telemetry = ClientContextService().get()
+        except Exception:
+            pass
+        flattened_telemetry = self._build_telemetry(raw_telemetry)
+
+        # Load persisted state (shared key with cron)
+        tool_state = {}
+        state_key = f"tool_state:{tool_name}"
+        try:
+            from services.redis_client import RedisClientService
+            redis = RedisClientService.create_connection()
+            state_json = redis.get(state_key)
+            if state_json:
+                tool_state = json.loads(state_json)
+        except Exception:
+            pass
+
+        payload = {
+            "params": {"_webhook": webhook_body, "_state": tool_state},
+            "settings": settings,
+            "telemetry": flattened_telemetry,
+        }
+
+        timeout = manifest.get("constraints", {}).get("timeout_seconds", 120)
+        from services.tool_container_service import ToolContainerService
+        result = ToolContainerService().run_interactive(
+            tool["image"], payload,
+            sandbox_config=tool.get("sandbox", {}),
+            timeout=timeout,
+            on_tool_output=dialog_callback,
+        )
+
+        # Persist returned state
+        if isinstance(result, dict) and "_state" in result:
+            try:
+                from services.redis_client import RedisClientService
+                redis = RedisClientService.create_connection()
+                redis.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
+            except Exception as e:
+                logger.warning(f"[TOOL REGISTRY] {tool_name}: failed to persist webhook state: {e}")
+
+        return result
 
     def _parse_cron_interval(self, schedule: str) -> int:
         """Parse simple cron expression to sleep interval in seconds. Defaults 30min."""

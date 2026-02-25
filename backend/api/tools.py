@@ -38,6 +38,191 @@ def _normalize_config_schema(schema_dict: dict) -> list:
     return result
 
 
+def _check_webhook_rate_limit(tool_name: str) -> bool:
+    """Return True if within rate limit (30 req/min per tool), False if exceeded."""
+    try:
+        from services.redis_client import RedisClientService
+        redis = RedisClientService.create_connection()
+        key = f"webhook_rate:{tool_name}"
+        count = redis.incr(key)
+        if count == 1:
+            redis.expire(key, 60)  # 1-minute sliding window
+        return count <= 30
+    except Exception:
+        return True  # Fail open on Redis errors
+
+
+@tools_bp.route("/tools/webhook/<tool_name>", methods=["POST"])
+def tool_webhook(tool_name):
+    """
+    Webhook endpoint for tool invocation. No session required.
+
+    Auth: X-Chalie-Token header (simple key) or X-Chalie-Signature +
+          X-Chalie-Timestamp (HMAC-SHA256 with replay protection).
+    Rate limit: 30 req/min per tool.
+    Payload size limit: 512KB.
+    """
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.tool_config_service import ToolConfigService
+        from services.database_service import get_shared_db_service
+
+        # Payload size guard (512KB)
+        content_length = request.content_length
+        if content_length and content_length > 512 * 1024:
+            return jsonify({"error": "Payload too large (max 512KB)"}), 413
+
+        raw_body = request.get_data(cache=True)
+        if len(raw_body) > 512 * 1024:
+            return jsonify({"error": "Payload too large (max 512KB)"}), 413
+
+        # Tool existence + trigger type check
+        registry = ToolRegistryService()
+        tool = registry.tools.get(tool_name)
+        if not tool:
+            return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
+
+        trigger = tool["manifest"].get("trigger", {})
+        if trigger.get("type") != "webhook":
+            return jsonify({"error": f"Tool '{tool_name}' does not accept webhooks"}), 404
+
+        # Auth: HMAC-SHA256 (preferred) or simple token
+        db = get_shared_db_service()
+        config_svc = ToolConfigService(db)
+
+        signature = request.headers.get("X-Chalie-Signature", "")
+        timestamp = request.headers.get("X-Chalie-Timestamp", "")
+        token = request.headers.get("X-Chalie-Token", "")
+
+        auth_ok = False
+        if signature and timestamp:
+            auth_ok = config_svc.validate_webhook_hmac(tool_name, timestamp, raw_body, signature)
+        elif token:
+            auth_ok = config_svc.validate_webhook_key(tool_name, token)
+
+        if not auth_ok:
+            logger.warning(f"[TOOLS API] Webhook auth failed for '{tool_name}'")
+            return jsonify({"error": "Unauthorized"}), 403
+
+        # Rate limiting
+        if not _check_webhook_rate_limit(tool_name):
+            return jsonify({"error": "Rate limit exceeded (30 req/min)"}), 429
+
+        # Parse body
+        try:
+            webhook_body = request.get_json(force=True) or {}
+        except Exception:
+            webhook_body = {}
+
+        # Dialog callback — routes "tool" output through full cognitive pipeline
+        trigger_prompt = trigger.get("prompt", "")
+        dialog_turns = []
+
+        def _dialog_callback(result):
+            from workers.digest_worker import process_tool_dialog
+            request_text = result.get("text", "")
+            response = process_tool_dialog(
+                text=request_text,
+                tool_name=tool_name,
+                trigger_prompt=trigger_prompt,
+            )
+            dialog_turns.append({"request": request_text, "response": response})
+            return response
+
+        # Invoke the tool
+        result = registry.invoke_webhook(tool_name, webhook_body, dialog_callback=_dialog_callback)
+
+        # Store final-turn dialog memory if interactive turns occurred
+        if dialog_turns:
+            try:
+                from workers.digest_worker import store_tool_dialog_memory
+                store_tool_dialog_memory(tool_name, dialog_turns)
+            except Exception as e:
+                logger.warning(f"[TOOLS API] Dialog memory store failed for '{tool_name}': {e}")
+
+        # Route output
+        output_type = result.get("output") if isinstance(result, dict) else None
+
+        if output_type == "card":
+            result_html = result.get("html")
+            result_title = result.get("title")
+            if result_html:
+                try:
+                    from services.card_renderer_service import CardRendererService
+                    from services.output_service import OutputService
+                    card_cfg = result.get("card_config") or {}
+                    card_data = CardRendererService().render_tool_html(
+                        tool_name, result_html,
+                        result_title or card_cfg.get("title", tool_name), card_cfg
+                    )
+                    if card_data:
+                        OutputService().enqueue_card("webhook", card_data, {})
+                except Exception as e:
+                    logger.warning(f"[TOOLS API] Webhook card render failed for '{tool_name}': {e}")
+        elif output_type == "prompt":
+            result_text = result.get("text", "")
+            if result_text:
+                try:
+                    from services.prompt_queue import PromptQueue
+                    from workers.digest_worker import digest_worker
+                    prompt_template = trigger_prompt or f"Tool {tool_name} says:"
+                    full_prompt = f"{prompt_template}\n\n--- Tool Data ---\n{result_text[:3000]}"
+                    queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+                    queue.enqueue(full_prompt, {
+                        "source": f"webhook_tool:{tool_name}",
+                        "tool_name": tool_name,
+                        "destination": "web",
+                        "priority": result.get("priority", "normal"),
+                    })
+                except Exception as e:
+                    logger.warning(f"[TOOLS API] Webhook prompt enqueue failed for '{tool_name}': {e}")
+
+        logger.info(f"[TOOLS API] Webhook '{tool_name}' processed (output={output_type!r})")
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] Webhook error for '{tool_name}': {e}", exc_info=True)
+        return jsonify({"error": "Internal error"}), 500
+
+
+@tools_bp.route("/tools/<tool_name>/webhook/key", methods=["POST"])
+@require_session
+def generate_webhook_key(tool_name: str):
+    """
+    Generate (or regenerate) a webhook API key for a tool.
+
+    Returns the key once — caller must store it securely.
+    Subsequent calls invalidate the previous key.
+    """
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.tool_config_service import ToolConfigService
+        from services.database_service import get_shared_db_service
+
+        registry = ToolRegistryService()
+        tool = registry.tools.get(tool_name)
+        if not tool:
+            return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
+
+        trigger_type = tool["manifest"].get("trigger", {}).get("type")
+        if trigger_type != "webhook":
+            return jsonify({"error": f"Tool '{tool_name}' is not a webhook tool"}), 400
+
+        db = get_shared_db_service()
+        key = ToolConfigService(db).generate_webhook_key(tool_name)
+        webhook_url = f"/api/tools/webhook/{tool_name}"
+
+        return jsonify({
+            "tool_name": tool_name,
+            "webhook_key": key,
+            "webhook_url": webhook_url,
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] Webhook key generation error for '{tool_name}': {e}", exc_info=True)
+        return jsonify({"error": "Failed to generate webhook key"}), 500
+
+
 @tools_bp.route("/tools/install", methods=["POST"])
 @require_session
 def install_tool():
@@ -408,7 +593,7 @@ def list_tools():
 
             config_schema_array = _normalize_config_schema(schema_dict)
 
-            result.append({
+            tool_entry = {
                 "name": name,
                 "display_name": display_name,
                 "icon": icon,
@@ -420,7 +605,11 @@ def list_tools():
                 "config_schema": config_schema_array,
                 "has_sandbox": bool(manifest.get("sandbox")),
                 "last_error": None,
-            })
+            }
+            if trigger.get("type") == "webhook":
+                tool_entry["webhook_url"] = f"/api/tools/webhook/{name}"
+                tool_entry["webhook_key_set"] = bool(stored_config.get("_webhook_key"))
+            result.append(tool_entry)
             processed_names.add(name)
 
         # 2. Building/error tools (in registry but not yet loaded, or failed)
