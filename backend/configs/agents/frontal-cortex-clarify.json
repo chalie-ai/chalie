@@ -1,7 +1,6 @@
 {
   "_comment": "CLARIFY mode: Ask clarifying questions with qwen3-coder:30b for reasoning",
   "temperature": 0.5,
-  "max_predict_tokens": 1024,
   "timeout": 180,
   "format": "json",
   "min_gist_confidence": 7,

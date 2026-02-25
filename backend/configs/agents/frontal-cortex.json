@@ -1,6 +1,5 @@
 {
   "temperature": 0.5,
-  "max_predict_tokens": 2048,
   "timeout": 180,
   "format": "json",
   "min_gist_confidence": 7,

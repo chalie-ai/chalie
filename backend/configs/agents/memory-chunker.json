@@ -1,6 +1,5 @@
 {
   "temperature": 0.3,
-  "max_predict_tokens": 512,
   "keep_alive": "5m",
   "timeout": 120,
   "max_retries": 1,

@@ -1,7 +1,6 @@
 {
   "_comment": "RESPOND mode: Full conversational response with qwen3-coder:30b for quality",
   "temperature": 0.5,
-  "max_predict_tokens": 2048,
   "timeout": 180,
   "format": "json",
   "min_gist_confidence": 7,
