@@ -1,0 +1,42 @@
+{
+  "_description": "Tunable thresholds for ambient inference — all deterministic, <1ms, zero LLM calls",
+
+  "place": {
+    "work_hours_start": 9,
+    "work_hours_end": 18,
+    "night_hours_start": 22,
+    "night_hours_end": 7,
+    "commute_hours": [7, 8, 9, 17, 18, 19],
+    "learned_threshold": 20
+  },
+
+  "attention": {
+    "idle_threshold_ms": 120000,
+    "session_min_ms": 480000,
+    "interruption_rate_per_10min": 1,
+    "deep_focus_sustain_snapshots": 2,
+    "typing_cps_boost_threshold": 3.0
+  },
+
+  "energy": {
+    "high_hours": [8, 9, 10, 11],
+    "low_hours": [0, 1, 2, 3, 4, 5, 23],
+    "long_session_ms": 14400000,
+    "battery_penalty_threshold": 0.2,
+    "battery_penalty_device": "phone"
+  },
+
+  "mobility": {
+    "jitter_threshold_m": 500,
+    "commute_max_m": 50000,
+    "sustained_samples": 2,
+    "connection_transition_weight": 0.3
+  },
+
+  "tempo": {
+    "rushed_gap_s": 10,
+    "relaxed_min_gap_s": 30,
+    "relaxed_max_gap_s": 300,
+    "reflective_gap_s": 300
+  }
+}
