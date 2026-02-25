@@ -64,10 +64,20 @@ _FACTUAL_QUESTION = re.compile(
     re.IGNORECASE
 )
 
+_URL_PATTERN = re.compile(
+    r'https?://[^\s<>"\'\)]+',
+    re.IGNORECASE
+)
+
 
 def _is_factual_question(text: str) -> bool:
     """Heuristic: does this look like a factual question needing real-world data?"""
     return bool(_FACTUAL_QUESTION.search(text))
+
+
+def _contains_url(text: str) -> bool:
+    """Detect presence of an HTTP(S) URL in the message."""
+    return bool(_URL_PATTERN.search(text))
 
 
 @dataclass
@@ -247,8 +257,9 @@ class CognitiveTriageService:
         lower = text.lower()
         looks_like_command = any(
             w in lower for w in ['search', 'find', 'check', 'look up', 'look it up', 'get me', 'fetch',
-                                  'just look', 'pull up', 'google', 'browse']
-        )
+                                  'just look', 'pull up', 'google', 'browse', 'open', 'visit',
+                                  'go to', 'read this', 'check this']
+        ) or _contains_url(lower)
         # Factual real-time signals: questions about events, results, current status, news
         looks_like_realtime = any(
             w in lower for w in ['who won', 'who is', 'who are', 'what happened', 'what is the current',
@@ -330,6 +341,15 @@ class CognitiveTriageService:
                 result.skills = list(_PRIMITIVES)
             result.self_eval_override = True
             result.self_eval_reason = 'act_failsafe'
+
+        # Rule 5: URL in message → escalate to ACT (URL is an unambiguous external-action signal)
+        if result.branch == 'respond' and _contains_url(text) and ctx.tool_summaries:
+            result.branch = 'act'
+            result.mode = 'ACT'
+            if not result.skills:
+                result.skills = list(_PRIMITIVES)
+            result.self_eval_override = True
+            result.self_eval_reason = 'act_url_detected'
 
         # Rule 3: Social filter missed a substantive question
         if result.branch == 'social' and '?' in text and len(text.split()) > 3:
