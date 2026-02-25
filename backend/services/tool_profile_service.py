@@ -18,6 +18,7 @@ Enrichment: triggered by high-salience episodes or idle-time background service.
 import hashlib
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from typing import Optional
@@ -50,6 +51,16 @@ def _compute_manifest_hash(manifest: dict) -> str:
     """MD5 hash of manifest for staleness detection."""
     content = json.dumps(manifest, sort_keys=True)
     return hashlib.md5(content.encode()).hexdigest()
+
+
+def _extract_json(text: str) -> dict:
+    """Parse JSON from LLM response, tolerating markdown fences and preamble."""
+    text = re.sub(r'```(?:json)?\s*', '', text).strip()
+    start = text.find('{')
+    end = text.rfind('}')
+    if start == -1 or end == -1:
+        raise ValueError(f"No JSON object found in response (len={len(text)})")
+    return json.loads(text[start:end + 1])
 
 
 class ToolProfileService:
@@ -106,7 +117,7 @@ class ToolProfileService:
         try:
             llm = self._get_llm()
             response_text = llm.send_message("", prompt).text
-            profile_data = json.loads(response_text)
+            profile_data = _extract_json(response_text)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} LLM profile build failed for {tool_name}: {e}")
             profile_data = self._fallback_profile(tool_name, manifest)
@@ -202,7 +213,7 @@ class ToolProfileService:
         try:
             llm = self._get_llm()
             response_text = llm.send_message("", prompt).text
-            profile_data = json.loads(response_text)
+            profile_data = _extract_json(response_text)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} LLM profile build failed for skill {skill_name}: {e}")
             profile_data = {
