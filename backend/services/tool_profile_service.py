@@ -129,12 +129,14 @@ class ToolProfileService:
         db = self._get_db()
         try:
             embedding_str = f"[{','.join(str(x) for x in embedding)}]" if embedding else None
+            triage_triggers = profile_data.get('triage_triggers', [])[:10]
             db.execute(
                 """
                 INSERT INTO tool_capability_profiles
                     (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain, updated_at)
-                VALUES (%s, 'tool', %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain,
+                     triage_triggers, updated_at)
+                VALUES (%s, 'tool', %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (tool_name) DO UPDATE SET
                     tool_type = 'tool',
                     short_summary = EXCLUDED.short_summary,
@@ -145,6 +147,7 @@ class ToolProfileService:
                     embedding = EXCLUDED.embedding,
                     manifest_hash = EXCLUDED.manifest_hash,
                     domain = EXCLUDED.domain,
+                    triage_triggers = EXCLUDED.triage_triggers,
                     updated_at = NOW()
                 """,
                 (
@@ -157,6 +160,7 @@ class ToolProfileService:
                     embedding_str,
                     manifest_hash,
                     profile_data.get('domain', 'Other'),
+                    json.dumps(triage_triggers),
                 )
             )
             logger.info(f"{LOG_PREFIX} Upserted profile for {tool_name}")
@@ -222,12 +226,14 @@ class ToolProfileService:
         db = self._get_db()
         try:
             embedding_str = f"[{','.join(str(x) for x in embedding)}]" if embedding else None
+            triage_triggers = profile_data.get('triage_triggers', [])[:10]
             db.execute(
                 """
                 INSERT INTO tool_capability_profiles
                     (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain, updated_at)
-                VALUES (%s, 'skill', %s, %s, %s, %s, %s, %s, %s, 'Innate Skill', NOW())
+                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain,
+                     triage_triggers, updated_at)
+                VALUES (%s, 'skill', %s, %s, %s, %s, %s, %s, %s, 'Innate Skill', %s, NOW())
                 ON CONFLICT (tool_name) DO UPDATE SET
                     tool_type = 'skill',
                     short_summary = EXCLUDED.short_summary,
@@ -238,6 +244,7 @@ class ToolProfileService:
                     embedding = EXCLUDED.embedding,
                     manifest_hash = EXCLUDED.manifest_hash,
                     domain = EXCLUDED.domain,
+                    triage_triggers = EXCLUDED.triage_triggers,
                     updated_at = NOW()
                 """,
                 (
@@ -249,6 +256,7 @@ class ToolProfileService:
                     json.dumps(profile_data.get('complementary_skills', [])),
                     embedding_str,
                     manifest_hash,
+                    json.dumps(triage_triggers),
                 )
             )
             logger.info(f"{LOG_PREFIX} Upserted profile for skill {skill_name}")
@@ -408,7 +416,8 @@ class ToolProfileService:
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, domain FROM tool_capability_profiles ORDER BY domain, tool_name"
+                "SELECT tool_name, tool_type, short_summary, triage_triggers, domain "
+                "FROM tool_capability_profiles ORDER BY domain, tool_name"
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to fetch profiles: {e}")
@@ -425,7 +434,13 @@ class ToolProfileService:
         for r in rows:
             if r['tool_type'] == 'tool':
                 domain = r.get('domain') or 'Other'
-                by_domain[domain].append(f"- {r['tool_name']}: {r['short_summary']}")
+                summary = r['short_summary']
+                triggers = r.get('triage_triggers') or []
+                if isinstance(triggers, str):
+                    triggers = json.loads(triggers)
+                if triggers:
+                    summary += f" [{', '.join(triggers[:10])}]"
+                by_domain[domain].append(f"- {r['tool_name']}: {summary}")
 
         if not by_domain:
             return ""
@@ -449,7 +464,7 @@ class ToolProfileService:
             if rows:
                 row = dict(rows[0])
                 # Parse JSONB fields
-                for field in ('usage_scenarios', 'anti_scenarios', 'complementary_skills', 'enrichment_episode_ids'):
+                for field in ('usage_scenarios', 'anti_scenarios', 'complementary_skills', 'enrichment_episode_ids', 'triage_triggers'):
                     if isinstance(row.get(field), str):
                         row[field] = json.loads(row[field])
                 return row
@@ -684,6 +699,7 @@ class ToolProfileService:
             'usage_scenarios': [ex.get('description', '') for ex in manifest.get('examples', [])[:10] if ex.get('description')],
             'anti_scenarios': [],
             'complementary_skills': [],
+            'triage_triggers': [],
         }
 
     def _invalidate_cache(self):
