@@ -84,7 +84,7 @@ def _get_sleep_interval(redis) -> float:
     return base * random.uniform(0.9, 1.1)
 
 
-def background_llm_worker():
+def background_llm_worker(shared_state=None):
     """
     Entry point registered with consumer.py via manager.register_service().
 
