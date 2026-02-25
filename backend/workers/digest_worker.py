@@ -689,6 +689,130 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
     return response_data, routing_result
 
 
+def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
+    """
+    Process tool data through Chalie's full cognitive pipeline (including ACT loop).
+
+    Called synchronously during an interactive tool↔Chalie dialog. Returns response text
+    to be written back to the tool container's stdin. Does NOT surface to the user.
+
+    Memory is stored with memory_durability='tool_internal' — weaker than cron_tool,
+    so the user can ask "did that tool ask you something?" but the tool dialog doesn't
+    alter long-term behavioral patterns.
+
+    Args:
+        text: Tool data text (prefixed by trigger_prompt from caller)
+        tool_name: Tool name for memory tagging
+        trigger_prompt: Tool's trigger.prompt from manifest (system context for Chalie)
+
+    Returns:
+        Chalie's response text (not surfaced to user).
+    """
+    try:
+        configs = load_configs()
+        cortex_config = configs['cortex']['config']
+        cortex_prompt_map = configs['cortex']['prompt_map']
+
+        topic = f'tool_dialog:{tool_name}'
+
+        thread_service = get_thread_service()
+        resolution = thread_service.resolve_thread('default', 'default', f'tool_dialog:{tool_name}')
+        thread_id = resolution.thread_id
+
+        thread_conv_service = get_thread_conv_service()
+
+        classification = {
+            'topic': topic,
+            'confidence': 10,
+            'similar_topic': '',
+            'topic_update': '',
+        }
+
+        # Build minimal routing signals — tool dialogs don't need full signal collection
+        signals = {'_prompt_text': text}
+
+        assembled_context = None
+        try:
+            assembled_context = get_context_assembly_service().assemble(
+                prompt=text, topic=topic, thread_id=thread_id,
+            )
+        except Exception as e:
+            logging.warning(f"[TOOL DIALOG] Context assembly failed for '{tool_name}': {e}")
+
+        mode_router = get_mode_router()
+
+        # Route through full pipeline (may engage ACT loop if mode router selects ACT)
+        # metadata=None means orchestrator does NOT deliver to user
+        response_data, _ = route_and_generate(
+            topic=topic,
+            text=text,
+            classification=classification,
+            thread_conv_service=thread_conv_service,
+            cortex_config=cortex_config,
+            cortex_prompt_map=cortex_prompt_map,
+            mode_router=mode_router,
+            signals=signals,
+            metadata=None,
+            context_warmth=0.5,
+            thread_id=thread_id,
+        )
+
+        response = response_data.get('response', '')
+
+        # Store response in conversation history (weak signal)
+        if thread_id:
+            thread_conv_service.add_response(thread_id, response, response_data.get('generation_time', 0.0))
+
+        logging.info(
+            f"[TOOL DIALOG] '{tool_name}' processed: mode={response_data.get('mode')} "
+            f"({response_data.get('generation_time', 0):.2f}s)"
+        )
+        return response
+
+    except Exception as e:
+        logging.error(f"[TOOL DIALOG] Failed for '{tool_name}': {e}")
+        return f"(analysis unavailable: {str(e)[:100]})"
+
+
+def store_tool_dialog_memory(tool_name: str, turns: list):
+    """
+    Store final-turn-only memory after interactive tool dialog completes.
+
+    Stores ONE memory entry regardless of dialog length:
+    - 1-2 turns: full exchange
+    - >2 turns: first request + final response (summary)
+
+    Tagged with memory_durability='tool_internal' for weak persistence.
+    """
+    if not turns:
+        return
+
+    topic = f'tool_dialog:{tool_name}'
+
+    # Build compact exchange summary
+    if len(turns) <= 2:
+        prompt_msg = turns[0].get('request', '')
+        response_msg = turns[-1].get('response', '')
+    else:
+        prompt_msg = turns[0].get('request', '') + f'\n[{len(turns) - 2} intermediate turns omitted]'
+        response_msg = turns[-1].get('response', '')
+
+    try:
+        enqueue_memory_chunker(
+            topic=topic,
+            exchange_id=f'tool_dialog_{tool_name}_{int(time.time())}',
+            prompt_message=prompt_msg[:1000],
+            response_message=response_msg[:1000],
+            metadata={
+                'source': f'tool_dialog:{tool_name}',
+                'memory_durability': 'tool_internal',
+                'tool_name': tool_name,
+            },
+        )
+    except Exception as e:
+        logging.warning(f"[TOOL DIALOG] Memory storage failed for '{tool_name}': {e}")
+
+
 def _handle_cron_tool_result(text: str, metadata: dict) -> str:
     """
     Pipeline for scheduled (cron) tool results.
@@ -2278,7 +2402,25 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             thread_id=thread_id,
         )
 
-    # Step 11c: Encode assistant response (per-message encoding — Phase D)
+    # Step 11c: Spark exchange tracking — increment phase state machine
+    try:
+        from services.spark_state_service import SparkStateService
+        spark = SparkStateService()
+        if not spark.is_graduated():
+            spark.increment_exchange(text, response_gap_seconds=5.0, source=source)
+            if topic:
+                spark.record_topic(topic)
+    except Exception as _spark_e:
+        logging.debug(f"[DIGEST] Spark exchange tracking failed: {_spark_e}")
+
+    # Step 11c.1: Reset nurture backoff on user activity
+    try:
+        from services.autonomous_actions.nurture_action import NurtureAction
+        NurtureAction.record_user_activity()
+    except Exception as _nurture_e:
+        logging.debug(f"[DIGEST] Nurture activity reset failed: {_nurture_e}")
+
+    # Step 11d: Encode assistant response (per-message encoding — Phase D)
     # Skip for fast-path template acks — template has no semantic content worth encoding
     if not is_fast_path_ack:
         event_bus.emit_and_handle(ENCODE_EVENT, {
