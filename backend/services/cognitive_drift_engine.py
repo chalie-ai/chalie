@@ -128,6 +128,7 @@ class CognitiveDriftEngine:
         from services.autonomous_actions.communicate_action import CommunicateAction
         from services.autonomous_actions.reflect_action import ReflectAction
         from services.autonomous_actions.seed_thread_action import SeedThreadAction
+        from services.autonomous_actions.suggest_action import SuggestAction
 
         router = ActionDecisionRouter()
 
@@ -140,6 +141,17 @@ class CognitiveDriftEngine:
         seed_config = action_config.get('seed_thread', {})
         if seed_config.get('enabled', True):
             router.register(SeedThreadAction(config=seed_config))
+
+        # Register SUGGEST (priority 8, below COMMUNICATE=10, above SEED_THREAD=6)
+        suggest_config = action_config.get('suggest', {})
+        if suggest_config.get('enabled', True):
+            router.register(SuggestAction(config=suggest_config))
+
+        # Register NURTURE (priority 7, between SUGGEST and SEED_THREAD)
+        from services.autonomous_actions.nurture_action import NurtureAction
+        nurture_config = action_config.get('nurture', {})
+        if nurture_config.get('enabled', True):
+            router.register(NurtureAction(config=nurture_config))
 
         # Register COMMUNICATE if enabled
         communicate_config = action_config.get('communicate', {})
@@ -289,6 +301,15 @@ class CognitiveDriftEngine:
         self.redis.zadd(FATIGUE_KEY, {f"{drift_id}:{max_activation}": time.time()})
         cutoff = time.time() - (self.fatigue_window_minutes * 60)
         self.redis.zremrangebyscore(FATIGUE_KEY, '-inf', cutoff)
+
+    def _is_user_deep_focus(self) -> bool:
+        """Check if user is in deep focus — skip drift to avoid interrupting."""
+        try:
+            from services.ambient_inference_service import AmbientInferenceService
+            inference = AmbientInferenceService()
+            return inference.is_user_deep_focus()
+        except Exception:
+            return False
 
     # ── Cooldown ─────────────────────────────────────────────────────
 
@@ -734,6 +755,11 @@ class CognitiveDriftEngine:
         """Execute one complete drift cycle."""
         # 1. Check fatigue
         if self._is_fatigued():
+            return
+
+        # 1b. Attention gate — don't interrupt deep work with spontaneous thoughts
+        if self._is_user_deep_focus():
+            logger.info(f"{LOG_PREFIX} User in deep focus, skipping drift")
             return
 
         # 2. Select seed

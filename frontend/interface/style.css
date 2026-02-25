@@ -1945,3 +1945,105 @@ body {
   text-decoration: underline;
   text-decoration-color: rgba(138, 92, 255, 0.4);
 }
+
+/* --------------------------------------------------------------------------
+   Spark Overlay — First-contact "Waking up Chalie..." screen
+   -------------------------------------------------------------------------- */
+
+.spark-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #06080e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 220ms ease;
+}
+
+.spark-overlay.hidden {
+  display: none;
+}
+
+.spark-overlay.spark-overlay--fading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.spark-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.spark-overlay__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--violet);
+  animation: glow 2s ease-in-out infinite;
+  box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(138, 92, 255, 0.2);
+}
+
+.spark-overlay__text {
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  animation: sparkTextFadeIn 400ms ease 400ms both;
+}
+
+.spark-overlay__skip {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  padding: 4px 8px;
+  opacity: 0;
+  animation: sparkTextFadeIn 400ms ease 4s both;
+  transition: color 220ms ease;
+}
+
+.spark-overlay__skip:hover {
+  color: var(--text-secondary);
+}
+
+.spark-overlay__skip:focus-visible {
+  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline-offset: 2px;
+}
+
+@keyframes sparkTextFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* --------------------------------------------------------------------------
+   Ambient Messages — Spark nurture/welcome: softer presence, not a prompt
+   -------------------------------------------------------------------------- */
+
+.speech-form--ambient {
+  opacity: 0;
+  animation: ambientFadeIn 600ms ease 200ms both;
+}
+
+.speech-form--ambient.speech-form--active {
+  border-color: rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+}
+
+.speech-form--ambient.speech-form--active::before {
+  display: none;
+}
+
+.speech-form--ambient .speech-form__text {
+  color: var(--text-secondary);
+}
+
+@keyframes ambientFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 0.85; transform: translateY(0); }
+}
