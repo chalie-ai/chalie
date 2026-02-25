@@ -80,15 +80,15 @@ class ToolProfileService:
 
     # ── Profile Building ──────────────────────────────────────────────
 
-    def build_profile(self, tool_name: str, manifest: dict) -> dict:
+    def build_profile(self, tool_name: str, manifest: dict, force: bool = False) -> dict:
         """Build and store a capability profile for an external tool."""
         logger.info(f"{LOG_PREFIX} Building profile for tool: {tool_name}")
 
         description = manifest.get('documentation') or manifest.get('description', tool_name)
         manifest_hash = _compute_manifest_hash(manifest)
 
-        # Check if profile is current
-        if not self.check_staleness(tool_name, manifest_hash):
+        # Check if profile is current (skip when caller has already decided a rebuild is needed)
+        if not force and not self.check_staleness(tool_name, manifest_hash):
             logger.info(f"{LOG_PREFIX} Profile for {tool_name} is current, skipping")
             return self.get_full_profile(tool_name) or {}
 
@@ -174,7 +174,7 @@ class ToolProfileService:
 
         return profile_data
 
-    def build_skill_profile(self, skill_name: str, skill_desc: str) -> dict:
+    def build_skill_profile(self, skill_name: str, skill_desc: str, force: bool = False) -> dict:
         """Build and store a capability profile for an innate skill."""
         logger.info(f"{LOG_PREFIX} Building profile for skill: {skill_name}")
 
@@ -186,7 +186,7 @@ class ToolProfileService:
         }
         manifest_hash = _compute_manifest_hash(pseudo_manifest)
 
-        if not self.check_staleness(skill_name, manifest_hash):
+        if not force and not self.check_staleness(skill_name, manifest_hash):
             logger.info(f"{LOG_PREFIX} Profile for skill {skill_name} is current, skipping")
             return self.get_full_profile(skill_name) or {}
 
@@ -549,7 +549,7 @@ class ToolProfileService:
                     profile = self.get_full_profile(skill_name)
                     if profile and self._profile_needs_rebuild(profile):
                         logger.info(f"{LOG_PREFIX} Rebuilding skill {skill_name} profile (missing fields)")
-                        self.build_skill_profile(skill_name, skill_desc)
+                        self.build_skill_profile(skill_name, skill_desc, force=True)
                     else:
                         logger.debug(f"{LOG_PREFIX} Skill {skill_name} profile is current")
             except Exception as e:
@@ -570,7 +570,7 @@ class ToolProfileService:
                         profile = self.get_full_profile(tool_name)
                         if profile and self._profile_needs_rebuild(profile):
                             logger.info(f"{LOG_PREFIX} Rebuilding tool {tool_name} profile (missing fields)")
-                            self.build_profile(tool_name, manifest)
+                            self.build_profile(tool_name, manifest, force=True)
                         else:
                             logger.debug(f"{LOG_PREFIX} Tool {tool_name} profile is current")
                 except Exception as e:
