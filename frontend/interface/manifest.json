@@ -12,5 +12,16 @@
   "prefer_related_applications": false,
   "icons": [
     { "src": "/icons/icon.png", "sizes": "500x500", "type": "image/png", "purpose": "any" }
-  ]
+  ],
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [{ "name": "media", "accept": ["image/*", "text/*"] }]
+    }
+  }
 }

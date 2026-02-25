@@ -1,9 +1,10 @@
 /**
  * Client Context Heartbeat
  *
- * Periodically sends the user's timezone, location, and system info to the backend.
- * This provides a single source of truth for services to read client context without
- * per-request overhead.
+ * Periodically sends the user's timezone, location, system info, device context,
+ * battery state, network quality, user preferences, and behavioral signals to
+ * the backend. This provides a single source of truth for services to read
+ * client context without per-request overhead.
  */
 
 export class ClientHeartbeat {
@@ -11,6 +12,15 @@ export class ClientHeartbeat {
     this._getHost = getHost || (() => '');
     this._interval = null;
     this._lastSentAt = 0;
+    this._ambientSensor = null;
+  }
+
+  /**
+   * Register an AmbientSensor instance whose snapshot() will be included
+   * in every heartbeat payload.
+   */
+  setAmbientSensor(sensor) {
+    this._ambientSensor = sensor;
   }
 
   /**
@@ -63,6 +73,88 @@ export class ClientHeartbeat {
   }
 
   /**
+   * Detect device class from screen size + pointer type (no user-agent parsing).
+   */
+  _detectDevice() {
+    const sw = screen.width;
+    const sh = screen.height;
+    const minDim = Math.min(sw, sh);
+    const coarse = matchMedia('(pointer: coarse)').matches;
+
+    let deviceClass;
+    if (coarse && minDim < 600) deviceClass = 'phone';
+    else if (coarse) deviceClass = 'tablet';
+    else deviceClass = 'desktop';
+
+    // Platform detection from navigator.platform / userAgentData
+    let platform = 'unknown';
+    if (navigator.userAgentData?.platform) {
+      platform = navigator.userAgentData.platform;
+    } else if (navigator.platform) {
+      const p = navigator.platform.toLowerCase();
+      if (p.includes('mac')) platform = 'macOS';
+      else if (p.includes('win')) platform = 'Windows';
+      else if (p.includes('linux')) platform = 'Linux';
+      else if (p.includes('iphone') || p.includes('ipad')) platform = 'iOS';
+    }
+
+    // PWA detection
+    const pwa = matchMedia('(display-mode: standalone)').matches ||
+                matchMedia('(display-mode: fullscreen)').matches ||
+                navigator.standalone === true;
+
+    return {
+      class: deviceClass,
+      platform,
+      screen_w: sw,
+      screen_h: sh,
+      pixel_ratio: window.devicePixelRatio || 1,
+      orientation: sw > sh ? 'landscape' : 'portrait',
+      input: coarse ? 'coarse' : 'fine',
+      pwa,
+    };
+  }
+
+  /**
+   * Get battery info (Chrome/Edge only — getBattery is not available everywhere).
+   */
+  async _getBattery() {
+    if (!navigator.getBattery) return null;
+    try {
+      const batt = await navigator.getBattery();
+      return {
+        level: Math.round(batt.level * 100) / 100,
+        charging: batt.charging,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Get enhanced network info from Network Information API.
+   */
+  _getNetwork() {
+    const conn = navigator.connection;
+    if (!conn) return null;
+    const net = {};
+    if (conn.effectiveType) net.effective_type = conn.effectiveType;
+    if (conn.saveData !== undefined) net.save_data = conn.saveData;
+    if (conn.downlink !== undefined) net.downlink = conn.downlink;
+    return Object.keys(net).length ? net : null;
+  }
+
+  /**
+   * Get user preferences (color scheme, motion).
+   */
+  _getPreferences() {
+    return {
+      color_scheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+      reduced_motion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    };
+  }
+
+  /**
    * Collect and send client context to /health endpoint.
    */
   async _sendContext() {
@@ -74,9 +166,29 @@ export class ClientHeartbeat {
         local_time: new Date().toISOString(),
       };
 
-      // Connection quality (Network Information API — not available in all browsers)
-      if (navigator.connection?.effectiveType) {
-        ctx.connection = navigator.connection.effectiveType;       // "4g", "3g", etc.
+      // Device info
+      ctx.device = this._detectDevice();
+
+      // Network (enhanced — replaces the old single connection field)
+      const network = this._getNetwork();
+      if (network) {
+        ctx.network = network;
+        // Keep legacy field for backward compatibility
+        if (network.effective_type) ctx.connection = network.effective_type;
+      } else if (navigator.connection?.effectiveType) {
+        ctx.connection = navigator.connection.effectiveType;
+      }
+
+      // Battery (async — Chrome/Edge only)
+      const battery = await this._getBattery();
+      if (battery) ctx.battery = battery;
+
+      // User preferences
+      ctx.preferences = this._getPreferences();
+
+      // Behavioral snapshot from AmbientSensor
+      if (this._ambientSensor) {
+        ctx.behavioral = this._ambientSensor.snapshot();
       }
 
       // Best-effort geolocation (no prompt — requestLocationPermission handles that)

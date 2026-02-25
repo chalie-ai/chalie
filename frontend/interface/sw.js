@@ -12,6 +12,7 @@ const SHELL_ASSETS = [
   '/app.js', '/api.js', '/sse.js', '/renderer.js',
   '/presence.js', '/voice.js', '/tools.js', '/style.css',
   '/markdown.js', '/lib/marked.esm.js',
+  '/ambient.js',
   '/icons/icon.png',
   '/cards/base.js', '/cards/memory.js', '/cards/timeline.js',
   '/cards/reminders.js', '/cards/weather.js', '/cards/digest.js',
@@ -73,6 +74,23 @@ self.addEventListener('activate', (event) => {
 // ============================================================================
 
 self.addEventListener('fetch', (event) => {
+  // Share Target: intercept POST to /share-target and redirect with data
+  if (event.request.method === 'POST' && new URL(event.request.url).pathname === '/share-target') {
+    event.respondWith(
+      event.request.formData().then((formData) => {
+        const title = formData.get('title') || '';
+        const text = formData.get('text') || '';
+        const url = formData.get('url') || '';
+        const parts = [title, text, url].filter(Boolean);
+        const shared = encodeURIComponent(parts.join(' '));
+        return Response.redirect(`/?shared=${shared}`, 303);
+      }).catch(() => {
+        return Response.redirect('/', 303);
+      })
+    );
+    return;
+  }
+
   // Only handle GET requests
   if (event.request.method !== 'GET') {
     return;
@@ -124,7 +142,9 @@ async function cacheFirst(request, cacheName, preloadResponse) {
   // 1. Check cache first
   let response = await cache.match(request);
   if (response) {
-    // Cache hit: return immediately, but fire a background update
+    // Cache hit: return immediately, but fire a background update.
+    // Drain preloadResponse so the browser doesn't log "cancelled before settled".
+    if (preloadResponse) preloadResponse.catch(() => {});
     backgroundFetch(request, cacheName);
     return response;
   }
@@ -218,7 +238,7 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || '',
     icon: payload.icon || undefined,
-    tag: payload.tag || 'chalie-drift',
+    tag: payload.tag || 'chalie-message',
     data: { url: payload.url || '/' },
   };
 
