@@ -26,19 +26,11 @@ LOG_PREFIX = "[TRIAGE]"
 
 # Cognitive primitives — always selected for ACT regardless of prompt compliance
 _PRIMITIVES = ['recall', 'memorize', 'introspect']
-_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography'}
+_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task'}
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
 
-# Innate action skill patterns — ACT is required even when no external tool is listed
-_INNATE_ACTION_PATTERNS = re.compile(
-    r'\b(remind\s+me|set\s+(a\s+)?(reminder|alarm|schedule)|schedule\s+(a\s+)?(reminder|task|message)|'
-    r'add\s+.{1,40}\s+to\s+(my\s+)?(list|shopping|to.?do)|remove\s+.{1,40}\s+from\s+(my\s+)?(list)|'
-    r'cancel\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
-    r'delete\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
-    r'turn\s+off\s+(my\s+|all\s+|the\s+)?(reminder|alarm|schedule|task|notification|event|appointment)s?|'
-    r'every\s+(morning|evening|day|hour|week|month|\d+\s+minutes?|few\s+hours?))\b',
-    re.IGNORECASE
-)
+# Contextual skills — if the LLM selected any of these, it's an innate action (no external tool needed)
+_CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES)
 
 # Social filter regex patterns (reused from IntentClassifierService)
 _GREETING_PATTERNS = re.compile(
@@ -304,43 +296,27 @@ class CognitiveTriageService:
     def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext) -> TriageResult:
         """Deterministic sanity check rules. ~0ms."""
 
-        # Rule 1: ACT without any tools → innate skill if matched, otherwise assign default tool or downgrade
+        # Rule 1: ACT without tools → keep if contextual skill, defer to ACT loop if tools exist, else downgrade
         if result.branch == 'act' and not result.tools:
-            if _INNATE_ACTION_PATTERNS.search(text):
-                # Innate action skill (schedule/list) — no external tool needed, keep ACT
-                # Ensure primitives are present (may arrive here from heuristic_fallback)
+            has_contextual_skill = any(s in _CONTEXTUAL_SKILLS for s in result.skills)
+            if has_contextual_skill:
+                # LLM selected an innate action skill (schedule, list, etc.) — no external tool needed
                 if not result.skills:
                     result.skills = list(_PRIMITIVES)
                 result.self_eval_override = True
                 result.self_eval_reason = 'act_innate_skill'
+            elif ctx.tool_summaries:
+                # Tools exist but none named — defer tool selection to ACT loop
+                if not result.skills:
+                    result.skills = list(_PRIMITIVES)
+                result.self_eval_override = True
+                result.self_eval_reason = 'act_tool_deferred_to_loop'
             else:
-                default_tool = self._pick_default_tool(ctx.tool_summaries)
-                if default_tool:
-                    result.tools = [default_tool]
-                    result.self_eval_override = True
-                    result.self_eval_reason = 'act_default_tool_assigned'
-                else:
-                    result.branch = 'respond'
-                    result.mode = 'RESPOND'
-                    result.self_eval_override = True
-                    result.self_eval_reason = 'act_without_tools'
-
-        # Rule 1b: RESPOND but text is clearly an innate action request → escalate to ACT
-        if result.branch == 'respond' and _INNATE_ACTION_PATTERNS.search(text):
-            result.branch = 'act'
-            result.mode = 'ACT'
-            result.tools = []
-            result.self_eval_override = True
-            result.self_eval_reason = 'act_innate_skill_failsafe'
-            # Ensure primitives + detect likely contextual skill from keyword match
-            if not result.skills:
-                result.skills = list(_PRIMITIVES)
-            lower = text.lower()
-            if not any(s for s in result.skills if s not in _PRIMITIVES):
-                if any(w in lower for w in ['remind', 'schedule', 'alarm', 'every morning', 'every day']):
-                    result.skills.append('schedule')
-                elif any(w in lower for w in ['add to', 'remove from', 'my list', 'shopping']):
-                    result.skills.append('list')
+                # No tools available at all
+                result.branch = 'respond'
+                result.mode = 'RESPOND'
+                result.self_eval_override = True
+                result.self_eval_reason = 'act_no_tools_available'
 
         # Rule 2: RESPOND on high-freshness question → escalate to ACT
         # Freshness risk alone is sufficient — if the answer requires live data, use tools.
@@ -376,14 +352,6 @@ class CognitiveTriageService:
                 result.self_eval_reason = 'anti_oscillation_same_tool'
 
         return result
-
-    def _pick_default_tool(self, tool_summaries: str) -> str:
-        """Pick the first available tool from summaries (format: "- tool_name: ...")."""
-        if not tool_summaries:
-            return ''
-        import re
-        m = re.search(r'-\s+(\w+):', tool_summaries)
-        return m.group(1) if m else ''
 
     def _load_prompt(self) -> str:
         import os

@@ -135,13 +135,13 @@ class TestSelfEvalRules:
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         result = self._make_result('act', 'ACT', tools=[])
-        # Empty tool_summaries so _pick_default_tool returns '' → triggers downgrade
+        # Empty tool_summaries → no tools available at all → downgrade
         ctx = self._make_context(tool_summaries='')
         result = svc._self_evaluate(result, "search for something", ctx)
         assert result.branch == 'respond'
         assert result.mode == 'RESPOND'
         assert result.self_eval_override is True
-        assert result.self_eval_reason == 'act_without_tools'
+        assert result.self_eval_reason == 'act_no_tools_available'
 
     def test_rule1_act_with_tools_not_modified(self):
         from services.cognitive_triage_service import CognitiveTriageService
@@ -151,6 +151,27 @@ class TestSelfEvalRules:
         result = svc._self_evaluate(result, "search for something", ctx)
         assert result.branch == 'act'
         assert result.self_eval_override is False
+
+    def test_rule1_act_with_contextual_skill_stays_act(self):
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('act', 'ACT', tools=[])
+        result.skills = ['recall', 'memorize', 'introspect', 'schedule']
+        ctx = self._make_context(tool_summaries='')
+        result = svc._self_evaluate(result, "remind me at 3pm", ctx)
+        assert result.branch == 'act'
+        assert result.self_eval_reason == 'act_innate_skill'
+
+    def test_rule1_act_no_tools_defers_to_loop_when_tools_available(self):
+        """ACT + no tools + tools registered → stays ACT, defers tool selection to ACT loop."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('act', 'ACT', tools=[])
+        ctx = self._make_context(tool_summaries='## Info\n- search: web search')
+        result = svc._self_evaluate(result, "open this link", ctx)
+        assert result.branch == 'act'
+        assert result.mode == 'ACT'
+        assert result.self_eval_reason == 'act_tool_deferred_to_loop'
 
     def test_rule2_act_failsafe_escalates_respond_to_act(self):
         from services.cognitive_triage_service import CognitiveTriageService
@@ -337,7 +358,7 @@ class TestTriageFull:
         result = svc.triage("do something external", ctx)
         assert result.branch == 'respond'  # Downgraded by self-eval
         assert result.self_eval_override is True
-        assert result.self_eval_reason == 'act_without_tools'
+        assert result.self_eval_reason == 'act_no_tools_available'
 
     @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
     def test_triage_llm_timeout_fallback(self, mock_get_llm):
