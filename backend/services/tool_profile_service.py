@@ -67,8 +67,7 @@ class ToolProfileService:
     def _get_llm(self):
         from services.llm_service import create_llm_service
         from services.config_service import ConfigService
-        config = ConfigService()
-        agent_cfg = config.get_agent_config('cognitive-triage')
+        agent_cfg = ConfigService.resolve_agent_config('cognitive-triage')
         return create_llm_service(agent_cfg)
 
     def _get_embedding_service(self):
@@ -705,10 +704,14 @@ class ToolProfileService:
     @staticmethod
     def _profile_needs_rebuild(profile: dict) -> bool:
         """Check if a profile is missing fields added after initial build."""
-        if not profile.get('domain'):
+        domain = profile.get('domain')
+        if not domain or (domain == 'Other' and profile.get('tool_type') == 'tool'):
             return True
         triggers = profile.get('triage_triggers')
         if not triggers or triggers == []:
+            return True
+        scenarios = profile.get('usage_scenarios')
+        if not scenarios or scenarios == []:
             return True
         return False
 

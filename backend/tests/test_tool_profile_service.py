@@ -130,8 +130,8 @@ class TestGetTriageSummaries:
         svc = ToolProfileService()
         mock_db = MagicMock()
         mock_db.fetch_all.return_value = [
-            {'tool_name': 'duckduckgo_search', 'tool_type': 'tool', 'short_summary': 'Search the web'},
-            {'tool_name': 'weather', 'tool_type': 'tool', 'short_summary': 'Check weather'},
+            {'tool_name': 'duckduckgo_search', 'tool_type': 'tool', 'short_summary': 'Search the web', 'domain': 'Information Retrieval', 'triage_triggers': []},
+            {'tool_name': 'weather', 'tool_type': 'tool', 'short_summary': 'Check weather', 'domain': 'Environment', 'triage_triggers': []},
         ]
         svc._db = mock_db
 
