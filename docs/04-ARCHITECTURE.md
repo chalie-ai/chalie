@@ -52,6 +52,7 @@ frontend/
 - **`routing_decision_service.py`** — Routing decision audit trail (PostgreSQL)
 - **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
+- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
 
 #### Response Generation
 - **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
@@ -80,18 +81,23 @@ frontend/
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
 #### Ambient Awareness
-- **`ambient_inference_service.py`** — Deterministic inference engine (<1ms, zero LLM): place, attention, energy, mobility, tempo, device_context from browser telemetry + behavioral signals; thresholds loaded from `configs/agents/ambient-inference.json`
+- **`ambient_inference_service.py`** — Deterministic inference engine (<1ms, zero LLM): place, attention, energy, mobility, tempo, device_context from browser telemetry + behavioral signals; thresholds loaded from `configs/agents/ambient-inference.json`; emits transition events (place, attention, energy) to event bridge when `emit_events=True`
 - **`place_learning_service.py`** — Accumulates place fingerprints (geohash ~1km, never raw coords) in `place_fingerprints` table; learned patterns override heuristics after 20+ observations
-- **`client_context_service.py`** — Rich client context with location history ring buffer (12 entries), place transition detection, session re-entry detection (>30min absence), demographic trait seeding from locale, and circadian hourly interaction counts
+- **`client_context_service.py`** — Rich client context with location history ring buffer (12 entries), place transition detection, session re-entry detection (>30min absence), demographic trait seeding from locale, and circadian hourly interaction counts; emits session_start/session_resume events to event bridge
+- **`event_bridge_service.py`** — Connects ambient context changes (place, attention, energy, session) to autonomous actions; enforces stabilization windows (90s), per-event cooldowns, confidence gating, aggregation (60s bundle window), and focus gates; config in `configs/agents/event-bridge.json`
+
+#### ACT Loop & Critic
+- **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
+- **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
+- **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
+- **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
 
 #### Tool Integration
-- **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
-- **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement
 - **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol)
 - **`tool_container_service.py`** — Container lifecycle; `run()` for single-shot, `run_interactive()` for bidirectional tool↔Chalie dialog (JSON-lines stdout, Chalie responses via stdin)
 - **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
 - **`tool_performance_service.py`** — Performance metrics tracking
-- **`tool_profile_service.py`** — Tool capability caching and profiles
+- **`tool_profile_service.py`** — LLM-generated tool capability profiles with `triage_triggers` (short action verbs injected into triage prompt for vocabulary bridging), `short_summary`, `full_profile`, and `usage_scenarios`; Redis-cached triage summaries (5min TTL)
 - **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
 #### Identity & Learning
@@ -119,7 +125,7 @@ frontend/
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-9 built-in cognitive skills for the ACT loop:
+10 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
@@ -129,6 +135,7 @@ frontend/
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
 - **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
 - **`moment_skill.py`** — Natural language moment recall ("Do you remember...") and listing via pgvector search
+- **`persistent_task_skill.py`** — Multi-session background task management: create, pause, resume, cancel, check status, set priority (<100ms)
 
 ## Worker Processes (`backend/workers/`)
 
@@ -155,6 +162,7 @@ frontend/
 - **Profile Enrichment** — Tool profile enrichment (6h cycle)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
+- **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); adaptive user surfacing at coverage milestones
 
 ## Data Flow Pipeline
 
@@ -266,7 +274,8 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - **Speaker confidence** gates trait storage (unknown speakers = 0.3 penalty)
 
 ### Operational Limits
-- **ACT loop**: 60s cumulative timeout, ~7 max iterations
+- **ACT loop**: 60s cumulative timeout, ~7 max iterations; post-action critic verification (0.3 fatigue cost per evaluation)
+- **Persistent tasks**: 5 active max, 3 cycles/hr rate limit, 14-day auto-expiry
 - **Fatigue budget**: 2.5 activation units per 30min
 - **Per-concept cooldown**: 60min (prevents circular rumination)
 - **Delegation rate**: 1 per topic per 30min
@@ -367,7 +376,6 @@ docker-compose logs -f backend
 ## Future Roadmap
 
 ### Planned (Priority 1)
-- **Strategic multi-session planning**: Goal stack + cross-session task tracking
 - **User memory transparency API**: Direct REST endpoints for memory inspection
 
 ### Planned (Priority 2)
