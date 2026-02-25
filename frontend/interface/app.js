@@ -7,6 +7,7 @@ import { Presence } from './presence.js';
 import { Renderer } from './renderer.js';
 import { VoiceIO } from './voice.js';
 import { ClientHeartbeat } from './heartbeat.js';
+import { AmbientSensor } from './ambient.js';
 import { MemoryCard } from './cards/memory.js';
 import { TimelineCard } from './cards/timeline.js';
 import { ToolResultCard } from './cards/tool_result.js';
@@ -87,10 +88,12 @@ class ChalieApp {
     this._initTools();
     this._initMoments();
     this._initInput();
+    this._initAmbientSensor();
     this._initPwaDialog();
     this._initAmbientCanvas();
     this._initVisibilityTracking();
     this._initConnectionMonitor();
+    this._handleSharedContent();
     this.heartbeat.start();
 
     // Show PWA install prompt first, then resume normal flow after dismiss/install
@@ -381,6 +384,40 @@ class ChalieApp {
   }
 
   // ---------------------------------------------------------------------------
+  // Ambient Sensor
+  // ---------------------------------------------------------------------------
+
+  _initAmbientSensor() {
+    this._ambientSensor = new AmbientSensor();
+    this._ambientSensor.bindTypingInput(document.getElementById('messageInput'));
+    this.heartbeat.setAmbientSensor(this._ambientSensor);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Share Target
+  // ---------------------------------------------------------------------------
+
+  _handleSharedContent() {
+    const params = new URLSearchParams(window.location.search);
+    const shared = params.get('shared');
+    if (!shared) return;
+
+    // Pre-fill the prompt textarea with shared content
+    const textarea = document.getElementById('messageInput');
+    if (textarea) {
+      textarea.value = decodeURIComponent(shared);
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+      const sendBtn = document.getElementById('sendBtn');
+      if (sendBtn) sendBtn.disabled = false;
+    }
+
+    // Clean URL without reload
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+  }
+
+  // ---------------------------------------------------------------------------
   // Input Handling
   // ---------------------------------------------------------------------------
 
@@ -506,6 +543,7 @@ class ChalieApp {
       },
       onDone: (data) => {
         clearTimeout(pendingUpgradeTimer);
+        if (this._ambientSensor) this._ambientSensor.recordResponse();
         if (responseText) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
@@ -712,7 +750,12 @@ class ChalieApp {
     };
 
     // Render in conversation spine as a Chalie message
-    this.renderer.appendChalieForm(content, meta);
+    const formEl = this.renderer.appendChalieForm(content, meta);
+
+    // Spark presence messages get ambient treatment (softer, not conversational)
+    if (data.topic && data.topic.startsWith('spark_')) {
+      formEl.classList.add('speech-form--ambient');
+    }
   }
 
   _handleSchedulerTrigger(data) {
