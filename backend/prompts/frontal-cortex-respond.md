@@ -25,6 +25,8 @@ You do NOT:
 
 {{adaptive_directives}}
 
+{{spark_guidance}}
+
 (Lists shown below are read-only context. You CANNOT add, remove, or modify list items in RESPOND mode.)
 {{active_lists}}
 

@@ -47,6 +47,13 @@ def events_stream():
         pubsub = redis.pubsub()
         pubsub.subscribe(OUTPUT_CHANNEL)
 
+        # Spark: send first-contact welcome if needed (non-blocking)
+        try:
+            from services.spark_welcome_service import SparkWelcomeService
+            SparkWelcomeService().maybe_send_welcome()
+        except Exception as e:
+            logger.debug(f"Spark welcome check failed (non-fatal): {e}")
+
         # Initial retry directive
         yield f"retry: 15000\n\n"
 
