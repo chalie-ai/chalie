@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 KITTEN_VOICE = os.getenv("KITTEN_VOICE", "Bella")
-KITTEN_MODEL = os.getenv("KITTEN_MODEL", "kitten-tts-mini-0.8")
+KITTEN_MODEL = os.getenv("KITTEN_MODEL", "KittenML/kitten-tts-mini-0.8")
 MAX_AUDIO_SECONDS = int(os.getenv("MAX_AUDIO_SECONDS", "60"))
 MAX_TTS_CHARS = int(os.getenv("MAX_TTS_CHARS", "5000"))
 STT_CONCURRENCY = int(os.getenv("STT_CONCURRENCY", "1"))
@@ -139,20 +139,20 @@ async def synthesize(req: SynthesizeRequest):
     if len(req.text) > MAX_TTS_CHARS:
         raise HTTPException(status_code=400, detail=f"Text exceeds {MAX_TTS_CHARS} character limit")
 
-    acquired = tts_sem._value > 0 if tts_sem else True
-    if not acquired:
-        # Quick check before blocking — if all slots are taken, 503 immediately.
-        # We still try to acquire below; this is just a fast-path reject for burst traffic.
-        pass
+    try:
+        await asyncio.wait_for(tts_sem.acquire(), timeout=0.1)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="TTS busy — try again shortly")
 
     try:
-        async with tts_sem:
-            audio = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: tts_model.generate(req.text.strip(), voice=KITTEN_VOICE)
-            )
+        audio = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: tts_model.generate(req.text.strip(), voice=KITTEN_VOICE)
+        )
     except Exception as e:
         logger.error("TTS error: %s", e)
         raise HTTPException(status_code=500, detail="TTS generation failed")
+    finally:
+        tts_sem.release()
 
     wav_bytes = _audio_to_wav_bytes(audio)
     return Response(content=wav_bytes, media_type="audio/wav")
@@ -173,17 +173,18 @@ async def transcribe(file: UploadFile = File(...)):
             detail=f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)",
         )
 
-    if not stt_sem.locked() and stt_sem._value == 0:
+    try:
+        await asyncio.wait_for(stt_sem.acquire(), timeout=0.1)
+    except asyncio.TimeoutError:
         raise HTTPException(status_code=503, detail="STT busy — try again shortly")
 
     try:
-        async with stt_sem:
-            text = await asyncio.get_event_loop().run_in_executor(None, _transcribe_sync, data)
-    except HTTPException:
-        raise
+        text = await asyncio.get_event_loop().run_in_executor(None, _transcribe_sync, data)
     except Exception as e:
         logger.error("STT error: %s", e)
         raise HTTPException(status_code=500, detail="Transcription failed")
+    finally:
+        stt_sem.release()
 
     return {"text": text}
 
