@@ -681,6 +681,9 @@ class CognitiveDriftEngine:
                 # Strip <think>...</think> tags (qwen3 thinking leakage)
                 import re
                 cleaned = re.sub(r'<think>.*?</think>', '', raw_response, flags=re.DOTALL).strip()
+                # Also strip unclosed <think> (truncated model output — no closing tag)
+                if '<think>' in cleaned:
+                    cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL).strip()
 
                 if not cleaned:
                     logger.warning(
