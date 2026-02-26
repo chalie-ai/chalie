@@ -84,6 +84,16 @@
     </div>
   </div>
 
+  <!-- Task strip — visible only when Chalie has active background tasks -->
+  <div id="taskStrip" class="task-strip hidden">
+    <button class="task-strip__toggle" id="taskStripToggle">
+      <span class="task-strip__dot"></span>
+      <span class="task-strip__label">Working on <span id="taskStripCount">0</span> things</span>
+      <svg class="task-strip__chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+    <div class="task-strip__list" id="taskStripList"></div>
+  </div>
+
   <!-- Conversation spine -->
   <main class="conversation-spine" id="conversationSpine">
     <!-- Speech forms and cards are appended here -->

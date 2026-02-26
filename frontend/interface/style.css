@@ -2118,3 +2118,138 @@ body {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255, 180, 50, 0.3), transparent);
 }
+
+/* ──────────────────────────────────────────────
+   Persistent Task Strip — background work visibility
+   ────────────────────────────────────────────── */
+
+.task-strip {
+  position: fixed;
+  top: 56px;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  animation: taskStripEnter 220ms ease both;
+}
+
+.task-strip.hidden {
+  display: none;
+}
+
+@keyframes taskStripEnter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.task-strip__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 20px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 220ms ease;
+}
+.task-strip__toggle:hover {
+  color: var(--text-primary);
+}
+
+.task-strip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #8A5CFF);
+  flex-shrink: 0;
+  animation: taskDotPulse 2s ease-in-out infinite;
+}
+
+@keyframes taskDotPulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+
+.task-strip__label {
+  flex: 1;
+  text-align: left;
+}
+
+.task-strip__chevron {
+  transition: transform 220ms ease;
+  opacity: 0.5;
+}
+.task-strip.--expanded .task-strip__chevron {
+  transform: rotate(180deg);
+}
+
+.task-strip__list {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 220ms ease;
+}
+.task-strip.--expanded .task-strip__list {
+  max-height: 300px;
+}
+
+.task-strip__item {
+  padding: 8px 20px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+.task-strip__item.--paused {
+  opacity: 0.5;
+}
+
+.task-strip__goal {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 600px;
+  margin-bottom: 4px;
+}
+
+.task-strip__progress-bar {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 1px;
+  margin-bottom: 4px;
+  overflow: hidden;
+}
+
+.task-strip__progress-fill {
+  height: 100%;
+  background: var(--accent, #8A5CFF);
+  border-radius: 1px;
+  transition: width 400ms ease;
+}
+
+.task-strip__summary {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-strip__hint {
+  padding: 6px 20px 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+/* Adjust conversation spine when task strip is visible */
+body.has-task-strip .conversation-spine {
+  padding-top: calc(56px + 40px + var(--space-xl));
+}
+body.has-task-strip.task-strip-expanded .conversation-spine {
+  padding-top: calc(56px + 40px + var(--space-xl));
+}

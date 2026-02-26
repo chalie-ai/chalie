@@ -88,6 +88,7 @@ class ChalieApp {
     this._initInput();
     this._initAmbientSensor();
     this._initPwaDialog();
+    this._initTaskStrip();
     this._initAmbientCanvas();
     this._initVisibilityTracking();
     this._initConnectionMonitor();
@@ -145,6 +146,7 @@ class ChalieApp {
       this.presence.setState('resting');
       await this._loadVoiceConfig();
       this._loadRecentConversation();
+      this._loadActiveTasks();
       this._connectDriftStream();
       this._requestNotificationPermission();
       // Ask once for geolocation permission so the heartbeat can capture coordinates.
@@ -391,6 +393,79 @@ class ChalieApp {
       }
     });
     observer.observe(document.getElementById('conversationSpine'), { childList: true });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Persistent Task Strip
+  // ---------------------------------------------------------------------------
+
+  _initTaskStrip() {
+    const toggle = document.getElementById('taskStripToggle');
+    const strip = document.getElementById('taskStrip');
+    if (!toggle || !strip) return;
+
+    toggle.addEventListener('click', () => {
+      strip.classList.toggle('--expanded');
+    });
+  }
+
+  async _loadActiveTasks() {
+    try {
+      const data = await this.api._get('/system/observability/tasks');
+      const tasks = (data.persistent_tasks || []).filter(
+        t => t.status === 'accepted' || t.status === 'in_progress' || t.status === 'paused'
+      );
+      this._renderTaskStrip(tasks);
+    } catch {
+      // Silently fail — task strip is supplementary
+    }
+  }
+
+  _renderTaskStrip(tasks) {
+    const strip = document.getElementById('taskStrip');
+    const list = document.getElementById('taskStripList');
+    const countEl = document.getElementById('taskStripCount');
+    if (!strip || !list) return;
+
+    if (tasks.length === 0) {
+      strip.classList.add('hidden');
+      document.body.classList.remove('has-task-strip');
+      return;
+    }
+
+    strip.classList.remove('hidden');
+    document.body.classList.add('has-task-strip');
+    countEl.textContent = tasks.length;
+
+    let html = '';
+    for (const t of tasks) {
+      const goal = (t.goal || 'Working…').slice(0, 60);
+      const progress = t.progress || {};
+      const coverage = Math.round((progress.coverage_estimate || 0) * 100);
+      const summary = progress.last_summary || '';
+      const pausedClass = t.status === 'paused' ? ' --paused' : '';
+
+      html += `<div class="task-strip__item${pausedClass}">
+        <div class="task-strip__goal">${this._escHtml(goal)}</div>
+        <div class="task-strip__progress-bar">
+          <div class="task-strip__progress-fill" style="width:${coverage}%"></div>
+        </div>
+        ${summary ? `<div class="task-strip__summary">${this._escHtml(summary)}</div>` : ''}
+      </div>`;
+    }
+
+    // First-time hint
+    if (!localStorage.getItem('task_strip_hint_shown')) {
+      localStorage.setItem('task_strip_hint_shown', '1');
+      html += '<div class="task-strip__hint">I\'ll show what I\'m working on here.</div>';
+    }
+
+    list.innerHTML = html;
+  }
+
+  _escHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   // ---------------------------------------------------------------------------
@@ -698,6 +773,11 @@ class ChalieApp {
   }
 
   _handleEvent(data) {
+    // Task progress/completion — refresh the task strip
+    if (data.type === 'task') {
+      this._loadActiveTasks();
+    }
+
     // Tool result card event
     if (data.type === 'card') {
       if (this._pendingForm) {

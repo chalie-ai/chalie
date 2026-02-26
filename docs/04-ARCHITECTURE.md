@@ -308,13 +308,23 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 - **`memory`** — Memory search, fact management
 - **`proactive`** — Outreach/notifications, upcoming tasks
 - **`privacy`** — Data deletion, export
-- **`system`** — Health, version, settings
+- **`system`** — Health, version, settings, observability (routing, memory, tools, identity, tasks, autobiography, traits)
 - **`tools`** — Tool execution, configuration
 - **`providers`** — LLM provider configuration
 - **`push`** — Push notification subscription
 - **`scheduler`** — Reminders and scheduled tasks
 - **`lists`** — List management
 - **`stubs`** — Placeholder endpoints (calendar, notifications, integrations, voice, permissions) returning 501
+
+### Observability Endpoints (`/system/observability/*`)
+- **`routing`** — Mode router decision distribution and recent activity
+- **`memory`** — Memory layer counts and health indicators
+- **`tools`** — Tool performance stats
+- **`identity`** — Identity vector states
+- **`tasks`** — Active persistent tasks, curiosity threads, triage calibration
+- **`autobiography`** — Current autobiography narrative with delta (changed/unchanged sections)
+- **`traits`** (GET) — User traits grouped by category with confidence scores
+- **`traits/<key>`** (DELETE) — Remove a specific learned trait (user correction)
 
 See API blueprints in `backend/api/` for full reference.
 
@@ -375,8 +385,10 @@ docker-compose logs -f backend
 
 ## Future Roadmap
 
+### Completed
+- **User memory transparency API**: Observability endpoints for autobiography, traits, memory, routing, identity, tools, and tasks — with user trait deletion for correction
+
 ### Planned (Priority 1)
-- **User memory transparency API**: Direct REST endpoints for memory inspection
 
 ### Planned (Priority 2)
 - **Cross-topic pattern mining**: Behavioral prediction, sequence rules
