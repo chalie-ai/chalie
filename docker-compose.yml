@@ -43,8 +43,8 @@ services:
   voice:
     build: ./voice
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
-      KITTEN_VOICE: ${KITTEN_VOICE:-Bella}
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      KITTEN_VOICE: ${KITTEN_VOICE:-Jasper}
     volumes:
       - voice_models:/root/.cache
     restart: unless-stopped
