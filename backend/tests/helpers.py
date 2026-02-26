@@ -164,3 +164,37 @@ def make_provider_row(
         provider_id, name, platform, model, host,
         api_key, dimensions, timeout, is_active,
     )
+
+
+# ─── identity_vectors ────────────────────────────────────────────────
+# Column order matches: SELECT vector_name, baseline_weight, current_activation,
+#   plasticity_rate, inertia_rate, min_cap, max_cap, reinforcement_count,
+#   signal_history, baseline_drift_today, drift_window_start
+
+def make_identity_vector(
+    vector_name="warmth",
+    baseline_weight=0.5,
+    current_activation=0.5,
+    plasticity_rate=0.1,
+    inertia_rate=0.05,
+    min_cap=0.0,
+    max_cap=1.0,
+    reinforcement_count=0,
+    signal_history=None,
+    baseline_drift_today=0.0,
+    drift_window_start=None,
+):
+    """Return an 11-element tuple matching identity_vectors SELECT order."""
+    return (
+        vector_name,
+        baseline_weight,
+        current_activation,
+        plasticity_rate,
+        inertia_rate,
+        min_cap,
+        max_cap,
+        reinforcement_count,
+        signal_history or [],
+        baseline_drift_today,
+        drift_window_start,
+    )
