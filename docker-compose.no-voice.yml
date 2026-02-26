@@ -1,0 +1,6 @@
+# Opt-out override: disables the voice service.
+# Voice is enabled by default. To disable it, add this to your .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.no-voice.yml
+services:
+  voice:
+    profiles: [disabled]
