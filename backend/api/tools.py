@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+from urllib.parse import quote as url_quote
+
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
@@ -584,8 +586,17 @@ def list_tools():
             stored_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
 
             has_secret_fields = any(v.get("secret", False) for v in schema_dict.values())
+            uses_oauth = manifest.get("auth", {}).get("type") == "oauth2"
             if not has_secret_fields:
                 status = "system"
+            elif uses_oauth:
+                # OAuth tools: "connected" only when tokens are present
+                if stored_config.get("_oauth_access_token"):
+                    status = "connected"
+                elif stored_config:
+                    status = "available"  # config saved but OAuth not completed
+                else:
+                    status = "available"
             elif stored_config:
                 status = "connected"
             else:
@@ -906,9 +917,20 @@ def oauth_start(tool_name: str):
             # Derive from request host
             scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
             host = request.headers.get("X-Forwarded-Host", request.host)
-            redirect_uri = f"{scheme}://{host}/api/tools/{tool_name}/oauth/callback"
+            redirect_uri = f"{scheme}://{host}/tools/{tool_name}/oauth/callback"
+
+        logger.info(
+            f"[TOOLS API] OAuth start for '{tool_name}': "
+            f"redirect_uri={redirect_uri} "
+            f"X-Forwarded-Host={request.headers.get('X-Forwarded-Host', '(none)')} "
+            f"X-Forwarded-Proto={request.headers.get('X-Forwarded-Proto', '(none)')} "
+            f"Host={request.headers.get('Host', '(none)')}"
+        )
 
         result = OAuthService().get_auth_url(tool_name, manifest_auth, redirect_uri)
+        logger.info(
+            f"[TOOLS API] OAuth start generated state={result.get('state', '?')[:16]}..."
+        )
         return jsonify(result), 200
 
     except ValueError as ve:
@@ -944,11 +966,17 @@ def oauth_callback(tool_name: str):
             error_desc = request.args.get("error_description", error)
             logger.warning(f"[TOOLS API] OAuth callback error for '{tool_name}': {error_desc}")
             from flask import redirect as flask_redirect
-            return flask_redirect(f"{brain_url}?oauth_error={error_desc}&tool={tool_name}")
+            return flask_redirect(f"{brain_url}?oauth_error={url_quote(error_desc)}&tool={tool_name}")
 
         if not code or not state:
             from flask import redirect as flask_redirect
             return flask_redirect(f"{brain_url}?oauth_error=Missing+code+or+state&tool={tool_name}")
+
+        logger.info(
+            f"[TOOLS API] OAuth callback for '{tool_name}': "
+            f"state={state[:16]}... code={code[:12]}... "
+            f"full_url={request.url[:200]}"
+        )
 
         result = OAuthService().exchange_code(state, code)
 
@@ -957,11 +985,31 @@ def oauth_callback(tool_name: str):
 
     except ValueError as ve:
         logger.warning(f"[TOOLS API] OAuth callback validation error: {ve}")
+
+        # Handle duplicate callback (browser double-fetch / redirect race).
+        # If state was already consumed but tokens were stored by the first
+        # call, treat this as a success rather than surfacing an error.
+        if "expired" in str(ve).lower() or "invalid" in str(ve).lower():
+            try:
+                status = OAuthService().get_oauth_status(tool_name)
+                if status.get("connected"):
+                    logger.info(
+                        f"[TOOLS API] OAuth callback duplicate for '{tool_name}' "
+                        f"— state already consumed but tool is connected, treating as success"
+                    )
+                    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+                    host = request.headers.get("X-Forwarded-Host", request.host)
+                    brain_url = f"{scheme}://{host}/brain/"
+                    from flask import redirect as flask_redirect
+                    return flask_redirect(f"{brain_url}?oauth_success=true&tool={tool_name}")
+            except Exception:
+                pass  # Fall through to normal error handling
+
         scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
         host = request.headers.get("X-Forwarded-Host", request.host)
         brain_url = f"{scheme}://{host}/brain/"
         from flask import redirect as flask_redirect
-        return flask_redirect(f"{brain_url}?oauth_error={str(ve)[:200]}&tool={tool_name}")
+        return flask_redirect(f"{brain_url}?oauth_error={url_quote(str(ve)[:200])}&tool={tool_name}")
     except Exception as e:
         logger.error(f"[TOOLS API] OAuth callback error for '{tool_name}': {e}", exc_info=True)
         scheme = request.headers.get("X-Forwarded-Proto", request.scheme)

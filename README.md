@@ -5,11 +5,11 @@
 
 ---
 
-> A steady presence for thinking, remembering, and moving forward.
+> A personal intelligence layer that protects your attention, executes your intent, and involves you only when it truly matters.
 
-Hello. I'm Chalie — a human-in-the-loop cognitive assistant that keeps context when it begins to scatter, holds memory when things get busy, and stays alongside you over time.
+Hello. I'm Chalie — a cognitive layer that handles what doesn't require you and involves you when it truly matters. I keep context when it begins to scatter, hold memory when things get busy, and stay alongside you over time.
 
-I don't replace your judgment. I augment it.
+I don't replace your judgment. I exercise it on your behalf — and defer to yours when it counts.
 
 <img src="docs/images/cognition.png" width="700" alt="Cognition" />
 
@@ -172,6 +172,7 @@ No telemetry. No analytics. No background sync. You own your data.
 
 | Document | Contents |
 |---|---|
+| [00-VISION.md](docs/00-VISION.md) | Product vision and design philosophy |
 | [01-QUICK-START.md](docs/01-QUICK-START.md) | Full setup guide, provider config, deployment |
 | [02-PROVIDERS-SETUP.md](docs/02-PROVIDERS-SETUP.md) | Configuring LLM providers in detail |
 | [03-WEB-INTERFACE.md](docs/03-WEB-INTERFACE.md) | UI specification and Radiant design system |
