@@ -2052,3 +2052,69 @@ body {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 0.85; transform: translateY(0); }
 }
+
+/* ──────────────────────────────────────────────
+   Cognitive Signals — mode badges, confidence dots
+   ────────────────────────────────────────────── */
+
+/* Mode badge — small, lowercase, muted, fades in */
+.meta-mode-badge {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(234, 230, 242, 0.5);
+  margin-left: 8px;
+  vertical-align: middle;
+  animation: meta-fade-in 150ms ease both;
+}
+
+/* Confidence dot — tiny circle, fades in with slight delay */
+.meta-confidence-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  animation: meta-fade-in 150ms ease 60ms both;
+}
+.meta-confidence-dot.--high { background: rgba(138, 92, 255, 0.6); }
+.meta-confidence-dot.--mid  { background: rgba(234, 230, 242, 0.3); }
+.meta-confidence-dot.--low  { background: rgba(255, 180, 50, 0.45); }
+
+@keyframes meta-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ──────────────────────────────────────────────
+   Focus Mode — subtle glow on presence bar
+   ────────────────────────────────────────────── */
+
+.presence-bar[data-focus="deep"] {
+  box-shadow: 0 0 12px rgba(138, 92, 255, 0.12), 0 0 4px rgba(138, 92, 255, 0.06);
+  border-color: rgba(138, 92, 255, 0.15);
+  transition: box-shadow 600ms ease, border-color 600ms ease;
+}
+
+/* ──────────────────────────────────────────────
+   Critic Escalation — amber border for paused actions
+   ────────────────────────────────────────────── */
+
+.speech-form--escalation {
+  border-color: rgba(255, 180, 50, 0.25);
+  box-shadow: 0 0 16px rgba(255, 180, 50, 0.06);
+  margin-top: var(--space-lg);
+}
+.speech-form--escalation::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 180, 50, 0.3), transparent);
+}

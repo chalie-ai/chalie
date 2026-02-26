@@ -322,6 +322,27 @@ def tool_worker(job_data: dict) -> str:
                     if not correction:
                         if not critic.is_safe_action(action_type):
                             logger.info(f"[TOOL WORKER] Critic escalation for {action_type}: {verdict.get('issue', 'unknown')}")
+
+                            # Tell the user about the paused action
+                            issue = verdict.get('issue', 'something unexpected')
+                            action_desc = action_spec.get('description', action_type)
+                            escalation_text = f"I was about to {action_desc}, but I paused \u2014 {issue}. Should I go ahead?"
+
+                            try:
+                                from services.output_service import OutputService
+                                OutputService().enqueue_text(
+                                    topic=topic,
+                                    response=escalation_text,
+                                    mode='ACT',
+                                    confidence=0.0,
+                                    generation_time=0.0,
+                                    original_metadata={
+                                        'source': 'critic_escalation',
+                                        'exchange_id': exchange_id,
+                                    },
+                                )
+                            except Exception as _esc_err:
+                                logger.warning(f"[TOOL WORKER] Failed to send escalation: {_esc_err}")
                         break
 
                     correction_entry = {
