@@ -150,7 +150,7 @@ def send_push_to_all(title, body, tag='chalie-message'):
                     vapid_claims={'sub': 'mailto:chalie@localhost'},
                 )
             except WebPushException as e:
-                if e.response and e.response.status_code in (404, 410):
+                if e.response and e.response.status_code in (401, 403, 404, 410):
                     stale.append(raw_sub)
                 else:
                     logger.warning(f"[Push] Failed to send: {e}")

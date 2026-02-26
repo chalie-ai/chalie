@@ -14,9 +14,13 @@ import { ToolResultCard } from './cards/tool_result.js';
 import { MomentSearch } from './moment_search.js';
 import { MomentCard } from './cards/moment.js';
 
+// Safe localStorage wrapper — private browsing on iOS Safari / Firefox throws SecurityError.
+function _lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function _lsSet(key, val) { try { localStorage.setItem(key, val); } catch { /* ignore */ } }
+
 class ChalieApp {
   constructor() {
-    this._backendHost = localStorage.getItem('chalie_backend_host') || '';
+    this._backendHost = _lsGet('chalie_backend_host') || '';
     this._isSending = false;
     this._healthRetryTimeout = null;
     this._driftSource = null;
@@ -135,7 +139,7 @@ class ChalieApp {
       this._deferredInstallPrompt.prompt();
       const { outcome } = await this._deferredInstallPrompt.userChoice;
       this._deferredInstallPrompt = null;
-      if (outcome === 'accepted') document.getElementById('installBtn').classList.add('hidden');
+      if (outcome === 'accepted') document.getElementById('installBtn')?.classList.add('hidden');
     });
   }
 
@@ -150,6 +154,7 @@ class ChalieApp {
       this._loadRecentConversation();
       this._loadActiveTasks();
       this._connectDriftStream();
+      window.addEventListener('beforeunload', () => this._closeDriftStream(), { once: true });
       this._requestNotificationPermission();
       // Ask once for geolocation permission so the heartbeat can capture coordinates.
       // The browser shows its own permission dialog; we don't block on the answer.
@@ -309,7 +314,7 @@ class ChalieApp {
     });
 
     // First-use hint (one-time)
-    if (!localStorage.getItem('moments_hint_shown')) {
+    if (!_lsGet('moments_hint_shown')) {
       this._showMomentsHintOnFirstResponse();
     }
   }
@@ -361,8 +366,8 @@ class ChalieApp {
         for (const node of m.addedNodes) {
           if (node.classList?.contains('speech-form--chalie')) {
             const btn = node.querySelector('.speech-form__remember-btn');
-            if (btn && !localStorage.getItem('moments_hint_shown')) {
-              localStorage.setItem('moments_hint_shown', '1');
+            if (btn && !_lsGet('moments_hint_shown')) {
+              _lsSet('moments_hint_shown', '1');
               observer.disconnect();
 
               // Show tooltip near the button
@@ -444,8 +449,8 @@ class ChalieApp {
     }
 
     // First-time hint
-    if (!localStorage.getItem('task_strip_hint_shown')) {
-      localStorage.setItem('task_strip_hint_shown', '1');
+    if (!_lsGet('task_strip_hint_shown')) {
+      _lsSet('task_strip_hint_shown', '1');
       html += '<div class="task-strip__hint">I\'ll show what I\'m working on here.</div>';
     }
 
@@ -1116,7 +1121,7 @@ class ChalieApp {
     const installBtn = document.getElementById('pwaInstallBtn');
 
     const dismiss = () => {
-      localStorage.setItem('chalie_pwa_dismissed', '1');
+      _lsSet('chalie_pwa_dismissed', '1');
       dialog.close();
       // Resume normal init flow (auth already checked in _init)
       this._start();
@@ -1139,7 +1144,7 @@ class ChalieApp {
     // Already installed as PWA
     if (window.matchMedia('(display-mode: standalone)').matches) return;
     // Already dismissed by user
-    if (localStorage.getItem('chalie_pwa_dismissed')) return;
+    if (_lsGet('chalie_pwa_dismissed')) return;
 
     const dialog = document.getElementById('pwaInstallDialog');
     dialog.showModal();

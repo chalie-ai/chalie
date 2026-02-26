@@ -383,11 +383,19 @@ function renderProviders() {
                 </div>
             </div>
             <div class="provider-actions">
-                <button class="btn btn-secondary" onclick="openEditModal(${p.id})">Edit</button>
-                <button class="btn btn-danger" onclick="confirmDelete(${p.id}, '${escapeHtml(p.name).replace(/'/g, "\\'")}')">Delete</button>
+                <button class="btn btn-secondary" data-edit-id="${p.id}">Edit</button>
+                <button class="btn btn-danger" data-delete-id="${p.id}" data-delete-name="${escapeHtml(p.name)}">Delete</button>
             </div>
         </div>
     `).join('');
+
+    // Wire delete/edit buttons via data attributes — never interpolate user data into JS strings.
+    el.querySelectorAll('[data-edit-id]').forEach(btn => {
+        btn.addEventListener('click', () => openEditModal(Number(btn.dataset.editId)));
+    });
+    el.querySelectorAll('[data-delete-id]').forEach(btn => {
+        btn.addEventListener('click', () => confirmDelete(Number(btn.dataset.deleteId), btn.dataset.deleteName));
+    });
 }
 
 document.getElementById('addProviderBtn').addEventListener('click', () => {
