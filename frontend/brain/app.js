@@ -2349,6 +2349,7 @@ function loadCognitionSubtab(subtab) {
         tools: loadToolsObs,
         identity: loadIdentityObs,
         tasks: loadTasksObs,
+        understanding: loadUnderstandingObs,
     };
     if (loaders[subtab]) loaders[subtab]();
 }
@@ -2685,6 +2686,134 @@ async function loadTasksObs() {
         el.innerHTML = html;
     } catch (e) {
         el.innerHTML = '<div class="obs-empty">Could not load task data.</div>';
+    }
+}
+
+// ── Understanding (Autobiography + Traits) ──
+
+const TRAIT_CATEGORY_LABELS = {
+    core: 'About You',
+    communication_style: 'How You Communicate',
+    relationship: 'Our Relationship',
+    preference: 'Your Preferences',
+    physical: 'Physical',
+    general: 'General',
+    micro_preference: 'Small Preferences',
+};
+
+async function loadUnderstandingObs() {
+    const el = document.getElementById('understandingContent');
+    el.innerHTML = obsSkeletonBlock(60) + obsSkeletonBlock(120) + obsSkeletonBlock(80);
+
+    try {
+        const [autoRes, traitsRes] = await Promise.all([
+            apiFetch('/system/observability/autobiography'),
+            apiFetch('/system/observability/traits'),
+        ]);
+
+        const autoData = autoRes.ok ? await autoRes.json() : {};
+        const traitsData = traitsRes.ok ? await traitsRes.json() : {};
+
+        obsData.understanding = { autobiography: autoData, traits: traitsData };
+        obsLoaded.understanding = true;
+        obsSetTimestamp(autoData.generated_at || traitsData.generated_at);
+
+        let html = '';
+
+        // ── Autobiography section ──
+        html += '<div class="obs-section-title">Autobiography';
+        if (autoData.created_at) {
+            html += ` <span class="obs-understanding-updated">Last updated ${timeAgo(autoData.created_at)}</span>`;
+        }
+        html += '</div>';
+
+        if (autoData.narrative) {
+            const changedSections = (autoData.delta && autoData.delta.changed) || [];
+            const sections = autoData.narrative.split(/(?=^## )/m);
+
+            for (const section of sections) {
+                const trimmed = section.trim();
+                if (!trimmed) continue;
+
+                const headerMatch = trimmed.match(/^## (.+)/);
+                const title = headerMatch ? headerMatch[1] : 'Overview';
+                const body = headerMatch ? trimmed.slice(headerMatch[0].length).trim() : trimmed;
+                const isChanged = changedSections.some(c => c.toLowerCase() === title.toLowerCase());
+
+                html += `<div class="obs-understanding-section${isChanged ? ' --changed' : ''}">
+                    <button class="obs-understanding-section__header" onclick="this.parentElement.classList.toggle('--open')">
+                        <span>${escapeHtml(title)}</span>
+                        ${isChanged ? '<span class="obs-understanding-section__delta">updated</span>' : ''}
+                        <svg class="obs-understanding-section__chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="obs-understanding-section__body">${escapeHtml(body).replace(/\n/g, '<br>')}</div>
+                </div>`;
+            }
+        } else {
+            html += '<div class="obs-empty">No autobiography yet. Chalie needs a few more conversations to build your narrative.</div>';
+        }
+
+        // ── Traits section ──
+        html += '<div class="obs-section-title">What I\'ve Learned About You</div>';
+
+        const categories = traitsData.categories || {};
+        const catKeys = Object.keys(categories);
+
+        if (catKeys.length > 0) {
+            for (const cat of catKeys) {
+                const label = TRAIT_CATEGORY_LABELS[cat] || cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                const traits = categories[cat];
+
+                html += `<div class="obs-trait-category">
+                    <div class="obs-trait-category__label">${escapeHtml(label)}</div>`;
+
+                for (const t of traits) {
+                    const conf = Math.round((t.confidence || 0) * 100);
+                    const confClass = conf >= 70 ? '--high' : conf >= 40 ? '--mid' : '--low';
+                    const keyLabel = escapeHtml((t.key || '').replace(/_/g, ' '));
+                    const reinforcements = t.reinforcement_count || 0;
+
+                    html += `<div class="obs-trait-item">
+                        <div class="obs-trait-item__content">
+                            <span class="obs-trait-item__key">${keyLabel}</span>
+                            <span class="obs-trait-item__value">${escapeHtml(t.value || '')}</span>
+                        </div>
+                        <span class="obs-trait-item__confidence ${confClass}" title="${conf}% confidence">${conf}%</span>
+                        <span class="obs-trait-item__reinforcements" title="${reinforcements} reinforcements">${reinforcements}x</span>
+                        <button class="obs-trait-item__delete" data-trait-key="${escapeHtml(t.key)}" title="Remove this">×</button>
+                    </div>`;
+                }
+
+                html += '</div>';
+            }
+        } else {
+            html += '<div class="obs-empty">No traits learned yet. Chalie picks these up naturally from conversations.</div>';
+        }
+
+        el.innerHTML = html;
+
+        // Wire up delete buttons
+        el.querySelectorAll('.obs-trait-item__delete').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const key = e.target.dataset.traitKey;
+                if (!key) return;
+                if (!confirm(`Remove "${key.replace(/_/g, ' ')}"?`)) return;
+
+                try {
+                    const res = await apiFetch(`/system/observability/traits/${encodeURIComponent(key)}`, { method: 'DELETE' });
+                    if (res.ok) {
+                        showToast("Got it — I'll adjust.");
+                        e.target.closest('.obs-trait-item').remove();
+                    } else {
+                        showToast('Could not remove trait.');
+                    }
+                } catch {
+                    showToast('Could not remove trait.');
+                }
+            });
+        });
+    } catch (e) {
+        el.innerHTML = '<div class="obs-empty">Could not load understanding data.</div>';
     }
 }
 
