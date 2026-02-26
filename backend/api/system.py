@@ -357,3 +357,110 @@ def observability_tasks():
     except Exception as e:
         logger.error(f"[REST API] observability/tasks error: {e}")
         return jsonify({"error": "Failed to retrieve task data"}), 500
+
+
+@system_bp.route('/system/observability/autobiography', methods=['GET'])
+@require_session
+def observability_autobiography():
+    """Current autobiography narrative with delta information."""
+    try:
+        from services.autobiography_service import AutobiographyService
+        from services.autobiography_delta_service import AutobiographyDeltaService
+
+        narrative_data = AutobiographyService().get_current_narrative()
+        delta_data = AutobiographyDeltaService().get_changed_sections()
+
+        result = {
+            'generated_at': _now_iso(),
+            'narrative': None,
+            'version': None,
+            'episodes_since': None,
+            'created_at': None,
+            'delta': None,
+        }
+
+        if narrative_data:
+            result['narrative'] = narrative_data.get('narrative')
+            result['version'] = narrative_data.get('version')
+            result['episodes_since'] = narrative_data.get('episodes_since')
+            created = narrative_data.get('created_at')
+            result['created_at'] = str(created) if created and not isinstance(created, str) else created
+
+        if delta_data:
+            result['delta'] = {
+                'changed': delta_data.get('changed', []),
+                'unchanged': delta_data.get('unchanged', []),
+                'from_version': delta_data.get('from_version'),
+                'to_version': delta_data.get('to_version'),
+            }
+
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/autobiography error: {e}")
+        return jsonify({"error": "Failed to retrieve autobiography data"}), 500
+
+
+@system_bp.route('/system/observability/traits', methods=['GET'])
+@require_session
+def observability_traits():
+    """User traits grouped by category."""
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        categories = {}
+
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT trait_key, trait_value, confidence, category, source, "
+                "reinforcement_count, is_literal, updated_at "
+                "FROM user_traits WHERE user_id = 'primary' "
+                "ORDER BY category, confidence DESC"
+            ).fetchall()
+
+            for row in rows:
+                cat = row[3] or 'general'
+                if cat not in categories:
+                    categories[cat] = []
+                updated = row[7]
+                categories[cat].append({
+                    'key': row[0],
+                    'value': row[1],
+                    'confidence': round(float(row[2] or 0), 3),
+                    'source': row[4],
+                    'reinforcement_count': row[5] or 0,
+                    'is_literal': bool(row[6]),
+                    'updated_at': str(updated) if updated and not isinstance(updated, str) else updated,
+                })
+
+        return jsonify({
+            'generated_at': _now_iso(),
+            'categories': categories,
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/traits error: {e}")
+        return jsonify({"error": "Failed to retrieve traits data"}), 500
+
+
+@system_bp.route('/system/observability/traits/<trait_key>', methods=['DELETE'])
+@require_session
+def observability_delete_trait(trait_key):
+    """Delete a specific user trait by key."""
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            result = conn.execute(
+                "DELETE FROM user_traits WHERE user_id = 'primary' AND trait_key = %s",
+                (trait_key,)
+            )
+            deleted = result.rowcount if hasattr(result, 'rowcount') else 0
+
+        if deleted:
+            return jsonify({'ok': True, 'deleted': trait_key}), 200
+        else:
+            return jsonify({'error': 'Trait not found'}), 404
+    except Exception as e:
+        logger.error(f"[REST API] observability/traits DELETE error: {e}")
+        return jsonify({"error": "Failed to delete trait"}), 500
