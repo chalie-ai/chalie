@@ -76,6 +76,7 @@ class OutputService:
             'tool_followup': 'tool_followup',
             'reminder': 'reminder',
             'task': 'task',
+            'persistent_task': 'task',
             'spark_welcome': 'drift',
             'spark_suggest': 'drift',
             'spark_nurture': 'drift',
@@ -137,6 +138,36 @@ class OutputService:
         )
 
         return output_id
+
+    def enqueue_proactive(
+        self,
+        topic: str,
+        response: str,
+        source: str = 'task',
+    ) -> str:
+        """
+        Enqueue a proactive/background output (persistent tasks, reminders, etc.).
+
+        Convenience wrapper around enqueue_text() with sensible defaults for
+        messages that originate from background workers rather than user requests.
+
+        Args:
+            topic: Conversation topic / thread identifier
+            response: The message text to deliver
+            source: Source identifier for SSE event type mapping
+
+        Returns:
+            str: UUID of the enqueued output
+        """
+        metadata = {'source': source}
+        return self.enqueue_text(
+            topic=topic,
+            response=response,
+            mode='RESPOND',
+            confidence=1.0,
+            generation_time=0.0,
+            original_metadata=metadata,
+        )
 
     def enqueue_card(
         self,
