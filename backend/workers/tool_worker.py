@@ -169,6 +169,9 @@ def tool_worker(job_data: dict) -> str:
             max_iterations=max_act_iterations,
         )
         act_loop.context_warmth = context_snapshot.get('context_warmth', 0.0)
+        act_loop.context_extras = {
+            'triage_tools': context_snapshot.get('triage_selected_tools', []),
+        }
 
         # Relevant tools from embedding-based scoring (passed from digest_worker)
         relevant_tools = context_snapshot.get('relevant_tools', None) or None
@@ -248,7 +251,7 @@ def tool_worker(job_data: dict) -> str:
 
             # Log what the LLM decided to do this iteration
             if actions:
-                logger.debug(
+                logger.info(
                     f"[TOOL WORKER] Iter {act_loop.iteration_number} actions: "
                     f"{json.dumps([{k: v for k, v in a.items() if k != 'type'} | {'type': a.get('type')} for a in actions], default=str)}"
                 )
@@ -256,7 +259,12 @@ def tool_worker(job_data: dict) -> str:
                     if a.get('type') == 'schedule':
                         logger.info(f"[TOOL WORKER] Schedule action: {json.dumps(a, default=str)}")
             else:
-                logger.debug(f"[TOOL WORKER] Iter {act_loop.iteration_number}: LLM returned no actions")
+                # Log full response to diagnose why ACT loop chose no actions
+                raw_resp = response_data.get('response', '')
+                logger.info(
+                    f"[TOOL WORKER] Iter {act_loop.iteration_number}: LLM returned no actions. "
+                    f"response_snippet={repr(raw_resp[:300]) if raw_resp else '(empty)'}"
+                )
 
             # No actions → log and break (nothing to execute)
             if not actions:
@@ -520,16 +528,14 @@ def tool_worker(job_data: dict) -> str:
         try:
             from services.tool_performance_service import ToolPerformanceService
             perf_service = ToolPerformanceService()
-            for action in act_loop.get_history_context() if hasattr(act_loop, 'get_history_context') else []:
-                action_type = action.get('action_type', '') if isinstance(action, dict) else ''
-                if action_type and action_type not in ('recall', 'memorize', 'introspect', 'associate', 'schedule', 'focus', 'list', 'autobiography'):
-                    action_success = action.get('status') == 'success' if isinstance(action, dict) else False
-                    action_latency = float(action.get('latency_ms', 0)) if isinstance(action, dict) else 0.0
+            for action in act_loop.act_history:
+                action_type = action.get('action_type', '')
+                if action_type and action_type not in INNATE_SKILLS:
                     perf_service.record_invocation(
                         tool_name=action_type,
                         exchange_id=exchange_id,
-                        success=action_success,
-                        latency_ms=action_latency,
+                        success=action.get('status') in ('success', 'completed', True),
+                        latency_ms=float(action.get('execution_time') or 0) * 1000,
                     )
         except Exception as _perf_err:
             logger.debug(f"[TOOL WORKER] Performance recording failed: {_perf_err}")

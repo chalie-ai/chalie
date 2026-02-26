@@ -37,11 +37,15 @@ def handle_introspect(topic: str, params: dict) -> str:
     state["recent_modes"] = _get_recent_modes(topic)
     state["skill_stats"] = _get_skill_stats(topic)
     state["recall_failure_rate"] = _get_recall_failure_rate(topic)
-    state["tool_details"] = _get_tool_details()
 
     # Cross-feature signals
     state["focus_active"] = _get_focus_active(params.get('thread_id', topic))
     state["communication_style"] = _get_communication_style()
+
+    # Triage-filtered tool details (auto-injected via context_extras)
+    triage_tools = params.get('triage_tools', [])
+    if triage_tools:
+        state["tool_details"] = _get_filtered_tool_details(triage_tools)
 
     return _format_state(state, topic)
 
@@ -236,6 +240,12 @@ def _get_tool_details() -> dict:
         return {}
 
 
+def _get_filtered_tool_details(tool_names: list) -> dict:
+    """Get manifest details for specific tools only (triage-selected)."""
+    all_details = _get_tool_details()
+    return {k: v for k, v in all_details.items() if k in tool_names}
+
+
 def _get_focus_active(thread_id: str) -> bool:
     """Check if a focus session is active for this thread."""
     try:
@@ -331,20 +341,18 @@ def _format_state(state: Dict, topic: str) -> str:
     else:
         lines.append("  world_state: (empty)")
 
-    # Tool details (full manifest info for on-demand reference)
-    tool_details = state.get("tool_details", {})
+    # Triage-filtered tool details (tips, constraints, examples)
+    tool_details = state.get("tool_details")
     if tool_details:
-        lines.append("  tool_details:")
-        for tool_name, details in tool_details.items():
-            lines.append(f"    {tool_name}: {details.get('description', '')}")
-            constraints = details.get("constraints", {})
-            if constraints:
-                lines.append(f"      constraints: {constraints}")
-            tips = details.get("tips", [])
-            for tip in tips:
-                lines.append(f"      tip: {tip}")
-            examples = details.get("examples", [])
-            for ex in examples:
-                lines.append(f"      example: {ex.get('description', '')} — {ex.get('params', {})}")
+        lines.append("  tool_details (triage-selected):")
+        for tname, tinfo in tool_details.items():
+            lines.append(f"    {tname}:")
+            if tinfo.get('tips'):
+                lines.append(f"      tips: {tinfo['tips']}")
+            if tinfo.get('constraints'):
+                lines.append(f"      constraints: {tinfo['constraints']}")
+            if tinfo.get('examples'):
+                examples_short = [str(e)[:120] for e in tinfo['examples'][:3]]
+                lines.append(f"      examples: {examples_short}")
 
     return "\n".join(lines)

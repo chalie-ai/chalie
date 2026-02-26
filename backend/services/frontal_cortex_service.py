@@ -159,6 +159,13 @@ class FrontalCortexService:
 
         generation_time = time.time() - start_time
 
+        # Diagnostic: log raw ACT response for debugging tool invocation issues
+        if 'act' in system_prompt_template.lower()[:200]:
+            logging.info(
+                f"[CORTEX ACT RAW] LLM response ({len(response_text)} chars): "
+                f"{response_text[:500]}"
+            )
+
         # Parse JSON response (format: "json" is set in config)
         # Strip markdown code fences if the model wrapped the JSON
         try:
@@ -387,9 +394,17 @@ class FrontalCortexService:
         # Available tools (dynamic, from tool registry — filtered when selected_tools or relevant_tools provided)
         if _include('available_tools'):
             available_tools = self._get_available_tools(selected_tools=selected_tools, relevant_tools=relevant_tools)
+            if available_tools:
+                logging.info(f"[CORTEX] Injected available_tools ({len(available_tools)} chars): {available_tools[:200]}...")
         else:
             available_tools = ''
         result = result.replace('{{available_tools}}', available_tools)
+
+        # Strategy hints from procedural memory (learned action reliability)
+        strategy_hints = ''
+        if _include('strategy_hints'):
+            strategy_hints = self._get_strategy_hints(topic)
+        result = result.replace('{{strategy_hints}}', strategy_hints)
 
         # Identity modulation (voice mapper)
         if _include('identity_modulation'):
@@ -937,6 +952,51 @@ class FrontalCortexService:
             logging.debug(f"Skill registry not available: {e}")
             return ""
 
+    def _get_performance_hint(self, tool_name: str) -> str:
+        """Compact one-line performance hint for ACT prompt injection."""
+        try:
+            from services.tool_performance_service import ToolPerformanceService
+            stats = ToolPerformanceService().get_tool_stats(tool_name)
+            if stats.get('total', 0) < 3:
+                return ''
+            success_pct = int(stats['success_rate'] * 100)
+            avg_ms = int(stats['avg_latency'])
+            label = 'reliable' if success_pct >= 80 else 'moderate' if success_pct >= 50 else 'unreliable'
+            return f"[perf: {label} • {success_pct}% success • {avg_ms}ms • {stats['total']} uses]"
+        except Exception:
+            return ''
+
+    def _get_strategy_hints(self, topic: str) -> str:
+        """Compact strategy hints from procedural memory for ACT prompt."""
+        try:
+            from services.procedural_memory_service import ProceduralMemoryService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            proc = ProceduralMemoryService(db)
+
+            hints = []  # (extremity_score, hint_text) tuples
+            for action_name in proc.get_all_policy_weights():
+                stats = proc.get_action_stats(action_name)
+                if not stats or stats.get('total_attempts', 0) < 5:
+                    continue
+                attempts = stats['total_attempts']
+                successes = stats.get('total_successes', 0)
+                reliability = (successes + 1) / (attempts + 2)
+                extremity = abs(reliability - 0.5)
+                if reliability < 0.4:
+                    hints.append((extremity, f"{action_name}: low reliability ({int(reliability*100)}% over {attempts} uses)"))
+                elif reliability > 0.85:
+                    hints.append((extremity, f"{action_name}: reliable ({int(reliability*100)}% over {attempts} uses)"))
+
+            if not hints:
+                return ''
+            # Sort by extremity (strongest signals first) for cognitive prioritization
+            hints.sort(key=lambda h: h[0], reverse=True)
+            lines = [h[1] for h in hints[:8]]
+            return "## Strategy Hints (from experience)\n" + "\n".join(f"- {l}" for l in lines)
+        except Exception:
+            return ''
+
     def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
         """
         Get tool profiles for ACT prompt injection.
@@ -969,7 +1029,9 @@ class FrontalCortexService:
                         for p in profiles:
                             name = p.get('tool_name', '')
                             full_profile = p.get('full_profile', '') or p.get('short_summary', '')
-                            lines.append(f"### {name}\n{full_profile}")
+                            perf_hint = self._get_performance_hint(name)
+                            suffix = f"\n{perf_hint}" if perf_hint else ''
+                            lines.append(f"### {name}\n{full_profile}{suffix}")
                         return "\n\n".join(lines)
                 except Exception:
                     pass
@@ -981,7 +1043,9 @@ class FrontalCortexService:
                     desc = manifest.get('description', name)
                     params = manifest.get('parameters', {})
                     param_str = f" ({', '.join(list(params.keys()))})" if params else ""
-                    lines.append(f"- {name}{param_str}: {desc}")
+                    perf_hint = self._get_performance_hint(name)
+                    suffix = f" {perf_hint}" if perf_hint else ''
+                    lines.append(f"- {name}{param_str}: {desc}{suffix}")
                 return "\n".join(lines)
 
             # No selected tools — return all registered tools

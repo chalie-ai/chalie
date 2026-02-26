@@ -58,6 +58,7 @@ class ActLoopService:
         # History tracking
         self.act_history = []  # Action results for context injection
         self.iteration_logs = []  # Iteration data for batch PostgreSQL write
+        self.context_extras = {}  # Extra params merged into every action dispatch
 
     def can_continue(self, mode: str = 'ACT', **kwargs) -> Tuple[bool, Optional[str]]:
         """
@@ -187,8 +188,8 @@ class ActLoopService:
         accumulated = {}  # outputs from completed actions, keyed by downstream param name
 
         for i, action in enumerate(actions):
-            # Enrich action params with accumulated outputs (only fill missing params)
-            enriched = {**action}
+            # Enrich action params with context_extras as defaults, then accumulated outputs
+            enriched = {**self.context_extras, **action}
             for field, value in accumulated.items():
                 if not enriched.get(field):
                     enriched[field] = value
