@@ -64,7 +64,7 @@ export class ApiClient {
 
   /** @returns {Promise<{status: string}>} */
   healthCheck() {
-    return fetch(this._buildUrl('/health'), { credentials: 'same-origin' }).then(r => r.json());
+    return fetch(this._buildUrl('/health'), { credentials: 'same-origin' }).then(r => r.json()).catch(() => null);
   }
 
   /** @returns {Promise<{thread_id: string, exchanges: Array}>} */

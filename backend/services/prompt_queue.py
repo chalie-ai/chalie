@@ -101,6 +101,15 @@ class PromptQueue:
                         logging.info(f"[{worker_id}] Re-enqueued abandoned job {job_id[:8]}")
                     except Exception as e:
                         logging.warning(f"[{worker_id}] Could not re-enqueue {job_id[:8]}, will cleanup: {e}")
+                        # Always evict from the registry regardless of failure reason —
+                        # leaving it here causes the count to grow on each restart cycle.
+                        try:
+                            started_registry.remove(job_id, pipeline=None)
+                        except Exception:
+                            try:
+                                redis_conn.zrem(started_registry.key, job_id)
+                            except Exception:
+                                pass
                 started_registry.cleanup()
                 logging.info(f"[{worker_id}] Abandoned jobs processed")
         except Exception as e:
