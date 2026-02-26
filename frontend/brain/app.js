@@ -1185,7 +1185,7 @@ async function openToolSettings(name) {
 
             // Setup guide when credentials are empty
             if (!hasCredentials) {
-                const callbackUrl = `${window.location.origin}/api/tools/${name}/oauth/callback`;
+                const callbackUrl = `${window.location.origin}/tools/${name}/oauth/callback`;
                 formHtml += `
                     <div class="oauth-setup-guide">
                         <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">
@@ -1201,6 +1201,7 @@ async function openToolSettings(name) {
                             </li>
                             <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent-hover)">Credentials</a> &rarr; Create OAuth Client ID &rarr; Web application</li>
                             <li>Add redirect URI: <code style="font-size:11px;color:var(--accent-hover);background:rgba(138,92,255,0.08);padding:2px 6px;border-radius:3px">${escapeHtml(callbackUrl)}</code></li>
+                            <li>Go to <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener" style="color:var(--accent-hover)">OAuth consent screen</a> &rarr; <strong>Test users</strong> &rarr; Add your Google email address <span style="opacity:0.5">(required while app is in "Testing" publishing status)</span></li>
                             <li>Paste Client ID and Client Secret in the fields above, then click Save</li>
                         </ol>
                     </div>`;
@@ -2323,7 +2324,10 @@ function renderIconHtml(icon) {
         return `<img src="${escapeHtml(icon)}" style="width:100%;height:100%;object-fit:contain" alt="">`;
     }
     if (icon.startsWith('fa-')) {
-        return `<i class="fa-solid ${escapeHtml(icon)}"></i>`;
+        // Multi-word = full class string supplied (e.g. "fa-brands fa-google")
+        // Single word = solid icon shorthand (e.g. "fa-cloud")
+        const classes = icon.includes(' ') ? escapeHtml(icon) : `fa-solid ${escapeHtml(icon)}`;
+        return `<i class="${classes}"></i>`;
     }
     return escapeHtml(icon);
 }

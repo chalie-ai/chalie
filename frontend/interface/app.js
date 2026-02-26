@@ -21,8 +21,6 @@ class ChalieApp {
     this._healthRetryTimeout = null;
     this._driftSource = null;
     this._deferredInstallPrompt = null;
-    this._isFirstContact = false;
-    this._sparkOverlayTimeout = null;
 
     // Modules
     this.api = new ApiClient(() => this._backendHost);
@@ -99,6 +97,9 @@ class ChalieApp {
     // Show PWA install prompt first, then resume normal flow after dismiss/install
     await this._showPwaDialogIfNeeded();
 
+    // Show the "Waking up" overlay while we wait for the backend
+    this._showSparkOverlay();
+
     // Start the app
     await this._start();
   }
@@ -132,6 +133,7 @@ class ChalieApp {
   async _start() {
     try {
       await this.api.healthCheck();
+      this._dismissSparkOverlay();
       this.presence.setState('resting');
       await this._loadVoiceConfig();
       this._loadRecentConversation();
@@ -584,8 +586,6 @@ class ChalieApp {
     try {
       const data = await this.api.getRecentConversation();
       if (!data.exchanges || data.exchanges.length === 0) {
-        // Empty conversation — check if this is a first-contact scenario
-        await this._checkSparkOverlay();
         return;
       }
 
@@ -609,18 +609,6 @@ class ChalieApp {
     }
   }
 
-  async _checkSparkOverlay() {
-    try {
-      const status = await this.api._get('/conversation/spark-status');
-      if (!status.needs_welcome) return;
-
-      this._isFirstContact = true;
-      this._showSparkOverlay();
-    } catch (_) {
-      // Spark status unavailable — don't show overlay
-    }
-  }
-
   _showSparkOverlay() {
     const overlay = document.getElementById('sparkOverlay');
     const spine = document.getElementById('conversationSpine');
@@ -636,17 +624,9 @@ class ChalieApp {
     if (skipBtn) {
       skipBtn.addEventListener('click', () => this._dismissSparkOverlay(), { once: true });
     }
-
-    // Timeout fallback: dismiss after 12s even if no welcome arrives
-    this._sparkOverlayTimeout = setTimeout(() => this._dismissSparkOverlay(), 12000);
   }
 
   _dismissSparkOverlay() {
-    if (this._sparkOverlayTimeout) {
-      clearTimeout(this._sparkOverlayTimeout);
-      this._sparkOverlayTimeout = null;
-    }
-
     const overlay = document.getElementById('sparkOverlay');
     const spine = document.getElementById('conversationSpine');
     const dock = document.querySelector('.input-dock');
@@ -661,7 +641,6 @@ class ChalieApp {
 
     if (spine) spine.style.display = '';
     if (dock) dock.style.display = '';
-    this._isFirstContact = false;
   }
 
   // ---------------------------------------------------------------------------
@@ -705,11 +684,6 @@ class ChalieApp {
   }
 
   _handleEvent(data) {
-    // Spark first-contact: dismiss overlay when the welcome message arrives
-    if (this._isFirstContact && data.type === 'drift' && data.content) {
-      this._dismissSparkOverlay();
-    }
-
     // Tool result card event
     if (data.type === 'card') {
       if (this._pendingForm) {

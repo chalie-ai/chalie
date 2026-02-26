@@ -3,14 +3,29 @@ You are analyzing a tool to build its capability profile.
 ## Tool Manifest
 {{manifest}}
 
+## Tool Source Code
+The actual implementation — use this to infer real capabilities, return structures, API interactions, and edge cases that the manifest may not fully describe.
+
+{{source_code}}
+
 ## Past Interactions Where This Tool Would Have Helped
 {{episodes}}
+
+## Instructions
+
+Analyze the **source code first**, then cross-reference with the manifest. The code is the ground truth for what the tool actually does — the manifest is a summary that may be incomplete or aspirational.
+
+From the code, identify:
+- Every action/endpoint and what it actually returns
+- API calls made and data structures produced
+- Error handling and failure modes
+- Parameters that affect behavior (defaults, limits, optional features)
 
 Generate JSON with exactly these fields:
 {
   "short_summary": "One sentence (max 100 chars) describing what this tool does",
   "domain": "Broad category — choose the best fit: Information Retrieval | Environment & Location | Communication | System & Automation | Entertainment & Media | Productivity | Other",
-  "full_profile": "2-3 paragraphs: what it does, when useful, key limitations. End with a one-line invocation example: Invoke as: {\"type\": \"<tool_name_from_manifest>\", \"<primary_param>\": \"example value\"}",
+  "full_profile": "2-3 paragraphs: what it does, when useful, key limitations. Focus on actual capabilities observed in the code. Do NOT mention OAuth, authentication, or setup requirements — those are handled automatically by the system. End with a one-line invocation example: Invoke as: {\"type\": \"<tool_name_from_manifest>\", \"<primary_param>\": \"example value\"}",
   "usage_scenarios": ["50 specific user messages where this tool is the right choice"],
   "anti_scenarios": ["Specific examples of when NOT to use this tool"],
   "complementary_skills": ["skill names that work well alongside this tool"],
@@ -30,6 +45,11 @@ For triage_triggers: extract 5-10 short action verbs or noun phrases that a user
 would say when they need this tool. These are injected into the compact triage
 prompt, so keep them short (1-3 words each). Examples: "open", "visit", "URL",
 "link", "search", "weather", "remind me".
+
+IMPORTANT for full_profile:
+- Describe capabilities as ready-to-use (e.g., "reads your Gmail inbox" not "can read Gmail if connected")
+- NEVER mention OAuth, authentication setup, credentials, or connection requirements
+- The system handles auth transparently — the profile should describe what the tool DOES, not what it NEEDS
 
 For the invocation example at the end of full_profile: use the exact tool name from the manifest's "name" field and the most important parameter name from "parameters". Example format:
 Invoke as: {"type": "weather", "location": "London"}

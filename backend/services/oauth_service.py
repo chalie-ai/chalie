@@ -170,15 +170,40 @@ class OAuthService:
         # Exchange code for tokens
         try:
             resp = requests.post(token_url, data=token_data, timeout=15)
-            resp.raise_for_status()
-            tokens = resp.json()
         except requests.RequestException as e:
-            logger.error(f"[OAUTH] Token exchange failed for '{tool_name}': {e}")
+            logger.error(f"[OAUTH] Token exchange request failed for '{tool_name}': {e}")
             raise ValueError(f"Token exchange failed: {str(e)[:200]}")
 
+        # Parse JSON body first — Google returns error details in the body
+        # even on HTTP 400, so we must read it before checking status.
+        try:
+            tokens = resp.json()
+        except (ValueError, KeyError):
+            logger.error(
+                f"[OAUTH] Token exchange for '{tool_name}': "
+                f"HTTP {resp.status_code}, non-JSON body: {resp.text[:300]}"
+            )
+            raise ValueError(
+                f"Token exchange failed: HTTP {resp.status_code} (non-JSON response)"
+            )
+
         if "error" in tokens:
-            error_desc = tokens.get("error_description", tokens["error"])
-            raise ValueError(f"Token exchange error: {error_desc}")
+            error_code = tokens.get("error", "")
+            error_desc = tokens.get("error_description", error_code)
+            logger.error(
+                f"[OAUTH] Token exchange error for '{tool_name}': "
+                f"{error_code} — {error_desc}"
+            )
+            raise ValueError(f"Token exchange error: {error_desc} ({error_code})")
+
+        if not resp.ok:
+            logger.error(
+                f"[OAUTH] Token exchange for '{tool_name}': "
+                f"HTTP {resp.status_code}, body: {resp.text[:300]}"
+            )
+            raise ValueError(
+                f"Token exchange failed: HTTP {resp.status_code}"
+            )
 
         # Store tokens
         self._store_tokens(tool_name, tokens, manifest_auth)
@@ -247,14 +272,26 @@ class OAuthService:
                 "client_id": client_id,
                 "client_secret": client_secret,
             }, timeout=15)
-            resp.raise_for_status()
-            tokens = resp.json()
         except requests.RequestException as e:
-            logger.error(f"[OAUTH] Token refresh failed for '{tool_name}': {e}")
+            logger.error(f"[OAUTH] Token refresh request failed for '{tool_name}': {e}")
             return access_token  # Return stale token
 
+        try:
+            tokens = resp.json()
+        except (ValueError, KeyError):
+            logger.error(
+                f"[OAUTH] Token refresh for '{tool_name}': "
+                f"HTTP {resp.status_code}, non-JSON body: {resp.text[:300]}"
+            )
+            return access_token
+
         if "error" in tokens:
-            logger.error(f"[OAUTH] Token refresh error for '{tool_name}': {tokens.get('error_description', tokens['error'])}")
+            error_code = tokens.get("error", "")
+            error_desc = tokens.get("error_description", error_code)
+            logger.error(
+                f"[OAUTH] Token refresh error for '{tool_name}': "
+                f"{error_code} — {error_desc}"
+            )
             return access_token
 
         # Store refreshed tokens
@@ -374,26 +411,46 @@ class OAuthService:
         """Store OAuth state data in Redis with TTL."""
         try:
             from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
-            redis.setex(
-                f"{self._REDIS_STATE_PREFIX}{state}",
-                self._STATE_TTL,
-                json.dumps(data),
-            )
+            redis_conn = RedisClientService.create_connection()
+            key = f"{self._REDIS_STATE_PREFIX}{state}"
+            payload = json.dumps(data)
+            redis_conn.setex(key, self._STATE_TTL, payload)
+
+            # Verify the key was actually stored
+            verify = redis_conn.get(key)
+            conn_kwargs = redis_conn.connection_pool.connection_kwargs
+            redis_addr = f"{conn_kwargs.get('host', '?')}:{conn_kwargs.get('port', '?')}/db{conn_kwargs.get('db', 0)}"
+            if verify:
+                logger.info(
+                    f"[OAUTH] Stored state in Redis: key={key} "
+                    f"ttl={redis_conn.ttl(key)}s redis={redis_addr}"
+                )
+            else:
+                logger.error(f"[OAUTH] State stored but immediate read-back returned None: key={key}")
+                raise ValueError("Failed to initiate OAuth flow (Redis write failed)")
+        except ValueError:
+            raise
         except Exception as e:
-            logger.error(f"[OAUTH] Failed to store state in Redis: {e}")
+            logger.error(f"[OAUTH] Failed to store state in Redis: {e}", exc_info=True)
             raise ValueError("Failed to initiate OAuth flow (Redis unavailable)")
 
     def _pop_oauth_state(self, state: str) -> dict | None:
         """Retrieve and delete OAuth state data from Redis."""
         try:
             from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
+            redis_conn = RedisClientService.create_connection()
             key = f"{self._REDIS_STATE_PREFIX}{state}"
-            data = redis.get(key)
+            ttl = redis_conn.ttl(key)
+            data = redis_conn.get(key)
+            conn_kwargs = redis_conn.connection_pool.connection_kwargs
+            redis_addr = f"{conn_kwargs.get('host', '?')}:{conn_kwargs.get('port', '?')}/db{conn_kwargs.get('db', 0)}"
+            logger.info(
+                f"[OAUTH] Pop state from Redis: key={key} "
+                f"found={data is not None} ttl={ttl} redis={redis_addr}"
+            )
             if data:
-                redis.delete(key)
+                redis_conn.delete(key)
                 return json.loads(data)
         except Exception as e:
-            logger.error(f"[OAUTH] Failed to retrieve state from Redis: {e}")
+            logger.error(f"[OAUTH] Failed to retrieve state from Redis: {e}", exc_info=True)
         return None
