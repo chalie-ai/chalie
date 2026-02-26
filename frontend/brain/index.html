@@ -42,11 +42,54 @@
         <!-- Cognition Tab -->
         <div class="tab-panel" id="tab-cognition">
             <div class="panel-header">
-                <h2>Cognition Jobs</h2>
-                <p class="panel-desc">Assign each cognitive job to an LLM provider. Changes auto-save.</p>
+                <h2>Cognition</h2>
+                <div class="panel-header-actions">
+                    <span class="obs-timestamp" id="obsTimestamp"></span>
+                    <button class="btn btn-secondary" id="obsRefreshBtn">Refresh</button>
+                </div>
             </div>
-            <div id="cognitionList" class="cognition-list">
-                <div class="loading">Loading...</div>
+
+            <!-- Sub-tabs with human-language labels -->
+            <div class="cognition-subtabs" id="cognitionSubtabs">
+                <button class="filter-tab active" data-subtab="jobs">Jobs</button>
+                <button class="filter-tab" data-subtab="routing">Thinking</button>
+                <button class="filter-tab" data-subtab="memory">Memory</button>
+                <button class="filter-tab" data-subtab="tools">Tools</button>
+                <button class="filter-tab" data-subtab="identity">Identity</button>
+                <button class="filter-tab" data-subtab="tasks">Working On</button>
+            </div>
+
+            <!-- Jobs sub-panel (existing content, unchanged) -->
+            <div class="cognition-subpanel active" id="subtab-jobs">
+                <p class="panel-desc">Assign each cognitive job to an LLM provider. Changes auto-save.</p>
+                <div id="cognitionList" class="cognition-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Thinking (Routing) sub-panel -->
+            <div class="cognition-subpanel" id="subtab-routing">
+                <div id="routingContent"></div>
+            </div>
+
+            <!-- Memory sub-panel -->
+            <div class="cognition-subpanel" id="subtab-memory">
+                <div id="memoryContent"></div>
+            </div>
+
+            <!-- Tools sub-panel -->
+            <div class="cognition-subpanel" id="subtab-tools">
+                <div id="toolsObsContent"></div>
+            </div>
+
+            <!-- Identity sub-panel -->
+            <div class="cognition-subpanel" id="subtab-identity">
+                <div id="identityContent"></div>
+            </div>
+
+            <!-- Working On (Tasks) sub-panel -->
+            <div class="cognition-subpanel" id="subtab-tasks">
+                <div id="tasksContent"></div>
             </div>
         </div>
 

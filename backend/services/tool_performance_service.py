@@ -167,6 +167,45 @@ class ToolPerformanceService:
             if not self._db:
                 db.close_pool()
 
+    def get_all_tool_stats(self, days: int = 30) -> list:
+        """Aggregate stats for every tool seen in the last N days."""
+        db = self._get_db()
+        try:
+            rows = db.fetch_all(
+                """
+                SELECT
+                    tool_name,
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE invocation_success) AS successes,
+                    AVG(latency_ms) AS avg_latency,
+                    AVG(cost_estimate) AS avg_cost,
+                    MAX(created_at) AS last_used_at
+                FROM tool_performance_metrics
+                WHERE created_at > NOW() - INTERVAL '%s days'
+                GROUP BY tool_name
+                ORDER BY total DESC
+                """,
+                (days,)
+            )
+            results = []
+            for row in (rows or []):
+                total = row['total'] or 1
+                results.append({
+                    'tool_name': row['tool_name'],
+                    'success_rate': (row['successes'] or 0) / total,
+                    'avg_latency': round(float(row['avg_latency'] or 0), 1),
+                    'avg_cost': round(float(row['avg_cost'] or 0), 4),
+                    'total': row['total'],
+                    'last_used_at': row['last_used_at'].isoformat() if row.get('last_used_at') else None,
+                })
+            return results
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} get_all_tool_stats failed: {e}")
+            return []
+        finally:
+            if not self._db:
+                db.close_pool()
+
     def rank_candidates(self, candidates: List[str], user_id: str = 'default') -> List[dict]:
         """
         Re-rank triage tool candidates by performance + preference.
