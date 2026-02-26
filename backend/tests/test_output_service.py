@@ -102,6 +102,76 @@ class TestOutputService:
         assert ttl == 3600
 
     # ------------------------------------------------------------------ #
+    # enqueue_proactive
+    # ------------------------------------------------------------------ #
+
+    def test_enqueue_proactive_publishes_to_output_events(self, service, mock_redis):
+        """enqueue_proactive publishes to output:events (no SSE channel)."""
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_proactive("thread-42", "Progress update")
+
+        publish_calls = mock_redis.publish.call_args_list
+        channels = [c[0][0] for c in publish_calls]
+        assert "output:events" in channels
+
+    def test_enqueue_proactive_persistent_task_maps_to_task_event(self, service, mock_redis):
+        """source='persistent_task' maps to SSE event type 'task'."""
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_proactive("thread-42", "Progress", source='persistent_task')
+
+        for c in mock_redis.publish.call_args_list:
+            if c[0][0] == "output:events":
+                payload = json.loads(c[0][1])
+                assert payload["type"] == "task"
+                return
+        pytest.fail("No publish to output:events found")
+
+    def test_enqueue_proactive_default_source_maps_to_task_event(self, service, mock_redis):
+        """Default source='task' maps to SSE event type 'task'."""
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_proactive("thread-42", "Done!")
+
+        for c in mock_redis.publish.call_args_list:
+            if c[0][0] == "output:events":
+                payload = json.loads(c[0][1])
+                assert payload["type"] == "task"
+                return
+        pytest.fail("No publish to output:events found")
+
+    def test_enqueue_proactive_returns_output_id(self, service, mock_redis):
+        """enqueue_proactive returns a UUID string."""
+        with patch('api.push.send_push_to_all'):
+            output_id = service.enqueue_proactive("thread-1", "hello")
+        assert isinstance(output_id, str)
+        assert len(output_id) > 0
+
+    def test_enqueue_proactive_buffers_to_notifications(self, service, mock_redis):
+        """Proactive output is buffered to notifications:recent for catch-up."""
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_proactive("thread-42", "Update")
+
+        rpush_calls = mock_redis.rpush.call_args_list
+        keys = [c[0][0] for c in rpush_calls]
+        assert "notifications:recent" in keys
+
+    # ------------------------------------------------------------------ #
+    # source_type_map coverage
+    # ------------------------------------------------------------------ #
+
+    def test_source_persistent_task_maps_to_task_event_type(self, service, mock_redis):
+        """Verify that 'persistent_task' source produces event type 'task' in enqueue_text."""
+        metadata = {"source": "persistent_task"}
+        with patch('api.push.send_push_to_all'):
+            service.enqueue_text("t", "msg", "RESPOND", 1.0, 0.0, metadata)
+
+        for c in mock_redis.publish.call_args_list:
+            if c[0][0] == "output:events":
+                payload = json.loads(c[0][1])
+                assert payload["type"] == "task"
+                return
+        pytest.fail("No publish to output:events found")
+
+    # ------------------------------------------------------------------ #
     # enqueue_card — always drift stream
     # ------------------------------------------------------------------ #
 
