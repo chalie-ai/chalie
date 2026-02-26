@@ -20,8 +20,8 @@ from pydantic import BaseModel
 
 # ── Configuration (all optional, sensible defaults) ──────────────────────────
 
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
-KITTEN_VOICE = os.getenv("KITTEN_VOICE", "Bella")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+KITTEN_VOICE = os.getenv("KITTEN_VOICE", "Jasper")
 KITTEN_MODEL = os.getenv("KITTEN_MODEL", "KittenML/kitten-tts-mini-0.8")
 MAX_AUDIO_SECONDS = int(os.getenv("MAX_AUDIO_SECONDS", "60"))
 MAX_TTS_CHARS = int(os.getenv("MAX_TTS_CHARS", "5000"))

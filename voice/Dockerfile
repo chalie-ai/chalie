@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download models at build time so the container starts fast.
-RUN python -c "from faster_whisper import WhisperModel; WhisperModel('small')"
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base')"
 RUN python -c "from kittentts import KittenTTS; KittenTTS('KittenML/kitten-tts-mini-0.8')"
 
 COPY app.py .
