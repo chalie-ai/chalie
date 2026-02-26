@@ -46,18 +46,6 @@ def integrations_reply_stub():
     return jsonify(_NOT_IMPLEMENTED[0]), _NOT_IMPLEMENTED[1]
 
 
-@stubs_bp.route('/voice/transcribe', methods=['POST'])
-@require_session
-def voice_transcribe_stub():
-    return jsonify(_NOT_IMPLEMENTED[0]), _NOT_IMPLEMENTED[1]
-
-
-@stubs_bp.route('/voice/synthesize', methods=['POST'])
-@require_session
-def voice_synthesize_stub():
-    return jsonify(_NOT_IMPLEMENTED[0]), _NOT_IMPLEMENTED[1]
-
-
 @stubs_bp.route('/permissions', methods=['GET'])
 @require_session
 def permissions_stub():

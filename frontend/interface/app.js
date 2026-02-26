@@ -144,7 +144,9 @@ class ChalieApp {
       await this.api.healthCheck();
       this._dismissSparkOverlay();
       this.presence.setState('resting');
-      await this._loadVoiceConfig();
+      const voiceReady = await this.voice.init();
+      if (voiceReady.stt) document.getElementById('micBtn')?.classList.remove('hidden');
+      this.renderer.setTtsEnabled(voiceReady.tts);
       this._loadRecentConversation();
       this._loadActiveTasks();
       this._connectDriftStream();
@@ -155,19 +157,6 @@ class ChalieApp {
     } catch {
       this.presence.setState('error');
       this._showConnectionBanner();
-    }
-  }
-
-  async _loadVoiceConfig() {
-    try {
-      const cfg = await this.api._get('/system/voice-config');
-      this.voice.configure(cfg.tts_endpoint, cfg.stt_endpoint);
-      if (cfg.stt_endpoint) {
-        document.getElementById('micBtn')?.classList.remove('hidden');
-      }
-      this.renderer.setTtsEnabled(!!cfg.tts_endpoint);
-    } catch (_) {
-      // silently ignore if voice config unavailable
     }
   }
 

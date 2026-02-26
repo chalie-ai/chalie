@@ -1,6 +1,13 @@
 /**
  * Voice I/O — Mic recording (STT) + TTS playback.
+ *
+ * Discovers the local voice service via /voice/health on init.
+ * No configuration needed — voice is available when the service is running,
+ * hidden when it's not.
  */
+
+const _TTS_PATH = '/voice/synthesize';
+const _STT_PATH = '/voice/transcribe';
 
 export class VoiceIO {
   /**
@@ -22,18 +29,27 @@ export class VoiceIO {
     this._currentAudio = null;
     this._micDisabled = false;
     this._speaking = false;
-    this._ttsEndpoint = '';
-    this._sttEndpoint = '';
+    this._available = false;
 
     this._bindEvents();
   }
 
   /**
-   * Configure TTS/STT endpoints (must be called before use).
+   * Check if the voice service is running.
+   * @returns {Promise<{tts: boolean, stt: boolean}>}
    */
-  configure(ttsEndpoint, sttEndpoint) {
-    this._ttsEndpoint = ttsEndpoint;
-    this._sttEndpoint = sttEndpoint;
+  async init() {
+    try {
+      const res = await fetch('/voice/health', { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        this._available = true;
+        return { tts: true, stt: true };
+      }
+    } catch (_) {
+      // Voice service not available — graceful degradation
+    }
+    this._available = false;
+    return { tts: false, stt: false };
   }
 
   // ---------------------------------------------------------------------------
@@ -41,7 +57,7 @@ export class VoiceIO {
   // ---------------------------------------------------------------------------
 
   async startRecording() {
-    if (!this._sttEndpoint) return; // silently return if not configured
+    if (!this._available) return;
     if (this._isRecording || this._micDisabled) return;
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -127,7 +143,7 @@ export class VoiceIO {
    * @param {string} text
    */
   async speak(text) {
-    if (!this._ttsEndpoint) return; // silently return if not configured
+    if (!this._available) return;
     if (this._speaking) return;
     this._speaking = true;
 
@@ -135,7 +151,7 @@ export class VoiceIO {
     this._stopAudio();
 
     try {
-      const response = await fetch(this._ttsEndpoint, {
+      const response = await fetch(_TTS_PATH, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -293,7 +309,7 @@ export class VoiceIO {
     const formData = new FormData();
     formData.append('file', blob, filename);
 
-    const response = await fetch(this._sttEndpoint, {
+    const response = await fetch(_STT_PATH, {
       method: 'POST',
       body: formData,
     });
