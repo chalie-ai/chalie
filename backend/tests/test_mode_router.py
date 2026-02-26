@@ -157,7 +157,7 @@ class TestModeRouter:
         assert result1['scores'] == result2['scores']
         assert result1['mode'] == result2['mode']
 
-    def test_collect_routing_signals_structure(self):
+    def test_collect_routing_signals_structure(self, mock_redis):
         """collect_routing_signals returns expected keys."""
         wm = MagicMock()
         wm.get_recent_turns.return_value = [{'role': 'user', 'content': 'hi'}]

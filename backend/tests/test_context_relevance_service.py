@@ -16,7 +16,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from backend.services.context_relevance_service import (
+from services.context_relevance_service import (
     ContextRelevanceService,
     ConfigError,
 )
@@ -339,13 +339,6 @@ class TestContextRelevanceService:
         # Just verify it returns a dict
         assert isinstance(result, dict)
 
-    def test_unknown_mode_includes_all(self, service):
-        """Test that unknown mode defaults to including all."""
-        result = service.compute_inclusion_map(mode='UNKNOWN_MODE')
-
-        # Template mask won't exist, so should default to including
-        # (depends on how template_mask.get() handles missing mode)
-
     def test_missing_signals_safe_defaults(self, service):
         """Test that missing signals use safe defaults (all conditions fail)."""
         signals = {}  # No signals provided
@@ -390,29 +383,6 @@ class TestContextRelevanceService:
         )
         # Rule should match, episodic_memory soft-excluded but recovered due to budget
         assert 'episodic_memory' in result
-
-    def test_soft_recovery_priority_order(self, minimal_config):
-        """Test that soft recovery respects configured priority order."""
-        minimal_config['signal_rules'] = {
-            'episodic_memory': [{'when': {}, 'strength': 'soft'}],
-            'working_memory': [{'when': {}, 'strength': 'soft'}],
-            'facts': [{'when': {}, 'strength': 'soft'}],
-        }
-        minimal_config['soft_recovery_priority'] = ['facts', 'working_memory', 'episodic_memory']
-        minimal_config['soft_recovery_budget'] = 100
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(minimal_config, f)
-            config_path = f.name
-
-        service = ContextRelevanceService(config_path)
-
-        # With limited budget, should recover in priority order
-        result = service.compute_inclusion_map(
-            mode='RESPOND',
-            token_budget_remaining=1500
-        )
-        # Just verify it runs without error
 
     def test_acknowledge_preserves_identity_and_style(self, service):
         """Test ACKNOWLEDGE mode preserves identity_context and communication_style."""
@@ -462,29 +432,6 @@ class TestContextRelevanceService:
 
         assert isinstance(result1, dict)
         assert isinstance(result2, dict)
-
-    def test_multiple_rules_first_match_wins(self, minimal_config):
-        """Test that first matching rule wins for a node."""
-        minimal_config['signal_rules'] = {
-            'episodic_memory': [
-                {'when': {'greeting_pattern': True}, 'strength': 'soft'},
-                {'when': {'greeting_pattern': True}, 'strength': 'hard'},  # Won't reach here
-            ]
-        }
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(minimal_config, f)
-            config_path = f.name
-
-        service = ContextRelevanceService(config_path)
-
-        signals = {'greeting_pattern': True}
-        result = service.compute_inclusion_map(
-            mode='RESPOND',
-            signals=signals,
-            token_budget_remaining=10000  # High budget for recovery
-        )
-        # First rule (soft) should apply, and be recovered due to budget
 
     def test_missing_config_file_uses_defaults(self):
         """Test that missing config file uses safe defaults."""

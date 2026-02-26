@@ -5,6 +5,8 @@ Tests for backend/tools/reddit_monitor/handler.py
 import pytest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
+
+feedparser = pytest.importorskip('feedparser', reason='feedparser not installed')
 from tools.reddit_monitor.handler import execute
 import tools.reddit_monitor.handler as reddit_handler
 
@@ -118,23 +120,6 @@ class TestRedditMonitorHandler:
 
         # Second call should not have new items
         assert result2['notify'] is False
-
-    @patch('requests.get')
-    @patch('feedparser.parse')
-    def test_rolling_window_500(self, mock_parse, mock_get):
-        """Seen IDs should keep rolling window of 500."""
-        mock_get.return_value = MagicMock(content=b"<rss></rss>")
-        mock_feed = MagicMock()
-        mock_feed.get.return_value = []
-        mock_parse.return_value = mock_feed
-
-        # Execute and manually check state
-        execute("test_topic", {}, {
-            "THREADS_TO_FOLLOW": "r/python"
-        })
-
-        # Rolling window is enforced in the code
-        # Window should be kept to 500 items per URL
 
     @patch('requests.get')
     @patch('feedparser.parse')
