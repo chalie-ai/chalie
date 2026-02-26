@@ -94,6 +94,14 @@ class ChalieApp {
     this._handleSharedContent();
     this.heartbeat.start();
 
+    // Focus mode: glow presence bar when user is in deep focus
+    document.addEventListener('chalie:attention', (e) => {
+      const bar = document.querySelector('.presence-bar');
+      if (bar) {
+        bar.dataset.focus = e.detail.attention === 'deep_focus' ? 'deep' : '';
+      }
+    });
+
     // Show PWA install prompt first, then resume normal flow after dismiss/install
     await this._showPwaDialogIfNeeded();
 
@@ -533,7 +541,12 @@ class ChalieApp {
       onMessage: (data) => {
         clearTimeout(pendingUpgradeTimer);
         responseText = data.text;
-        responseMeta = { topic: data.topic, exchange_id: data.exchange_id };
+        responseMeta = {
+          topic: data.topic,
+          exchange_id: data.exchange_id,
+          mode: data.mode || '',
+          confidence: data.confidence || 0,
+        };
         this.presence.setState('responding');
       },
       onError: (data) => {
@@ -670,6 +683,7 @@ class ChalieApp {
     this._driftSource.addEventListener('card', handler);
     this._driftSource.addEventListener('reminder', handler);
     this._driftSource.addEventListener('task', handler);
+    this._driftSource.addEventListener('escalation', handler);
 
     this._driftSource.onerror = () => {
       // EventSource auto-reconnects; nothing to do
@@ -721,6 +735,8 @@ class ChalieApp {
       topic: data.topic,
       type: data.type,
       ts: new Date(),
+      mode: data.mode || '',
+      confidence: data.confidence || 0,
     };
 
     // Render in conversation spine as a Chalie message
@@ -729,6 +745,11 @@ class ChalieApp {
     // Spark presence messages get ambient treatment (softer, not conversational)
     if (data.topic && data.topic.startsWith('spark_')) {
       formEl.classList.add('speech-form--ambient');
+    }
+
+    // Critic escalation — amber border to signal "needs your attention"
+    if (data.type === 'escalation') {
+      formEl.classList.add('speech-form--escalation');
     }
   }
 

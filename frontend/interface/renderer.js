@@ -160,12 +160,33 @@ export class Renderer {
   // ---------------------------------------------------------------------------
 
   _buildMetaRow(text, meta) {
+    const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };
+
     const metaRow = this._createEl('div', 'speech-form__meta');
 
     // Timestamp — always shown
     const timestampEl = this._createEl('span', 'speech-form__timestamp');
     timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
     metaRow.appendChild(timestampEl);
+
+    // Mode badge — only for non-default modes (skip RESPOND)
+    if (meta.mode && MODE_LABELS[meta.mode]) {
+      const badge = document.createElement('span');
+      badge.className = 'meta-mode-badge';
+      badge.textContent = MODE_LABELS[meta.mode];
+      metaRow.appendChild(badge);
+    }
+
+    // Confidence dot — color reflects routing confidence
+    if (meta.confidence > 0) {
+      const dot = document.createElement('span');
+      dot.className = 'meta-confidence-dot';
+      const c = meta.confidence;
+      dot.classList.add(c >= 0.85 ? '--high' : c >= 0.65 ? '--mid' : '--low');
+      const label = c >= 0.85 ? 'Highly' : c >= 0.65 ? 'Moderately' : 'Less';
+      dot.title = `${label} confident (${Math.round(c * 100)}%)`;
+      metaRow.appendChild(dot);
+    }
 
     // TTS speak button — only shown when TTS is configured
     if (this._ttsEnabled) {
