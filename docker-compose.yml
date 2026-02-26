@@ -6,8 +6,8 @@ services:
       POSTGRES_DB: chalie
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chalie}
-    ports:
-      - "5432:5432"
+#    ports:
+#      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -34,6 +34,7 @@ services:
       SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-changeme-in-production-use-a-long-random-string}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       HF_HUB_OFFLINE: "1"
+    mem_limit: 2560m
     volumes:
       - backend_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -45,6 +46,7 @@ services:
     environment:
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       KITTEN_VOICE: ${KITTEN_VOICE:-Jasper}
+    mem_reservation: 1024m
     volumes:
       - voice_models:/root/.cache
     restart: unless-stopped

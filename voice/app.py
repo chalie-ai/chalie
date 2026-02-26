@@ -37,6 +37,7 @@ stt_model = None
 tts_model = None
 stt_sem = None
 tts_sem = None
+_ready = False  # True once models are loaded (warmup may still be running)
 
 app = FastAPI(title="Chalie Voice", docs_url=None, redoc_url=None)
 
@@ -45,25 +46,42 @@ app = FastAPI(title="Chalie Voice", docs_url=None, redoc_url=None)
 
 @app.on_event("startup")
 async def startup():
-    global stt_model, tts_model, stt_sem, tts_sem
+    global stt_model, tts_model, stt_sem, tts_sem, _ready
 
     stt_sem = asyncio.Semaphore(STT_CONCURRENCY)
     tts_sem = asyncio.Semaphore(TTS_CONCURRENCY)
 
+    loop = asyncio.get_event_loop()
+
     logger.info("Loading STT model: %s", WHISPER_MODEL)
     from faster_whisper import WhisperModel
-    stt_model = WhisperModel(WHISPER_MODEL, compute_type="int8")
+    stt_model = await loop.run_in_executor(
+        None, lambda: WhisperModel(WHISPER_MODEL, compute_type="int8")
+    )
 
     logger.info("Loading TTS model: %s (voice=%s)", KITTEN_MODEL, KITTEN_VOICE)
     from kittentts import KittenTTS
-    tts_model = KittenTTS(KITTEN_MODEL)
+    tts_model = await loop.run_in_executor(
+        None, lambda: KittenTTS(KITTEN_MODEL)
+    )
 
-    # Warm both models so the first real request is fast.
-    logger.info("Warming STT model...")
-    _warmup_stt()
-    logger.info("Warming TTS model...")
-    _warmup_tts()
-    logger.info("Voice service ready.")
+    _ready = True
+    logger.info("Models loaded — service accepting requests.")
+
+    # Warm models in the background so the health endpoint responds immediately.
+    asyncio.create_task(_background_warmup(loop))
+
+
+async def _background_warmup(loop):
+    """Warm both models in background threads so first real request is fast."""
+    try:
+        logger.info("Warming STT model (background)...")
+        await loop.run_in_executor(None, _warmup_stt)
+        logger.info("Warming TTS model (background)...")
+        await loop.run_in_executor(None, _warmup_tts)
+        logger.info("Warmup complete.")
+    except Exception as e:
+        logger.warning("Warmup failed (non-fatal): %s", e)
 
 
 def _warmup_stt():
@@ -124,7 +142,7 @@ def _audio_to_wav_bytes(audio_array: np.ndarray, sample_rate: int = 24000) -> by
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok" if _ready else "loading"}
 
 
 class SynthesizeRequest(BaseModel):
@@ -134,6 +152,8 @@ class SynthesizeRequest(BaseModel):
 @app.post("/synthesize")
 async def synthesize(req: SynthesizeRequest):
     """Generate speech from text.  Returns binary audio/wav."""
+    if not _ready:
+        raise HTTPException(status_code=503, detail="Models still loading")
     if not req.text or not req.text.strip():
         raise HTTPException(status_code=400, detail="Text is required")
     if len(req.text) > MAX_TTS_CHARS:
@@ -161,6 +181,9 @@ async def synthesize(req: SynthesizeRequest):
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     """Transcribe uploaded audio (WAV).  Returns {"text": "..."}."""
+    if not _ready:
+        raise HTTPException(status_code=503, detail="Models still loading")
+
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
