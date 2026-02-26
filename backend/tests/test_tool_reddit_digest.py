@@ -5,6 +5,8 @@ Tests for backend/tools/reddit_digest/handler.py
 import pytest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
+
+feedparser = pytest.importorskip('feedparser', reason='feedparser not installed')
 from tools.reddit_digest.handler import execute
 import tools.reddit_digest.handler as reddit_handler
 

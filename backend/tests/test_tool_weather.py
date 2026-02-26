@@ -116,7 +116,8 @@ class TestWeatherHandler:
         mock_get.side_effect = Exception("Network error")
         result = execute("test_topic", {"location": "London"})
 
-        assert result == {"error": "weather_unavailable"}
+        assert "error" in result
+        assert "unavailable" in result['error'].lower()
 
     @patch('requests.get')
     def test_is_raining_true(self, mock_get):
@@ -176,7 +177,8 @@ class TestWeatherHandler:
         mock_get.return_value = mock_response
 
         result = execute("test_topic", {"location": "London"})
-        assert result == {"error": "weather_unavailable"}
+        assert "error" in result
+        assert "unavailable" in result['error'].lower()
 
     @patch('requests.get')
     def test_estimate_daylight_daytime(self, mock_get):

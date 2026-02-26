@@ -4,6 +4,8 @@ Tests for backend/tools/web_read/handler.py
 
 import pytest
 from unittest.mock import patch, MagicMock
+
+trafilatura = pytest.importorskip('trafilatura', reason='trafilatura not installed')
 from tools.web_read.handler import execute
 
 

@@ -44,6 +44,50 @@ The application processes user prompts through a pipeline of workers, queues, an
 - **Thread Context** – Conversation threads are managed in Redis with expiry, not persistent files. Thread state includes active topic, confidence, and conversation history.
 - **Error Handling** – All workers catch JSON decoding errors from LLM responses and log meaningful messages instead of crashing.
 
+### Error Recovery Per Pipeline Stage
+
+| Stage | Failure Mode | Recovery |
+|---|---|---|
+| Classification | Embedding service down | Falls back to default topic ("general") with low confidence |
+| Mode Routing | LLM tiebreaker fails | Uses deterministic scores only (no tiebreak) |
+| Generation | LLM timeout / malformed JSON | Retries once; if still fails, returns a generic "I had trouble thinking" message |
+| Memory Chunker | LLM returns invalid JSON | Re-raises `JSONDecodeError`; exchange is stored without memory enrichment |
+| Episodic Memory | Not all chunks available | Waits with backoff; proceeds with available chunks after deadline |
+| Tool Worker | Tool container crash | Critic evaluates partial result; escalates to user if consequential |
+
+### Latency Budget (Typical)
+
+| Component | Target | Notes |
+|---|---|---|
+| Topic Classification | <5ms | Embedding lookup, deterministic |
+| Mode Routing | <5ms | Mathematical scoring, no LLM |
+| LLM Tiebreaker (rare) | ~200ms | Only when top-2 modes within margin |
+| Response Generation | 2–15s | Depends on model and context length |
+| Memory Chunker | 1–5s | Background, non-blocking |
+| Episodic Memory | 2–8s | Background, non-blocking |
+
+### ACT Loop Detail
+
+When the mode router selects **ACT**, the digest worker enters an autonomous action loop:
+
+1. **Dispatch** — `ActDispatcherService` routes each action to the registered innate skill handler (recall, memorize, schedule, etc.)
+2. **Execute** — Handler runs with a timeout (default 10s); result includes structured output + confidence estimate
+3. **Critic** — `CriticService` evaluates the result via a lightweight LLM call. Safe actions (recall, memorize) get silent correction. Consequential actions (schedule, persistent_task) pause for user confirmation if confidence is low
+4. **Re-plan** — If the critic suggests a different approach, the loop re-routes. Otherwise, the loop continues with the next action or exits to a terminal mode (RESPOND/CLARIFY)
+5. **Budget** — Each action costs fatigue points (recall=1.0, memorize=0.8, introspect=0.5). The loop exits when the budget is exhausted
+
+### SSE Lifecycle
+
+The `/chat` endpoint uses Server-Sent Events for real-time streaming:
+
+1. Client sends `POST /chat` with `{text, source}`
+2. Server returns `text/event-stream` with `X-Request-ID` header
+3. Background thread runs `digest_worker` with the request UUID
+4. Server listens on `sse:{uuid}` Redis pub/sub channel
+5. Events flow: `status:processing` → `status:thinking` → `message:{response}` → `done`
+6. Keepalive pings every 15s; status updates every 20s; 360s hard timeout
+7. If background thread completes without pub/sub (race condition), server polls `output:{request_id}` key as fallback
+
 ## Flow Diagram
 ```
 [Listener] → [Consumer] → [Prompt Queue] → [Digest Worker] →

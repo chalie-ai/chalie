@@ -134,6 +134,136 @@ def mock_db():
 
 
 @pytest.fixture
+def mock_db_rows():
+    """Extended DB mock with programmable cursor returns.
+
+    Supports both patterns used across services:
+      1. with db.connection() as conn: cursor = conn.cursor()
+      2. with db.get_session() as session: session.execute(...)
+
+    Usage:
+        def test_something(self, mock_db_rows):
+            db, cursor = mock_db_rows
+            cursor.fetchone.return_value = make_task_row(status='active')
+            cursor.fetchall.return_value = [make_task_row(), make_task_row(task_id=2)]
+    """
+    db = MagicMock()
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+    cursor.fetchall.return_value = []
+    cursor.rowcount = 0
+
+    # Pattern 1: db.connection() → conn → conn.cursor() → cursor
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.execute.return_value = cursor  # some services do conn.execute() directly
+    conn_ctx = MagicMock()
+    conn_ctx.__enter__ = MagicMock(return_value=conn)
+    conn_ctx.__exit__ = MagicMock(return_value=False)
+    db.connection.return_value = conn_ctx
+
+    # Pattern 2: db.get_session() → session → session.execute() → result
+    session = MagicMock()
+    session_result = MagicMock()
+    session_result.fetchone.return_value = None
+    session_result.fetchall.return_value = []
+    session.execute.return_value = session_result
+    session_ctx = MagicMock()
+    session_ctx.__enter__ = MagicMock(return_value=session)
+    session_ctx.__exit__ = MagicMock(return_value=False)
+    db.get_session.return_value = session_ctx
+
+    # Expose session_result for tests that need SQLAlchemy-style control
+    db._test_session = session
+    db._test_session_result = session_result
+
+    yield (db, cursor)
+
+
+@pytest.fixture
+def mock_llm():
+    """Configurable LLM mock — set mock_llm.response_text before calling.
+
+    Usage:
+        def test_something(self, mock_llm):
+            mock_llm.response_text = '{"verdict": "good"}'
+            # Now any service calling create_llm_service().send_message() gets that text
+    """
+    from services.llm_service import LLMResponse
+    mock = MagicMock()
+
+    # Default response — override via mock.response_text
+    mock.response_text = '{"result": "ok"}'
+
+    def _send_message(*args, **kwargs):
+        return LLMResponse(
+            text=mock.response_text,
+            model='test-model',
+            provider='mock',
+        )
+
+    mock.send_message.side_effect = _send_message
+    mock.generate_embedding.return_value = [0.0] * 256
+
+    with patch('services.llm_service.create_llm_service', return_value=mock):
+        yield mock
+
+
+@pytest.fixture
+def authed_client():
+    """Flask test client with real blueprints registered, auth bypassed.
+
+    Usage:
+        def test_endpoint(self, authed_client):
+            client, mock_db, mock_redis = authed_client
+            mock_db._test_session_result.fetchall.return_value = [...]
+            response = client.get('/system/health')
+    """
+    from api import create_app
+
+    mock_db = MagicMock()
+    mock_r = MagicMock()
+
+    # Wire up db.connection() context manager
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+    cursor.fetchall.return_value = []
+    cursor.rowcount = 0
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.execute.return_value = cursor
+    conn_ctx = MagicMock()
+    conn_ctx.__enter__ = MagicMock(return_value=conn)
+    conn_ctx.__exit__ = MagicMock(return_value=False)
+    mock_db.connection.return_value = conn_ctx
+
+    # Wire up db.get_session() context manager
+    session = MagicMock()
+    session_result = MagicMock()
+    session_result.fetchone.return_value = None
+    session_result.fetchall.return_value = []
+    session.execute.return_value = session_result
+    session_ctx = MagicMock()
+    session_ctx.__enter__ = MagicMock(return_value=session)
+    session_ctx.__exit__ = MagicMock(return_value=False)
+    mock_db.get_session.return_value = session_ctx
+
+    # Expose internals for test control
+    mock_db._test_cursor = cursor
+    mock_db._test_conn = conn
+    mock_db._test_session = session
+    mock_db._test_session_result = session_result
+
+    with patch('services.auth_session_service.validate_session', return_value=True), \
+         patch('services.database_service.get_shared_db_service', return_value=mock_db), \
+         patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r):
+        app = create_app()
+        app.config['TESTING'] = True
+        with app.test_client() as client:
+            yield (client, mock_db, mock_r)
+
+
+@pytest.fixture
 def mock_requests():
     """Mock requests.get/post/head for HTTP tool handlers."""
     with patch('requests.get') as mock_get, \

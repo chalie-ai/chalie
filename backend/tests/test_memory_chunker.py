@@ -201,8 +201,8 @@ class TestMemoryChunker:
 
         mock_llm_factory.return_value = _make_llm_mock('not valid json {{{}')
 
-        result = memory_chunker_worker(_make_job_data())
-        assert 'ERROR' in result
+        with pytest.raises(json.JSONDecodeError):
+            memory_chunker_worker(_make_job_data())
 
     @patch('workers.memory_chunker_worker.ConfigService')
     def test_config_loaded_fresh(self, mock_config_cls):
