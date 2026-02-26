@@ -4,9 +4,9 @@ Tool Performance Service — Records, aggregates, and uses tool invocation metri
 Tracks success rate, latency, cost, and user preferences per tool.
 Provides ranked candidates from triage selection for the ACT dispatch.
 
-Ranking formula (weights sum to 1.0):
-  0.40 * success_rate
-  0.25 * (1 - normalized_latency)
+Ranking formula (weights sum to 1.0, correctness-biased):
+  0.50 * success_rate          — correctness is king
+  0.15 * (1 - normalized_latency)  — speed matters less than accuracy
   0.15 * reliability_score
   0.10 * (1 - normalized_cost)
   0.10 * normalized_preference
@@ -182,8 +182,8 @@ class ToolPerformanceService:
             reliability = self._get_reliability(tool_name)
 
             score = (
-                0.40 * stats.get('success_rate', 0.5)
-                + 0.25 * (1.0 - self._normalize_latency(stats.get('avg_latency', 0)))
+                0.50 * stats.get('success_rate', 0.5)
+                + 0.15 * (1.0 - self._normalize_latency(stats.get('avg_latency', 0)))
                 + 0.15 * reliability
                 + 0.10 * (1.0 - self._normalize_cost(stats.get('avg_cost', 0)))
                 + 0.10 * self._normalize_preference(pref)

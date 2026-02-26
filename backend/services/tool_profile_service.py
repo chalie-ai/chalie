@@ -53,6 +53,53 @@ def _compute_manifest_hash(manifest: dict) -> str:
     return hashlib.md5(content.encode()).hexdigest()
 
 
+def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:
+    """Read all source files from a tool directory for profile enrichment.
+
+    Language-agnostic: includes every text-based source file in the tool
+    directory. The LLM decides what is capability-relevant vs boilerplate.
+    Binary files and build artifacts are excluded by extension.
+    """
+    from pathlib import Path
+
+    tools_dir = Path(__file__).parent.parent / "tools" / tool_name
+    if not tools_dir.is_dir():
+        return ""
+
+    # Skip binary / build artifacts — everything else is fair game
+    skip_ext = {".pyc", ".pyo", ".class", ".o", ".so", ".dll", ".exe",
+                ".wasm", ".jar", ".zip", ".tar", ".gz", ".png", ".jpg",
+                ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf"}
+    skip_dirs = {"__pycache__", "node_modules", ".git", "venv", ".venv", "dist", "build"}
+
+    parts = []
+    total_lines = 0
+
+    for source_file in sorted(tools_dir.rglob("*")):
+        if not source_file.is_file():
+            continue
+        if source_file.suffix.lower() in skip_ext:
+            continue
+        if any(d in source_file.parts for d in skip_dirs):
+            continue
+        try:
+            source = source_file.read_text(encoding="utf-8", errors="replace")
+            file_lines = source.splitlines()
+            rel_path = source_file.relative_to(tools_dir)
+            if total_lines + len(file_lines) > max_lines:
+                remaining = max_lines - total_lines
+                if remaining > 0:
+                    parts.append(f"── {rel_path} (truncated) ──\n" + "\n".join(file_lines[:remaining]))
+                    total_lines += remaining
+                break
+            parts.append(f"── {rel_path} ──\n{source}")
+            total_lines += len(file_lines)
+        except Exception:
+            continue
+
+    return "\n\n".join(parts)
+
+
 def _extract_json(text: str) -> dict:
     """Parse JSON from LLM response, tolerating markdown fences and preamble."""
     text = re.sub(r'```(?:json)?\s*', '', text).strip()
@@ -106,12 +153,16 @@ class ToolProfileService:
         # Query related episodes for enrichment context
         episodes_text = self._get_related_episodes(description)
 
+        # Read tool source code for capability inference
+        source_code = _read_tool_source(tool_name)
+
         # Build LLM prompt
         prompt_template = self._load_prompt('tool-profile-builder')
         prompt = (
             prompt_template
             .replace('{{manifest}}', json.dumps(manifest, indent=2))
             .replace('{{episodes}}', episodes_text)
+            .replace('{{source_code}}', source_code or '(source not available)')
         )
 
         try:
@@ -367,6 +418,35 @@ class ToolProfileService:
 
         self._invalidate_cache()
         return len(accepted)
+
+    def add_usage_scenarios(self, tool_name: str, scenarios: list) -> int:
+        """Add scenarios directly to a tool profile. Returns count added."""
+        profile = self.get_full_profile(tool_name)
+        if not profile:
+            return 0
+        existing = profile.get('usage_scenarios', [])
+        accepted = self._filter_distinct_scenarios(scenarios, existing)
+        if not accepted:
+            return 0
+        merged = existing + accepted
+        if len(merged) > MAX_SCENARIOS:
+            merged = merged[:MAX_SCENARIOS]
+        db = self._get_db()
+        try:
+            db.execute(
+                """UPDATE tool_capability_profiles
+                   SET usage_scenarios = %s, updated_at = NOW()
+                   WHERE tool_name = %s""",
+                (json.dumps(merged), tool_name)
+            )
+            self._invalidate_cache()
+            return len(accepted)
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} add_usage_scenarios failed for {tool_name}: {e}")
+            return 0
+        finally:
+            if not self._db:
+                db.close_pool()
 
     def check_episode_relevance(self, episode_embedding, episode_id: str) -> None:
         """Check if an episode is relevant to any tool profile; enrich if so."""

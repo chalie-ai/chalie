@@ -250,6 +250,80 @@ class TriageCalibrationService:
                     f"false_neg={stats['false_negative_rate']:.1%}"
                 )
 
+                # 4b. Wire correction signals to tool performance preferences
+                try:
+                    from services.tool_performance_service import ToolPerformanceService
+                    perf_svc = ToolPerformanceService()
+                    for row in rows:
+                        if not row.get('signal_correction') or not row.get('tool_selected'):
+                            continue
+                        tools = row['tool_selected']
+                        if isinstance(tools, list):
+                            for tool_name in tools:
+                                if not isinstance(tool_name, str) or not tool_name:
+                                    continue
+                                tool_stats = perf_svc.get_tool_stats(tool_name)
+                                if tool_stats.get('total', 0) < 3:
+                                    continue  # Insufficient data, skip correction
+                                perf_svc.record_user_correction(
+                                    exchange_id=str(row.get('exchange_id', '')),
+                                    tool_name=tool_name,
+                                )
+                except Exception as _corr_err:
+                    logger.debug(f"{LOG_PREFIX} User correction wiring failed: {_corr_err}")
+
+                # 4c. Learn from clarification → tool resolution chains
+                try:
+                    from services.tool_profile_service import ToolProfileService
+                    profile_svc = ToolProfileService()
+
+                    noise_prefixes = ('ok', 'thanks', 'yes', 'no', 'sure', 'got it', 'cool', 'fine')
+                    for i, row in enumerate(rows):
+                        if not row.get('signal_rephrase'):
+                            continue
+                        # Find next event in same topic
+                        next_row = None
+                        for j in range(i + 1, len(rows)):
+                            if rows[j].get('topic') == row.get('topic'):
+                                next_row = rows[j]
+                                break
+                        if not next_row or not next_row.get('tool_selected'):
+                            continue
+                        if not next_row.get('outcome_tool_success'):
+                            continue
+
+                        # Get original prompt text from interaction_log
+                        original_prompt = db.fetch_all(
+                            """SELECT payload->>'message' AS msg
+                               FROM interaction_log
+                               WHERE exchange_id = %s AND event_type = 'user_input'
+                               LIMIT 1""",
+                            (row['exchange_id'],)
+                        )
+                        if not original_prompt or not original_prompt[0].get('msg'):
+                            continue
+
+                        prompt_text = original_prompt[0]['msg'].strip()
+                        if len(prompt_text) < 5 or len(prompt_text) > 200:
+                            continue
+                        if prompt_text.lower().startswith(noise_prefixes):
+                            continue
+
+                        # Add original phrasing as scenario for each resolved tool
+                        tools = next_row['tool_selected']
+                        if isinstance(tools, list):
+                            for tool_name in tools:
+                                if not isinstance(tool_name, str) or not tool_name:
+                                    continue
+                                added = profile_svc.add_usage_scenarios(tool_name, [prompt_text])
+                                if added:
+                                    logger.info(
+                                        f"{LOG_PREFIX} Learned scenario for {tool_name}: "
+                                        f"'{prompt_text[:60]}' (from clarification chain)"
+                                    )
+                except Exception as _learn_err:
+                    logger.debug(f"{LOG_PREFIX} Clarification learning failed: {_learn_err}")
+
             # 5. Always store stats (even if minimal)
             if not stats:
                 stats = {

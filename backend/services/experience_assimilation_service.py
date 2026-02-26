@@ -268,7 +268,7 @@ class ExperienceAssimilationService:
             episode_id = storage.store_episode(episode_data)
 
             # Trigger profile enrichment for high-salience episodes
-            if salience >= 7 and embedding is not None:
+            if salience >= 5 and embedding is not None:
                 try:
                     from services.tool_profile_service import ToolProfileService
                     ToolProfileService().check_episode_relevance(embedding, str(episode_id))

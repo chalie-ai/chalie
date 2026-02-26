@@ -96,7 +96,7 @@ frontend/
 - **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol)
 - **`tool_container_service.py`** — Container lifecycle; `run()` for single-shot, `run_interactive()` for bidirectional tool↔Chalie dialog (JSON-lines stdout, Chalie responses via stdin)
 - **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
-- **`tool_performance_service.py`** — Performance metrics tracking
+- **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
 - **`tool_profile_service.py`** — LLM-generated tool capability profiles with `triage_triggers` (short action verbs injected into triage prompt for vocabulary bridging), `short_summary`, `full_profile`, and `usage_scenarios`; Redis-cached triage summaries (5min TTL)
 - **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
@@ -158,8 +158,8 @@ frontend/
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
-- **Triage Calibration** — Triage correctness scoring (24h cycle)
-- **Profile Enrichment** — Tool profile enrichment (6h cycle)
+- **Triage Calibration** — Triage correctness scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from clarification→tool resolution chains
+- **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 - **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); adaptive user surfacing at coverage milestones
