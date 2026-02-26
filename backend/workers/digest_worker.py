@@ -2270,6 +2270,16 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             except Exception as _cal_err:
                 logging.debug(f"[DIGEST] Calibration log failed: {_cal_err}")
 
+        # Performance-rank triage tools (tool order influences LLM selection)
+        if triage_result.tools and len(triage_result.tools) > 1:
+            try:
+                from services.tool_performance_service import ToolPerformanceService
+                ranked = ToolPerformanceService().rank_candidates(triage_result.tools)
+                if ranked:
+                    triage_result.tools = [r['name'] for r in ranked]
+            except Exception:
+                pass
+
         # Handle cancel / self-resolved from social filter
         if triage_result.mode == 'CANCEL':
             _cancel_active_tool_work(topic)
