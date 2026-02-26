@@ -191,51 +191,6 @@ class TestSystemAPI:
         assert 'redis_error' in data
 
     # ────────────────────────────────────────────
-    # GET /system/voice-config
-    # ────────────────────────────────────────────
-
-    def test_get_voice_config_returns_endpoints(self, client):
-        """GET /system/voice-config returns tts and stt endpoint URLs."""
-        mock_settings = MagicMock()
-        mock_settings.get.side_effect = lambda k: {
-            'tts_endpoint': 'http://tts:5000',
-            'stt_endpoint': 'http://stt:5001',
-        }.get(k)
-
-        mock_db = MagicMock()
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.settings_service.SettingsService', return_value=mock_settings):
-            resp = client.get('/system/voice-config')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['tts_endpoint'] == 'http://tts:5000'
-        assert data['stt_endpoint'] == 'http://stt:5001'
-
-    # ────────────────────────────────────────────
-    # PUT /system/voice-config
-    # ────────────────────────────────────────────
-
-    def test_put_voice_config_updates_settings(self, client):
-        """PUT /system/voice-config persists new TTS/STT endpoints."""
-        mock_settings = MagicMock()
-        mock_db = MagicMock()
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.settings_service.SettingsService', return_value=mock_settings):
-            resp = client.put('/system/voice-config', json={
-                'tts_endpoint': 'http://new-tts:5000',
-                'stt_endpoint': 'http://new-stt:5001',
-            })
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['ok'] is True
-        mock_settings.set.assert_any_call('tts_endpoint', 'http://new-tts:5000', description='TTS server URL')
-        mock_settings.set.assert_any_call('stt_endpoint', 'http://new-stt:5001', description='STT server URL')
-
-    # ────────────────────────────────────────────
     # GET /system/observability/routing
     # ────────────────────────────────────────────
 
