@@ -106,17 +106,13 @@ Choose based on your preference:
 - Models available: Gemini Pro, Gemini Flash, etc.
 - In onboarding, select **Gemini** and paste your key
 
-## Voice Setup (Optional)
+## Voice (Built-in)
 
-Chalie supports optional Text-to-Speech (TTS) and Speech-to-Text (STT) via OpenAI-compatible servers.
+Voice is built into Chalie as a local Docker service — no configuration needed. When the `voice` container is running, the mic button and speaker buttons appear automatically in the chat interface. When it's not running, they stay hidden. Zero setup, zero settings.
 
-1. Set up a TTS/STT server (e.g., [bark](https://github.com/suno-ai/bark), FastAPI wrapper around Whisper)
-2. Open the **Brain** dashboard (http://localhost:8081/brain/)
-3. Navigate to the **Voice** tab
-4. Enter your TTS/STT endpoints:
-   - **TTS**: POST request, input `{"text": "..."}`, output: binary audio (mp3/wav/ogg)
-   - **STT**: POST request, multipart form with `file` field (WAV), output: `{"text": "..."}`
-5. Save & test
+- **STT**: faster-whisper (`small` model) — records from mic, transcribes to text
+- **TTS**: KittenTTS Mini (80M params) — speaks Chalie's responses aloud
+- **Verify**: `curl localhost:8081/voice/health` should return `{"status": "ok"}`
 
 ## Security
 

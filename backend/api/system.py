@@ -108,49 +108,6 @@ def system_status():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@system_bp.route('/system/voice-config', methods=['GET'])
-@require_session
-def get_voice_config():
-    """Return TTS/STT server endpoints stored in settings."""
-    try:
-        from services.database_service import get_shared_db_service
-        from services.settings_service import SettingsService
-
-        db = get_shared_db_service()
-        settings = SettingsService(db)
-
-        return jsonify({
-            'tts_endpoint': settings.get('tts_endpoint') or '',
-            'stt_endpoint': settings.get('stt_endpoint') or '',
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] Failed to get voice config: {e}")
-        return jsonify({"error": "Failed to retrieve voice config"}), 500
-
-
-@system_bp.route('/system/voice-config', methods=['PUT'])
-@require_session
-def update_voice_config():
-    """Update TTS/STT server endpoints."""
-    try:
-        from services.database_service import get_shared_db_service
-        from services.settings_service import SettingsService
-
-        db = get_shared_db_service()
-        settings = SettingsService(db)
-        data = request.get_json() or {}
-
-        if 'tts_endpoint' in data:
-            settings.set('tts_endpoint', data['tts_endpoint'], description='TTS server URL')
-        if 'stt_endpoint' in data:
-            settings.set('stt_endpoint', data['stt_endpoint'], description='STT server URL')
-
-        return jsonify({'ok': True}), 200
-    except Exception as e:
-        logger.error(f"[REST API] Failed to update voice config: {e}")
-        return jsonify({"error": "Failed to update voice config"}), 500
-
-
 # ─────────────────────────────────────────────
 # Observability — cognitive legibility endpoints
 # ─────────────────────────────────────────────

@@ -1,0 +1,7 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+faster-whisper>=1.1.0
+kittentts>=0.8.0
+soundfile>=0.13.0
+numpy>=1.24.0
+python-multipart>=0.0.18

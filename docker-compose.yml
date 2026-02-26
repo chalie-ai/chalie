@@ -40,6 +40,15 @@ services:
       - ./backend/tools:/app/tools
     restart: unless-stopped
 
+  voice:
+    build: ./voice
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      KITTEN_VOICE: ${KITTEN_VOICE:-Bella}
+    volumes:
+      - voice_models:/root/.cache
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     depends_on:
@@ -52,3 +61,4 @@ volumes:
   postgres_data:
   redis_data:
   backend_data:
+  voice_models:
