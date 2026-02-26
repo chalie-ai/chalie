@@ -2,6 +2,11 @@
 
 Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
 
+## Vision & Philosophy
+
+**Understand what Chalie is and why it exists:**
+- **[00-VISION.md](00-VISION.md)** — Product vision, design principles, delegation boundary, feature decision filter
+
 ## Getting Started
 
 **New to Chalie?** Start here:
@@ -27,6 +32,7 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 ## If You're a Developer Exploring the Codebase
 
 Recommended reading order for engineers:
+0. **[00-VISION.md](00-VISION.md)** — Start with why: product vision, design principles, and feature decision filter
 1. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; fastest way to build a mental map
 2. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
 3. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
@@ -54,6 +60,7 @@ Recommended reading order for engineers:
 ```
 docs/
 ├── INDEX.md                          ← You are here
+├── 00-VISION.md                      ← Product vision & design compass
 ├── 01-QUICK-START.md                 ← Getting started
 ├── 02-PROVIDERS-SETUP.md             ← LLM provider configuration
 ├── 03-WEB-INTERFACE.md               ← Web UI specification
@@ -92,6 +99,8 @@ docs/
 5. Open http://localhost:8081/ in browser
 
 ### Understanding a Specific Component
+- **Product philosophy?** → See 00-VISION.md — core principles, delegation boundary, behavioral guidelines
+- **Should we build this feature?** → See 00-VISION.md "Decision Filter" — 7 yes/no questions
 - **Memory system?** → See 04-ARCHITECTURE.md "Memory Hierarchy"
 - **How routing works?** → See 07-COGNITIVE-ARCHITECTURE.md
 - **Data flow?** → See 05-WORKFLOW.md or 04-ARCHITECTURE.md "Data Flow Pipeline"
