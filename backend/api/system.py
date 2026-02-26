@@ -18,13 +18,21 @@ system_bp = Blueprint('system', __name__)
 def health_check():
     """Health check endpoint (no auth required). POST saves client context."""
     if request.method == 'POST':
+        attention = None
         try:
             from services.client_context_service import ClientContextService
             data = request.get_json() or {}
             if data:
-                ClientContextService().save(data)
+                svc = ClientContextService()
+                svc.save(data)
+                # Run ambient inference on the saved context
+                from services.ambient_inference_service import AmbientInferenceService
+                inference = AmbientInferenceService().infer(data)
+                attention = inference.get('attention') if inference else None
         except Exception as e:
             logger.warning(f"[HEALTH] Failed to save client context: {e}")
+        from consumer import APP_VERSION
+        return jsonify({"status": "ok", "version": APP_VERSION, "attention": attention}), 200
     from consumer import APP_VERSION
     return jsonify({"status": "ok", "version": APP_VERSION}), 200
 

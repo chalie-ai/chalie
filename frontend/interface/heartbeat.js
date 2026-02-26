@@ -217,6 +217,15 @@ export class ClientHeartbeat {
 
       if (!response.ok) {
         console.warn('[CLIENT HEARTBEAT] Failed to send context:', response.status);
+      } else {
+        try {
+          const result = await response.json();
+          if (result.attention) {
+            document.dispatchEvent(new CustomEvent('chalie:attention', {
+              detail: { attention: result.attention }
+            }));
+          }
+        } catch (_) { /* ignore parse failures */ }
       }
 
       this._lastSentAt = Date.now();
