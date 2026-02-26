@@ -71,7 +71,8 @@ docs/
 ├── 08-DATA-SCHEMAS.md                ← Data structures
 ├── 09-TOOLS.md                       ← Tools system & creation guide
 ├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
-└── 11-MULTI-INSTANCE-SETUP.md        ← Running multiple instances on one host
+├── 11-MULTI-INSTANCE-SETUP.md        ← Running multiple instances on one host
+└── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
 ```
 
 ### Important Project Files (Not in docs/)
@@ -202,16 +203,22 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 - **Contributing**: Create feature branch, add tests, follow existing patterns
 - **Questions**: Review relevant documentation section, check `docs/04-ARCHITECTURE.md` for recent work
 
+## Testing
+
+**Writing or reviewing tests?**
+- **[12-TESTING.md](12-TESTING.md)** — Test conventions, fixture catalog, mock strategies, how to add tests
+
 ## Document Status
 
-**Last Updated**: 2026-02-21
+**Last Updated**: 2026-02-26
 
 All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
 
 **Recent Additions**:
-- Curiosity Threads: Replaced user-facing goals with self-directed exploration threads (learning and behavioral) seeded from cognitive drift
-- New services: `curiosity_thread_service.py`, `curiosity_pursuit_service.py`, `seed_thread_action.py`
-- Updated 07-COGNITIVE-ARCHITECTURE.md: 8 innate skills (removed goal)
-- Updated 08-DATA-SCHEMAS.md: Replaced goals table with curiosity_threads table
-- Updated 04-ARCHITECTURE.md: Added curiosity thread and pursuit services
+- Testing guide: `12-TESTING.md` — conventions, fixtures, mock strategies
+- Observability endpoints: `/system/observability/*` for cognitive legibility
+- Moments API: Pin, list, search, and forget meaningful exchanges
+- Task strip: Persistent background tasks visible in the UI
+- Understanding tab: Brain dashboard cognitive transparency
+- Curiosity Threads: Self-directed exploration threads seeded from cognitive drift
 - 09-TOOLS.md: Comprehensive tools system documentation

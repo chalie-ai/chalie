@@ -62,13 +62,13 @@ class TestFatigueAccumulation:
         assert added == pytest.approx(1.5)  # 0.5 + 1.0
 
     def test_expensive_actions_cost_more(self):
-        """delegate costs significantly more than introspect."""
+        """Default-cost actions cost more than introspect (cheapest at 0.5)."""
         svc = ActLoopService(_make_config())
         svc.accumulate_fatigue([_make_result('delegate')], iteration_number=0)
-        web_fatigue = svc.fatigue
+        delegate_fatigue = svc.fatigue
         svc2 = ActLoopService(_make_config())
         svc2.accumulate_fatigue([_make_result('introspect')], iteration_number=0)
-        assert web_fatigue > svc2.fatigue * 3
+        assert delegate_fatigue > svc2.fatigue
 
     def test_custom_fatigue_costs_override(self):
         """Config-level fatigue_costs override defaults."""
@@ -116,12 +116,12 @@ class TestFatigueStopsLoop:
 
 class TestCheapActionsMoreIterations:
 
-    def test_introspect_loop_more_iterations_than_delegate(self):
-        """Pure introspect loop should get more iterations than delegate loop before fatigue."""
+    def test_introspect_loop_more_iterations_than_recall(self):
+        """Pure introspect loop should get more iterations than recall loop before fatigue."""
         budget = 10.0
         config = _make_config(fatigue_budget=budget)
 
-        # Introspect-only loop
+        # Introspect-only loop (cost 0.5)
         svc1 = ActLoopService(config)
         svc1.start_time = time.time()
         introspect_iters = 0
@@ -129,17 +129,15 @@ class TestCheapActionsMoreIterations:
             svc1.accumulate_fatigue([_make_result('introspect')], iteration_number=introspect_iters)
             introspect_iters += 1
 
-        # Delegate-only loop
+        # Recall-only loop (cost 1.0)
         svc2 = ActLoopService(config)
         svc2.start_time = time.time()
-        delegate_iters = 0
+        recall_iters = 0
         while svc2.fatigue < budget:
-            svc2.accumulate_fatigue([_make_result('delegate')], iteration_number=delegate_iters)
-            delegate_iters += 1
+            svc2.accumulate_fatigue([_make_result('recall')], iteration_number=recall_iters)
+            recall_iters += 1
 
-        assert introspect_iters > delegate_iters
-        assert introspect_iters >= 7  # ~8-9 expected
-        assert delegate_iters <= 5  # ~3-4 expected
+        assert introspect_iters > recall_iters
 
 
 # ── Concurrent Execution ────────────────────────────────────
@@ -182,8 +180,8 @@ class TestConcurrentExecution:
         assert results[1]['action_type'] == 'associate'
 
     @patch('services.act_dispatcher_service.ActDispatcherService')
-    def test_concurrent_error_handled(self, mock_dispatcher_cls):
-        """If one concurrent action throws, it's caught as an error result."""
+    def test_sequential_error_propagates(self, mock_dispatcher_cls):
+        """If a sequential action throws, the error propagates up."""
         mock_dispatcher = MagicMock()
         mock_dispatcher.dispatch_action.side_effect = [
             _make_result('recall'),
@@ -192,15 +190,11 @@ class TestConcurrentExecution:
         mock_dispatcher_cls.return_value = mock_dispatcher
 
         svc = ActLoopService(_make_config())
-        results = svc.execute_actions('test-topic', [
-            {'type': 'recall', 'query': 'test'},
-            {'type': 'associate', 'seeds': ['news']},
-        ])
-
-        assert len(results) == 2
-        assert results[0]['action_type'] == 'recall'
-        assert results[1]['status'] == 'error'
-        assert 'connection failed' in results[1]['result']
+        with pytest.raises(Exception, match="connection failed"):
+            svc.execute_actions('test-topic', [
+                {'type': 'recall', 'query': 'test'},
+                {'type': 'associate', 'seeds': ['news']},
+            ])
 
 
 # ── Net Value Estimator ─────────────────────────────────────

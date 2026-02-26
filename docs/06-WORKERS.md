@@ -36,3 +36,65 @@
 ## Registration
 
 Each worker is registered in `consumer.py` via `WorkerManager.register_worker` (queue workers) or `WorkerManager.register_service` (services). Queue names correspond to Redis topics defined in `configs/connections.json`.
+
+## Worker Lifecycle
+
+```
+[consumer.py] → spawn process → [WorkerBase.__init__]
+    → create Redis/DB connections
+    → enter main loop
+        → poll queue / sleep interval
+        → process job
+        → _update_shared_state
+    → on exception: log + continue (unless fatal)
+    → on SIGTERM: set shutdown flag → exit loop → cleanup
+
+[consumer.py] health check (every 30s):
+    → for each registered worker:
+        → if process.is_alive() → ok
+        → if dead → log warning → respawn
+```
+
+### Health Check & Restart
+
+The `WorkerManager` in `consumer.py` runs a health check loop every 30 seconds:
+- Iterates all registered workers and services
+- Dead processes are respawned with the same configuration
+- Restart count is tracked per worker; excessive restarts trigger a warning log
+- On `SIGTERM`/`SIGINT`, the manager sends shutdown signals to all children and waits for graceful exit
+
+### Per-Worker Configuration
+
+| Worker / Service | Interval | Jitter | Notes |
+|---|---|---|---|
+| Digest Worker | Queue-driven | N/A | Blocks on `BRPOP` from prompt queue |
+| Memory Chunker | Queue-driven | N/A | Blocks on `BRPOP` from memory-chunker queue |
+| Episodic Memory | Queue-driven | N/A | Blocks on `BRPOP` from episodic-memory queue |
+| Tool Worker | RQ queue | N/A | Managed by RQ worker process |
+| Persistent Task Worker | 30min cycle | ±30% (0.7–1.3x) | Bounded ACT loop per cycle |
+| Cognitive Drift | Idle-triggered | N/A | Only runs when all queues are empty |
+| Decay Engine | 30min | None | Fixed interval |
+| Scheduler Service | 60s poll | None | Checks `due_at <= NOW()` |
+| Thread Expiry | 5min poll | None | Expires threads with no activity |
+| Routing Stability Regulator | 24h cycle | None | Single authority for weight mutation |
+| Topic Stability Regulator | 24h cycle | None | Tunes topic classifier params |
+| Autobiography Synthesis | 6h cycle | None | Narrative synthesis |
+| Triage Calibration | 24h cycle | None | Scoring/learning signals |
+| Profile Enrichment | 6h cycle | None | Tool profile enrichment |
+| Curiosity Pursuit | 6h cycle | None | Explores curiosity threads |
+
+### Failure Handling
+
+- **Queue workers** (digest, memory chunker, episodic): Catch exceptions per-job, log, and continue polling. A single bad job never takes down the worker.
+- **Polling services** (scheduler, thread expiry, decay): Catch exceptions per-cycle, log, and sleep until the next interval.
+- **LLM-dependent workers**: If the LLM returns invalid JSON, the worker logs the raw response and moves on. No retry — the next cycle will pick up any missed work.
+- **Fatal errors** (Redis/Postgres connection lost): The worker crashes. `consumer.py` detects the dead process and respawns it.
+
+### Graceful Shutdown
+
+On `SIGTERM` or `SIGINT`:
+1. `consumer.py` sets a global shutdown flag
+2. Each worker checks the flag at the top of its loop
+3. Queue workers finish processing their current job, then exit
+4. Service workers complete their current cycle, then exit
+5. `consumer.py` waits up to 10s for all children, then sends `SIGKILL` to stragglers

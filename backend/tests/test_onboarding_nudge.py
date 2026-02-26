@@ -54,10 +54,10 @@ def _mock_identity_and_redis(identity_blob: dict, exchange_count: int, thread_id
 class TestOnboardingNudge:
 
     def test_no_nudge_below_min_turn(self):
-        """No nudge when exchange_count < min_turn (5)."""
+        """No nudge when exchange_count < min_turn (3)."""
         svc = _make_service_instance()
 
-        with _mock_identity_and_redis({}, exchange_count=3):
+        with _mock_identity_and_redis({}, exchange_count=2):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -118,10 +118,14 @@ class TestOnboardingNudge:
         assert call_arg['name']['attempts'] == 2
 
     def test_no_nudge_after_max_attempts(self):
-        """No nudge after max_attempts (2) reached — system backs off."""
+        """No nudge after max_attempts reached for all scheduled traits."""
         svc = _make_service_instance()
         identity = {
-            '_onboarding': {'name': {'nudged_at_turn': 13, 'attempts': 2}},
+            '_onboarding': {
+                'name': {'nudged_at_turn': 13, 'attempts': 2},
+                'timezone': {'nudged_at_turn': 20, 'attempts': 1},
+                'interests': {'nudged_at_turn': 30, 'attempts': 1},
+            },
         }
 
         with _mock_identity_and_redis(identity, exchange_count=50):

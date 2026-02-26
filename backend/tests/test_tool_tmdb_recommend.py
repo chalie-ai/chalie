@@ -1,23 +1,17 @@
 """
 Tests for backend/tools/tmdb_recommend/handler.py
+
+State is passed via params["_state"] and returned in result["_state"].
 """
 
 import pytest
-from datetime import datetime
 from unittest.mock import patch, MagicMock
 from tools.tmdb_recommend.handler import execute
-import tools.tmdb_recommend.handler as tmdb_handler
 
 
 @pytest.mark.unit
 class TestTMDBRecommendHandler:
     """Test tmdb_recommend tool handler."""
-
-    @pytest.fixture(autouse=True)
-    def setup_temp_state(self, tmp_path, monkeypatch):
-        """Setup temporary state file for each test."""
-        state_file = tmp_path / "state.json"
-        monkeypatch.setattr(tmdb_handler, 'STATE_FILE', state_file)
 
     def test_missing_api_key(self):
         """Missing API key should return error."""
@@ -35,53 +29,33 @@ class TestTMDBRecommendHandler:
 
     def test_already_ran_today(self):
         """Already ran today should not notify."""
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state') as mock_load:
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        from datetime import datetime
+        today_str = datetime.now().strftime("%Y-%m-%d")
 
-            # State shows already ran today
-            mock_load.return_value = {"last_run_date": "2024-01-15", "seen_ids": []}
+        state = {"last_run_date": today_str, "seen_ids": []}
+        result = execute("test_topic", {"_state": state}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "09:00"
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00"
-            })
-
-            assert result['notify'] is False
-            assert result['reason'] == "already_ran_today"
+        assert result['notify'] is False
+        assert result['reason'] == "already_ran_today"
 
     def test_not_scheduled_time(self):
         """Before scheduled time should not notify."""
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state'):
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 8
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        result = execute("test_topic", {}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "23:59"  # Always in the future (unless run at 23:59)
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00"
-            })
+        assert result['notify'] is False
+        assert result['reason'] == "not_scheduled_time"
 
-            assert result['notify'] is False
-            assert result['reason'] == "not_scheduled_time"
-
-    @patch('requests.get')
+    @patch('tools.tmdb_recommend.handler.requests.get')
     def test_successful_recommendations(self, mock_get):
-        """Successful recommendations should notify."""
+        """Successful recommendations should notify with picks."""
         mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "results": [
                 {
@@ -96,189 +70,139 @@ class TestTMDBRecommendHandler:
         }
         mock_get.return_value = mock_response
 
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state'):
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        result = execute("test_topic", {}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "00:00"
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00"
-            })
+        assert result['notify'] is True
+        assert 'picks' in result
+        assert len(result['picks']) > 0
+        assert '_state' in result
 
-            if result.get('notify'):
-                assert 'picks' in result
-                assert len(result['picks']) > 0
-
-    @patch('requests.get')
+    @patch('tools.tmdb_recommend.handler.requests.get')
     def test_genre_filtering(self, mock_get):
-        """Only matching genres should be returned."""
+        """Only matching genres should be included."""
         mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "results": [
-                {"id": 1, "title": "Action", "release_date": "2024-01-01", "vote_average": 8.0, "popularity": 100, "genre_ids": [28]},
-                {"id": 2, "title": "Drama", "release_date": "2024-01-01", "vote_average": 8.0, "popularity": 100, "genre_ids": [18]}
+                {"id": 1, "title": "Action", "release_date": "2024-01-01",
+                 "vote_average": 8.0, "popularity": 100, "genre_ids": [28]},
+                {"id": 2, "title": "Drama", "release_date": "2024-01-01",
+                 "vote_average": 8.0, "popularity": 100, "genre_ids": [18]},
             ]
         }
         mock_get.return_value = mock_response
 
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state'):
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        result = execute("test_topic", {}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "00:00",
+            "PREFERRED_GENRES": "action"
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00",
-                "PREFERRED_GENRES": "action"  # Only action genre (ID 28)
-            })
+        if result.get('notify') and 'picks' in result:
+            # Only action movie (id=1) should be included
+            tmdb_ids = [p['tmdb_id'] for p in result['picks']]
+            assert 1 in tmdb_ids
+            assert 2 not in tmdb_ids
 
-            if result.get('notify') and 'picks' in result:
-                # Should only include action movies
-                for pick in result['picks']:
-                    # Genre filtering is applied in _fetch_and_filter
-                    pass
-
-    @patch('requests.get')
+    @patch('tools.tmdb_recommend.handler.requests.get')
     def test_min_rating_filter(self, mock_get):
         """Below-threshold rating should be excluded."""
         mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "results": [
-                {"id": 1, "title": "Good", "release_date": "2024-01-01", "vote_average": 8.0, "popularity": 100},
-                {"id": 2, "title": "Bad", "release_date": "2024-01-01", "vote_average": 5.0, "popularity": 100}
+                {"id": 1, "title": "Good", "release_date": "2024-01-01",
+                 "vote_average": 8.0, "popularity": 100},
+                {"id": 2, "title": "Bad", "release_date": "2024-01-01",
+                 "vote_average": 5.0, "popularity": 100},
             ]
         }
         mock_get.return_value = mock_response
 
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state'):
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        result = execute("test_topic", {}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "00:00",
+            "MIN_RATING": "7.0"
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00",
-                "MIN_RATING": "7.0"
-            })
+        if result.get('notify') and 'picks' in result:
+            for pick in result['picks']:
+                assert pick['rating'] >= 7.0
 
-            # Should filter out low-rated items
-            if result.get('notify') and 'picks' in result:
-                for pick in result['picks']:
-                    assert pick['rating'] >= 7.0
-
-    @patch('requests.get')
+    @patch('tools.tmdb_recommend.handler.requests.get')
     def test_seen_ids_excluded(self, mock_get):
-        """Previously recommended should be excluded."""
+        """Previously recommended IDs should be excluded."""
         mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "results": [
-                {"id": 1, "title": "Movie 1", "release_date": "2024-01-01", "vote_average": 8.0, "popularity": 100}
+                {"id": 1, "title": "Movie 1", "release_date": "2024-01-01",
+                 "vote_average": 8.0, "popularity": 100},
             ]
         }
         mock_get.return_value = mock_response
 
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state') as mock_load:
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        # State has seen movie ID 1
+        state = {"seen_ids": [1], "last_run_date": ""}
+        result = execute("test_topic", {"_state": state}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "00:00"
+        })
 
-            # State has seen movie ID 1
-            mock_load.return_value = {"seen_ids": [1], "last_run_date": ""}
+        # Should not recommend movie 1 since it was seen
+        if result.get('notify'):
+            for pick in result.get('picks', []):
+                assert pick['tmdb_id'] != 1
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00"
-            })
-
-            # Should not recommend movie 1 since it was seen
-            if result.get('notify'):
-                for pick in result.get('picks', []):
-                    assert pick['tmdb_id'] != 1
-
-    @patch('requests.get')
+    @patch('tools.tmdb_recommend.handler.requests.get')
     def test_rolling_window_270(self, mock_get):
-        """Seen IDs should keep rolling window of 270."""
+        """Seen IDs should be capped at rolling window of 270."""
         mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "results": [
-                {"id": i, "title": f"Movie {i}", "release_date": "2024-01-01", "vote_average": 8.0, "popularity": 100}
-                for i in range(100)
+                {"id": 999, "title": f"Movie 999", "release_date": "2024-01-01",
+                 "vote_average": 8.0, "popularity": 100},
             ]
         }
         mock_get.return_value = mock_response
 
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state'):
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        # State with 300 seen IDs
+        state = {"seen_ids": list(range(300)), "last_run_date": ""}
+        result = execute("test_topic", {"_state": state}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "00:00"
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00"
-            })
+        if '_state' in result:
+            assert len(result['_state']['seen_ids']) <= 270
 
-            # Rolling window of 270 is maintained
-
-    @patch('requests.get')
+    @patch('tools.tmdb_recommend.handler.requests.get')
     def test_scoring_formula(self, mock_get):
-        """Scoring formula: 0.3*popularity + 0.7*rating."""
+        """Scoring: 0.3*popularity + 0.7*rating — high popularity wins."""
         mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
             "results": [
-                {"id": 1, "title": "High rating", "release_date": "2024-01-01", "vote_average": 9.0, "popularity": 10},
-                {"id": 2, "title": "High popularity", "release_date": "2024-01-01", "vote_average": 6.0, "popularity": 100}
+                {"id": 1, "title": "High rating", "release_date": "2024-01-01",
+                 "vote_average": 9.0, "popularity": 10},
+                {"id": 2, "title": "High popularity", "release_date": "2024-01-01",
+                 "vote_average": 6.0, "popularity": 100},
             ]
         }
         mock_get.return_value = mock_response
 
-        with patch('datetime.datetime') as mock_dt, \
-             patch('tools.tmdb_recommend.handler._load_state'):
-            mock_now = MagicMock()
-            mock_now.strftime.return_value = "2024-01-15"
-            mock_now.hour = 10
-            mock_now.minute = 0
-            mock_now.second = 0
-            mock_now.microsecond = 0
-            mock_now.replace.return_value = mock_now
-            mock_dt.now.return_value = mock_now
+        result = execute("test_topic", {}, {
+            "TMDB_API_KEY": "key123",
+            "DAILY_TIME": "00:00",
+            "MIN_RATING": "5.0"
+        })
 
-            result = execute("test_topic", {}, {
-                "TMDB_API_KEY": "key123",
-                "DAILY_TIME": "09:00",
-                "MIN_RATING": "5.0"
-            })
-
-            # Score: id=1: 0.3*10 + 0.7*9 = 3 + 6.3 = 9.3
-            # Score: id=2: 0.3*100 + 0.7*6 = 30 + 4.2 = 34.2
-            # Should pick id=2 first
+        # Score: id=1: 0.3*10 + 0.7*9 = 9.3
+        # Score: id=2: 0.3*100 + 0.7*6 = 34.2
+        # id=2 should be first
+        if result.get('notify') and len(result.get('picks', [])) >= 2:
+            assert result['picks'][0]['tmdb_id'] == 2

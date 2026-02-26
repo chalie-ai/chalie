@@ -38,15 +38,12 @@ def _make_classifier(mock_db):
         'w_salience': 0.1,
     }
 
-    with patch('services.topic_classifier_service.DatabaseService') as mock_db_cls, \
-         patch('services.topic_classifier_service.get_merged_db_config', return_value={}), \
+    with patch('services.topic_classifier_service.get_shared_db_service', return_value=mock_db), \
+         patch('services.topic_classifier_service.EmbeddingService'), \
          patch('services.topic_stability_regulator_service.TopicStabilityRegulator', return_value=reg_instance):
-
-        mock_db_cls.return_value = mock_db
 
         from services.topic_classifier_service import TopicClassifierService
         svc = TopicClassifierService()
-        svc.db = mock_db
         return svc
 
 
