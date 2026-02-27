@@ -114,6 +114,20 @@ def tool_worker(job_data: dict) -> str:
         context_snapshot = job_data.get('context_snapshot', {})
         metadata = job_data.get('metadata', {})
 
+        # Heartbeat tracking for SSE health monitoring (Phase 3)
+        _heartbeat_redis = None
+        _heartbeat_job_id = None
+        _last_heartbeat = 0.0
+        try:
+            from services.redis_client import RedisClientService
+            _heartbeat_redis = RedisClientService.create_connection()
+            # Try to get the RQ job ID from the current job context
+            import rq
+            current_job = rq.get_current_job()
+            _heartbeat_job_id = current_job.id if current_job else cycle_id
+        except Exception:
+            _heartbeat_job_id = cycle_id
+
         logger.info(
             f"[TOOL WORKER] Starting ACT loop for cycle {cycle_id[:8] if cycle_id else '?'} "
             f"(topic={topic})"
@@ -233,6 +247,16 @@ def tool_worker(job_data: dict) -> str:
                 return f"Topic '{topic}' | CANCELLED by user"
 
             iteration_start = time.time()
+
+            # Publish heartbeat every ~10s for SSE health monitoring
+            if _heartbeat_redis and _heartbeat_job_id:
+                _now = time.time()
+                if _now - _last_heartbeat >= 10.0:
+                    try:
+                        _heartbeat_redis.setex(f"heartbeat:{_heartbeat_job_id}", 30, "1")
+                        _last_heartbeat = _now
+                    except Exception:
+                        pass
 
             # Generate action plan
             response_data = cortex_service.generate_response(
@@ -570,14 +594,34 @@ def tool_worker(job_data: dict) -> str:
         logger.error(f"[TOOL WORKER] Hard timeout for topic '{topic}'")
         if cycle_service and cycle_id:
             cycle_service.complete_cycle(cycle_id, 'failed')
+        # Notify SSE loop of failure so it doesn't hang for 600s
+        _notify_sse_error(metadata, "Tool execution timed out")
         return f"Topic '{topic}' | TIMEOUT"
     except Exception as e:
         logger.error(f"[TOOL WORKER] Failed: {e}", exc_info=True)
         if cycle_service and cycle_id:
             cycle_service.complete_cycle(cycle_id, 'failed')
+        # Notify SSE loop of failure so it doesn't hang for 600s
+        _notify_sse_error(metadata, f"Tool execution failed: {str(e)[:200]}")
         return f"Topic '{topic}' | ERROR: {e}"
     finally:
         signal.alarm(0)
+
+
+def _notify_sse_error(metadata: dict, error_message: str):
+    """Publish error to SSE channel and clean up sse_pending flag so the SSE loop is released."""
+    try:
+        sse_uuid = metadata.get('uuid')
+        if not sse_uuid:
+            return
+        from services.redis_client import RedisClientService
+        redis_conn = RedisClientService.create_connection()
+        # Publish error to SSE channel
+        redis_conn.publish(f"sse:{sse_uuid}", json.dumps({"error": error_message}))
+        # Delete sse_pending flag so SSE loop breaks immediately
+        redis_conn.delete(f"sse_pending:{sse_uuid}")
+    except Exception as e:
+        logger.warning(f"[TOOL WORKER] Failed to notify SSE of error: {e}")
 
 
 def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:

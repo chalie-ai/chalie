@@ -60,14 +60,19 @@ class ActLoopService:
         self.iteration_logs = []  # Iteration data for batch PostgreSQL write
         self.context_extras = {}  # Extra params merged into every action dispatch
 
-    def can_continue(self, mode: str = 'ACT', **kwargs) -> Tuple[bool, Optional[str]]:
+    def can_continue(self, mode: str = 'ACT', max_history_tokens: int = 4000, **kwargs) -> Tuple[bool, Optional[str]]:
         """
-        Determine if ACT loop should continue based on fatigue, timeout, and iteration cap.
+        Determine if ACT loop should continue based on fatigue, timeout, iteration cap,
+        and history token budget.
 
-        Fatigue is the primary termination signal. Timeout and max_iterations are safety caps.
+        Fatigue is the primary termination signal. Timeout, max_iterations, and
+        max_history_tokens are safety caps.
 
         Args:
             mode: Selected mode from decision gate (default 'ACT')
+            max_history_tokens: Maximum estimated tokens for act_history context.
+                Prevents unbounded prompt growth across iterations.
+                Estimated via word_count * 1.3 heuristic.
 
         Returns:
             Tuple of (can_continue: bool, termination_reason: str | None)
@@ -91,6 +96,14 @@ class ActLoopService:
         if self.iteration_number >= self.max_iterations:
             logging.info(f"[MODE:ACT] [ACT LOOP] Max iterations reached ({self.max_iterations})")
             return False, 'max_iterations'
+
+        # Safety: history token budget (prevents unbounded prompt growth)
+        if self.act_history and max_history_tokens > 0:
+            history_text = self.get_history_context()
+            estimated_tokens = int(len(history_text.split()) * 1.3)
+            if estimated_tokens > max_history_tokens:
+                logging.info(f"[MODE:ACT] [ACT LOOP] History token budget exceeded ({estimated_tokens} > {max_history_tokens})")
+                return False, 'history_token_budget'
 
         # Can continue ACT mode
         return True, None
@@ -147,26 +160,55 @@ class ActLoopService:
         """
         self.act_history.extend(results)
 
-    def get_history_context(self) -> str:
+    def get_history_context(self, max_history_tokens: int = 4000) -> str:
         """
         Format ACT history for injection into {{act_history}} prompt placeholder.
 
+        When the full history exceeds max_history_tokens (estimated via word_count * 1.3),
+        truncates older entries but keeps the most recent 3 intact.
+
         Returns:
-            Formatted history string showing all executed actions
+            Formatted history string showing executed actions
         """
         if not self.act_history:
             return "(none)"
 
+        history = self.act_history
+
+        # Build full history first
         lines = ["## Internal Cognitive Actions"]
-        for idx, result in enumerate(self.act_history, 1):
+        for idx, result in enumerate(history, 1):
             action_type = result['action_type']
             status = result['status']
             result_text = result['result']
             exec_time = result['execution_time']
 
-            lines.append(f"{idx}. [{action_type}] {status.upper()}: {result_text} ({exec_time:.2f}s)")
+            display_text = "(card emitted)" if result_text == "__CARD_ONLY__" else result_text
+            lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
 
-        return "\n".join(lines)
+        full_text = "\n".join(lines)
+
+        # Check token estimate
+        if max_history_tokens > 0:
+            estimated_tokens = int(len(full_text.split()) * 1.3)
+            if estimated_tokens > max_history_tokens and len(history) > 3:
+                # Keep most recent 3 entries, summarize older ones
+                truncated_count = len(history) - 3
+                recent = history[-3:]
+                lines = [
+                    "## Internal Cognitive Actions",
+                    f"[{truncated_count} earlier action(s) truncated for brevity]",
+                ]
+                for idx, result in enumerate(recent, truncated_count + 1):
+                    action_type = result['action_type']
+                    status = result['status']
+                    result_text = result['result']
+                    exec_time = result['execution_time']
+                    display_text = "(card emitted)" if result_text == "__CARD_ONLY__" else result_text
+                    lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
+                return "\n".join(lines)
+
+        return full_text
 
     def execute_actions(self, topic: str, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

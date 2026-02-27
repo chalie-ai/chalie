@@ -7,6 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 import json
+import os
 import re
 import time
 import logging
@@ -22,7 +23,7 @@ from services.event_bus_service import EventBusService, ENCODE_EVENT
 from services.metrics_service import MetricsService
 from services.topic_classifier_service import TopicClassifierService
 from services.fact_store_service import FactStoreService
-from services.mode_router_service import ModeRouterService, collect_routing_signals
+from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
 from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
@@ -594,23 +595,24 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
     Returns:
         tuple: (response_data dict, routing_result dict)
     """
-    # Initialize routing decision service for logging
-    routing_decision_service = None
-    try:
-        from services.routing_decision_service import RoutingDecisionService
-        from services.database_service import get_shared_db_service
-        db_service = get_shared_db_service()
-        routing_decision_service = RoutingDecisionService(db_service)
-    except Exception as e:
-        logging.warning(f"[DIGEST] Routing decision logging not available: {e}")
-
     if pre_routing_result:
-        # Use pre-computed routing result (avoids double mode routing)
+        # Use pre-computed routing result — skip mode router and DB query entirely
         routing_result = pre_routing_result
+        routing_result.setdefault('routing_source', 'triage')
         selected_mode = routing_result['mode']
         previous_mode = None
-        logging.info(f"[DIGEST] Using pre-routed mode: {selected_mode} (confidence={routing_result['router_confidence']:.3f})")
+        logging.info(f"[DIGEST] Using pre-routed mode: {selected_mode} (confidence={routing_result['router_confidence']:.3f}, source={routing_result.get('routing_source', 'triage')})")
     else:
+        # Full mode router path — only used for proactive/drift and fallback callers
+        routing_decision_service = None
+        try:
+            from services.routing_decision_service import RoutingDecisionService
+            from services.database_service import get_shared_db_service
+            db_service = get_shared_db_service()
+            routing_decision_service = RoutingDecisionService(db_service)
+        except Exception as e:
+            logging.warning(f"[DIGEST] Routing decision logging not available: {e}")
+
         # Get previous mode for anti-oscillation
         previous_mode = None
         if routing_decision_service:
@@ -621,15 +623,25 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
 
         # Route
         routing_result = mode_router.route(signals, text, previous_mode=previous_mode)
+        routing_result['routing_source'] = 'mode_router'
         selected_mode = routing_result['mode']
 
-        logging.info(f"[DIGEST] Mode router selected: {selected_mode} (confidence={routing_result['router_confidence']:.3f})")
+        logging.info(f"[DIGEST] Mode router selected: {selected_mode} (confidence={routing_result['router_confidence']:.3f}, source=mode_router)")
 
-    # Log routing decision
+    # Log routing decision (all paths)
     try:
         exchange_id = thread_conv_service.get_latest_exchange_id(thread_id) if thread_id else "unknown"
     except Exception:
         exchange_id = "unknown"
+
+    routing_decision_service = None
+    try:
+        from services.routing_decision_service import RoutingDecisionService
+        from services.database_service import get_shared_db_service
+        db_service = get_shared_db_service()
+        routing_decision_service = RoutingDecisionService(db_service)
+    except Exception:
+        pass
 
     if routing_decision_service:
         try:
@@ -1677,7 +1689,7 @@ def _handle_act_triage(
             {'name': t, 'score': 1.0, 'type': 'tool'}
             for t in (triage_result.tools or [])
         ]
-        tool_queue.enqueue({
+        _rq_job = tool_queue.enqueue({
             'cycle_id': user_cycle_id,
             'parent_cycle_id': user_cycle_id,
             'root_cycle_id': user_cycle_id,
@@ -1696,12 +1708,14 @@ def _handle_act_triage(
         })
 
         # Signal the SSE loop to keep waiting — tool_worker will deliver the response.
+        # Store the RQ job ID so the SSE loop can monitor job health.
         _sse_uuid = metadata.get('uuid')
         if _sse_uuid:
             try:
                 from services.redis_client import RedisClientService
                 _r = RedisClientService.create_connection()
-                _r.setex(f"sse_pending:{_sse_uuid}", 600, "1")
+                _rq_job_id = getattr(_rq_job, 'id', None) or getattr(_rq_job, 'job_id', '1')
+                _r.setex(f"sse_pending:{_sse_uuid}", 600, str(_rq_job_id))
             except Exception as _rf:
                 logging.warning(f"[DIGEST] Could not set sse_pending flag: {_rf}")
 
@@ -2094,6 +2108,46 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # PHASE C: CLASSIFICATION + ROUTING + RESPONSE
     # ═══════════════════════════════════════════════════════════
 
+    # Step 5a: Social pre-check — skip topic classification for CANCEL/IGNORE
+    # This saves ~100ms on ~10% of messages by avoiding the topic classifier LLM call
+    try:
+        from services.cognitive_triage_service import social_filter as _social_precheck
+        _social_result = _social_precheck(text)
+        if _social_result and _social_result.mode in ('CANCEL', 'IGNORE'):
+            logging.info(f"[DIGEST] Social pre-check: {_social_result.mode} (skipping topic classification)")
+            # CANCEL: cancel active tool work
+            if _social_result.mode == 'CANCEL':
+                _cancel_active_tool_work(context_topic or 'unknown')
+            response_data = {
+                'response': '',
+                'mode': _social_result.mode,
+                'confidence': 1.0,
+                'generation_time': 0.0,
+            }
+            routing_result = {'mode': _social_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage'}
+            is_fast_path_ack = True
+
+            # Minimal post-response commit for social pre-check
+            exchange_data = {
+                'exchange_id': f'social_{int(time.time())}',
+                'prompt': {'message': text},
+                'timestamp': time.time(),
+                'response': {'message': ''},
+            }
+            session_service.add_exchange(exchange_data)
+            working_memory.append_turn(thread_id, 'assistant', '')
+
+            logging.info(f"\n{'='*60}")
+            logging.info(f"Topic: {context_topic or 'unknown'}")
+            logging.info(f"Mode: {_social_result.mode} (router confidence: 1.000)")
+            logging.info(f"{'='*60}\n")
+
+            metrics.record_timing(trace_id, 'total_request', (time.time() - request_start_time) * 1000)
+            metrics.record_counter('responses_total')
+            return f"Topic '{context_topic or 'unknown'}' | Mode: {_social_result.mode} | Social pre-check"
+    except Exception as _sp_err:
+        logging.debug(f"[DIGEST] Social pre-check failed (non-fatal): {_sp_err}")
+
     # Step 6: Classify the prompt with deterministic embedding-based classifier
     topic_classifier = get_topic_classifier()
     classification_result = topic_classifier.classify(text, recent_topic=recent_topic, thread_id=thread_id)
@@ -2409,7 +2463,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 intent, intent_classifier, working_memory, thread_conv_service,
             )
             is_fast_path_ack = True
-            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0}
+            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage'}
 
         elif triage_result.branch == 'act' and _is_innate_skill_only(triage_result):
             # Direct dispatch: fire-and-done skills bypass the full ACT loop
@@ -2419,39 +2473,100 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 context_warmth, exchange_id,
             )
             if response_data is None:
-                # Fallback to full ACT loop if direct dispatch declined
+                # Fallback: use unified ACT path or legacy async path
+                _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
+                if _use_unified:
+                    _act_nlp = compute_nlp_signals(text, intent)
+                    _act_signals = {
+                        'context_warmth': context_warmth,
+                        'working_memory_turns': working_memory_turns,
+                        'gist_count': gist_count,
+                        'fact_count': fact_count,
+                        'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                        'world_state_present': bool(world_state and world_state.strip()),
+                        'topic_confidence': classification_result.get('confidence', 0.5),
+                        'is_new_topic': classification_result.get('is_new_topic', False),
+                        'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+                        'memory_confidence': memory_confidence,
+                    }
+                    _act_signals.update(_act_nlp)
+                    _act_signals['_prompt_text'] = text
+                    response_data, routing_result = route_and_generate(
+                        topic, text, classification, thread_conv_service,
+                        cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
+                        metadata=metadata, context_warmth=context_warmth,
+                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'},
+                        selected_tools=triage_result.tools if triage_result.tools else None,
+                        selected_skills=triage_result.skills if triage_result.skills else None,
+                        thread_id=thread_id,
+                    )
+                else:
+                    response_data = _handle_act_triage(
+                        triage_result, text, topic, thread_id, metadata,
+                        intent, intent_classifier, working_memory, thread_conv_service,
+                        context_warmth, exchange_id,
+                    )
+            is_fast_path_ack = True
+            if routing_result is None:
+                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'}
+
+        elif triage_result.branch == 'act':
+            # Full ACT loop — complex multi-step tasks with external tools
+            _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
+            if _use_unified:
+                # Unified path: route through ACT loop inline (no async RQ spawn)
+                _act_nlp = compute_nlp_signals(text, intent)
+                _act_signals = {
+                    'context_warmth': context_warmth,
+                    'working_memory_turns': working_memory_turns,
+                    'gist_count': gist_count,
+                    'fact_count': fact_count,
+                    'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                    'world_state_present': bool(world_state and world_state.strip()),
+                    'topic_confidence': classification_result.get('confidence', 0.5),
+                    'is_new_topic': classification_result.get('is_new_topic', False),
+                    'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+                    'memory_confidence': memory_confidence,
+                }
+                _act_signals.update(_act_nlp)
+                _act_signals['_prompt_text'] = text
+                response_data, routing_result = route_and_generate(
+                    topic, text, classification, thread_conv_service,
+                    cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
+                    metadata=metadata, context_warmth=context_warmth,
+                    pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'},
+                    selected_tools=triage_result.tools if triage_result.tools else None,
+                    selected_skills=triage_result.skills if triage_result.skills else None,
+                    thread_id=thread_id,
+                )
+            else:
+                # Legacy path: async RQ spawn for external tools
                 response_data = _handle_act_triage(
                     triage_result, text, topic, thread_id, metadata,
                     intent, intent_classifier, working_memory, thread_conv_service,
                     context_warmth, exchange_id,
                 )
+                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'}
             is_fast_path_ack = True
-            routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need}
-
-        elif triage_result.branch == 'act':
-            # Full ACT loop — complex multi-step tasks with external tools
-            response_data = _handle_act_triage(
-                triage_result, text, topic, thread_id, metadata,
-                intent, intent_classifier, working_memory, thread_conv_service,
-                context_warmth, exchange_id,
-            )
-            is_fast_path_ack = True
-            routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need}
 
         else:
             # RESPOND or CLARIFY branch — route_and_generate with forced mode
-            _forced_signals = collect_routing_signals(
-                text=text,
-                topic=topic,
-                context_warmth=context_warmth,
-                working_memory=working_memory,
-                gist_storage=gist_storage,
-                fact_store=fact_store,
-                world_state_service=world_state_service,
-                classification_result=classification_result,
-                session_service=session_service,
-                intent=intent,
-            )
+            # Build signals from context_snapshot + NLP (avoids redundant Redis reads)
+            _nlp = compute_nlp_signals(text, intent)
+            _forced_signals = {
+                # Context signals already available from Phase A/B
+                'context_warmth': context_warmth,
+                'working_memory_turns': working_memory_turns,
+                'gist_count': gist_count,
+                'fact_count': fact_count,
+                'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                'world_state_present': bool(world_state and world_state.strip()),
+                'topic_confidence': classification_result.get('confidence', 0.5),
+                'is_new_topic': classification_result.get('is_new_topic', False),
+                'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+                'memory_confidence': memory_confidence,
+            }
+            _forced_signals.update(_nlp)
             _forced_signals['_prompt_text'] = text
             # Update adaptive signals now that explicit_feedback is known
             _store_adaptive_signals(thread_id, text, signals=_forced_signals)
@@ -2478,14 +2593,21 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     except Exception as _triage_ex:
         logging.error(f"[DIGEST] Triage dispatch failed: {_triage_ex}", exc_info=True)
-        # Fallback: normal path without triage
-        _fallback_signals = collect_routing_signals(
-            text=text, topic=topic, context_warmth=context_warmth,
-            working_memory=working_memory, gist_storage=gist_storage,
-            fact_store=fact_store, world_state_service=world_state_service,
-            classification_result=classification_result, session_service=session_service,
-            intent=intent,
-        )
+        # Fallback: build signals from context_snapshot + NLP (avoids redundant Redis reads)
+        _fb_nlp = compute_nlp_signals(text, intent)
+        _fallback_signals = {
+            'context_warmth': context_warmth,
+            'working_memory_turns': working_memory_turns,
+            'gist_count': gist_count,
+            'fact_count': fact_count,
+            'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+            'world_state_present': bool(world_state and world_state.strip()),
+            'topic_confidence': classification_result.get('confidence', 0.5),
+            'is_new_topic': classification_result.get('is_new_topic', False),
+            'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+            'memory_confidence': memory_confidence,
+        }
+        _fallback_signals.update(_fb_nlp)
         _fallback_signals['_prompt_text'] = text
         response_data, routing_result = route_and_generate(
             topic, text, classification, thread_conv_service,
@@ -2494,6 +2616,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             thread_id=thread_id,
             returning_from_silence=returning_from_silence,
         )
+        if routing_result:
+            routing_result.setdefault('routing_source', 'fallback')
 
     # Add response to exchange data
     exchange_data['response'] = {'message': response_data['response']}
