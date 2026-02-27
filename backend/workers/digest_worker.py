@@ -315,6 +315,49 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     return response_data
 
 
+def _generate_reflexive_response(text, metadata, thread_id):
+    """
+    Generate a response via the reflexive fast path.
+
+    Minimal LLM call: no context assembly, no context relevance, no mode router.
+    Uses the reflexive prompt template with identity + communication style only.
+
+    Returns:
+        dict: {response, mode, confidence, generation_time}
+    """
+    from services.config_service import ConfigService
+
+    # Load reflexive prompt + config
+    prompt_template = ConfigService.get_agent_prompt('frontal-cortex-reflexive')
+    try:
+        config = ConfigService.resolve_agent_config('frontal-cortex-reflexive')
+    except Exception:
+        config = ConfigService.resolve_agent_config('frontal-cortex-acknowledge')
+
+    cortex_service = FrontalCortexService(config)
+
+    start_time = time.time()
+    response_data = cortex_service.generate_response(
+        system_prompt_template=prompt_template,
+        original_prompt=text,
+        classification={'topic': 'reflex', 'confidence': 10, 'context_warmth': 0.0},
+        chat_history=[],
+        thread_id=thread_id,
+    )
+    generation_time = time.time() - start_time
+
+    response_text = response_data.get('response', '').strip()
+    if not response_text:
+        response_text = "I'm not sure how to answer that."
+
+    return {
+        'response': response_text,
+        'mode': 'RESPOND',
+        'confidence': response_data.get('confidence', 0.9),
+        'generation_time': generation_time,
+    }
+
+
 def generate_with_act_loop(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map, mode_router, signals, metadata=None, context_warmth=1.0, relevant_tools=None, selected_tools=None, selected_skills=None, thread_id=None):
     """
     Run ACT loop: execute actions, then re-route to terminal mode for response.
@@ -2148,6 +2191,86 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as _sp_err:
         logging.debug(f"[DIGEST] Social pre-check failed (non-fatal): {_sp_err}")
 
+    # Step 5b: Reflex check — learned fast path via semantic abstraction
+    _reflex_candidate = False
+    _reflex_activated = False
+    _reflex_embedding = None
+    _reflex_service = None
+    try:
+        from services.cognitive_reflex_service import CognitiveReflexService
+        _reflex_service = CognitiveReflexService()
+
+        # Check for pending validation from previous fast-path response
+        _reflex_service.check_pending_validation(thread_id, text)
+
+        reflex_result = _reflex_service.check(text, context_warmth)
+        _reflex_candidate = reflex_result.is_candidate
+        _reflex_embedding = reflex_result.embedding  # Reusable downstream
+
+        if reflex_result.can_activate:
+            _reflex_activated = True
+            logging.info(
+                f"[DIGEST] Reflex ACTIVATED — cluster={reflex_result.cluster_id}, "
+                f"confidence={reflex_result.confidence:.2f}, "
+                f"observations={reflex_result.observations}"
+            )
+
+            response_data = _generate_reflexive_response(text, metadata, thread_id)
+            routing_result = {
+                'mode': 'RESPOND',
+                'router_confidence': reflex_result.confidence,
+                'routing_source': 'reflex',
+            }
+            is_fast_path_ack = True
+
+            # Record activation counter
+            _reflex_service.record_activation(reflex_result.cluster_id)
+            _reflex_service.set_pending_validation(thread_id, reflex_result.cluster_id)
+
+            # Deliver response via orchestrator (same SSE mechanism as normal path)
+            orchestrator = get_orchestrator()
+            orchestrator.route_path('RESPOND', {
+                'topic': context_topic or 'reflex',
+                'response': response_data['response'],
+                'confidence': response_data.get('confidence', 0.9),
+                'generation_time': response_data.get('generation_time', 0.0),
+                'destination': metadata.get('destination', 'web'),
+                'metadata': metadata,
+            })
+
+            # Minimal post-response commit (mirrors social filter pattern)
+            exchange_data = {
+                'exchange_id': f'reflex_{int(time.time())}',
+                'prompt': {'message': text},
+                'timestamp': time.time(),
+                'response': {'message': response_data['response']},
+            }
+            session_service.add_exchange(exchange_data)
+            working_memory.append_turn(thread_id, 'assistant', response_data['response'])
+
+            # Shadow validation: sometimes run full pipeline in background for quality check
+            _reflex_service.maybe_queue_shadow_validation(
+                text, metadata, thread_id,
+                response_data['response'], reflex_result.cluster_id,
+            )
+
+            logging.info(f"\n{'='*60}")
+            logging.info(f"Topic: {context_topic or 'reflex'}")
+            logging.info(f"Mode: RESPOND (reflex, confidence: {reflex_result.confidence:.3f})")
+            logging.info(f"{'='*60}\n")
+
+            metrics.record_timing(trace_id, 'total_request', (time.time() - request_start_time) * 1000)
+            metrics.record_counter('responses_total')
+            return f"Topic '{context_topic or 'reflex'}' | Mode: RESPOND | Reflex fast path (cluster {reflex_result.cluster_id})"
+
+        elif _reflex_candidate:
+            logging.info(
+                f"[DIGEST] Reflex candidate — not activated "
+                f"({reflex_result.reasoning})"
+            )
+    except Exception as _reflex_err:
+        logging.debug(f"[DIGEST] Reflex check failed (non-fatal): {_reflex_err}")
+
     # Step 6: Classify the prompt with deterministic embedding-based classifier
     topic_classifier = get_topic_classifier()
     classification_result = topic_classifier.classify(text, recent_topic=recent_topic, thread_id=thread_id)
@@ -2618,6 +2741,24 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         )
         if routing_result:
             routing_result.setdefault('routing_source', 'fallback')
+
+    # Step 10b: Record reflex observation (learn from full pipeline run)
+    if _reflex_candidate and not _reflex_activated and _reflex_service and _reflex_embedding:
+        try:
+            _triage_for_reflex = triage_result
+        except NameError:
+            _triage_for_reflex = None
+        try:
+            _pipeline_useful = _reflex_service.evaluate_pipeline_utility(
+                _triage_for_reflex, None,
+            )
+            _reflex_service.record_observation(
+                text=text,
+                embedding=_reflex_embedding,
+                was_useful=_pipeline_useful,
+            )
+        except Exception:
+            pass
 
     # Add response to exchange data
     exchange_data['response'] = {'message': response_data['response']}

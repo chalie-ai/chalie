@@ -1,0 +1,6 @@
+{
+  "_comment": "REFLEXIVE mode: Lightweight fast path for self-contained queries",
+  "temperature": 0.3,
+  "timeout": 30,
+  "format": "json"
+}
