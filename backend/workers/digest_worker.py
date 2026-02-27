@@ -534,13 +534,33 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
     # Generate terminal response (pass act_history so LLM can reference tool results)
     act_history_for_respond = act_loop.get_history_context()
     logging.info(f"[MODE:ACT→{terminal_mode}] Passing act_history to terminal response ({len(act_history_for_respond)} chars, {len(act_loop.act_history)} actions)")
-    terminal_response = generate_for_mode(
-        topic, text, terminal_mode, classification,
-        thread_conv_service, cortex_config, cortex_prompt_map, metadata,
-        act_history_context=act_history_for_respond,
-        thread_id=thread_id,
-        signals=signals,
+
+    # If every action result is a card-only sentinel, the card IS the response —
+    # skip the text LLM call entirely rather than generating redundant commentary.
+    _history = act_loop.act_history
+    _all_card_only = (
+        bool(_history)
+        and all(r.get('status') == 'success' for r in _history)
+        and all(r.get('result') == '__CARD_ONLY__' for r in _history)
     )
+    if _all_card_only:
+        logging.info(f"[MODE:ACT→IGNORE] All actions emitted cards — skipping text response")
+        terminal_response = {
+            'mode': 'IGNORE',
+            'modifiers': [],
+            'response': '',
+            'generation_time': 0.0,
+            'actions': None,
+            'confidence': 1.0,
+        }
+    else:
+        terminal_response = generate_for_mode(
+            topic, text, terminal_mode, classification,
+            thread_conv_service, cortex_config, cortex_prompt_map, metadata,
+            act_history_context=act_history_for_respond,
+            thread_id=thread_id,
+            signals=signals,
+        )
 
     # Enqueue tool outputs for background experience assimilation
     try:
@@ -1551,6 +1571,84 @@ def _handle_social_triage(
         }
 
 
+# Contextual skills that can be dispatched directly (fire-and-done)
+_CONTEXTUAL_SKILLS = {'schedule', 'list', 'focus', 'persistent_task'}
+_PRIMITIVES = {'recall', 'memorize', 'introspect', 'associate'}
+
+
+def _is_innate_skill_only(triage_result) -> bool:
+    """True if triage selected only innate skills and no external tools."""
+    if triage_result.tools:
+        return False  # External tools needed → full ACT loop
+    contextual = [s for s in triage_result.skills if s in _CONTEXTUAL_SKILLS]
+    return len(contextual) > 0
+
+
+def _handle_innate_skill_dispatch(
+    triage_result, text, topic, thread_id, metadata,
+    intent, working_memory, thread_conv_service,
+    context_warmth, exchange_id,
+):
+    """
+    Direct dispatch for innate-skill-only requests (schedule, list, focus, etc.).
+
+    Bypasses the full ACT loop: one LLM call → extract params → execute skill → done.
+    Prevents duplicates caused by multi-iteration ACT loop on fire-and-done skills.
+    """
+    import logging
+    from services import ConfigService, FrontalCortexService
+    from services.act_dispatcher_service import ActDispatcherService
+    from services.thread_conversation_service import ThreadConversationService
+
+    contextual_skills = [s for s in triage_result.skills if s in _CONTEXTUAL_SKILLS]
+    if not contextual_skills:
+        # Should not reach here — _is_innate_skill_only() gates this
+        return None
+
+    # Load ACT config and generate ONE action plan
+    try:
+        act_config = ConfigService.resolve_agent_config("frontal-cortex-act")
+    except Exception:
+        act_config = ConfigService.resolve_agent_config("frontal-cortex")
+
+    act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
+    cortex_service = FrontalCortexService(act_config)
+
+    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
+
+    response_data = cortex_service.generate_response(
+        system_prompt_template=act_prompt,
+        original_prompt=text,
+        classification={'topic': topic, 'confidence': 10},
+        chat_history=chat_history,
+        act_history='(none)',  # First and only iteration — no history
+        selected_skills=triage_result.skills,
+    )
+
+    actions = response_data.get('actions', [])
+    if not actions:
+        # LLM decided no action needed — return response data as-is
+        return response_data
+
+    # Execute actions directly via dispatcher (no loop)
+    dispatcher = ActDispatcherService(timeout=10.0)
+
+    for action in actions:
+        result = dispatcher.dispatch_action(topic, action)
+        logging.info(
+            f"[DIGEST] Direct skill dispatch: {result['action_type']} "
+            f"{result['status']} ({result['execution_time']:.2f}s)"
+        )
+
+    # Card was already emitted by the skill — no text follow-up needed
+    return {
+        'response': '',
+        'mode': 'ACT',
+        'confidence': 0.9,
+        'generation_time': response_data.get('generation_time', 0.0),
+    }
+
+
 def _handle_act_triage(
     triage_result, text, topic, thread_id, metadata,
     intent, intent_classifier, working_memory, thread_conv_service,
@@ -2313,8 +2411,25 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             is_fast_path_ack = True
             routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0}
 
+        elif triage_result.branch == 'act' and _is_innate_skill_only(triage_result):
+            # Direct dispatch: fire-and-done skills bypass the full ACT loop
+            response_data = _handle_innate_skill_dispatch(
+                triage_result, text, topic, thread_id, metadata,
+                intent, working_memory, thread_conv_service,
+                context_warmth, exchange_id,
+            )
+            if response_data is None:
+                # Fallback to full ACT loop if direct dispatch declined
+                response_data = _handle_act_triage(
+                    triage_result, text, topic, thread_id, metadata,
+                    intent, intent_classifier, working_memory, thread_conv_service,
+                    context_warmth, exchange_id,
+                )
+            is_fast_path_ack = True
+            routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need}
+
         elif triage_result.branch == 'act':
-            # ACT branch — spawn tool_worker; SSE stays open until tool result arrives
+            # Full ACT loop — complex multi-step tasks with external tools
             response_data = _handle_act_triage(
                 triage_result, text, topic, thread_id, metadata,
                 intent, intent_classifier, working_memory, thread_conv_service,
