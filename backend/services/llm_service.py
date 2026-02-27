@@ -395,7 +395,7 @@ class GeminiService:
 
     def __init__(self, config: dict):
         self._config = config
-        self.model = config.get('model', 'gemini-2.0-flash')
+        self.model = config.get('model', 'gemini-2.5-flash')
         self.format = config.get('format', 'text')
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
