@@ -172,7 +172,7 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--space-lg);
-  background: rgba(6, 8, 14, 0.60);
+  background: rgba(6, 8, 14, 0.92);
   backdrop-filter: blur(24px) saturate(120%);
   -webkit-backdrop-filter: blur(24px) saturate(120%);
   border-bottom: 1px solid rgba(138, 92, 255, 0.08);
@@ -2200,8 +2200,14 @@ body {
 }
 
 .task-strip__item {
-  padding: 8px 20px 10px;
+  position: relative;
+  padding: 8px 36px 10px 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+.task-strip__item > .task-strip__dismiss {
+  position: absolute;
+  top: 8px;
+  right: 10px;
 }
 .task-strip__item.--paused {
   opacity: 0.5;
