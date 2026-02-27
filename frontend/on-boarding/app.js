@@ -34,8 +34,8 @@ const PLATFORM_CONFIG = {
         desc: 'Free tier available — API key from <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>',
         hasHost: false,
         hasApiKey: true,
-        modelPlaceholder: 'e.g. gemini-2.0-flash',
-        models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-pro'],
+        modelPlaceholder: 'e.g. gemini-2.5-flash',
+        models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'],
     },
 };
 
