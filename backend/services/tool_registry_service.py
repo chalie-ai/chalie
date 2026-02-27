@@ -676,12 +676,12 @@ class ToolRegistryService:
         except TimeoutError as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' timed out: {e}")
-            self._log_outcome(tool_name, False, topic, elapsed_ms)
+            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class="external")
             return f"[TOOL:{tool_name}] Error: timed out after {timeout}s (cost: {elapsed_ms}ms) [/TOOL]"
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' failed: {e}")
-            self._log_outcome(tool_name, False, topic, elapsed_ms)
+            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class="internal")
             return (
                 f"[TOOL:{tool_name}] Error: {str(e)[:200]} "
                 f"(cost: {elapsed_ms}ms) [/TOOL]"
@@ -717,10 +717,11 @@ class ToolRegistryService:
             # Fallback for non-dict responses
             result_text = str(result) if result else ""
 
-        # Handle error path
+        # Handle error path — tool self-declares failure_class ('internal'/'external')
         if result_error:
             output = f"[TOOL:{tool_name}] Error: {result_error} (cost: {elapsed_ms}ms) [/TOOL]"
-            self._log_outcome(tool_name, False, topic, elapsed_ms)
+            tool_failure_class = result.get("failure_class", "internal") if isinstance(result, dict) else "internal"
+            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class=tool_failure_class)
             return output
 
         # Sanitize text result
@@ -874,15 +875,27 @@ class ToolRegistryService:
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
 
-    def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int):
-        """Log tool invocation outcome to procedural memory."""
+    def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None):
+        """Log tool invocation outcome to procedural memory.
+
+        Args:
+            failure_class: 'external' for rate limits / network / upstream errors;
+                           'internal' for container crashes / tool bugs.
+                           None implies success. External failures receive an
+                           attenuated penalty to avoid unjust weight degradation.
+        """
         try:
             from services.procedural_memory_service import ProceduralMemoryService
             from services.database_service import get_shared_db_service
             db_service = get_shared_db_service()
             service = ProceduralMemoryService(db_service)
-            reward = 0.3 if success else -0.2
-            service.record_action_outcome(tool_name, success, reward, topic)
+            if success:
+                reward = 0.3
+            elif failure_class == "external":
+                reward = -0.05
+            else:
+                reward = -0.2
+            service.record_action_outcome(tool_name, success, reward, topic, failure_class=failure_class)
         except Exception as e:
             logger.debug(f"[TOOL REGISTRY] Failed to log outcome: {e}")
 

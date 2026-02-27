@@ -37,7 +37,8 @@ class ProceduralMemoryService:
         action_name: str,
         success: bool,
         reward: float = 0.0,
-        topic: str = None
+        topic: str = None,
+        failure_class: str = None,
     ) -> bool:
         """
         Record the outcome of an action execution.
@@ -47,6 +48,7 @@ class ProceduralMemoryService:
             success: Whether the action succeeded
             reward: Reward signal (-1.0 to 1.0)
             topic: Optional topic for context-specific stats
+            failure_class: 'internal' or 'external'; logged in reward_history for observability
 
         Returns:
             True if recorded successfully
@@ -90,7 +92,7 @@ class ProceduralMemoryService:
                     )
                     WHERE action_name = %s
                 """, (
-                    json.dumps([{'reward': reward, 'success': success, 'timestamp': time.time()}]),
+                    json.dumps([{'reward': reward, 'success': success, 'failure_class': failure_class, 'timestamp': time.time()}]),
                     self.reward_history_max,
                     action_name
                 ))
@@ -146,9 +148,10 @@ class ProceduralMemoryService:
 
                 cursor.close()
 
+                fc_tag = f", failure_class={failure_class}" if failure_class else ""
                 logging.info(
                     f"[PROCEDURAL] Recorded outcome for '{action_name}': "
-                    f"success={success}, reward={reward:.2f}"
+                    f"success={success}, reward={reward:.2f}{fc_tag}"
                 )
                 return True
 
