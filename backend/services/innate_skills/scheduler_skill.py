@@ -128,6 +128,32 @@ def _create(topic: str, params: dict) -> str:
         is_prompt = (item_type == "prompt")
         with db.connection() as conn:
             cursor = conn.cursor()
+
+            # Dedup: reject if same message was scheduled within the last 60s
+            cursor.execute("""
+                SELECT id FROM scheduled_items
+                WHERE status = 'pending'
+                  AND message = %s
+                  AND created_at > NOW() - INTERVAL '60 seconds'
+                LIMIT 1
+            """, (message,))
+            existing = cursor.fetchone()
+            if existing:
+                conn.commit()
+                existing_id = existing[0]
+                logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
+                # Emit card for the existing item so the user sees feedback
+                try:
+                    from services.scheduler_card_service import SchedulerCardService
+                    SchedulerCardService().emit_create_card(topic, {
+                        "id": existing_id, "item_type": item_type,
+                        "message": message, "due_at": due_at,
+                        "recurrence": recurrence, "status": "pending",
+                    })
+                except Exception:
+                    pass
+                return f"Schedule already exists [id:{existing_id}]"
+
             cursor.execute("""
                 INSERT INTO scheduled_items
                   (id, item_type, message, due_at, recurrence, window_start, window_end,
@@ -156,12 +182,8 @@ def _create(topic: str, params: dict) -> str:
         except Exception as card_err:
             logger.warning(f"{LOG_PREFIX} Card emit failed (non-fatal): {card_err}")
 
-        # Format due_at for response
-        due_at_fmt = due_at.strftime("%Y-%m-%d %H:%M:%S %Z")
-
-        result = f"Scheduled: '{message}' on {due_at_fmt} (id: {item_id})"
         logger.info(f"{LOG_PREFIX} Created {item_type}: {item_id}")
-        return result
+        return "__CARD_ONLY__"
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
@@ -221,10 +243,7 @@ def _list(topic: str, params: dict) -> str:
         except Exception as card_err:
             logger.warning(f"{LOG_PREFIX} Card emit failed (non-fatal): {card_err}")
 
-        if not lines:
-            return f"No scheduled items ({card_label.lower()})."
-
-        return f"Scheduled items ({card_label.lower()}):\n" + "\n".join(lines)
+        return "__CARD_ONLY__"
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} List failed: {e}", exc_info=True)
@@ -371,7 +390,7 @@ def _cancel(topic: str, params: dict) -> str:
                 logger.warning(f"{LOG_PREFIX} Card emit failed (non-fatal): {card_err}")
 
         logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
-        return f"Cancelled scheduled item {item_id}"
+        return "__CARD_ONLY__"
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Cancel failed: {e}", exc_info=True)

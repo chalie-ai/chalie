@@ -4,7 +4,7 @@ import time
 import requests
 import json
 import ollama
-from services.llm_service import LLMResponse
+from services.llm_service import LLMResponse, RateLimitError
 
 class OllamaService:
 
@@ -66,7 +66,16 @@ class OllamaService:
                     logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
                     raise
             except requests.exceptions.HTTPError as e:
-                if e.response is not None and e.response.status_code >= 500:
+                if e.response is not None and e.response.status_code == 429:
+                    retry_after = None
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                    raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
+                elif e.response is not None and e.response.status_code >= 500:
                     last_exception = e
                     if attempt < self.max_retries:
                         backoff = 1.5 * (2 ** attempt)
