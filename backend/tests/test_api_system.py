@@ -13,28 +13,32 @@ from api.system import system_bp
 def _make_db_mock(execute_side_effects=None):
     """Build a mock db service whose connection() context manager yields a mock conn.
 
-    ``execute_side_effects`` is an optional list of return values; each call to
-    ``conn.execute(...)`` will pop the next one.  When the list contains a simple
-    tuple it is wrapped so that ``.fetchone()`` returns that tuple and
-    ``.fetchall()`` returns ``[tuple]``.
+    The mock conn provides a ``cursor()`` that returns a mock cursor.
+    ``execute_side_effects`` is an optional list of return values; each successive
+    call to ``cursor.fetchone()`` will pop the next one.  When the list contains a
+    simple tuple, ``fetchone()`` returns that tuple and ``fetchall()`` returns
+    ``[tuple]``.
     """
+    mock_cursor = MagicMock()
     mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
 
     if execute_side_effects is not None:
-        results = []
+        fetchone_results = []
+        fetchall_results = []
         for effect in execute_side_effects:
-            mock_result = MagicMock()
             if isinstance(effect, tuple):
-                mock_result.fetchone.return_value = effect
-                mock_result.fetchall.return_value = [effect]
+                fetchone_results.append(effect)
+                fetchall_results.append([effect])
             elif isinstance(effect, list):
-                mock_result.fetchone.return_value = effect[0] if effect else None
-                mock_result.fetchall.return_value = effect
+                fetchone_results.append(effect[0] if effect else None)
+                fetchall_results.append(effect)
             else:
                 # Allow passing a fully configured MagicMock
-                mock_result = effect
-            results.append(mock_result)
-        mock_conn.execute.side_effect = results
+                fetchone_results.append(effect.fetchone.return_value)
+                fetchall_results.append(effect.fetchall.return_value)
+        mock_cursor.fetchone.side_effect = fetchone_results
+        mock_cursor.fetchall.side_effect = fetchall_results
 
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
@@ -147,9 +151,8 @@ class TestSystemAPI:
         mock_redis.get.return_value = '2026-02-26T10:00:00'
 
         mock_db, mock_conn = _make_db_mock()
-        mock_result = MagicMock()
-        mock_result.fetchone.return_value = (42,)
-        mock_conn.execute.return_value = mock_result
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.fetchone.return_value = (42,)
 
         with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
@@ -177,9 +180,8 @@ class TestSystemAPI:
         mock_redis.get.return_value = None
 
         mock_db, mock_conn = _make_db_mock()
-        mock_result = MagicMock()
-        mock_result.fetchone.return_value = (0,)
-        mock_conn.execute.return_value = mock_result
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.fetchone.return_value = (0,)
 
         with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
@@ -241,15 +243,9 @@ class TestSystemAPI:
         mock_redis.llen.return_value = 0
 
         # Three SQL calls: episodes (count+avg), semantic_concepts (count), user_traits (count+avg)
-        episodes_result = MagicMock()
-        episodes_result.fetchone.return_value = (100, 0.72)
-        concepts_result = MagicMock()
-        concepts_result.fetchone.return_value = (50,)
-        traits_result = MagicMock()
-        traits_result.fetchone.return_value = (30, 0.85)
-
         mock_db, mock_conn = _make_db_mock()
-        mock_conn.execute.side_effect = [episodes_result, concepts_result, traits_result]
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.fetchone.side_effect = [(100, 0.72), (50,), (30, 0.85)]
 
         with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
@@ -442,9 +438,8 @@ class TestSystemAPI:
         ]
 
         mock_db, mock_conn = _make_db_mock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = rows
-        mock_conn.execute.return_value = mock_result
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.fetchall.return_value = rows
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/traits')
@@ -484,9 +479,8 @@ class TestSystemAPI:
     def test_delete_trait_returns_200(self, client):
         """DELETE /system/observability/traits/<key> returns 200 when row is deleted."""
         mock_db, mock_conn = _make_db_mock()
-        mock_result = MagicMock()
-        mock_result.rowcount = 1
-        mock_conn.execute.return_value = mock_result
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.rowcount = 1
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.delete('/system/observability/traits/favorite_drink')
@@ -499,9 +493,8 @@ class TestSystemAPI:
     def test_delete_trait_returns_404_when_not_found(self, client):
         """DELETE /system/observability/traits/<key> returns 404 when trait does not exist."""
         mock_db, mock_conn = _make_db_mock()
-        mock_result = MagicMock()
-        mock_result.rowcount = 0
-        mock_conn.execute.return_value = mock_result
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.rowcount = 0
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.delete('/system/observability/traits/nonexistent')
@@ -588,13 +581,8 @@ class TestSystemAPI:
         mock_redis.llen.return_value = 0
 
         mock_db, mock_conn = _make_db_mock()
-        episodes_result = MagicMock()
-        episodes_result.fetchone.return_value = (10, 0.5)
-        concepts_result = MagicMock()
-        concepts_result.fetchone.return_value = (5,)
-        traits_result = MagicMock()
-        traits_result.fetchone.return_value = (3, 0.75)
-        mock_conn.execute.side_effect = [episodes_result, concepts_result, traits_result]
+        mock_cursor = mock_conn.cursor.return_value
+        mock_cursor.fetchone.side_effect = [(10, 0.5), (5,), (3, 0.75)]
 
         with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
@@ -602,7 +590,7 @@ class TestSystemAPI:
 
         assert resp.status_code == 200
         # Verify the SQL calls used the correct column name
-        calls = [str(call) for call in mock_conn.execute.call_args_list]
+        calls = [str(call) for call in mock_cursor.execute.call_args_list]
         assert any('AVG(confidence)' in c for c in calls), \
             "Memory endpoint must use AVG(confidence), not AVG(strength), for user_traits"
         assert not any('AVG(strength)' in c for c in calls), \

@@ -77,9 +77,11 @@ def system_status():
         try:
             db = get_shared_db_service()
             with db.connection() as conn:
+                cursor = conn.cursor()
                 for table in ["episodes", "semantic_concepts", "user_traits"]:
                     try:
-                        row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        row = cursor.fetchone()
                         result["storage"][table] = row[0] if row else 0
                     except Exception:
                         result["storage"][table] = -1
@@ -183,16 +185,20 @@ def observability_memory():
         try:
             db = get_shared_db_service()
             with db.connection() as conn:
-                row = conn.execute("SELECT COUNT(*), AVG(activation_score) FROM episodes").fetchone()
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*), AVG(activation_score) FROM episodes")
+                row = cursor.fetchone()
                 if row:
                     result['episodes'] = row[0] or 0
                     result['avg_episode_activation'] = round(float(row[1] or 0), 3)
 
-                row = conn.execute("SELECT COUNT(*) FROM semantic_concepts").fetchone()
+                cursor.execute("SELECT COUNT(*) FROM semantic_concepts")
+                row = cursor.fetchone()
                 if row:
                     result['concepts'] = row[0] or 0
 
-                row = conn.execute("SELECT COUNT(*), AVG(confidence) FROM user_traits").fetchone()
+                cursor.execute("SELECT COUNT(*), AVG(confidence) FROM user_traits")
+                row = cursor.fetchone()
                 if row:
                     result['traits'] = row[0] or 0
                     result['avg_trait_strength'] = round(float(row[1] or 0), 3)
@@ -319,6 +325,23 @@ def observability_tasks():
         return jsonify({"error": "Failed to retrieve task data"}), 500
 
 
+@system_bp.route('/system/observability/tasks/<int:task_id>', methods=['DELETE'])
+@require_session
+def cancel_persistent_task(task_id):
+    """Cancel (dismiss) a persistent background task."""
+    try:
+        from services.persistent_task_service import PersistentTaskService
+        from services.database_service import get_shared_db_service
+        svc = PersistentTaskService(get_shared_db_service())
+        ok, msg = svc.transition(task_id, 'cancelled')
+        if ok:
+            return jsonify({"status": "cancelled"}), 200
+        return jsonify({"error": msg}), 400
+    except Exception as e:
+        logger.error(f"[REST API] cancel task error: {e}")
+        return jsonify({"error": "Failed to cancel task"}), 500
+
+
 @system_bp.route('/system/observability/autobiography', methods=['GET'])
 @require_session
 def observability_autobiography():
@@ -373,12 +396,14 @@ def observability_traits():
         categories = {}
 
         with db.connection() as conn:
-            rows = conn.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 "SELECT trait_key, trait_value, confidence, category, source, "
                 "reinforcement_count, is_literal, updated_at "
                 "FROM user_traits WHERE user_id = 'primary' "
                 "ORDER BY category, confidence DESC"
-            ).fetchall()
+            )
+            rows = cursor.fetchall()
 
             for row in rows:
                 cat = row[3] or 'general'
@@ -413,11 +438,12 @@ def observability_delete_trait(trait_key):
 
         db = get_shared_db_service()
         with db.connection() as conn:
-            result = conn.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 "DELETE FROM user_traits WHERE user_id = 'primary' AND trait_key = %s",
                 (trait_key,)
             )
-            deleted = result.rowcount if hasattr(result, 'rowcount') else 0
+            deleted = cursor.rowcount
 
         if deleted:
             return jsonify({'ok': True, 'deleted': trait_key}), 200
