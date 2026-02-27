@@ -26,7 +26,7 @@ import concurrent.futures
 from typing import Optional
 
 from services.redis_client import RedisClientService
-from services.llm_service import create_refreshable_llm_service
+from services.llm_service import create_refreshable_llm_service, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,7 @@ def background_llm_worker(shared_state=None):
         "stale_discarded": 0,
         "failures": 0,
         "timeouts": 0,
+        "rate_limits": 0,
         "total_processing_ms": 0,
         "max_queue_depth_seen": 0,
     }
@@ -134,13 +135,14 @@ def background_llm_worker(shared_state=None):
             )
             logger.info(
                 "%s metrics — processed=%d retries=%d stale=%d "
-                "failures=%d timeouts=%d avg_ms=%d max_depth=%d",
+                "failures=%d timeouts=%d rate_limits=%d avg_ms=%d max_depth=%d",
                 LOG_PREFIX,
                 processed,
                 metrics["retries"],
                 metrics["stale_discarded"],
                 metrics["failures"],
                 metrics["timeouts"],
+                metrics["rate_limits"],
                 avg_ms,
                 metrics["max_queue_depth_seen"],
             )
@@ -225,6 +227,26 @@ def background_llm_worker(shared_state=None):
                         LOG_PREFIX, LLM_CALL_TIMEOUT, agent_name, job_id,
                     )
                     metrics["timeouts"] += 1
+        except RateLimitError as e:
+            # Re-queue at back WITHOUT incrementing retry_count
+            metrics["rate_limits"] += 1
+            wait = min(e.retry_after or 30.0, 60.0)
+            logger.warning(
+                "%s Rate limited by %s (agent=%s, job=%s). "
+                "Re-queuing and sleeping %.0fs...",
+                LOG_PREFIX, e.provider or 'provider', agent_name, job_id, wait,
+            )
+            try:
+                redis.rpush(QUEUE_KEY, json.dumps(job))
+            except Exception as rq_err:
+                logger.error("%s Rate-limit re-enqueue failed: %s", LOG_PREFIX, rq_err)
+                try:
+                    redis.rpush(result_key, json.dumps({"error": "rate_limit_reenqueue_failed"}))
+                    redis.expire(result_key, 60)
+                except Exception:
+                    pass
+            time.sleep(wait)
+            continue
         except Exception as e:
             logger.error(
                 "%s LLM call exception (agent=%s, job=%s): %s",

@@ -17,6 +17,14 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+class RateLimitError(Exception):
+    """Raised when an LLM provider returns HTTP 429."""
+    def __init__(self, message: str, retry_after: float = None, provider: str = None):
+        super().__init__(message)
+        self.retry_after = retry_after  # seconds, from Retry-After header
+        self.provider = provider
+
+
 def _resolve_api_key(config: dict) -> str:
     """
     Resolve API key from provider config (from database).
@@ -52,16 +60,37 @@ class LLMResponse:
 
 
 def _call_with_retry(fn, max_retries=2, backoff=1.0):
-    """Retry fn() up to max_retries times with exponential backoff."""
-    for attempt in range(max_retries + 1):
+    """Retry fn() up to max_retries times with exponential backoff.
+
+    Rate limits (RateLimitError) get special treatment: longer backoff
+    (Retry-After or 30s default, max 120s) and a separate retry counter
+    (3 attempts) that doesn't consume generic retries.
+    """
+    attempt = 0
+    rate_limit_retries = 0
+    max_rate_limit_retries = 3
+    while attempt <= max_retries:
         try:
             return fn()
+        except RateLimitError as e:
+            rate_limit_retries += 1
+            if rate_limit_retries > max_rate_limit_retries:
+                raise
+            wait = min(e.retry_after or 30.0, 120.0)
+            logger.warning(
+                f"Rate limited by {e.provider or 'provider'} "
+                f"(attempt {rate_limit_retries}/{max_rate_limit_retries}). "
+                f"Waiting {wait:.0f}s..."
+            )
+            time.sleep(wait)
+            # Don't increment attempt — rate limits have their own counter
         except Exception as e:
             if attempt == max_retries:
                 raise
             wait = backoff * (2 ** attempt)
             logger.warning(f"LLM call failed (attempt {attempt+1}): {e}. Retrying in {wait}s...")
             time.sleep(wait)
+            attempt += 1
 
 
 class FallbackLLMService:
@@ -74,6 +103,8 @@ class FallbackLLMService:
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         try:
             return self._primary.send_message(system_prompt, user_message, stream=stream)
+        except RateLimitError:
+            raise  # Rate limits propagate — fallback provider is likely also rate-limited
         except Exception as e:
             logger.warning(f"Primary LLM failed, using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
@@ -245,12 +276,23 @@ class AnthropicService:
         start_time = time.time()
 
         def _call():
-            return client.messages.create(
-                model=self.model,
-                max_tokens=self._MAX_TOKENS,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            )
+            try:
+                return client.messages.create(
+                    model=self.model,
+                    max_tokens=self._MAX_TOKENS,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+            except anthropic.RateLimitError as e:
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
@@ -280,11 +322,13 @@ class OpenAIService:
         self._config = config
         self.model = config.get('model', 'gpt-4o-mini')
         self.timeout = config.get('timeout', 120)
+        self.format = config.get('format', 'text')
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         if stream:
             raise NotImplementedError("Streaming not yet supported")
 
+        import openai as openai_mod
         from openai import OpenAI
 
         api_key = _resolve_api_key(self._config)
@@ -292,14 +336,29 @@ class OpenAIService:
 
         start_time = time.time()
 
+        create_kwargs = {
+            'model': self.model,
+            'messages': [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+        }
+        if self.format == 'json':
+            create_kwargs['response_format'] = {"type": "json_object"}
+
         def _call():
-            return client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-            )
+            try:
+                return client.chat.completions.create(**create_kwargs)
+            except openai_mod.RateLimitError as e:
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
@@ -337,6 +396,7 @@ class GeminiService:
     def __init__(self, config: dict):
         self._config = config
         self.model = config.get('model', 'gemini-2.0-flash')
+        self.format = config.get('format', 'text')
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         if stream:
@@ -349,14 +409,23 @@ class GeminiService:
 
         start_time = time.time()
 
+        gen_config_kwargs = {'system_instruction': system_prompt}
+        if self.format == 'json':
+            gen_config_kwargs['response_mime_type'] = 'application/json'
+
         def _call():
-            return client.models.generate_content(
-                model=self.model,
-                contents=user_message,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                ),
-            )
+            try:
+                return client.models.generate_content(
+                    model=self.model,
+                    contents=user_message,
+                    config=genai.types.GenerateContentConfig(**gen_config_kwargs),
+                )
+            except Exception as e:
+                # Gemini SDK raises google.api_core.exceptions.ResourceExhausted for 429
+                ename = type(e).__name__
+                if 'ResourceExhausted' in ename or '429' in str(e):
+                    raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
+                raise
 
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
