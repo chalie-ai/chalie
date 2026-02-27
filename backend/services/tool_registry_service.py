@@ -713,6 +713,9 @@ class ToolRegistryService:
             result_html = result.get("html")
             result_title = result.get("title")
             result_error = result.get("error")
+            # Fallback: if runner didn't set "text", convert dict to readable text
+            if not result_text:
+                result_text = self._format_result(result)
         else:
             # Fallback for non-dict responses
             result_text = str(result) if result else ""
