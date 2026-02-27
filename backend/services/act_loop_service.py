@@ -5,9 +5,28 @@ Manages ACT loop with fatigue-based termination. Each action type has a differen
 base cost, and fatigue grows non-linearly with iteration depth.
 """
 
+import re
 import time
 from typing import List, Dict, Any, Optional, Tuple
 import logging
+
+# Strip [TOOL:name]...[/TOOL] wrappers and cost metadata so the LLM
+# sees clean, synthesisable text — not programmatic markers.
+_TOOL_WRAPPER_RE = re.compile(
+    r'\[TOOL:\w+\]\s*',
+    re.IGNORECASE,
+)
+_TOOL_END_RE = re.compile(
+    r'\s*\(cost:\s*\d+ms,\s*~\d+\s*tokens\)\s*\[/TOOL\]',
+    re.IGNORECASE,
+)
+
+
+def _strip_tool_markers(text: str) -> str:
+    """Remove [TOOL:name]...[/TOOL] wrapper and cost metadata from tool result text."""
+    text = _TOOL_WRAPPER_RE.sub('', text)
+    text = _TOOL_END_RE.sub('', text)
+    return text.strip()
 
 
 ACTION_FATIGUE_COSTS = {
@@ -183,7 +202,10 @@ class ActLoopService:
             result_text = result['result']
             exec_time = result['execution_time']
 
-            display_text = "(card emitted)" if result_text == "__CARD_ONLY__" else result_text
+            if result_text == "__CARD_ONLY__":
+                display_text = "(card emitted)"
+            else:
+                display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
             lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
 
         full_text = "\n".join(lines)
@@ -204,7 +226,10 @@ class ActLoopService:
                     status = result['status']
                     result_text = result['result']
                     exec_time = result['execution_time']
-                    display_text = "(card emitted)" if result_text == "__CARD_ONLY__" else result_text
+                    if result_text == "__CARD_ONLY__":
+                        display_text = "(card emitted)"
+                    else:
+                        display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
                     lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
                 return "\n".join(lines)
 
