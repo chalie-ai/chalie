@@ -452,3 +452,22 @@ def observability_delete_trait(trait_key):
     except Exception as e:
         logger.error(f"[REST API] observability/traits DELETE error: {e}")
         return jsonify({"error": "Failed to delete trait"}), 500
+
+
+@system_bp.route('/system/observability/reflexes', methods=['GET'])
+@require_session
+def observability_reflexes():
+    """Cognitive reflex cluster stats and activation rates."""
+    try:
+        from services.cognitive_reflex_service import CognitiveReflexService
+
+        svc = CognitiveReflexService()
+        stats = svc.get_stats()
+
+        return jsonify({
+            'generated_at': _now_iso(),
+            **stats,
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/reflexes error: {e}")
+        return jsonify({"error": "Failed to retrieve reflex data"}), 500
