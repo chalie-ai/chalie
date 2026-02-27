@@ -153,8 +153,13 @@ class ChalieApp {
       this.renderer.setTtsEnabled(voiceReady.tts);
       this._loadRecentConversation();
       this._loadActiveTasks();
+      // Poll every 60s as a safety net for tasks that complete without a drift event
+      this._taskStripInterval = setInterval(() => this._loadActiveTasks(), 60_000);
       this._connectDriftStream();
-      window.addEventListener('beforeunload', () => this._closeDriftStream(), { once: true });
+      window.addEventListener('beforeunload', () => {
+        this._closeDriftStream();
+        clearInterval(this._taskStripInterval);
+      }, { once: true });
       this._requestNotificationPermission();
       // Ask once for geolocation permission so the heartbeat can capture coordinates.
       // The browser shows its own permission dialog; we don't block on the answer.
@@ -480,6 +485,7 @@ class ChalieApp {
         </div>
         ${stepsHtml}
         ${summary ? `<div class="task-strip__summary">${this._escHtml(summary)}</div>` : ''}
+        <button class="task-strip__dismiss" data-dismiss-task="${t.id}" aria-label="Dismiss task">&times;</button>
       </div>`;
     }
 
@@ -505,13 +511,25 @@ class ChalieApp {
 
     list.innerHTML = html;
 
-    // Wire dismiss buttons
+    // Wire dismiss buttons — reminders
     list.querySelectorAll('[data-dismiss-reminder]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const remId = btn.dataset.dismissReminder;
         try {
           await this.api._delete(`/scheduler/${remId}`);
+        } catch { /* ignore */ }
+        this._loadActiveTasks();
+      });
+    });
+
+    // Wire dismiss buttons — persistent tasks
+    list.querySelectorAll('[data-dismiss-task]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const taskId = btn.dataset.dismissTask;
+        try {
+          await this.api._delete(`/system/observability/tasks/${taskId}`);
         } catch { /* ignore */ }
         this._loadActiveTasks();
       });
