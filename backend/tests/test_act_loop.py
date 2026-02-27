@@ -306,3 +306,55 @@ class TestExistingBehavior:
         assert "[recall]" in context
         assert "SUCCESS" in context
         assert "found data" in context
+
+
+# ── History Token Budget (Phase 4) ────────────────────────
+
+
+class TestHistoryTokenBudget:
+
+    def test_can_continue_respects_max_history_tokens(self):
+        """can_continue returns False when history exceeds token budget."""
+        svc = ActLoopService(_make_config(fatigue_budget=100.0))
+        svc.start_time = time.time()
+        # Add many large results with realistic multi-word text to exceed token budget
+        large_text = ' '.join(['word'] * 200)  # 200 words per result
+        for i in range(10):
+            svc.append_results([_make_result('recall', result=large_text)])
+        can, reason = svc.can_continue(max_history_tokens=100)
+        assert can is False
+        assert reason == 'history_token_budget'
+
+    def test_can_continue_passes_within_token_budget(self):
+        """can_continue returns True when history is within token budget."""
+        svc = ActLoopService(_make_config(fatigue_budget=100.0))
+        svc.start_time = time.time()
+        svc.append_results([_make_result('recall', result='short result')])
+        can, reason = svc.can_continue(max_history_tokens=4000)
+        assert can is True
+        assert reason is None
+
+    def test_get_history_context_truncates_when_over_budget(self):
+        """get_history_context truncates older entries, keeps most recent 3."""
+        svc = ActLoopService(_make_config())
+        # Add 6 results with realistic multi-word text
+        for i in range(6):
+            svc.append_results([_make_result('recall', result=f'Result {i}: ' + ' '.join(['data'] * 100))])
+
+        # Very small budget forces truncation
+        context = svc.get_history_context(max_history_tokens=50)
+        assert "truncated" in context
+        # Should still have the last 3 results
+        assert "Result 3" in context
+        assert "Result 4" in context
+        assert "Result 5" in context
+        # First 3 should be truncated
+        assert "Result 0:" not in context
+
+    def test_get_history_context_no_truncation_within_budget(self):
+        """get_history_context returns all entries when within budget."""
+        svc = ActLoopService(_make_config())
+        svc.append_results([_make_result('recall', result='short')])
+        context = svc.get_history_context(max_history_tokens=4000)
+        assert "truncated" not in context
+        assert "[recall]" in context
