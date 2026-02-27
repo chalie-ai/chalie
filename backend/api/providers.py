@@ -61,7 +61,8 @@ def create_provider():
                 'frontal-cortex', 'frontal-cortex-respond', 'frontal-cortex-clarify',
                 'frontal-cortex-acknowledge', 'frontal-cortex-act', 'frontal-cortex-proactive',
                 'memory-chunker', 'episodic-memory', 'semantic-memory',
-                'mode-tiebreaker', 'mode-reflection', 'cognitive-drift', 'experience-assimilation'
+                'mode-tiebreaker', 'mode-reflection', 'cognitive-drift', 'experience-assimilation',
+                'plan-decomposition',
             ]
             try:
                 for job in all_jobs:
