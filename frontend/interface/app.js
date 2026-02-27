@@ -405,33 +405,50 @@ class ChalieApp {
 
   async _loadActiveTasks() {
     try {
-      const data = await this.api._get('/system/observability/tasks');
-      const tasks = (data.persistent_tasks || []).filter(
+      const [taskData, schedData] = await Promise.all([
+        this.api._get('/system/observability/tasks').catch(() => ({})),
+        this.api._get('/scheduler?status=pending').catch(() => ({})),
+      ]);
+      const tasks = (taskData.persistent_tasks || []).filter(
         t => t.status === 'accepted' || t.status === 'in_progress' || t.status === 'paused'
       );
-      this._renderTaskStrip(tasks);
+      const reminders = (schedData.items || []).filter(
+        r => r.status === 'pending' && r.due_at
+      );
+      this._renderTaskStrip(tasks, reminders);
     } catch {
       // Silently fail — task strip is supplementary
     }
   }
 
-  _renderTaskStrip(tasks) {
+  _renderTaskStrip(tasks, reminders = []) {
     const strip = document.getElementById('taskStrip');
     const list = document.getElementById('taskStripList');
     const countEl = document.getElementById('taskStripCount');
     if (!strip || !list) return;
 
-    if (tasks.length === 0) {
+    const totalCount = tasks.length + reminders.length;
+    const wasEmpty = strip.classList.contains('hidden');
+
+    if (totalCount === 0) {
       strip.classList.add('hidden');
+      strip.classList.remove('--expanded');
       document.body.classList.remove('has-task-strip');
       return;
     }
 
     strip.classList.remove('hidden');
     document.body.classList.add('has-task-strip');
-    countEl.textContent = tasks.length;
+    countEl.textContent = totalCount;
+
+    // Auto-expand when items appear for the first time (was hidden → now visible)
+    if (wasEmpty) {
+      strip.classList.add('--expanded');
+    }
 
     let html = '';
+
+    // Render persistent tasks
     for (const t of tasks) {
       const goal = (t.goal || 'Working…').slice(0, 60);
       const progress = t.progress || {};
@@ -439,12 +456,44 @@ class ChalieApp {
       const summary = progress.last_summary || '';
       const pausedClass = t.status === 'paused' ? ' --paused' : '';
 
+      // Step-level progress from plan DAG
+      const plan = progress.plan;
+      let stepsHtml = '';
+      if (plan && plan.steps && plan.steps.length > 0) {
+        const done = plan.steps.filter(s => s.status === 'completed' || s.status === 'skipped').length;
+        const total = plan.steps.length;
+        const current = plan.steps.find(s => s.status === 'in_progress');
+        stepsHtml = `<div class="task-strip__steps">${done}/${total} steps</div>`;
+        if (current) {
+          stepsHtml += `<div class="task-strip__current-step">${this._escHtml(current.description)}</div>`;
+        }
+        if (plan.blocked_on) {
+          stepsHtml += `<div class="task-strip__blocked">Blocked: ${this._escHtml(plan.blocked_reason || 'dependency failed')}</div>`;
+        }
+      }
+
       html += `<div class="task-strip__item${pausedClass}">
+        <span class="task-strip__kind-dot task-strip__kind-dot--task"></span>
         <div class="task-strip__goal">${this._escHtml(goal)}</div>
         <div class="task-strip__progress-bar">
           <div class="task-strip__progress-fill" style="width:${coverage}%"></div>
         </div>
+        ${stepsHtml}
         ${summary ? `<div class="task-strip__summary">${this._escHtml(summary)}</div>` : ''}
+      </div>`;
+    }
+
+    // Render pending reminders
+    for (const r of reminders) {
+      const msg = (r.message || '').slice(0, 80);
+      const due = r.due_at ? this._relativeTime(r.due_at) : '';
+      const id = r.id;
+
+      html += `<div class="task-strip__item task-strip__item--reminder">
+        <span class="task-strip__kind-dot task-strip__kind-dot--reminder"></span>
+        <span class="task-strip__msg">${this._escHtml(msg)}</span>
+        ${due ? `<span class="task-strip__due">${this._escHtml(due)}</span>` : ''}
+        <button class="task-strip__dismiss" data-dismiss-reminder="${this._escHtml(id)}" aria-label="Dismiss reminder">&times;</button>
       </div>`;
     }
 
@@ -455,6 +504,38 @@ class ChalieApp {
     }
 
     list.innerHTML = html;
+
+    // Wire dismiss buttons
+    list.querySelectorAll('[data-dismiss-reminder]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const remId = btn.dataset.dismissReminder;
+        try {
+          await this.api._delete(`/scheduler/${remId}`);
+        } catch { /* ignore */ }
+        this._loadActiveTasks();
+      });
+    });
+  }
+
+  /** Convert an ISO date string to a short relative label ("in 5m", "in 2h", "tomorrow"). */
+  _relativeTime(isoStr) {
+    try {
+      const due = new Date(isoStr);
+      const now = Date.now();
+      const diffMs = due.getTime() - now;
+      if (diffMs < 0) return 'overdue';
+      const mins = Math.round(diffMs / 60000);
+      if (mins < 1) return 'now';
+      if (mins < 60) return `in ${mins}m`;
+      const hrs = Math.round(mins / 60);
+      if (hrs < 24) return `in ${hrs}h`;
+      const days = Math.round(hrs / 24);
+      if (days === 1) return 'tomorrow';
+      return `in ${days}d`;
+    } catch {
+      return '';
+    }
   }
 
   _escHtml(str) {
@@ -753,6 +834,7 @@ class ChalieApp {
     this._driftSource.addEventListener('reminder', handler);
     this._driftSource.addEventListener('task', handler);
     this._driftSource.addEventListener('escalation', handler);
+    this._driftSource.addEventListener('notification', handler);
 
     this._driftSource.onerror = () => {
       // EventSource auto-reconnects; nothing to do
@@ -799,9 +881,10 @@ class ChalieApp {
       this._notifyBackground(content);
     }
 
-    // Scheduler trigger events — render as styled trigger card or plain message
+    // Scheduler trigger events — show in task strip only, no chat card
     if (data.type === 'notification') {
-      this._handleSchedulerTrigger(data);
+      this._playScheduleSound();
+      this._loadActiveTasks();  // Refresh strip; fired reminder changes status → drops out
       return;
     }
 

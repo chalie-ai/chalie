@@ -2,8 +2,9 @@
 Persistent Task Skill — Native innate skill for multi-session background tasks.
 
 Provides natural language commands:
-  - create: Propose a new persistent task
+  - create: Propose a new persistent task (with plan decomposition)
   - status: Get progress summary
+  - plan: Show step-level plan for a task
   - pause: Pause an active task
   - resume: Resume a paused task
   - cancel: Cancel a task
@@ -46,6 +47,8 @@ def handle_persistent_task(topic: str, params: dict) -> str:
         return _expand(topic, params)
     elif action == "priority":
         return _priority(topic, params)
+    elif action == "plan":
+        return _show_plan(topic, params)
     elif action == "list":
         return _list_tasks(topic, params)
     else:
@@ -74,7 +77,7 @@ def _get_account_id() -> int:
 
 
 def _create(topic: str, params: dict) -> str:
-    """Create a new persistent task."""
+    """Create a new persistent task with plan decomposition."""
     goal = params.get("goal", params.get("query", params.get("text", "")))
     if not goal:
         return "No goal specified for the persistent task."
@@ -100,7 +103,49 @@ def _create(topic: str, params: dict) -> str:
         scope=scope,
         priority=priority,
     )
+    task_id = task['id']
 
+    # Attempt plan decomposition
+    plan = None
+    try:
+        from services.plan_decomposition_service import PlanDecompositionService
+        decomposer = PlanDecompositionService()
+        plan = decomposer.decompose(goal, scope)
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Plan decomposition failed: {e}")
+
+    if plan:
+        # Store plan in task progress via checkpoint
+        progress = {'plan': plan, 'coverage_estimate': 0.0}
+        service.checkpoint(task_id=task_id, progress=progress)
+
+        cost_class = plan.get('cost_class', 'expensive')
+        confidence = plan.get('decomposition_confidence', 0.0)
+        auto_accept = decomposer.auto_accept_confidence
+
+        step_list = '\n'.join(
+            f"  {i+1}. {s['description']}"
+            for i, s in enumerate(plan['steps'])
+        )
+
+        if cost_class == 'cheap' and confidence >= auto_accept:
+            # Auto-accept cheap, high-confidence plans
+            service.transition(task_id, 'accepted')
+            return (
+                f"Task created and auto-started: \"{goal[:80]}\"\n"
+                f"Plan ({len(plan['steps'])} steps, confidence {confidence:.0%}):\n"
+                f"{step_list}\n"
+                f"Working on this in the background."
+            )
+        else:
+            return (
+                f"Task proposed: \"{goal[:80]}\"\n"
+                f"Plan ({len(plan['steps'])} steps, confidence {confidence:.0%}):\n"
+                f"{step_list}\n"
+                f"Confirm to start, or adjust the scope."
+            )
+
+    # Fallback: no plan (decomposition failed or wasn't possible)
     if scope:
         return (
             f"Task proposed: \"{goal[:80]}\"\n"
@@ -226,6 +271,52 @@ def _list_tasks(topic: str, params: dict) -> str:
         )
 
     return "Active background tasks:\n" + "\n".join(summaries)
+
+
+def _show_plan(topic: str, params: dict) -> str:
+    """Show the plan (step DAG) for a task."""
+    service = _get_service()
+    task_id = _resolve_task_id(params)
+    if not task_id:
+        return "Could not identify which task to show the plan for."
+
+    task = service.get_task(task_id)
+    if not task:
+        return "Task not found."
+
+    progress = task.get('progress', {}) or {}
+    plan = progress.get('plan')
+    if not plan or not plan.get('steps'):
+        return f"Task \"{task['goal'][:60]}\" has no step plan (running as flat ACT loop)."
+
+    steps = plan['steps']
+    lines = [f"Plan for: \"{task['goal'][:60]}\""]
+    lines.append(f"Confidence: {plan.get('decomposition_confidence', 0):.0%} | "
+                 f"Cost: {plan.get('cost_class', 'unknown')}")
+
+    if plan.get('blocked_on'):
+        lines.append(f"BLOCKED: {plan.get('blocked_reason', 'unknown reason')}")
+
+    for s in steps:
+        status_icon = {
+            'pending': '○', 'ready': '◎', 'in_progress': '◉',
+            'completed': '●', 'skipped': '⊘', 'failed': '✗',
+        }.get(s.get('status', 'pending'), '?')
+
+        line = f"  {status_icon} {s['id']}: {s['description']}"
+        if s.get('result_summary'):
+            line += f" → {s['result_summary'][:60]}"
+        if s.get('skip_reason'):
+            line += f" (skipped: {s['skip_reason'][:40]})"
+        if s.get('failure_reason'):
+            line += f" (failed: {s['failure_reason'][:40]})"
+        lines.append(line)
+
+    from services.plan_decomposition_service import PlanDecompositionService
+    coverage = PlanDecompositionService.get_plan_coverage(plan)
+    lines.append(f"Progress: {coverage:.0%} ({sum(1 for s in steps if s.get('status') in ('completed', 'skipped'))}/{len(steps)} steps)")
+
+    return '\n'.join(lines)
 
 
 def _resolve_task_id(params: dict) -> int | None:

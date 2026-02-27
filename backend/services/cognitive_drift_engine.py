@@ -19,7 +19,8 @@ After each thought, an ActionDecisionRouter evaluates what to do with it:
   - COMMUNICATE: Share with the user proactively (quality + timing + engagement gated)
   - REFLECT: Internal enrichment — store association-linked gist, boost concepts
   - NOTHING: Let the gist live in Redis as before (reactive surfacing only)
-  - Future: USE_SKILL, PLAN, LEARN
+  - PLAN: Create plan-backed persistent tasks from recurring topics
+  - Future: USE_SKILL, LEARN
 """
 
 import json
@@ -152,6 +153,12 @@ class CognitiveDriftEngine:
         nurture_config = action_config.get('nurture', {})
         if nurture_config.get('enabled', True):
             router.register(NurtureAction(config=nurture_config))
+
+        # Register PLAN (priority 7, same as NURTURE — ties broken by score)
+        from services.autonomous_actions.plan_action import PlanAction
+        plan_config = action_config.get('plan', {})
+        if plan_config.get('enabled', True):
+            router.register(PlanAction(config=plan_config))
 
         # Register COMMUNICATE if enabled
         communicate_config = action_config.get('communicate', {})

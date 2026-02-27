@@ -511,6 +511,104 @@ class TestSystemAPI:
         assert data['error'] == 'Trait not found'
 
     # ────────────────────────────────────────────
+    # Service constructor receives db_service
+    # (regression guards against missing arg 500s)
+    # ────────────────────────────────────────────
+
+    def test_observability_routing_passes_db_to_service(self, client):
+        """RoutingDecisionService must be constructed with get_shared_db_service()."""
+        mock_db = MagicMock()
+        mock_svc = MagicMock()
+        mock_svc.get_mode_distribution.return_value = {}
+        mock_svc.get_tiebreaker_rate.return_value = 0.0
+        mock_svc.get_recent_decisions.return_value = []
+        mock_cls = MagicMock(return_value=mock_svc)
+
+        with patch('services.routing_decision_service.RoutingDecisionService', mock_cls), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+            resp = client.get('/system/observability/routing')
+
+        assert resp.status_code == 200
+        mock_cls.assert_called_once_with(mock_db)
+
+    def test_observability_identity_passes_db_to_service(self, client):
+        """IdentityService must be constructed with get_shared_db_service()."""
+        mock_db = MagicMock()
+        mock_svc = MagicMock()
+        mock_svc.get_vectors.return_value = {}
+        mock_cls = MagicMock(return_value=mock_svc)
+
+        with patch('services.identity_service.IdentityService', mock_cls), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+            resp = client.get('/system/observability/identity')
+
+        assert resp.status_code == 200
+        mock_cls.assert_called_once_with(mock_db)
+
+    def test_observability_tasks_passes_db_to_persistent_task_service(self, client):
+        """PersistentTaskService must be constructed with get_shared_db_service()."""
+        mock_db = MagicMock()
+        mock_pt_svc = MagicMock()
+        mock_pt_svc.get_active_tasks.return_value = []
+        mock_pt_cls = MagicMock(return_value=mock_pt_svc)
+
+        with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db), \
+             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=MagicMock(get_active_threads=MagicMock(return_value=[]))), \
+             patch('services.triage_calibration_service.TriageCalibrationService', return_value=MagicMock(get_calibration_stats=MagicMock(return_value={}))):
+            resp = client.get('/system/observability/tasks')
+
+        assert resp.status_code == 200
+        mock_pt_cls.assert_called_once_with(mock_db)
+
+    def test_observability_autobiography_passes_db_to_both_services(self, client):
+        """AutobiographyService and AutobiographyDeltaService must receive get_shared_db_service()."""
+        mock_db = MagicMock()
+        mock_auto_svc = MagicMock()
+        mock_auto_svc.get_current_narrative.return_value = None
+        mock_auto_cls = MagicMock(return_value=mock_auto_svc)
+
+        mock_delta_svc = MagicMock()
+        mock_delta_svc.get_changed_sections.return_value = None
+        mock_delta_cls = MagicMock(return_value=mock_delta_svc)
+
+        with patch('services.autobiography_service.AutobiographyService', mock_auto_cls), \
+             patch('services.autobiography_delta_service.AutobiographyDeltaService', mock_delta_cls), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+            resp = client.get('/system/observability/autobiography')
+
+        assert resp.status_code == 200
+        mock_auto_cls.assert_called_once_with(mock_db)
+        mock_delta_cls.assert_called_once_with(mock_db)
+
+    def test_observability_memory_queries_confidence_not_strength(self, client):
+        """Memory endpoint must query AVG(confidence) from user_traits (not AVG(strength))."""
+        mock_redis = MagicMock()
+        mock_redis.keys.return_value = []
+        mock_redis.llen.return_value = 0
+
+        mock_db, mock_conn = _make_db_mock()
+        episodes_result = MagicMock()
+        episodes_result.fetchone.return_value = (10, 0.5)
+        concepts_result = MagicMock()
+        concepts_result.fetchone.return_value = (5,)
+        traits_result = MagicMock()
+        traits_result.fetchone.return_value = (3, 0.75)
+        mock_conn.execute.side_effect = [episodes_result, concepts_result, traits_result]
+
+        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+            resp = client.get('/system/observability/memory')
+
+        assert resp.status_code == 200
+        # Verify the SQL calls used the correct column name
+        calls = [str(call) for call in mock_conn.execute.call_args_list]
+        assert any('AVG(confidence)' in c for c in calls), \
+            "Memory endpoint must use AVG(confidence), not AVG(strength), for user_traits"
+        assert not any('AVG(strength)' in c for c in calls), \
+            "Memory endpoint must not query AVG(strength) from user_traits"
+
+    # ────────────────────────────────────────────
     # generated_at field on all observability endpoints
     # ────────────────────────────────────────────
 

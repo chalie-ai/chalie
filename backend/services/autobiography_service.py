@@ -209,13 +209,13 @@ class AutobiographyService:
                 # Gather concepts (top 30 by strength)
                 result = session.execute(
                     text("""
-                    SELECT concept_name, type, definition, domain, strength
+                    SELECT concept_name, concept_type, definition, domain, strength
                     FROM semantic_concepts
-                    WHERE user_id = :user_id
+                    WHERE deleted_at IS NULL
                     ORDER BY strength DESC
                     LIMIT 30
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 for row in result.fetchall():
                     inputs["concepts"].append({
@@ -226,15 +226,18 @@ class AutobiographyService:
                         "strength": row[4]
                     })
 
-                # Gather relationships
+                # Gather relationships (join to resolve UUIDs → names)
                 result = session.execute(
                     text("""
-                    SELECT source, target, type, strength
-                    FROM semantic_relationships
-                    WHERE user_id = :user_id
-                    ORDER BY strength DESC
+                    SELECT sc1.concept_name, sc2.concept_name, sr.relationship_type, sr.strength
+                    FROM semantic_relationships sr
+                    JOIN semantic_concepts sc1 ON sr.source_concept_id = sc1.id
+                    JOIN semantic_concepts sc2 ON sr.target_concept_id = sc2.id
+                    WHERE sr.deleted_at IS NULL
+                    ORDER BY sr.strength DESC
+                    LIMIT 50
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 for row in result.fetchall():
                     inputs["relationships"].append({

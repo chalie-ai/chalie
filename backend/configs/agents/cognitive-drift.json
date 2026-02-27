@@ -73,6 +73,14 @@
       "fatigue_budget_fraction": 0.4,
       "reflection_gist_confidence": 8,
       "concept_boost_limit": 3
+    },
+    "plan": {
+      "enabled": true,
+      "min_activation": 0.7,
+      "min_signals": 2,
+      "max_active_tasks": 5,
+      "cooldown_seconds": 172800,
+      "actionable_verbs": ["research", "find", "compare", "learn", "build", "prepare", "compile", "analyze", "investigate", "explore"]
     }
   },
   "descriptions": {
@@ -90,6 +98,7 @@
     "decaying_reinforce_bump": "Strength bump for decaying concepts on successful drift only",
     "insight_sessions_cap": "Minimum drift cycles between insight seed selections (throttle to avoid over-surfacing pattern observations)",
     "autonomous_actions.communicate": "Config for proactive messaging action. enabled=false to disable outreach entirely.",
-    "autonomous_actions.reflect": "Config for internal reflection action. Enriches drift thoughts with associations, stores as reflection gists. type_repeat_decay penalizes consecutive same-type reflections."
+    "autonomous_actions.reflect": "Config for internal reflection action. Enriches drift thoughts with associations, stores as reflection gists. type_repeat_decay penalizes consecutive same-type reflections.",
+    "autonomous_actions.plan": "Config for proactive plan creation. Creates plan-backed persistent tasks from recurring drift topics. Signal persistence gate prevents over-eager planning."
   }
 }
