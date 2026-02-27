@@ -70,6 +70,27 @@ _URL_PATTERN = re.compile(
 )
 
 
+_JSON_FENCE_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
+
+
+def _extract_json(text: str) -> dict:
+    """Parse JSON from LLM response, stripping markdown fences or preamble if present."""
+    import json
+    text = text.strip()
+    # Fast path: already valid JSON
+    if text.startswith('{'):
+        return json.loads(text)
+    # Strip markdown code fences
+    m = _JSON_FENCE_RE.search(text)
+    if m:
+        return json.loads(m.group(1).strip())
+    # Find first { ... } substring
+    start = text.find('{')
+    if start != -1:
+        return json.loads(text[start:])
+    raise json.JSONDecodeError("No JSON object found in response", text, 0)
+
+
 def _is_factual_question(text: str) -> bool:
     """Heuristic: does this look like a factual question needing real-world data?"""
     return bool(_FACTUAL_QUESTION.search(text))
@@ -108,6 +129,61 @@ class TriageResult:
     fast_filtered: bool           # True if regex path, no LLM
     self_eval_override: bool
     self_eval_reason: str
+
+
+def social_filter(text: str) -> 'Optional[TriageResult]':
+    """
+    Module-level social filter for early short-circuit (CANCEL/IGNORE only).
+
+    Used by digest_worker to skip topic classification for trivial messages.
+    Only returns a result for CANCEL and IGNORE — ACKNOWLEDGE still needs
+    response generation and goes through full triage.
+
+    Safety guardrails:
+    - Length gate: only fires if message is ≤ 6 words (prevents false positives
+      on longer instructions like "ignore the previous error and continue")
+    - Clause check: if message contains '?' or clause separators (comma, semicolon),
+      skip the pre-check and let triage handle it
+    """
+    stripped = text.strip()
+    if not stripped:
+        return TriageResult(
+            branch='social', mode='IGNORE', tools=[], skills=[],
+            confidence_internal=1.0, confidence_tool_need=0.0,
+            freshness_risk=0.0, decision_entropy=0.0,
+            reasoning='social_precheck_empty', triage_time_ms=0.0,
+            fast_filtered=True, self_eval_override=False, self_eval_reason='',
+        )
+
+    words = stripped.split()
+    # Length gate: only short-circuit short messages
+    if len(words) > 6:
+        return None
+    # Clause/question check: multi-clause or question → let full triage handle it
+    if '?' in stripped or ',' in stripped or ';' in stripped:
+        return None
+
+    for pattern in _CANCEL_PATTERNS:
+        if pattern.search(stripped):
+            return TriageResult(
+                branch='social', mode='CANCEL', tools=[], skills=[],
+                confidence_internal=1.0, confidence_tool_need=0.0,
+                freshness_risk=0.0, decision_entropy=0.0,
+                reasoning='social_precheck_cancel', triage_time_ms=0.0,
+                fast_filtered=True, self_eval_override=False, self_eval_reason='',
+            )
+
+    for pattern in _SELF_RESOLVED_PATTERNS:
+        if pattern.search(stripped):
+            return TriageResult(
+                branch='social', mode='IGNORE', tools=[], skills=[],
+                confidence_internal=1.0, confidence_tool_need=0.0,
+                freshness_risk=0.0, decision_entropy=0.0,
+                reasoning='social_precheck_self_resolved', triage_time_ms=0.0,
+                fast_filtered=True, self_eval_override=False, self_eval_reason='',
+            )
+
+    return None
 
 
 class CognitiveTriageService:
@@ -195,7 +271,7 @@ class CognitiveTriageService:
 
             llm = self._get_llm()
             response_text = llm.send_message("", prompt).text
-            data = json.loads(response_text)
+            data = _extract_json(response_text)
 
             mode = data.get('mode', 'RESPOND').upper()
             tools = data.get('tools', [])
@@ -255,6 +331,26 @@ class CognitiveTriageService:
     def _heuristic_fallback(self, text: str, context: TriageContext) -> TriageResult:
         """Deterministic fallback when LLM times out or fails."""
         lower = text.lower()
+
+        # Innate skill detection — these never need external tools
+        _innate_skill = self._detect_innate_skill(lower)
+        if _innate_skill:
+            return TriageResult(
+                branch='act',
+                mode='ACT',
+                tools=[],
+                skills=list(_PRIMITIVES) + [_innate_skill],
+                confidence_internal=0.3,
+                confidence_tool_need=0.8,
+                freshness_risk=0.2,
+                decision_entropy=0.0,
+                reasoning=f'heuristic_fallback_innate_{_innate_skill}',
+                triage_time_ms=0.0,
+                fast_filtered=True,
+                self_eval_override=False,
+                self_eval_reason='',
+            )
+
         looks_like_command = any(
             w in lower for w in ['search', 'find', 'check', 'look up', 'look it up', 'get me', 'fetch',
                                   'just look', 'pull up', 'google', 'browse', 'open', 'visit',
@@ -292,6 +388,30 @@ class CognitiveTriageService:
             self_eval_override=False,
             self_eval_reason='',
         )
+
+    @staticmethod
+    def _detect_innate_skill(lower: str) -> Optional[str]:
+        """Detect innate skill intent from message keywords. Returns skill name or None."""
+        # Schedule / reminder patterns
+        if any(w in lower for w in ['remind me', 'set a reminder', 'set reminder',
+                                     'schedule a', 'schedule this', 'alarm for',
+                                     'every morning', 'every evening', 'every day at',
+                                     'every week', 'notify me', 'alert me']):
+            return 'schedule'
+        # List patterns
+        if any(w in lower for w in ['add to my list', 'add to the list', 'remove from my list',
+                                     'shopping list', 'to-do list', 'todo list',
+                                     'check off', 'cross off']):
+            return 'list'
+        # Focus patterns
+        if any(w in lower for w in ['start a focus', 'focus session', 'deep work',
+                                     'am i focused', 'end focus']):
+            return 'focus'
+        # Persistent task patterns
+        if any(w in lower for w in ['research this over', 'background task',
+                                     'work on this over', 'task status']):
+            return 'persistent_task'
+        return None
 
     def _mode_to_branch(self, mode: str) -> str:
         """Map LLM mode string to branch name."""

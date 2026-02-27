@@ -412,3 +412,73 @@ class TestTriageFull:
         # Should fall back gracefully, not raise
         assert result.branch in ('act', 'respond', 'clarify', 'social')
         assert result.triage_time_ms >= 0
+
+
+class TestSocialFilterPrecheck:
+    """Tests for the module-level social_filter() pre-check function."""
+
+    def test_nevermind_triggers_cancel(self):
+        """'nevermind' (1 word, ≤6) should trigger CANCEL pre-check."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("nevermind")
+        assert result is not None
+        assert result.mode == 'CANCEL'
+        assert result.fast_filtered is True
+
+    def test_empty_triggers_ignore(self):
+        """Empty string triggers IGNORE."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("")
+        assert result is not None
+        assert result.mode == 'IGNORE'
+
+    def test_forget_it_triggers_cancel(self):
+        """'forget it' triggers CANCEL."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("forget it")
+        assert result is not None
+        assert result.mode == 'CANCEL'
+
+    def test_long_instruction_does_not_trigger(self):
+        """'ignore the previous error and continue' (>6 words) must NOT trigger."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("ignore the previous error and continue")
+        assert result is None
+
+    def test_question_with_cancel_word_does_not_trigger(self):
+        """Messages with '?' skip the pre-check."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("cancel what?")
+        assert result is None
+
+    def test_comma_clause_does_not_trigger(self):
+        """'forget about it, can you also check X?' skips pre-check (has comma)."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("forget about it, check X")
+        assert result is None
+
+    def test_greeting_does_not_trigger(self):
+        """Greetings should NOT be caught by the pre-check (only CANCEL/IGNORE)."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("hey")
+        assert result is None  # Greetings need ACKNOWLEDGE → go through triage
+
+    def test_self_resolved_short_triggers_ignore(self):
+        """'all good' (≤6 words, no ? or ,) triggers IGNORE."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("all good")
+        assert result is not None
+        assert result.mode == 'IGNORE'
+
+    def test_normal_text_passes_through(self):
+        """Normal text should not be caught."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("what's the weather?")
+        assert result is None  # has '?'
+
+    def test_stop_searching_triggers_cancel(self):
+        """'stop searching' triggers CANCEL."""
+        from services.cognitive_triage_service import social_filter
+        result = social_filter("stop searching")
+        assert result is not None
+        assert result.mode == 'CANCEL'

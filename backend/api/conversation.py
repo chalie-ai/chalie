@@ -152,7 +152,76 @@ def chat_sse():
             if bg_done.is_set() and not message_received:
                 # ACT triage sets this flag when a tool_worker job is pending.
                 # Keep the connection alive — the worker will publish when done.
-                if redis.get(f"sse_pending:{request_id}"):
+                sse_pending_value = redis.get(f"sse_pending:{request_id}")
+                if sse_pending_value:
+                    if isinstance(sse_pending_value, bytes):
+                        sse_pending_value = sse_pending_value.decode()
+
+                    # Maximum pending wait of 300s (tool_worker hard timeout)
+                    if time.time() - start_time > 300:
+                        yield sse_event("error", {
+                            "message": "Tool execution exceeded maximum wait time",
+                            "recoverable": True
+                        })
+                        yield sse_event("done", {
+                            "duration_ms": int((time.time() - start_time) * 1000)
+                        })
+                        break
+
+                    # Job health check every ~10s (only for non-legacy values)
+                    if sse_pending_value != "1" and int(time.time()) % 10 < 2:
+                        job_id = sse_pending_value
+                        try:
+                            # Check RQ job status
+                            from rq.job import Job as RQJob
+                            rq_job = RQJob.fetch(job_id, connection=redis)
+                            if rq_job.is_failed or rq_job.get_status() == 'canceled':
+                                yield sse_event("error", {
+                                    "message": "Tool execution failed",
+                                    "recoverable": True
+                                })
+                                yield sse_event("done", {
+                                    "duration_ms": int((time.time() - start_time) * 1000)
+                                })
+                                break
+                            if rq_job.is_finished:
+                                # Job finished but no pub/sub received — poll output key
+                                fallback_data = redis.get(f"output:{request_id}")
+                                if fallback_data:
+                                    output = json.loads(fallback_data)
+                                    metadata = output.get("metadata", {})
+                                    original_meta = metadata.get("metadata", {})
+                                    message_data = {
+                                        "text": metadata.get("response", ""),
+                                        "topic": output.get("topic", ""),
+                                        "mode": metadata.get("mode", ""),
+                                        "confidence": metadata.get("confidence", 0),
+                                        "exchange_id": original_meta.get("exchange_id", ""),
+                                    }
+                                    yield sse_event("message", message_data)
+                                    yield sse_event("done", {
+                                        "duration_ms": int((time.time() - start_time) * 1000)
+                                    })
+                                    break
+                        except Exception:
+                            pass
+
+                        # Heartbeat check: if heartbeat key is absent for >30s, treat as zombie
+                        try:
+                            heartbeat = redis.get(f"heartbeat:{job_id}")
+                            # Only check after the job has had time to start (>30s elapsed)
+                            if not heartbeat and time.time() - start_time > 30:
+                                yield sse_event("error", {
+                                    "message": "Tool execution appears stalled",
+                                    "recoverable": True
+                                })
+                                yield sse_event("done", {
+                                    "duration_ms": int((time.time() - start_time) * 1000)
+                                })
+                                break
+                        except Exception:
+                            pass
+
                     continue
                 time.sleep(0.5)  # Brief grace period (non-ACT paths)
                 # Try polling the output key directly

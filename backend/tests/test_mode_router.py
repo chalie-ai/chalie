@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import patch, MagicMock
-from services.mode_router_service import ModeRouterService, collect_routing_signals
+from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
 
 
 pytestmark = pytest.mark.unit
@@ -191,3 +191,66 @@ class TestModeRouter:
             'intent_type', 'intent_confidence', 'intent_complexity',
         }
         assert expected_keys == set(signals.keys())
+
+
+class TestComputeNlpSignals:
+    """Tests for the standalone compute_nlp_signals() function."""
+
+    def test_nlp_signals_match_collect_routing_signals_nlp_portion(self, mock_redis):
+        """compute_nlp_signals() must produce the same NLP keys as collect_routing_signals()."""
+        wm = MagicMock()
+        wm.get_recent_turns.return_value = []
+        gs = MagicMock()
+        gs.get_latest_gists.return_value = []
+        fs = MagicMock()
+        fs.get_all_facts.return_value = []
+        ws = MagicMock()
+        ws.get_world_state.return_value = ""
+        ss = MagicMock()
+        ss.topic_exchange_count = 0
+
+        text = "What is the weather today?"
+        intent = {'complexity': 'simple', 'intent_type': 'question', 'confidence': 0.9}
+
+        full_signals = collect_routing_signals(
+            text=text, topic="test", context_warmth=0.5,
+            working_memory=wm, gist_storage=gs, fact_store=fs,
+            world_state_service=ws, classification_result={'confidence': 0.5, 'is_new_topic': False},
+            session_service=ss, intent=intent,
+        )
+        nlp_only = compute_nlp_signals(text, intent)
+
+        # All NLP keys must match
+        nlp_keys = {
+            'prompt_token_count', 'has_question_mark', 'interrogative_words',
+            'greeting_pattern', 'explicit_feedback', 'information_density',
+            'implicit_reference', 'intent_complexity', 'intent_type', 'intent_confidence',
+        }
+        for key in nlp_keys:
+            assert nlp_only[key] == full_signals[key], f"Mismatch on {key}: {nlp_only[key]} != {full_signals[key]}"
+
+    def test_nlp_signals_default_intent(self):
+        """Without intent arg, intent fields have safe defaults."""
+        result = compute_nlp_signals("hello world")
+        assert result['intent_complexity'] == 'simple'
+        assert result['intent_type'] is None
+        assert result['intent_confidence'] == 0.0
+
+    def test_nlp_signals_question_detection(self):
+        """Question marks and interrogative words are detected."""
+        result = compute_nlp_signals("What is this?")
+        assert result['has_question_mark'] is True
+        assert result['interrogative_words'] is True
+
+    def test_nlp_signals_greeting_detection(self):
+        """Greeting patterns are detected."""
+        result = compute_nlp_signals("hey")
+        assert result['greeting_pattern'] is True
+
+    def test_nlp_signals_feedback_detection(self):
+        """Positive and negative feedback are detected."""
+        pos = compute_nlp_signals("thanks, that's great")
+        assert pos['explicit_feedback'] == 'positive'
+
+        neg = compute_nlp_signals("that's wrong, try again")
+        assert neg['explicit_feedback'] == 'negative'

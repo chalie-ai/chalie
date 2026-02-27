@@ -49,6 +49,61 @@ NEGATIVE_FEEDBACK = re.compile(
     re.IGNORECASE
 )
 
+def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
+    """
+    Compute regex-only NLP signals from user text (<1ms).
+
+    Standalone function so callers that already have context signals from Redis
+    can merge NLP signals without re-reading Redis.
+
+    Args:
+        text: User's raw prompt text
+        intent: Optional intent classification dict
+
+    Returns:
+        Dict of NLP-derived signals
+    """
+    tokens = text.split()
+    prompt_token_count = len(tokens)
+    has_question_mark = '?' in text
+    interrogative_words = bool(INTERROGATIVE_WORDS.search(text))
+    greeting_pattern = bool(GREETING_PATTERNS.match(text.strip()))
+    implicit_reference = bool(IMPLICIT_REFERENCE.search(text))
+
+    # Explicit feedback detection
+    explicit_feedback = None
+    if POSITIVE_FEEDBACK.search(text):
+        explicit_feedback = 'positive'
+    elif NEGATIVE_FEEDBACK.search(text):
+        explicit_feedback = 'negative'
+
+    # Information density (unique tokens / total tokens)
+    unique_tokens = len(set(t.lower() for t in tokens))
+    information_density = unique_tokens / max(prompt_token_count, 1)
+
+    signals = {
+        'prompt_token_count': prompt_token_count,
+        'has_question_mark': has_question_mark,
+        'interrogative_words': interrogative_words,
+        'greeting_pattern': greeting_pattern,
+        'explicit_feedback': explicit_feedback,
+        'information_density': information_density,
+        'implicit_reference': implicit_reference,
+
+        # Intent signals (from IntentClassifierService, if available)
+        'intent_complexity': 'simple',
+        'intent_type': None,
+        'intent_confidence': 0.0,
+    }
+
+    if intent:
+        signals['intent_complexity'] = intent.get('complexity', 'simple')
+        signals['intent_type'] = intent.get('intent_type')
+        signals['intent_confidence'] = intent.get('confidence', 0.0)
+
+    return signals
+
+
 def collect_routing_signals(
     text: str,
     topic: str,
@@ -103,14 +158,6 @@ def collect_routing_signals(
     # Session signals
     session_exchange_count = getattr(session_service, 'topic_exchange_count', 0) if session_service else 0
 
-    # NLP signals (regex, <1ms)
-    tokens = text.split()
-    prompt_token_count = len(tokens)
-    has_question_mark = '?' in text
-    interrogative_words = bool(INTERROGATIVE_WORDS.search(text))
-    greeting_pattern = bool(GREETING_PATTERNS.match(text.strip()))
-    implicit_reference = bool(IMPLICIT_REFERENCE.search(text))
-
     # Memory confidence signal: FOK (Feeling-of-Knowing) per topic
     # Read from Redis (set by recall skill), compute composite confidence score
     from services.redis_client import RedisClientService
@@ -130,16 +177,8 @@ def collect_routing_signals(
         memory_confidence *= 0.7
     memory_confidence = round(memory_confidence, 3)
 
-    # Explicit feedback detection
-    explicit_feedback = None
-    if POSITIVE_FEEDBACK.search(text):
-        explicit_feedback = 'positive'
-    elif NEGATIVE_FEEDBACK.search(text):
-        explicit_feedback = 'negative'
-
-    # Information density (unique tokens / total tokens)
-    unique_tokens = len(set(t.lower() for t in tokens))
-    information_density = unique_tokens / max(prompt_token_count, 1)
+    # NLP signals via standalone function
+    nlp = compute_nlp_signals(text, intent)
 
     signals = {
         # Context signals
@@ -153,27 +192,10 @@ def collect_routing_signals(
         'is_new_topic': is_new_topic,
         'session_exchange_count': session_exchange_count,
         'memory_confidence': memory_confidence,
-
-        # NLP signals
-        'prompt_token_count': prompt_token_count,
-        'has_question_mark': has_question_mark,
-        'interrogative_words': interrogative_words,
-        'greeting_pattern': greeting_pattern,
-        'explicit_feedback': explicit_feedback,
-        'information_density': information_density,
-        'implicit_reference': implicit_reference,
-
-        # Intent signals (from IntentClassifierService, if available)
-        'intent_complexity': 'simple',
-        'intent_type': None,
-        'intent_confidence': 0.0,
     }
 
-    # Merge intent classification signals when available
-    if intent:
-        signals['intent_complexity'] = intent.get('complexity', 'simple')
-        signals['intent_type'] = intent.get('intent_type')
-        signals['intent_confidence'] = intent.get('confidence', 0.0)
+    # Merge NLP signals
+    signals.update(nlp)
 
     return signals
 
