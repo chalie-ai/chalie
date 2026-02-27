@@ -37,7 +37,7 @@ stt_model = None
 tts_model = None
 stt_sem = None
 tts_sem = None
-_ready = False  # True once models are loaded (warmup may still be running)
+_ready = False  # True once both models are loaded
 
 app = FastAPI(title="Chalie Voice", docs_url=None, redoc_url=None)
 
@@ -67,36 +67,6 @@ async def startup():
 
     _ready = True
     logger.info("Models loaded — service accepting requests.")
-
-    # Warm models in the background so the health endpoint responds immediately.
-    asyncio.create_task(_background_warmup(loop))
-
-
-async def _background_warmup(loop):
-    """Warm both models in background threads so first real request is fast."""
-    try:
-        logger.info("Warming STT model (background)...")
-        await loop.run_in_executor(None, _warmup_stt)
-        logger.info("Warming TTS model (background)...")
-        await loop.run_in_executor(None, _warmup_tts)
-        logger.info("Warmup complete.")
-    except Exception as e:
-        logger.warning("Warmup failed (non-fatal): %s", e)
-
-
-def _warmup_stt():
-    """Run a tiny silent WAV through Whisper to warm CTranslate2 layers."""
-    sample_rate = 16000
-    silence = np.zeros(sample_rate, dtype=np.float32)  # 1 second of silence
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
-        sf.write(tmp.name, silence, sample_rate)
-        segments, _ = stt_model.transcribe(tmp.name)
-        list(segments)  # consume the generator
-
-
-def _warmup_tts():
-    """Run a short phrase through KittenTTS to warm the ONNX runtime."""
-    tts_model.generate("hello", voice=KITTEN_VOICE)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

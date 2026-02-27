@@ -73,7 +73,7 @@ frontend/
 
 #### Autonomous Behavior
 - **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle; attention-gated (skips when user in deep focus)
-- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, SuggestAction (skill-matched proactive suggestions), NurtureAction (gentle phase-appropriate presence), ReflectAction, SeedThreadAction
+- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, SuggestAction (skill-matched proactive suggestions), NurtureAction (gentle phase-appropriate presence), PlanAction (proactive plan proposals from recurring topics, 7-gate eligibility with signal persistence), ReflectAction, SeedThreadAction
 - **`spark_state_service.py`** — Tracks relationship phase progression (first_contact → surface → exploratory → connected → graduated)
 - **`spark_welcome_service.py`** — First-contact welcome message triggered on first SSE connection; runs once per lifecycle
 - **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
@@ -91,6 +91,7 @@ frontend/
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
 - **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
+- **`plan_decomposition_service.py`** — LLM-powered goal → step DAG decomposition; validates DAG (Kahn's cycle detection), step quality (4–30 word descriptions, Jaccard dedup), and cost classification (cheap/expensive); plans stored in `persistent_tasks.progress` JSONB; ready-step ordering (shallowest depth, cheapest first)
 
 #### Tool Integration
 - **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol)
@@ -135,7 +136,7 @@ frontend/
 - **`list_skill.py`** — Deterministic list management: add/remove/check items, view, history (<50ms)
 - **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
 - **`moment_skill.py`** — Natural language moment recall ("Do you remember...") and listing via pgvector search
-- **`persistent_task_skill.py`** — Multi-session background task management: create, pause, resume, cancel, check status, set priority (<100ms)
+- **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
 
 ## Worker Processes (`backend/workers/`)
 
@@ -162,7 +163,7 @@ frontend/
 - **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
-- **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); adaptive user surfacing at coverage milestones
+- **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); plan-aware execution follows step DAG when present (up to 3 steps/cycle with per-step fatigue budgets), falls back to flat loop otherwise; adaptive user surfacing at coverage milestones
 
 ## Data Flow Pipeline
 
@@ -275,7 +276,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 
 ### Operational Limits
 - **ACT loop**: 60s cumulative timeout, ~7 max iterations; post-action critic verification (0.3 fatigue cost per evaluation)
-- **Persistent tasks**: 5 active max, 3 cycles/hr rate limit, 14-day auto-expiry
+- **Persistent tasks**: 5 active max, 3 cycles/hr rate limit, 14-day auto-expiry; plan-decomposed tasks: 3–8 steps per plan, up to 3 steps executed per cycle, 3 ACT iterations per step
 - **Fatigue budget**: 2.5 activation units per 30min
 - **Per-concept cooldown**: 60min (prevents circular rumination)
 - **Delegation rate**: 1 per topic per 30min

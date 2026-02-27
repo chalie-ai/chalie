@@ -132,7 +132,7 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 13
+        assert mock_service.set_job_assignment.call_count == 14
 
         assigned_jobs = [c.args[0] for c in mock_service.set_job_assignment.call_args_list]
         expected_jobs = [
@@ -140,7 +140,7 @@ class TestProvidersAPI:
             'frontal-cortex-acknowledge', 'frontal-cortex-act', 'frontal-cortex-proactive',
             'memory-chunker', 'episodic-memory', 'semantic-memory',
             'mode-tiebreaker', 'mode-reflection', 'cognitive-drift',
-            'experience-assimilation',
+            'experience-assimilation', 'plan-decomposition',
         ]
         assert assigned_jobs == expected_jobs
 

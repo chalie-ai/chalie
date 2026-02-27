@@ -147,3 +147,84 @@ class TestAutobiographyService:
         assert len(result["episodes"]) == 1
         assert len(result["episodes"][0]["gist"]) == 503  # 500 + "..."
         assert result["episodes"][0]["gist"].endswith("...")
+
+    def test_gather_synthesis_inputs_concepts_row_mapping(self, mock_db, service):
+        """Concept rows should map to correct dict keys/values."""
+        mock_session = MagicMock()
+        mock_db.get_session.return_value.__enter__.return_value = mock_session
+        mock_db.get_session.return_value.__exit__.return_value = None
+
+        mock_session.execute.return_value.fetchall.side_effect = [
+            [],  # episodes
+            [],  # traits
+            [("Python", "knowledge", "A programming language", "tech", 0.9)],  # concepts
+            [],  # relationships
+        ]
+
+        result = service.gather_synthesis_inputs("primary")
+
+        assert len(result["concepts"]) == 1
+        assert result["concepts"][0] == {
+            "name": "Python",
+            "type": "knowledge",
+            "definition": "A programming language",
+            "domain": "tech",
+            "strength": 0.9,
+        }
+
+    def test_gather_synthesis_inputs_relationships_row_mapping(self, mock_db, service):
+        """Relationship rows should map to correct dict keys/values."""
+        mock_session = MagicMock()
+        mock_db.get_session.return_value.__enter__.return_value = mock_session
+        mock_db.get_session.return_value.__exit__.return_value = None
+
+        mock_session.execute.return_value.fetchall.side_effect = [
+            [],  # episodes
+            [],  # traits
+            [],  # concepts
+            [("Python", "Flask", "uses", 0.85)],  # relationships
+        ]
+
+        result = service.gather_synthesis_inputs("primary")
+
+        assert len(result["relationships"]) == 1
+        assert result["relationships"][0] == {
+            "source": "Python",
+            "target": "Flask",
+            "type": "uses",
+            "strength": 0.85,
+        }
+
+    def test_gather_synthesis_inputs_sql_column_names(self, mock_db, service):
+        """SQL queries must use correct column names from the actual schema."""
+        mock_session = MagicMock()
+        mock_db.get_session.return_value.__enter__.return_value = mock_session
+        mock_db.get_session.return_value.__exit__.return_value = None
+
+        mock_session.execute.return_value.fetchall.side_effect = [
+            [],  # episodes
+            [],  # traits
+            [],  # concepts
+            [],  # relationships
+        ]
+
+        service.gather_synthesis_inputs("primary")
+
+        # Capture all SQL strings passed to session.execute()
+        sql_calls = [
+            str(call.args[0]) for call in mock_session.execute.call_args_list
+        ]
+
+        # Find the concepts query (selects from semantic_concepts)
+        concepts_sql = [s for s in sql_calls if 'semantic_concepts' in s and 'JOIN' not in s]
+        assert len(concepts_sql) == 1, "Expected exactly one semantic_concepts query"
+        assert 'concept_type' in concepts_sql[0], "Concepts query must use 'concept_type', not 'type'"
+        assert 'user_id' not in concepts_sql[0], "Concepts query must not reference 'user_id'"
+
+        # Find the relationships query (joins semantic_relationships)
+        rels_sql = [s for s in sql_calls if 'semantic_relationships' in s]
+        assert len(rels_sql) == 1, "Expected exactly one semantic_relationships query"
+        assert 'source_concept_id' in rels_sql[0], "Relationships query must join on 'source_concept_id'"
+        assert 'target_concept_id' in rels_sql[0], "Relationships query must join on 'target_concept_id'"
+        assert 'relationship_type' in rels_sql[0], "Relationships query must select 'relationship_type'"
+        assert 'user_id' not in rels_sql[0], "Relationships query must not reference 'user_id'"

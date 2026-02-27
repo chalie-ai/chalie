@@ -122,8 +122,9 @@ def observability_routing():
     """Mode router decision distribution and recent activity."""
     try:
         from services.routing_decision_service import RoutingDecisionService
+        from services.database_service import get_shared_db_service
 
-        svc = RoutingDecisionService()
+        svc = RoutingDecisionService(get_shared_db_service())
         distribution = svc.get_mode_distribution(168)
         tiebreaker_rate = svc.get_tiebreaker_rate(24)
         recent = svc.get_recent_decisions(24, 20)
@@ -191,7 +192,7 @@ def observability_memory():
                 if row:
                     result['concepts'] = row[0] or 0
 
-                row = conn.execute("SELECT COUNT(*), AVG(strength) FROM user_traits").fetchone()
+                row = conn.execute("SELECT COUNT(*), AVG(confidence) FROM user_traits").fetchone()
                 if row:
                     result['traits'] = row[0] or 0
                     result['avg_trait_strength'] = round(float(row[1] or 0), 3)
@@ -244,8 +245,9 @@ def observability_identity():
     """Identity vector states."""
     try:
         from services.identity_service import IdentityService
+        from services.database_service import get_shared_db_service
 
-        svc = IdentityService()
+        svc = IdentityService(get_shared_db_service())
         raw = svc.get_vectors()
 
         vectors = {}
@@ -284,7 +286,8 @@ def observability_tasks():
         # Persistent tasks
         try:
             from services.persistent_task_service import PersistentTaskService
-            svc = PersistentTaskService()
+            from services.database_service import get_shared_db_service
+            svc = PersistentTaskService(get_shared_db_service())
             result['persistent_tasks'] = svc.get_active_tasks(1)
         except Exception as e:
             logger.warning(f"[OBS] persistent tasks error: {e}")
@@ -323,9 +326,11 @@ def observability_autobiography():
     try:
         from services.autobiography_service import AutobiographyService
         from services.autobiography_delta_service import AutobiographyDeltaService
+        from services.database_service import get_shared_db_service
 
-        narrative_data = AutobiographyService().get_current_narrative()
-        delta_data = AutobiographyDeltaService().get_changed_sections()
+        db = get_shared_db_service()
+        narrative_data = AutobiographyService(db).get_current_narrative()
+        delta_data = AutobiographyDeltaService(db).get_changed_sections()
 
         result = {
             'generated_at': _now_iso(),

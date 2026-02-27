@@ -24,20 +24,22 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 
 **Want to understand how Chalie works?** Read these in order:
 1. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — Complete system architecture, services, workers, data flow
-2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed step-by-step flow of prompt processing
-3. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Deterministic mode router and decision flow
-4. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
-5. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for Redis and PostgreSQL
+2. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual flow diagrams: every path, every Redis/DB hit, every LLM call
+3. **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed step-by-step flow of prompt processing
+4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Deterministic mode router and decision flow
+5. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
+6. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for Redis and PostgreSQL
 
 ## If You're a Developer Exploring the Codebase
 
 Recommended reading order for engineers:
 0. **[00-VISION.md](00-VISION.md)** — Start with why: product vision, design principles, and feature decision filter
-1. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; fastest way to build a mental map
-2. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
-3. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
-4. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with sandboxed tools
-5. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Token optimization and selective context injection
+1. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual map of every path, storage hit, and LLM call; fastest way to build a mental model
+2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; narrative explanation
+3. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
+4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
+5. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with sandboxed tools
+6. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Token optimization and selective context injection
 
 ## Tools & Extensions
 
@@ -72,7 +74,8 @@ docs/
 ├── 09-TOOLS.md                       ← Tools system & creation guide
 ├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
 ├── 11-MULTI-INSTANCE-SETUP.md        ← Running multiple instances on one host
-└── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
+├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
+└── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, storage, LLM calls
 ```
 
 ### Important Project Files (Not in docs/)

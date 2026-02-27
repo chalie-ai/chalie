@@ -1,0 +1,16 @@
+{
+  "temperature": 0.3,
+  "format": "json",
+  "timeout": 30,
+  "min_steps": 2,
+  "max_steps": 8,
+  "confidence_threshold": 0.5,
+  "auto_accept_confidence": 0.9,
+  "descriptions": {
+    "temperature": "Low temperature for structured, deterministic decomposition",
+    "min_steps": "Minimum step count for a valid plan (reject trivial decompositions)",
+    "max_steps": "Maximum step count (reject over-decomposition)",
+    "confidence_threshold": "Minimum decomposition_confidence to accept a plan",
+    "auto_accept_confidence": "Plans above this confidence auto-transition to accepted (if cheap)"
+  }
+}

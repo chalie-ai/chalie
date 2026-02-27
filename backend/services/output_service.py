@@ -81,6 +81,7 @@ class OutputService:
             'spark_suggest': 'drift',
             'spark_nurture': 'drift',
             'critic_escalation': 'escalation',
+            'notification': 'notification',
         }
         event_type = source_type_map.get(source, 'response')
 
