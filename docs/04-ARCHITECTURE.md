@@ -60,10 +60,11 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from all 5 memory layers with weighted budget allocation
+- **`context_assembly_service.py`** — Unified retrieval from 6 memory layers (working memory, moments, facts, gists, episodes, procedural, concepts) with weighted budget allocation; procedural hints surface learned action reliability (≥8 attempts, top 3, confidence labels)
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
-- **`user_trait_service.py`** — Per-user trait management with category-specific decay
+- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, relationship, physical, preference, communication_style, micro_preference, behavioral_pattern)
+- **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as `behavioral_pattern` user traits with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — PostgreSQL CRUD for episodic memories
 - **`semantic_storage_service.py`** — PostgreSQL CRUD for semantic concepts
 - **`gist_storage_service.py`** — Redis-backed short-term memory with deduplication
@@ -128,9 +129,9 @@ frontend/
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
 10 built-in cognitive skills for the ACT loop:
-- **`recall_skill.py`** — Unified retrieval across ALL memory layers (<500ms)
+- **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
-- **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats) (<100ms)
+- **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats, decision explanations, recent autonomous actions) (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
 - **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
@@ -164,6 +165,7 @@ frontend/
 - **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
+- **Temporal Pattern Service** — Mines behavioral patterns from interaction timestamps (24h cycle, 5min warmup); detects hour-of-day peaks, day-of-week peaks, topic-time clusters; stores as `behavioral_pattern` user traits
 - **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); plan-aware execution follows step DAG when present (up to 3 steps/cycle with per-step fatigue budgets), falls back to flat loop otherwise; adaptive user surfacing at coverage milestones
 
 ## Data Flow Pipeline
@@ -231,7 +233,8 @@ frontend/
 - **Facts** (Redis, 24h TTL) — Atomic key-value assertions
 - **Episodes** (PostgreSQL + pgvector) — Narrative units with decay
 - **Concepts** (PostgreSQL + pgvector) — Knowledge nodes and relationships
-- **User Traits** (PostgreSQL) — Personal facts with category-specific decay
+- **Procedural Memory** (PostgreSQL) — Learned action reliability; surfaced in context assembly as reliability hints (≥8 attempts, top 3 skills)
+- **User Traits** (PostgreSQL) — Personal facts with category-specific decay (includes behavioral patterns from temporal mining)
 - **Lists** (PostgreSQL) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
 Each layer optimized for its timescale; all integrated via context assembly. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
@@ -393,7 +396,7 @@ docker-compose logs -f backend
 ### Planned (Priority 1)
 
 ### Planned (Priority 2)
-- **Cross-topic pattern mining**: Behavioral prediction, sequence rules
+- **Cross-topic pattern mining**: Beyond temporal — behavioral prediction, sequence rules across topics
 - **Active error detection**: Pre-delivery validation against known facts
 - **Negative memory mechanism**: Store "X is FALSE" assertions
 

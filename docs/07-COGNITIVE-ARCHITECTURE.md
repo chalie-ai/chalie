@@ -81,9 +81,9 @@ The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, s
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
-| `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, gists, facts, episodes, concepts) |
+| `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, gists, facts, episodes, concepts, user_traits) |
 | `memorize` | memory | <50ms | Store gists (short-term) and/or facts (medium-term) |
-| `introspect` | perception | <100ms | Self-examination: context_warmth, FOK signal, recall_failure_rate, skill stats, world state |
+| `introspect` | perception | <100ms | Self-examination: context_warmth, FOK signal, recall_failure_rate, skill stats, world state, decision explanations (routing audit), recent autonomous actions |
 | `associate` | cognition | <500ms | Spreading activation from seed concepts through semantic graph |
 | `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
 | `autobiography` | narrative | <500ms | Retrieve synthesized user narrative covering identity, relationship arc, values, patterns, active threads |
