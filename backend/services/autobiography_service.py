@@ -1,5 +1,5 @@
 """
-Autobiography Service - Synthesis of user narrative from memory layers.
+Autobiography Service - Synthesis of Chalie's self-narrative from memory layers.
 
 Background service that periodically synthesizes prose from episode, trait,
 concept, and relationship data via LLM. Supports incremental updates with
@@ -31,7 +31,7 @@ class AutobiographyService:
 
     def get_current_narrative(self, user_id: str = "primary") -> Optional[Dict[str, Any]]:
         """
-        Fetch the latest version of the user's autobiography.
+        Fetch the latest version of Chalie's self-narrative.
 
         Args:
             user_id: User identifier (default: "primary")
@@ -463,7 +463,7 @@ class AutobiographyService:
             lines.append(f"- {ep['gist']} (emotion: {ep['emotion']}, topic: {ep['topic']})")
 
         if inputs["traits"]:
-            lines.append("\n## User Traits\n")
+            lines.append("\n## Observed Traits\n")
             for trait in inputs["traits"]:
                 lines.append(
                     f"- {trait['key']}: {trait['value']} "

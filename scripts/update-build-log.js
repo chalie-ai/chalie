@@ -183,17 +183,60 @@ async function callGemini(systemPrompt, userPrompt) {
   });
 }
 
+function getProjectContext() {
+  try {
+    const claudeMd = fs.readFileSync('./CLAUDE.md', 'utf8');
+    // Extract the Project Overview and Architecture Overview sections for context
+    const overviewMatch = claudeMd.match(/## Project Overview([\s\S]*?)## Non-Negotiable Rules/);
+    const archMatch = claudeMd.match(/## Architecture Overview([\s\S]*?)### Service Organization/);
+    const serviceMatch = claudeMd.match(/#### Core Services[\s\S]*?#### Worker Processes/);
+    const parts = [
+      overviewMatch ? overviewMatch[0].trim() : '',
+      archMatch ? archMatch[0].trim() : '',
+      serviceMatch ? serviceMatch[0].slice(0, 1500).trim() : ''
+    ].filter(Boolean);
+    return parts.join('\n\n');
+  } catch (e) {
+    return 'Chalie: a personal intelligence layer that protects attention and executes intent.';
+  }
+}
+
+function getDiffsForCommits(commits) {
+  const MAX_DIFF_CHARS = 4000;
+  const diffs = [];
+  for (const commit of commits) {
+    try {
+      const diff = execSync(
+        `git show --stat --patch --no-color ${commit.hash}`,
+        { encoding: 'utf8', maxBuffer: 1024 * 1024 }
+      );
+      // Trim per-commit diff to avoid overwhelming the prompt
+      diffs.push(`### ${commit.subject}\n${diff.slice(0, MAX_DIFF_CHARS)}${diff.length > MAX_DIFF_CHARS ? '\n[...truncated]' : ''}`);
+    } catch (e) {
+      diffs.push(`### ${commit.subject}\n[diff unavailable]`);
+    }
+  }
+  return diffs.join('\n\n');
+}
+
 async function generateBuildLogEntry(commits, stats) {
   const isTrivial = isAllTrivial(commits);
   const commitsText = formatCommitsForPrompt(commits);
+  const projectContext = getProjectContext();
+  const diffsText = getDiffsForCommits(commits);
 
   const systemPrompt = `You are writing a developer diary entry for the Chalie project build log.
+
+Project context:
+${projectContext}
+
 Write a coherent daily summary — honest, conversational prose grouped by theme.
-Do not include commit hashes or timestamps. Group related work. Be factual and concise.
+Do not include commit hashes, timestamps, or dates in the title. Group related work. Be factual and concise.
+The title should reflect the theme or focus of the work, not the date.
 
 Return ONLY valid JSON, nothing else:
 {
-  "title": "Month Day — Short Theme or Topic",
+  "title": "Short Theme or Topic",
   "description": "One sentence summary of today's work.",
   "tags": ["lowercase-tag", "another-tag"],
   "body": "## Section\n\nProse here...\n"
@@ -201,8 +244,11 @@ Return ONLY valid JSON, nothing else:
 
   const userPrompt = `Stats: ${stats.totalCommits} commits, ${stats.totalFilesChanged} files changed.
 
-${isTrivial ? 'Note: These are primarily maintenance commits.\n\n' : ''}Today's commits:
-${commitsText}`;
+${isTrivial ? 'Note: These are primarily maintenance commits.\n\n' : ''}Commit summaries:
+${commitsText}
+
+Full diffs:
+${diffsText}`;
 
   // Retry once on failure
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -228,17 +274,10 @@ function normalizeTags(tags) {
 }
 
 function formatFrontmatter(entry, date) {
-  const dateParts = date.split('-');
-  const dateObj = new Date(`${date}T00:00:00Z`);
-  const months = ['January', 'February', 'March', 'April', 'May', 'June',
-                  'July', 'August', 'September', 'October', 'November', 'December'];
-  const month = months[dateObj.getUTCMonth()];
-  const day = dateObj.getUTCDate();
-
   const normalizedTags = normalizeTags(entry.tags);
 
   return `---
-title: "${month} ${day} — ${entry.title}"
+title: "${entry.title}"
 description: "${entry.description}"
 date: ${date}
 tags: [${normalizedTags.map(t => `"${t}"`).join(', ')}]
