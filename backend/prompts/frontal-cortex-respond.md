@@ -78,6 +78,8 @@ Your response is rendered as Markdown. Use formatting when it makes the answer c
 
 {{episodic_memory}}
 
+{{semantic_concepts}}
+
 Previous Internal Actions (use these results to inform your response):
 {{act_history}}
 
