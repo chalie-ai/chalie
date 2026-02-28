@@ -460,7 +460,6 @@ class UserTraitService:
                         (user_id, trait_key, new_value, 0.95, category or 'general', embedding)
                     )
                     logger.info(f"[USER_TRAITS] Inserted corrected trait '{trait_key}' = '{new_value}'")
-                conn.commit()
             return True
         except Exception as e:
             logger.error(f"[TRAITS] Correction failed for {trait_key}: {e}")
@@ -476,7 +475,6 @@ class UserTraitService:
                     (user_id, trait_key)
                 )
                 deleted = cursor.rowcount
-                conn.commit()
             if deleted > 0:
                 logger.info(f"[USER_TRAITS] Deleted trait '{trait_key}' (user negation)")
             return deleted > 0

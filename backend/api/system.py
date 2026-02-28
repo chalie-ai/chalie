@@ -481,8 +481,8 @@ def activity_feed():
         from services.interaction_log_service import InteractionLogService
 
         since_hours = request.args.get('since_hours', 24, type=int)
-        limit = min(request.args.get('limit', 50, type=int), 200)
-        offset = request.args.get('offset', 0, type=int)
+        limit = min(max(1, request.args.get('limit', 50, type=int)), 200)
+        offset = max(0, request.args.get('offset', 0, type=int))
 
         # Clamp since_hours to reasonable range (1h to 7 days)
         since_hours = max(1, min(since_hours, 168))

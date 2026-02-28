@@ -50,6 +50,82 @@ def persistent_task_worker(shared_state):
         time.sleep(sleep_time)
 
 
+def run_immediate_task(task_id: int):
+    """
+    Execute a task to completion in one RQ job.
+
+    For tasks that should finish NOW (user asked for research, comparison,
+    crawl, etc.). Runs all plan steps sequentially with no cycle gaps.
+
+    Falls back to periodic scheduling only if the task can't complete in
+    one shot (e.g., blocked dependencies, errors).
+    """
+    from services.database_service import get_shared_db_service
+    from services.persistent_task_service import PersistentTaskService
+
+    db = get_shared_db_service()
+    task_service = PersistentTaskService(db)
+
+    task = task_service.get_task(task_id)
+    if not task:
+        logger.warning(f"{LOG_PREFIX} run_immediate_task: task {task_id} not found")
+        return
+    if task['status'] not in ('accepted', 'in_progress'):
+        logger.info(f"{LOG_PREFIX} run_immediate_task: task {task_id} status '{task['status']}' — skipping")
+        return
+
+    logger.info(f"{LOG_PREFIX} Immediate execution for task {task_id}: {task['goal'][:80]}")
+
+    # Park the periodic worker — push next_run_after far into the future
+    # so the 30-min cycle doesn't also pick up this task concurrently.
+    task_service.set_next_run(task_id, delay_seconds=86400)
+
+    # Transition to IN_PROGRESS
+    if task['status'] == 'accepted':
+        ok, msg = task_service.transition(task_id, 'in_progress')
+        if not ok:
+            logger.warning(f"{LOG_PREFIX} Cannot start task {task_id}: {msg}")
+            return
+
+    # Plan decomposition
+    progress = task.get('progress', {}) or {}
+    if not progress.get('plan'):
+        progress = _attempt_plan_decomposition(task_service, task, progress)
+        task['progress'] = progress
+
+    # Execute — no step cap, run everything
+    try:
+        result_data = _execute_task_act_loop(task, max_steps=None)
+    except Exception as e:
+        logger.error(f"{LOG_PREFIX} Immediate execution failed for task {task_id}: {e}", exc_info=True)
+        # Task stays in_progress — periodic worker can retry
+        task_service.set_next_run(task_id, BASE_CYCLE_SECONDS)
+        return
+
+    # Checkpoint
+    new_progress = dict(progress)
+    new_progress.update(result_data.get('progress_update', {}))
+    new_progress['cycles_completed'] = progress.get('cycles_completed', 0) + 1
+    new_progress['last_cycle_at'] = datetime.now(timezone.utc).isoformat()
+
+    task_service.checkpoint(task_id=task_id, progress=new_progress)
+
+    # Complete?
+    if result_data.get('task_complete', False):
+        final_result = new_progress.get('last_summary', 'Task completed.')
+        task_service.complete_task(task_id, final_result, result_data.get('artifact'))
+        _surface_completion(task, final_result)
+        logger.info(f"{LOG_PREFIX} Task {task_id} completed (immediate)!")
+    else:
+        # Couldn't finish in one shot — hand off to periodic worker
+        task_service.set_next_run(task_id, BASE_CYCLE_SECONDS)
+        _surface_progress(task, new_progress)
+        logger.info(
+            f"{LOG_PREFIX} Task {task_id} partially done — "
+            f"handing off to periodic worker"
+        )
+
+
 def _run_cycle():
     """Execute one processing cycle: pick task → ACT loop → checkpoint."""
     from services.database_service import get_shared_db_service
@@ -72,6 +148,13 @@ def _run_cycle():
     task_id = task['id']
     logger.info(f"{LOG_PREFIX} Processing task {task_id}: {task['goal'][:80]}")
 
+    _process_task(task_service, task)
+
+
+def _process_task(task_service, task):
+    """Periodic task processing — one bounded cycle for the 30-min background worker."""
+    task_id = task['id']
+
     # Rate limit check
     if not task_service.check_rate_limit(task_id):
         logger.info(f"{LOG_PREFIX} Task {task_id} rate-limited (max {3}/hr)")
@@ -84,8 +167,14 @@ def _run_cycle():
             logger.warning(f"{LOG_PREFIX} Cannot start task {task_id}: {msg}")
             return
 
-    # Run the ACT loop for this task
+    # Attempt plan decomposition on first cycle if no plan exists yet
     progress = task.get('progress', {}) or {}
+    if not progress.get('plan'):
+        progress = _attempt_plan_decomposition(task_service, task, progress)
+        # Update in-memory task so _execute_task_act_loop sees the plan
+        task['progress'] = progress
+
+    # Run the ACT loop for this task
     prev_coverage = progress.get('coverage_estimate', 0.0)
 
     try:
@@ -139,12 +228,68 @@ def _run_cycle():
     )
 
 
-def _execute_task_act_loop(task: dict) -> dict:
+def _attempt_plan_decomposition(task_service, task, progress: dict) -> dict:
+    """
+    Try to decompose the task goal into a step DAG on the first cycle.
+
+    Runs in the background worker where the time budget is generous (2min),
+    unlike the 10s dispatcher timeout where inline decomposition always failed.
+
+    Returns the (possibly updated) progress dict. Non-fatal: if decomposition
+    fails, the task proceeds as a flat ACT loop.
+    """
+    task_id = task['id']
+    goal = task.get('goal', '')
+    scope = task.get('scope')
+
+    try:
+        from services.plan_decomposition_service import PlanDecompositionService
+        decomposer = PlanDecompositionService()
+        plan = decomposer.decompose(goal, scope)
+
+        if plan:
+            progress = dict(progress)
+            progress['plan'] = plan
+            progress['coverage_estimate'] = 0.0
+            task_service.checkpoint(task_id=task_id, progress=progress)
+
+            step_count = len(plan.get('steps', []))
+            confidence = plan.get('decomposition_confidence', 0)
+            cost_class = plan.get('cost_class', 'unknown')
+            logger.info(
+                f"{LOG_PREFIX} Plan decomposed for task {task_id}: "
+                f"{step_count} steps, confidence={confidence:.2f}, cost={cost_class}"
+            )
+        else:
+            logger.info(
+                f"{LOG_PREFIX} No plan produced for task {task_id} — "
+                f"proceeding with flat ACT loop"
+            )
+    except Exception as e:
+        logger.warning(
+            f"{LOG_PREFIX} Plan decomposition failed for task {task_id}: {e}"
+        )
+
+    return progress
+
+
+# ── Plan-Aware Execution Constants ──────────────────────────────────
+MAX_STEPS_PER_CYCLE = 3      # periodic mode: steps per 30-min cycle
+MAX_ITERATIONS_PER_STEP = 3  # ACT loop iterations per step
+MIN_PER_STEP_BUDGET = 3.0    # minimum fatigue budget per step
+
+
+def _execute_task_act_loop(task: dict, max_steps: int | None = MAX_STEPS_PER_CYCLE) -> dict:
     """
     Run a bounded ACT loop for a persistent task.
 
     Branches to plan-aware execution if the task has a step DAG,
     otherwise falls through to the flat ACT loop.
+
+    Args:
+        task: Task dict with goal, progress, etc.
+        max_steps: Max plan steps per invocation. None = unlimited (immediate mode).
+                   Defaults to MAX_STEPS_PER_CYCLE (periodic mode).
 
     Returns dict with:
       - progress_update: dict
@@ -156,7 +301,7 @@ def _execute_task_act_loop(task: dict) -> dict:
     plan = progress.get('plan')
 
     if plan and plan.get('steps'):
-        return _execute_plan_aware_loop(task, plan)
+        return _execute_plan_aware_loop(task, plan, max_steps=max_steps)
     else:
         return _execute_flat_loop(task)
 
@@ -248,20 +393,14 @@ def _execute_flat_loop(task: dict) -> dict:
     }
 
 
-# ── Plan-Aware Execution ─────────────────────────────────────────────
-
-MAX_STEPS_PER_CYCLE = 3
-MAX_ITERATIONS_PER_STEP = 3
-MIN_PER_STEP_BUDGET = 3.0
-
-
-def _execute_plan_aware_loop(task: dict, plan: dict) -> dict:
+def _execute_plan_aware_loop(task: dict, plan: dict,
+                             max_steps: int | None = MAX_STEPS_PER_CYCLE) -> dict:
     """
     Execute steps from the plan DAG in dependency order.
 
-    Each cycle processes up to MAX_STEPS_PER_CYCLE ready steps, each with
-    a bounded ACT loop (MAX_ITERATIONS_PER_STEP iterations, fractional
-    fatigue budget).
+    Args:
+        max_steps: Step cap per invocation. None = unlimited (immediate mode).
+                   Defaults to MAX_STEPS_PER_CYCLE (periodic mode).
     """
     from services.plan_decomposition_service import PlanDecompositionService
 
@@ -313,17 +452,26 @@ def _execute_plan_aware_loop(task: dict, plan: dict) -> dict:
             'artifact': None,
         }
 
-    # Cap ready steps per cycle
-    steps_to_run = ready_steps[:MAX_STEPS_PER_CYCLE]
+    # Process ready steps, re-evaluating after each completion so that
+    # newly-unblocked steps (sequential DAG) run in the same invocation.
+    total_steps = len(plan.get('steps', []))
+    step_limit = max_steps if max_steps is not None else total_steps
     fatigue_budget = task.get('fatigue_budget', 15.0)
-    per_step_budget = max(MIN_PER_STEP_BUDGET, fatigue_budget / len(steps_to_run))
+    budget_divisor = min(step_limit, total_steps) or 1
+    per_step_budget = max(MIN_PER_STEP_BUDGET, fatigue_budget / budget_divisor)
+    steps_processed = 0
 
+    mode_label = "immediate" if max_steps is None else f"periodic (max {step_limit})"
     logger.info(
-        f"{LOG_PREFIX} Task {task['id']}: executing {len(steps_to_run)} steps "
-        f"(budget {per_step_budget:.1f} each)"
+        f"{LOG_PREFIX} Task {task['id']}: {len(ready_steps)} steps ready, "
+        f"{mode_label}, budget {per_step_budget:.1f}/step"
     )
 
-    for step in steps_to_run:
+    while steps_processed < step_limit:
+        ready_now = PlanDecompositionService.get_ready_steps(plan)
+        if not ready_now:
+            break
+        step = ready_now[0]
         try:
             plan = _execute_single_step(task, plan, step, per_step_budget)
         except Exception as e:
@@ -335,6 +483,7 @@ def _execute_plan_aware_loop(task: dict, plan: dict) -> dict:
                 failure_reason=str(e)[:200],
                 retryable=True,
             )
+        steps_processed += 1
 
     coverage = PlanDecompositionService.get_plan_coverage(plan)
     completed_steps = [
@@ -347,13 +496,27 @@ def _execute_plan_aware_loop(task: dict, plan: dict) -> dict:
         if last_completed else 'Processing steps...'
     )
 
+    # Check if all steps resolved after this cycle's execution
+    plan_steps = plan.get('steps', [])
+    all_resolved = bool(plan_steps) and all(
+        s.get('status') in ('completed', 'skipped')
+        for s in plan_steps
+    )
+    if all_resolved:
+        results = [
+            s.get('result_summary', '')
+            for s in plan['steps']
+            if s.get('status') == 'completed' and s.get('result_summary')
+        ]
+        summary = ' | '.join(results) if results else 'All steps completed.'
+
     return {
         'progress_update': {
             'plan': plan,
             'coverage_estimate': coverage,
             'last_summary': summary,
         },
-        'task_complete': False,
+        'task_complete': all_resolved,
         'result_fragment': None,
         'artifact': None,
     }

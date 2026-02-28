@@ -77,9 +77,9 @@ def data_summary():
             except Exception:
                 pass
 
-        # Redis fact count
+        # Redis fact count (SCAN avoids O(N) keyspace block of KEYS)
         try:
-            result["facts"] = len(redis.keys("fact_index:*"))
+            result["facts"] = sum(1 for _ in redis.scan_iter(match="fact_index:*", count=100))
         except Exception:
             result["facts"] = 0
 
@@ -113,18 +113,27 @@ def export_data():
             "procedural_memory", "topics", "user_tool_preferences",
         ]
 
+        MAX_EXPORT_ROWS = 10000  # Safety cap per table to prevent memory exhaustion
+
         with db.connection() as conn:
             for table in user_data_tables:
                 try:
                     cursor = conn.cursor()
-                    cursor.execute(f"SELECT * FROM {table}")
+                    # Count first, then fetch with limit
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    total_count = cursor.fetchone()[0]
+                    cursor.execute(f"SELECT * FROM {table} LIMIT {MAX_EXPORT_ROWS}")
                     columns = [desc[0] for desc in cursor.description]
                     rows = cursor.fetchall()
-                    export["tables"][table] = {
-                        "count": len(rows),
+                    entry = {
+                        "count": total_count,
                         "columns": columns,
                         "rows": [_serialize_row(dict(zip(columns, row))) for row in rows],
                     }
+                    if total_count > MAX_EXPORT_ROWS:
+                        entry["truncated"] = True
+                        entry["exported_rows"] = MAX_EXPORT_ROWS
+                    export["tables"][table] = entry
                 except Exception:
                     export["tables"][table] = {"count": 0, "error": "table not found or empty"}
 
@@ -250,6 +259,7 @@ def delete_all():
         # NOTE: lists CASCADE handles list_items and list_events via FK relationships
         # NOTE: interaction_log is truncated here; the audit entry below is written after
         db = get_shared_db_service()
+        truncate_failures = []
         with db.connection() as conn:
             for table in [
                 # User-personal data (critical)
@@ -284,9 +294,9 @@ def delete_all():
                 try:
                     cursor = conn.cursor()
                     cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
-                except Exception:
-                    pass
-            conn.commit()
+                except Exception as e:
+                    logger.warning(f"[REST API] Failed to truncate {table}: {e}")
+                    truncate_failures.append(table)
 
         # Audit trail — log the deletion event AFTER truncation so it persists
         try:
@@ -300,7 +310,10 @@ def delete_all():
             pass
 
         ts = datetime.now(timezone.utc).isoformat()
-        return jsonify({"deleted": True, "timestamp": ts}), 200
+        result = {"deleted": True, "timestamp": ts}
+        if truncate_failures:
+            result["warnings"] = f"Failed to truncate: {', '.join(truncate_failures)}"
+        return jsonify(result), 200
 
     except Exception as e:
         logger.error(f"[REST API] privacy/delete-all error: {e}", exc_info=True)
