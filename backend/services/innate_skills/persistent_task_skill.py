@@ -35,6 +35,8 @@ def handle_persistent_task(topic: str, params: dict) -> str:
 
     if action == "create":
         return _create(topic, params)
+    elif action == "confirm":
+        return _confirm(topic, params)
     elif action == "status":
         return _status(topic, params)
     elif action == "pause":
@@ -77,7 +79,12 @@ def _get_account_id() -> int:
 
 
 def _create(topic: str, params: dict) -> str:
-    """Create a new persistent task with plan decomposition."""
+    """Create a new persistent task.
+
+    Routing by origin:
+    - origin='system' (cognitive drift, curiosity): auto-accept, periodic execution
+    - origin='user' (default): stays proposed, ask user "now or deep dive?"
+    """
     goal = params.get("goal", params.get("query", params.get("text", "")))
     if not goal:
         return "No goal specified for the persistent task."
@@ -96,6 +103,7 @@ def _create(topic: str, params: dict) -> str:
 
     scope = params.get("scope")
     priority = int(params.get("priority", 5))
+    origin = params.get("origin", "user")
 
     task = service.create_task(
         account_id=account_id,
@@ -105,57 +113,69 @@ def _create(topic: str, params: dict) -> str:
     )
     task_id = task['id']
 
-    # Attempt plan decomposition
-    plan = None
-    try:
-        from services.plan_decomposition_service import PlanDecompositionService
-        decomposer = PlanDecompositionService()
-        plan = decomposer.decompose(goal, scope)
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Plan decomposition failed: {e}")
+    if origin == "system":
+        # System-originated: auto-accept, deferred periodic execution
+        ok, msg = service.transition(task_id, 'accepted')
+        if not ok:
+            logger.warning(f"{LOG_PREFIX} Could not auto-accept task {task_id}: {msg}")
+            return f"Task created but could not start: {msg}"
+        logger.info(f"{LOG_PREFIX} System task {task_id} auto-accepted (periodic)")
+        return f"Background task created: \"{goal[:80]}\" — running on periodic schedule."
 
-    if plan:
-        # Store plan in task progress via checkpoint
-        progress = {'plan': plan, 'coverage_estimate': 0.0}
-        service.checkpoint(task_id=task_id, progress=progress)
+    # User-originated: stay proposed, let user choose execution mode
+    scope_line = f"\nScope: {scope}" if scope else ""
+    return (
+        f"I've identified this as a deeper task: \"{goal[:80]}\"{scope_line}\n"
+        f"Task #{task_id} ready. Should I handle this quickly now, "
+        f"or do a thorough deep dive and get back to you later?"
+    )
 
-        cost_class = plan.get('cost_class', 'expensive')
-        confidence = plan.get('decomposition_confidence', 0.0)
-        auto_accept = decomposer.auto_accept_confidence
 
-        step_list = '\n'.join(
-            f"  {i+1}. {s['description']}"
-            for i, s in enumerate(plan['steps'])
-        )
+def _confirm(topic: str, params: dict) -> str:
+    """Confirm a proposed task and choose execution mode.
 
-        if cost_class == 'cheap' and confidence >= auto_accept:
-            # Auto-accept cheap, high-confidence plans
-            service.transition(task_id, 'accepted')
-            return (
-                f"Task created and auto-started: \"{goal[:80]}\"\n"
-                f"Plan ({len(plan['steps'])} steps, confidence {confidence:.0%}):\n"
-                f"{step_list}\n"
-                f"Working on this in the background."
-            )
+    mode='now': immediate execution — all steps run in one shot
+    mode='later': periodic execution — 30-min cycles, thorough deep dive
+    """
+    service = _get_service()
+    task_id = _resolve_task_id(params)
+    if not task_id:
+        # Try to find the most recent proposed task
+        account_id = _get_account_id()
+        active = service.get_active_tasks(account_id)
+        proposed = [t for t in active if t['status'] == 'proposed']
+        if proposed:
+            task_id = proposed[-1]['id']  # Most recent
         else:
-            return (
-                f"Task proposed: \"{goal[:80]}\"\n"
-                f"Plan ({len(plan['steps'])} steps, confidence {confidence:.0%}):\n"
-                f"{step_list}\n"
-                f"Confirm to start, or adjust the scope."
-            )
+            return "No pending task to confirm."
 
-    # Fallback: no plan (decomposition failed or wasn't possible)
-    if scope:
+    task = service.get_task(task_id)
+    if not task:
+        return f"Task {task_id} not found."
+    if task['status'] != 'proposed':
+        return f"Task {task_id} is already {task['status']}."
+
+    ok, msg = service.transition(task_id, 'accepted')
+    if not ok:
+        return f"Cannot start task: {msg}"
+
+    mode = params.get("mode", "now").lower()
+    if mode not in ("now", "later"):
+        logger.info(f"{LOG_PREFIX} Unknown mode '{mode}' for task {task_id}, defaulting to 'now'")
+        mode = "now"
+
+    if mode == "now":
+        _enqueue_immediate_task(task_id)
         return (
-            f"Task proposed: \"{goal[:80]}\"\n"
-            f"Scope: {scope}\n"
-            f"I'll work on this in the background. Confirm to start."
+            f"On it — executing \"{task['goal'][:60]}\" now. "
+            f"I'll let you know when I have results."
         )
     else:
+        # Periodic — background worker picks it up on next 30-min cycle
+        service.set_next_run(task_id, delay_seconds=0)
         return (
-            f"Task proposed: \"{goal[:80]}\"\n"
-            f"Could you help me scope this? For example, time range, specific topics, or constraints?"
+            f"Deep dive started for \"{task['goal'][:60]}\". "
+            f"I'll work on this thoroughly in the background and update you as I go."
         )
 
 
@@ -317,6 +337,19 @@ def _show_plan(topic: str, params: dict) -> str:
     lines.append(f"Progress: {coverage:.0%} ({sum(1 for s in steps if s.get('status') in ('completed', 'skipped'))}/{len(steps)} steps)")
 
     return '\n'.join(lines)
+
+
+def _enqueue_immediate_task(task_id: int):
+    """Enqueue immediate full execution for a task via RQ."""
+    try:
+        from services.prompt_queue import PromptQueue
+        from workers.persistent_task_worker import run_immediate_task
+        queue = PromptQueue(queue_name="persistent-task-immediate", worker_func=run_immediate_task)
+        queue.enqueue(task_id)
+        logger.info(f"{LOG_PREFIX} Enqueued immediate execution for task {task_id}")
+    except Exception as e:
+        # Non-fatal: periodic worker will pick it up on next cycle
+        logger.warning(f"{LOG_PREFIX} Could not enqueue immediate task {task_id}: {e}")
 
 
 def _resolve_task_id(params: dict) -> int | None:

@@ -425,20 +425,36 @@ class PlanDecompositionService:
 
     @staticmethod
     def _get_available_tools() -> str:
-        """List available external tools from the tool registry."""
+        """List available external tools from the tool registry with rich profiles."""
         try:
-            from services.database_service import get_shared_db_service
             from services.tool_registry_service import ToolRegistryService
-            db = get_shared_db_service()
-            registry = ToolRegistryService(db)
-            tools = registry.list_tools()
-            if not tools:
+            registry = ToolRegistryService()
+            on_demand = registry.get_on_demand_tools()
+            if not on_demand:
                 return 'No external tools configured.'
+
+            # Try profiler first (same rich profiles used in ACT prompt)
+            try:
+                from services.tool_profile_service import ToolProfileService
+                profiles = ToolProfileService().get_profiles_for_tools(on_demand)
+                if profiles:
+                    lines = []
+                    for p in profiles:
+                        name = p.get('tool_name', '')
+                        text = p.get('full_profile', '') or p.get('short_summary', '')
+                        lines.append(f'- **{name}**: {text}')
+                    return '\n'.join(lines)
+            except Exception:
+                pass
+
+            # Fallback: manifest documentation field
             lines = []
-            for t in tools:
-                name = t.get('name', 'unknown')
-                desc = t.get('description', 'No description')
-                lines.append(f'- **{name}**: {desc}')
-            return '\n'.join(lines)
+            for name in sorted(on_demand):
+                if name not in registry.tools:
+                    continue
+                manifest = registry.tools[name]["manifest"]
+                doc = manifest.get("documentation", "") or manifest.get("description", "")
+                lines.append(f'- **{name}**: {doc}')
+            return '\n'.join(lines) if lines else 'No external tools configured.'
         except Exception:
             return 'No external tools configured.'

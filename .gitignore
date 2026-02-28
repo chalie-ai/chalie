@@ -19,5 +19,8 @@ __pycache__/
 .claude/
 Claude.md
 
+# Planning docs (local only)
+plans/
+
 # Frontend build artifacts (none currently, vanilla JS)
 node_modules/

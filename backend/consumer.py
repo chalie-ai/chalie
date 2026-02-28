@@ -342,7 +342,7 @@ if __name__ == "__main__":
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
     from services.curiosity_pursuit_service import curiosity_pursuit_worker
-    from workers.persistent_task_worker import persistent_task_worker
+    from workers.persistent_task_worker import persistent_task_worker, run_immediate_task
 
     # 5. RESOLVE HOSTNAMES (BEFORE FORKING)
     # This prevents DNS lookup segfaults in child processes on macOS
@@ -484,6 +484,14 @@ if __name__ == "__main__":
         worker_id="tool-worker-1",
         worker_type="idle-busy",
         queue=tool_queue
+    )
+
+    # Register persistent task immediate queue (immediate full execution)
+    pt_immediate_queue = PromptQueue(queue_name="persistent-task-immediate", worker_func=run_immediate_task)
+    manager.register_worker(
+        worker_id="persistent-task-immediate-1",
+        worker_type="idle-busy",
+        queue=pt_immediate_queue
     )
 
     # Register idle consolidation service (STORY-12)

@@ -12,9 +12,11 @@ from typing import List, Optional, Dict, Any
 from services.database_service import DatabaseService
 
 
-# Activity-relevant event types (autonomous actions only, not conversation)
+# Activity-relevant event types (autonomous actions only, not conversation).
+# proactive_candidate intentionally excluded — those are thoughts Chalie
+# decided NOT to send; surfacing them undermines the judgment layer.
 _ACTIVITY_EVENT_TYPES = (
-    'proactive_sent', 'proactive_candidate',
+    'proactive_sent',
     'act_loop_telemetry', 'cron_tool_executed',
     'plan_proposed', 'curiosity_thread_seeded',
     'spark_nurture_sent', 'spark_suggestion_sent',
@@ -35,7 +37,6 @@ def _summarize_event(event_type: str, payload: dict) -> str:
         'spark_suggestion_sent': lambda: f"Suggested: {p.get('skill_name', 'something')}",
         'spark_phase_change': lambda: "Relationship phase updated",
         'place_transition': lambda: "Noticed a location change",
-        'proactive_candidate': lambda: f"Considered sharing: {p.get('thought_content', '')[:60]}",
     }
     fn = summaries.get(event_type, lambda: event_type.replace('_', ' ').title())
     try:
@@ -249,8 +250,13 @@ class InteractionLogService:
         Returns:
             dict with 'items', 'total', and 'since_hours'
         """
+        since_hours = max(1, min(since_hours, 168))
         since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
         items = []
+
+        # SQL-level cap prevents memory exhaustion on long time windows.
+        # We fetch more than `limit` to allow cross-source sorting, but bound it.
+        sql_cap = min((offset + limit) * 3, 1000)
 
         try:
             with self.db_service.connection() as conn:
@@ -262,8 +268,8 @@ class InteractionLogService:
                     f"SELECT id, event_type, topic, payload, source, created_at "
                     f"FROM interaction_log "
                     f"WHERE created_at > %s AND event_type IN ({placeholders}) "
-                    f"ORDER BY created_at DESC",
-                    (since, *_ACTIVITY_EVENT_TYPES)
+                    f"ORDER BY created_at DESC LIMIT %s",
+                    (since, *_ACTIVITY_EVENT_TYPES, sql_cap)
                 )
                 for row in cursor.fetchall():
                     items.append({
@@ -271,7 +277,6 @@ class InteractionLogService:
                         'type': row[1],
                         'topic': row[2],
                         'summary': _summarize_event(row[1], row[3]),
-                        'detail': row[3],
                         'occurred_at': row[5].isoformat() if row[5] else None,
                     })
 
@@ -281,8 +286,8 @@ class InteractionLogService:
                         "SELECT id, goal, status, progress, updated_at "
                         "FROM persistent_tasks "
                         "WHERE updated_at > %s "
-                        "ORDER BY updated_at DESC",
-                        (since,)
+                        "ORDER BY updated_at DESC LIMIT %s",
+                        (since, sql_cap)
                     )
                     for row in cursor.fetchall():
                         progress = row[3] or {}
@@ -308,8 +313,8 @@ class InteractionLogService:
                         "SELECT id, message, item_type, topic, last_fired_at "
                         "FROM scheduled_items "
                         "WHERE status = 'fired' AND last_fired_at > %s "
-                        "ORDER BY last_fired_at DESC",
-                        (since,)
+                        "ORDER BY last_fired_at DESC LIMIT %s",
+                        (since, sql_cap)
                     )
                     for row in cursor.fetchall():
                         items.append({
