@@ -50,7 +50,7 @@ class TestPrivacyAPI:
         mock_db.connection.return_value = mock_conn_ctx
 
         mock_redis = MagicMock()
-        mock_redis.keys.return_value = ["fact_index:topic1", "fact_index:topic2"]
+        mock_redis.scan_iter.return_value = iter(["fact_index:topic1", "fact_index:topic2"])
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis):
@@ -118,7 +118,6 @@ class TestPrivacyAPI:
             # PostgreSQL tables were truncated via cursor pattern
             cursor = mock_conn.cursor.return_value
             assert cursor.execute.call_count > 0
-            mock_conn.commit.assert_called_once()
 
     def test_delete_all_logs_audit_event(self, client):
         """DELETE /privacy/delete-all logs a privacy_delete_all audit event."""

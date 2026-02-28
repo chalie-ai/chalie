@@ -57,6 +57,7 @@ class ContextRelevanceService:
         'onboarding_nudge': 80,
         'warm_return_hint': 80,
         'adaptive_directives': 150,
+        'concepts': 400,
     }
 
     def __init__(self, config_path: Optional[str] = None):

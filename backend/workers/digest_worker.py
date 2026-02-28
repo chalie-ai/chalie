@@ -1976,11 +1976,16 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
             if confidence < 0.4:
                 continue
 
+            # GUARDRAIL 3: Skip empty trait values — "" is substring of everything
+            if not value or not value.strip():
+                continue
+
             # Check if the user's message negates this specific trait value
+            escaped_value = re.escape(value.lower())
             if value.lower() in text_lower:
                 negation_near_value = re.search(
-                    rf"\b(?:not|don'?t|never|no longer|isn'?t|aren'?t|wasn'?t|wrong)\b.{{0,30}}{re.escape(value.lower())}|"
-                    rf"{re.escape(value.lower())}.{{0,30}}\b(?:is wrong|is incorrect|is not right|isn'?t right)\b",
+                    rf"\b(?:not|don'?t|never|no longer|isn'?t|aren'?t|wasn'?t|wrong)\b.{{0,30}}\b{escaped_value}\b|"
+                    rf"\b{escaped_value}\b.{{0,30}}\b(?:is wrong|is incorrect|is not right|isn'?t right)\b",
                     text_lower
                 )
                 if negation_near_value:
@@ -2003,7 +2008,7 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
                     logging.info(f"[BELIEF CORRECTION] Corrected trait '{key}': '{value}' → '{new_value}'")
 
     except Exception as e:
-        logging.debug(f"[BELIEF CORRECTION] Hook error: {e}")
+        logging.warning(f"[BELIEF CORRECTION] Hook failed (non-fatal): {e}")
 
 
 def _try_proactive_engagement_correlation(text: str, topic: str):
