@@ -42,6 +42,10 @@ def handle_introspect(topic: str, params: dict) -> str:
     state["focus_active"] = _get_focus_active(params.get('thread_id', topic))
     state["communication_style"] = _get_communication_style()
 
+    # Decision transparency
+    state["decision_explanations"] = _get_recent_decision_explanations()
+    state["recent_autonomous_actions"] = _get_recent_autonomous_actions()
+
     # Triage-filtered tool details (auto-injected via context_extras)
     triage_tools = params.get('triage_tools', [])
     if triage_tools:
@@ -271,6 +275,105 @@ def _get_communication_style() -> dict:
         return {}
 
 
+def _get_recent_decision_explanations(limit: int = 3) -> list:
+    """
+    Get full decision context for recent routing decisions.
+
+    Expands _get_recent_modes() to include scores, key signals, confidence,
+    and tiebreaker info — all the data needed for honest "why" explanations.
+    The LLM translates this into plain language; raw numbers are never shown
+    unless the user explicitly requests technical detail.
+    """
+    try:
+        from services.routing_decision_service import RoutingDecisionService
+        from services.database_service import get_shared_db_service
+
+        db_service = get_shared_db_service()
+        service = RoutingDecisionService(db_service)
+        decisions = service.get_recent_decisions(hours=1, limit=limit)
+
+        explanations = []
+        for d in decisions:
+            scores = d.get('scores') or {}
+            signals = d.get('signal_snapshot') or {}
+
+            # Extract the most human-meaningful signals only
+            key_signals = {}
+            if signals.get('context_warmth') is not None:
+                key_signals['context_warmth'] = round(signals['context_warmth'], 2)
+            if signals.get('has_question_mark'):
+                key_signals['question_detected'] = True
+            if signals.get('greeting_pattern'):
+                key_signals['greeting_detected'] = True
+            if signals.get('explicit_feedback'):
+                key_signals['user_feedback'] = signals['explicit_feedback']
+            if signals.get('memory_confidence') is not None:
+                key_signals['memory_confidence'] = round(signals['memory_confidence'], 2)
+            if signals.get('is_new_topic'):
+                key_signals['new_topic'] = True
+
+            explanations.append({
+                'mode': d.get('selected_mode'),
+                'confidence': round(d.get('router_confidence', 0), 3),
+                'scores': {k: round(v, 3) for k, v in scores.items()} if scores else {},
+                'tiebreaker_used': d.get('tiebreaker_used', False),
+                'tiebreaker_candidates': d.get('tiebreaker_candidates'),
+                'key_signals': key_signals,
+                'margin': round(d.get('margin', 0), 3),
+            })
+
+        return explanations
+
+    except Exception as e:
+        logger.warning(f"[INTROSPECT] decision explanations failed: {e}")
+        return []
+
+
+def _get_recent_autonomous_actions(limit: int = 5) -> list:
+    """
+    Get recent autonomous actions from interaction_log.
+
+    Only surfaces user-relevant actions (proactive_sent, cron_tool_executed,
+    plan_proposed). Telemetry and debug events are excluded to avoid noise.
+    """
+    # Only events the user would care about knowing happened
+    RELEVANT_TYPES = ('proactive_sent', 'cron_tool_executed', 'plan_proposed')
+
+    try:
+        from services.database_service import get_shared_db_service
+
+        db_service = get_shared_db_service()
+        placeholders = ','.join(['%s'] * len(RELEVANT_TYPES))
+
+        with db_service.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT event_type, payload, created_at "
+                f"FROM interaction_log "
+                f"WHERE event_type IN ({placeholders}) "
+                f"ORDER BY created_at DESC LIMIT %s",
+                (*RELEVANT_TYPES, limit)
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+
+        actions = []
+        for row in rows:
+            event_type, payload, created_at = row
+            payload_dict = payload if isinstance(payload, dict) else {}
+            actions.append({
+                'event_type': event_type,
+                'payload_summary': str(payload_dict)[:200],
+                'created_at': str(created_at),
+            })
+
+        return actions
+
+    except Exception as e:
+        logger.warning(f"[INTROSPECT] autonomous actions failed: {e}")
+        return []
+
+
 def _get_recall_failure_rate(topic: str) -> float:
     """
     Get per-topic recall failure rate from procedural memory.
@@ -340,6 +443,30 @@ def _format_state(state: Dict, topic: str) -> str:
         lines.append(f"  world_state: {ws.strip()}")
     else:
         lines.append("  world_state: (empty)")
+
+    # Decision explanations (for "why" questions)
+    decision_exps = state.get("decision_explanations", [])
+    if decision_exps:
+        lines.append("  recent_decision_explanations:")
+        for i, exp in enumerate(decision_exps):
+            lines.append(f"    [{i+1}] mode={exp['mode']}, confidence={exp['confidence']}, margin={exp['margin']}")
+            if exp.get('scores'):
+                lines.append(f"        scores: {exp['scores']}")
+            if exp.get('key_signals'):
+                lines.append(f"        key_signals: {exp['key_signals']}")
+            if exp.get('tiebreaker_used'):
+                lines.append(f"        tiebreaker between: {exp.get('tiebreaker_candidates')}")
+    else:
+        lines.append("  recent_decision_explanations: (none in last hour)")
+
+    # Recent autonomous actions
+    auto_actions = state.get("recent_autonomous_actions", [])
+    if auto_actions:
+        lines.append("  recent_autonomous_actions:")
+        for a in auto_actions:
+            lines.append(f"    - {a['event_type']} at {a['created_at']}: {a['payload_summary'][:100]}")
+    else:
+        lines.append("  recent_autonomous_actions: (none recently)")
 
     # Triage-filtered tool details (tips, constraints, examples)
     tool_details = state.get("tool_details")
