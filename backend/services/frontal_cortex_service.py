@@ -367,6 +367,7 @@ class FrontalCortexService:
         episodic_context = _ctx.get('episodes', '') if _include('episodic_memory') else ''
         facts_context = _ctx.get('facts', '') if _include('facts') else ''
         working_memory_context = _ctx.get('working_memory', '') if _include('working_memory') else ''
+        concepts_context = _ctx.get('concepts', '') if _include('concepts') else ''
         world_state = self.world_state_service.get_world_state(topic, thread_id=thread_id) if _include('world_state') else ''
 
         # Replace placeholders
@@ -376,6 +377,7 @@ class FrontalCortexService:
         result = result.replace('{{chat_history}}', formatted_context)
         result = result.replace('{{world_state}}', world_state if _include('world_state') else '')
         result = result.replace('{{episodic_memory}}', episodic_context if _include('episodic_memory') else '')
+        result = result.replace('{{semantic_concepts}}', concepts_context)
         result = result.replace('{{act_history}}', act_history)
         result = result.replace('{{facts}}', facts_context if _include('facts') else '')
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
@@ -943,7 +945,7 @@ class FrontalCortexService:
         try:
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list"]
+            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task"]
             available = [s for s in innate if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)
