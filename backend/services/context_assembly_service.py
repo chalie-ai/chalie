@@ -20,6 +20,7 @@ class ContextAssemblyService:
         'facts': 0.9,
         'gists': 0.8,
         'episodes': 0.7,
+        'procedural': 0.65,
         'concepts': 0.6
     }
 
@@ -77,6 +78,7 @@ class ContextAssemblyService:
         sections['facts'] = self._get_facts(topic)
         sections['gists'] = self._get_gists(topic)
         sections['episodes'] = self._get_episodes(prompt, topic, act_history)
+        sections['procedural'] = self._get_procedural_hints(topic)
         sections['concepts'] = self._get_concepts(prompt, topic, act_history)
 
         # Inject recent visible context from previous session (visual continuity bridge)
@@ -253,6 +255,56 @@ class ContextAssemblyService:
             logging.debug(f"[CONTEXT] Concept retrieval unavailable: {e}")
             return ""
 
+    def _get_procedural_hints(self, topic: str = None) -> str:
+        """
+        Retrieve learned action reliability from procedural memory.
+
+        Only surfaces skills with sufficient experience (>=8 attempts) to avoid
+        biasing the model with noisy early data. Uses softened language for
+        borderline performance ("less consistent results so far") to avoid
+        discouraging exploration of potentially useful skills.
+        """
+        try:
+            from services.procedural_memory_service import ProceduralMemoryService
+            from services.database_service import get_shared_db_service
+
+            db_service = get_shared_db_service()
+            service = ProceduralMemoryService(db_service)
+
+            ranked = service.get_ranked_skills(topic=topic)
+            if not ranked:
+                return ""
+
+            lines = ["## Learned Action Reliability"]
+            shown = 0
+            for skill in ranked:
+                if shown >= 3:
+                    break
+
+                name = skill.get('name', '')
+                sr = skill.get('success_rate', 0)
+                attempts = skill.get('attempts', 0)
+
+                # Require sufficient experience before surfacing
+                if attempts < 8:
+                    continue
+
+                if sr > 0.85:
+                    label = "reliable"
+                elif sr >= 0.70:
+                    label = "moderate"
+                else:
+                    label = "less consistent results so far"
+
+                lines.append(f"- {name}: {label} ({int(sr * 100)}% over {attempts} uses)")
+                shown += 1
+
+            return "\n".join(lines) if len(lines) > 1 else ""
+
+        except Exception as e:
+            logging.debug(f"[CONTEXT] Procedural memory unavailable: {e}")
+            return ""
+
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
         """Parse semantic_query results from act_history string."""
         import re
@@ -283,7 +335,7 @@ class ContextAssemblyService:
         Returns:
             Budget-constrained sections
         """
-        memory_types = ['working_memory', 'moments', 'facts', 'gists', 'episodes', 'concepts', 'previous_session']
+        memory_types = ['working_memory', 'moments', 'facts', 'gists', 'episodes', 'procedural', 'concepts', 'previous_session']
 
         # Sort by weight ascending (trim lowest weight first)
         sorted_types = sorted(memory_types, key=lambda t: self.weights.get(t, 0.5))
