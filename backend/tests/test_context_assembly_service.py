@@ -254,3 +254,78 @@ class TestContextAssemblyService:
         custom = {'working_memory': 0.1, 'facts': 0.2}
         svc = ContextAssemblyService({'context_weights': custom})
         assert svc.weights == custom
+
+    # ── _get_concepts ─────────────────────────────────────────────────
+
+    def test_get_concepts_returns_formatted_string_when_concepts_exist(self):
+        """_get_concepts() returns '## Relevant Concepts' section when concepts are available."""
+        svc = ContextAssemblyService({})
+        mock_concepts = [
+            {'concept_name': 'Python', 'definition': 'A programming language', 'concept_type': 'technology', 'strength': 0.8},
+            {'concept_name': 'Weak', 'definition': 'A weak concept', 'concept_type': 'unknown', 'strength': 0.1},  # below 0.2 gate
+            {'concept_name': 'NoDef', 'definition': '', 'concept_type': 'other', 'strength': 0.9},  # no definition
+        ]
+        mock_retrieval = MagicMock()
+        mock_retrieval.retrieve_concepts.return_value = mock_concepts
+
+        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+            result = svc._get_concepts('What is Python?', 'programming')
+
+        assert '## Relevant Concepts' in result
+        assert '**Python**' in result
+        assert 'A programming language' in result
+        # Weak concept (strength 0.1) should be excluded
+        assert 'Weak' not in result
+        # Concept without definition should be excluded
+        assert 'NoDef' not in result
+
+    def test_get_concepts_returns_empty_when_no_concepts(self):
+        """_get_concepts() returns '' when retrieval returns empty list."""
+        svc = ContextAssemblyService({})
+        mock_retrieval = MagicMock()
+        mock_retrieval.retrieve_concepts.return_value = []
+
+        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+            result = svc._get_concepts('hello', 'general')
+
+        assert result == ''
+
+    def test_get_concepts_returns_empty_when_all_filtered(self):
+        """_get_concepts() returns '' when all concepts fail the strength/definition gate."""
+        svc = ContextAssemblyService({})
+        mock_concepts = [
+            {'concept_name': 'Noisy', 'definition': '', 'concept_type': 'other', 'strength': 0.9},
+            {'concept_name': 'Weak', 'definition': 'Some def', 'concept_type': 'other', 'strength': 0.1},
+        ]
+        mock_retrieval = MagicMock()
+        mock_retrieval.retrieve_concepts.return_value = mock_concepts
+
+        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+            result = svc._get_concepts('hello', 'general')
+
+        assert result == ''
+
+    def test_get_concepts_returns_empty_on_service_failure(self):
+        """_get_concepts() gracefully returns '' when SemanticRetrievalService fails."""
+        svc = ContextAssemblyService({})
+
+        with patch('services.semantic_retrieval_service.SemanticRetrievalService', side_effect=Exception('DB down')):
+            result = svc._get_concepts('hello', 'general')
+
+        assert result == ''
+
+    def test_assemble_includes_concepts_in_result(self):
+        """assemble() passes concept retrieval result into the 'concepts' key."""
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+
+        with patch.object(svc, '_get_working_memory', return_value=''), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_facts', return_value=''), \
+             patch.object(svc, '_get_gists', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value='## Relevant Concepts\n- **AI**: Artificial intelligence'):
+
+            result = svc.assemble(prompt='tell me about AI', topic='tech')
+
+        assert result['concepts'] == '## Relevant Concepts\n- **AI**: Artificial intelligence'

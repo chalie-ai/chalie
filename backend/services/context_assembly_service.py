@@ -229,10 +229,29 @@ class ContextAssemblyService:
             return ""
 
     def _get_concepts(self, prompt: str, topic: str, act_history: str = "") -> str:
-        """Retrieve semantic concept context from act_history if available."""
-        # Concepts are currently injected via act_history semantic_query results
-        # This is a placeholder for when dedicated concept injection is needed
-        return ""
+        """Retrieve relevant semantic concepts for context injection."""
+        try:
+            from services.semantic_retrieval_service import SemanticRetrievalService
+            retrieval = SemanticRetrievalService()
+            concepts = retrieval.retrieve_concepts(query=prompt, limit=5)
+
+            if not concepts:
+                return ""
+
+            lines = ["## Relevant Concepts"]
+            for c in concepts:
+                name = c.get('concept_name', 'unknown')
+                definition = c.get('definition', '')
+                ctype = c.get('concept_type', '')
+                strength = c.get('strength', 0)
+                # Only surface concepts with meaningful definitions and non-trivial strength
+                if definition and strength > 0.2:
+                    lines.append(f"- **{name}** ({ctype}): {definition}")
+
+            return "\n".join(lines) if len(lines) > 1 else ""
+        except Exception as e:
+            logging.debug(f"[CONTEXT] Concept retrieval unavailable: {e}")
+            return ""
 
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
         """Parse semantic_query results from act_history string."""
