@@ -1,7 +1,7 @@
 """
 Recall Skill — Unified memory retrieval across all layers.
 
-Searches working memory, gists, facts, episodes, and concepts in one call.
+Searches working memory, gists, facts, episodes, concepts, and user traits in one call.
 Stores partial_match_count in Redis for the introspect skill's FOK signal.
 """
 
@@ -10,7 +10,16 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-ALL_LAYERS = ["working_memory", "gists", "facts", "episodes", "concepts"]
+ALL_LAYERS = ["working_memory", "gists", "facts", "episodes", "concepts", "user_traits"]
+
+# Broad self-knowledge queries — return all traits, not keyword-filtered
+BROAD_QUERIES = {
+    "me", "myself", "user", "about me", "user profile", "everything", "all",
+    "what do you know", "what do you remember", "profile",
+}
+
+# Soft cap for broad queries to avoid overwhelming responses
+BROAD_TRAIT_DISPLAY_CAP = 15
 
 
 def handle_recall(topic: str, params: dict) -> str:
@@ -45,6 +54,8 @@ def handle_recall(topic: str, params: dict) -> str:
             hits, status = _search_episodes(topic, query, limit)
         elif layer == "concepts":
             hits, status = _search_concepts(topic, query, limit)
+        elif layer == "user_traits":
+            hits, status = _search_user_traits(topic, query, limit)
         else:
             hits, status = [], f"unknown layer: {layer}"
 
@@ -280,6 +291,86 @@ def _count_concept_candidates(db_service) -> int:
             db_service.release_connection(conn)
 
 
+def _search_user_traits(topic: str, query: str, limit: int) -> tuple:
+    """
+    Search user traits by keyword matching on trait key/value pairs.
+
+    For broad self-knowledge queries ("what do you know about me?"), returns all
+    traits above confidence threshold with a soft cap. For specific queries,
+    keyword-matches on key and value. Includes meta fields so the LLM can
+    phrase inferences naturally rather than stating them as facts.
+    """
+    try:
+        from services.user_trait_service import UserTraitService
+        from services.database_service import get_shared_db_service
+
+        db_service = get_shared_db_service()
+        service = UserTraitService(db_service)
+        all_traits = service.get_all_traits(user_id='primary')
+
+        if not all_traits:
+            return [], "0 traits stored"
+
+        query_lower = query.lower()
+        is_broad = query_lower in BROAD_QUERIES
+
+        matched = []
+        for t in all_traits:
+            key = t.get('trait_key', '')
+            value = t.get('trait_value', '')
+            category = t.get('category', 'general')
+            confidence = t.get('confidence', 0.0)
+            source = t.get('source', 'inferred')
+
+            if is_broad:
+                if confidence >= 0.3:
+                    matched.append(_format_trait_hit(key, value, category, confidence, source))
+            else:
+                if query_lower in key.lower() or query_lower in str(value).lower():
+                    matched.append(_format_trait_hit(key, value, category, confidence, source))
+
+        matched.sort(key=lambda h: h['confidence'], reverse=True)
+
+        total_matched = len(matched)
+        if is_broad and total_matched > BROAD_TRAIT_DISPLAY_CAP:
+            matched = matched[:BROAD_TRAIT_DISPLAY_CAP]
+        elif not is_broad:
+            matched = matched[:limit]
+
+        status = f"{len(matched)} matches ({len(all_traits)} traits evaluated)"
+        if is_broad and total_matched > BROAD_TRAIT_DISPLAY_CAP:
+            status += f" — showing top {BROAD_TRAIT_DISPLAY_CAP}, {total_matched - BROAD_TRAIT_DISPLAY_CAP} more available"
+
+        return matched, status
+
+    except Exception as e:
+        logger.warning(f"[RECALL] user_traits search failed: {e}")
+        return [], f"error: {e}"
+
+
+def _format_trait_hit(key: str, value: str, category: str, confidence: float, source: str = 'inferred') -> dict:
+    """
+    Format a user trait as a standard recall hit dict.
+
+    Includes meta fields so the LLM can modulate tone based on source/confidence:
+    - explicit + high confidence  → "Your name is Dylan."
+    - inferred + medium           → "You seem to prefer dark themes."
+    - inferred + low              → "I think you might enjoy cooking, but I'm not certain."
+    """
+    conf_label = "well established" if confidence >= 0.7 else "likely" if confidence >= 0.4 else "uncertain"
+    return {
+        "layer": "user_traits",
+        "content": f"{key}: {value}",
+        "confidence": confidence,
+        "freshness": conf_label,
+        "meta": {
+            "category": category,
+            "confidence_label": conf_label,
+            "source": source,
+        },
+    }
+
+
 def _store_fok_signal(topic: str, partial_match_count: int) -> None:
     """Store partial match count in Redis for introspect's FOK signal."""
     try:
@@ -312,6 +403,9 @@ def _format_results(results: List[Dict], query: str) -> str:
                 extra = f", salience={hit['salience']}"
             if "strength" in hit:
                 extra = f", strength={hit['strength']:.2f}"
+            if "meta" in hit:
+                m = hit["meta"]
+                extra = f", source={m.get('source','inferred')}, certainty={m.get('confidence_label','')}"
             lines.append(f"    - {content} (confidence={conf:.2f}{extra})")
 
     return "\n".join(lines)
