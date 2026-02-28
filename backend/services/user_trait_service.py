@@ -31,6 +31,7 @@ CATEGORY_DECAY = {
     'general':            {'base_decay': 0.02, 'floor': 0.1},
     'communication_style': {'base_decay': 0.005, 'floor': 0.2},  # very slow — behavioral patterns are stable
     'micro_preference': {'base_decay': 0.015, 'floor': 0.15},   # faster — preferences are more volatile than patterns
+    'behavioral_pattern': {'base_decay': 0.005, 'floor': 0.2},  # slow — activity time patterns are stable
 }
 
 MAX_TRAITS_IN_PROMPT = 8

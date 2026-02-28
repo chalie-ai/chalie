@@ -612,6 +612,16 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
 
+    # Register temporal pattern service (24h cycle, mines behavioral patterns from interaction history)
+    try:
+        from services.temporal_pattern_service import temporal_pattern_worker
+        manager.register_service(
+            worker_id="temporal-pattern-service",
+            worker_func=temporal_pattern_worker
+        )
+    except Exception as e:
+        logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
+
     # One-time migration: move tools_disabled/ → tools/ with _enabled=false in DB
     try:
         from pathlib import Path as _MigPath
