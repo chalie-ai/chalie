@@ -2584,7 +2584,7 @@ async function loadUnderstandingObs() {
                 </div>`;
             }
         } else {
-            html += '<div class="obs-empty">No autobiography yet. Chalie needs a few more conversations to build your narrative.</div>';
+            html += '<div class="obs-empty">No autobiography yet. Chalie needs a few more conversations to build its self-narrative.</div>';
         }
 
         // ── Traits section ──
