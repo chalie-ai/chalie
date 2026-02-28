@@ -369,7 +369,7 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
     Returns:
         dict: {mode, modifiers, response, generation_time, actions, confidence}
     """
-    from services.act_loop_service import ActLoopService
+    from services.act_loop_service import ActLoopService, ACTION_FATIGUE_COSTS
     from services.cortex_iteration_service import CortexIterationService
     from services.database_service import get_shared_db_service
 
@@ -442,9 +442,11 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
         logging.warning(f"[MODE:ACT] Context assembly failed: {e}")
 
     # ACT loop — simplified, safety-capped at max_act_iterations
-    # Repetition detection: if same action type called 3+ times consecutively, force exit
+    # Repetition detection: if same action type called 3+ times consecutively,
+    # inject a pivot hint first; force exit on second threshold
     consecutive_same_action = 0
     last_action_type = None
+    pivot_hint_injected = False
 
     while True:
         iteration_start = time.time()
@@ -478,12 +480,57 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
             last_action_type = None
 
         if consecutive_same_action >= 3:
-            logging.warning(f"[MODE:ACT] [ACT LOOP] Repetition detected: '{last_action_type}' called {consecutive_same_action} times consecutively, forcing exit")
-            termination_reason = 'repetition_detected'
-            can_continue = False
+            if not pivot_hint_injected:
+                # First threshold: inject pivot hint and give one more chance
+                logging.info(f"[MODE:ACT] [ACT LOOP] Repetition detected: '{last_action_type}' called {consecutive_same_action}x — injecting pivot hint")
+                act_loop.append_results([{
+                    'action_type': 'system',
+                    'status': 'info',
+                    'execution_time': 0.0,
+                    'result': f"SYSTEM: You have called '{last_action_type}' {consecutive_same_action} times with similar queries. Try a DIFFERENT action type that builds on existing results, or return empty actions to finish."
+                }])
+                pivot_hint_injected = True
+                consecutive_same_action = 0
+                # Fall through to can_continue check (don't force exit yet)
+                can_continue, termination_reason = act_loop.can_continue()
+            else:
+                # Second threshold: force exit
+                logging.warning(f"[MODE:ACT] [ACT LOOP] Repetition persists after pivot hint: '{last_action_type}' called {consecutive_same_action}x, forcing exit")
+                termination_reason = 'repetition_detected'
+                can_continue = False
         else:
             # Check if loop can continue
             can_continue, termination_reason = act_loop.can_continue()
+
+        # Safety net: if the prompt-based scope evaluation didn't trigger an
+        # early persistent_task, warn the LLM when budget is nearly gone.
+        # Tight thresholds (85% fatigue, 4+ tool actions) to avoid false positives
+        # on bounded queries that legitimately use most of the budget.
+        if can_continue and actions and not getattr(act_loop, '_escalation_hint_injected', False):
+            _tool_action_count = sum(
+                1 for r in act_loop.act_history
+                if r.get('action_type') not in ('recall', 'memorize', 'introspect', 'associate', 'system', None)
+            )
+            if _tool_action_count >= 4 and act_loop.fatigue_budget > 0:
+                _predicted_cost = sum(
+                    ACTION_FATIGUE_COSTS.get(a.get('type', ''), 1.0) * (1.0 + act_loop.fatigue_growth_rate * act_loop.iteration_number)
+                    for a in actions
+                )
+                _predicted_fatigue = act_loop.fatigue + _predicted_cost
+                _predicted_util = _predicted_fatigue / act_loop.fatigue_budget
+                if _predicted_util >= 0.85:
+                    logging.info(f"[MODE:ACT] [ACT LOOP] Budget safety net: predicted {_predicted_util:.0%} after this iteration ({_tool_action_count} tool actions)")
+                    act_loop.append_results([{
+                        'action_type': 'system',
+                        'status': 'info',
+                        'execution_time': 0.0,
+                        'result': (
+                            f"SYSTEM: Action budget nearly exhausted (~{_predicted_util:.0%}). "
+                            "This is your last iteration. If significant work remains, "
+                            "create a persistent_task now. Otherwise return empty actions to finish."
+                        ),
+                    }])
+                    act_loop._escalation_hint_injected = True
 
         # Execute actions
         actions_executed = []
@@ -501,6 +548,16 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
 
             # Estimate net value (for cortex_iterations logging + strategy analysis)
             iteration_net_value = ActLoopService.estimate_net_value(actions_executed, act_loop.iteration_number)
+
+            # If a persistent_task was created, exit immediately — the task
+            # worker handles the deep work; no point burning more ACT budget.
+            if any(
+                r.get('action_type') == 'persistent_task' and r.get('status') == 'success'
+                for r in actions_executed
+            ):
+                logging.info("[MODE:ACT] [ACT LOOP] persistent_task dispatched — exiting loop to let background worker handle it")
+                termination_reason = 'persistent_task_dispatched'
+                can_continue = False
 
             # Record skill outcomes to procedural memory
             from services.skill_outcome_recorder import record_skill_outcomes
@@ -574,6 +631,16 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
         logging.info(f"[MODE:ACT→{terminal_mode}] Re-routed after ACT loop")
     except Exception as e:
         logging.warning(f"[MODE:ACT→RESPOND] Re-routing failed: {e}")
+
+    # If ACT loop produced substantive results, force RESPOND so the LLM can
+    # synthesize them. ACKNOWLEDGE/IGNORE would discard act_history context.
+    _has_substantive_results = any(
+        r.get('status') == 'success' and r.get('result') and r.get('result') != '__CARD_ONLY__'
+        for r in act_loop.act_history
+    )
+    if _has_substantive_results and terminal_mode in ('ACKNOWLEDGE', 'IGNORE'):
+        logging.info(f"[MODE:ACT→{terminal_mode}→RESPOND] Overriding — ACT loop has substantive results to synthesize")
+        terminal_mode = 'RESPOND'
 
     # Generate terminal response (pass act_history so LLM can reference tool results)
     act_history_for_respond = act_loop.get_history_context()
@@ -1854,6 +1921,91 @@ def _run_iip_hook(text: str, database_service) -> None:
         logging.warning(f"[IIP] Hook failed (non-fatal): {e}")
 
 
+# Belief correction patterns — detect explicit trait corrections/negations
+_BELIEF_CORRECTION_PATTERNS = [
+    # Direct negation: "I don't like X", "I'm not a Y"
+    re.compile(r"\b(?:I\s+(?:don'?t|do\s+not|never)\s+(?:like|enjoy|want|eat|drink|use|have|prefer|need))\s+(.+)", re.IGNORECASE),
+    re.compile(r"\b(?:I'?m\s+not\s+(?:a\s+)?|I\s+am\s+not\s+(?:a\s+)?)(.+)", re.IGNORECASE),
+
+    # Explicit correction: "actually my X is Y", "my name is actually Y"
+    re.compile(r"\b(?:actually,?\s+)?my\s+(\w+(?:\s+\w+)?)\s+is\s+(?:actually\s+)?(.+)", re.IGNORECASE),
+
+    # Belief correction: "that's wrong about me", "you're wrong about"
+    re.compile(r"\b(?:that'?s\s+(?:wrong|incorrect|not\s+(?:true|right|correct))\s+(?:about\s+me|about\s+that))", re.IGNORECASE),
+    re.compile(r"\b(?:you(?:'re|\s+are)\s+wrong\s+about)", re.IGNORECASE),
+
+    # Retraction: "I never said I liked X", "I didn't say"
+    re.compile(r"\b(?:I\s+never\s+said|I\s+didn'?t\s+say|I\s+didn'?t\s+tell\s+you)", re.IGNORECASE),
+
+    # Stop assuming: "stop assuming", "don't assume"
+    re.compile(r"\b(?:(?:stop|don'?t)\s+(?:assuming|thinking)\s+(?:I|that\s+I))", re.IGNORECASE),
+]
+
+
+def _run_belief_correction_hook(text: str, thread_id: str = None):
+    """
+    Detect explicit belief corrections and update/delete traits.
+    Runs synchronously in Phase A before LLM trait injection.
+    Precision-first: better to miss a correction than delete the wrong trait.
+    """
+    if not any(p.search(text) for p in _BELIEF_CORRECTION_PATTERNS):
+        return
+
+    text_lower = text.lower()
+
+    # GUARDRAIL 1: Require explicit self-reference before any mutation
+    # Prevents "sushi is terrible" from deleting a food preference
+    if not re.search(r"\b(i|me|my|about me)\b", text_lower):
+        return
+
+    try:
+        from services.user_trait_service import UserTraitService
+        from services.database_service import get_shared_db_service
+        trait_service = UserTraitService(get_shared_db_service())
+
+        traits = trait_service.get_all_traits()
+        if not traits:
+            return
+
+        for trait in traits:
+            key = trait.get('trait_key', '')
+            value = trait.get('trait_value', '')
+            confidence = trait.get('confidence', 0)
+
+            # GUARDRAIL 2: Skip low-confidence traits — don't churn noisy data
+            if confidence < 0.4:
+                continue
+
+            # Check if the user's message negates this specific trait value
+            if value.lower() in text_lower:
+                negation_near_value = re.search(
+                    rf"\b(?:not|don'?t|never|no longer|isn'?t|aren'?t|wasn'?t|wrong)\b.{{0,30}}{re.escape(value.lower())}|"
+                    rf"{re.escape(value.lower())}.{{0,30}}\b(?:is wrong|is incorrect|is not right|isn'?t right)\b",
+                    text_lower
+                )
+                if negation_near_value:
+                    trait_service.delete_trait(key)
+                    logging.info(f"[BELIEF CORRECTION] Deleted trait '{key}={value}' — user negated it")
+                    continue
+
+            # Check for "actually my X is Y" pattern (value replacement)
+            # Cap capture at 3 words to avoid trailing clauses
+            replacement_match = re.search(
+                rf"(?:actually,?\s+)?my\s+{re.escape(key.replace('_', ' '))}\s+is\s+(?:actually\s+)?(.+?)(?:\.|,|!|\?|$)",
+                text_lower
+            )
+            if replacement_match:
+                raw_value = replacement_match.group(1).strip()
+                # Cap at 3 words to avoid trailing clause capture
+                new_value = " ".join(raw_value.split()[:3])
+                if new_value and new_value.lower() != value.lower():
+                    trait_service.correct_trait(key, new_value, category=trait.get('category'))
+                    logging.info(f"[BELIEF CORRECTION] Corrected trait '{key}': '{value}' → '{new_value}'")
+
+    except Exception as e:
+        logging.debug(f"[BELIEF CORRECTION] Hook error: {e}")
+
+
 def _try_proactive_engagement_correlation(text: str, topic: str):
     """
     Check if the user is responding to a proactive message and score engagement.
@@ -2051,6 +2203,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _run_iip_hook(text, get_shared_db_service())
     except Exception as _iip_e:
         logging.debug(f"[IIP] Skipped: {_iip_e}")
+
+    # Step 3a.2: Belief correction hook — detect and apply explicit trait corrections
+    # Runs before frontal cortex retrieves traits (Phase C), so corrected traits are
+    # already in the database when get_traits_for_prompt() is called.
+    _run_belief_correction_hook(text, thread_id=thread_id)
 
     # Step 3b: Immediate commit - log user input event (pre-classification)
     if interaction_log:

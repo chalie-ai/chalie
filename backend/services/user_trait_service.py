@@ -420,6 +420,89 @@ class UserTraitService:
 
         return stats
 
+    def correct_trait(self, trait_key: str, new_value: str, category: str = None, user_id: str = 'primary') -> bool:
+        """
+        Explicit user correction — overwrites regardless of confidence threshold.
+        This is the conversational path for "that's wrong about me."
+
+        Bypasses the >2x threshold by design — user's explicit word always wins.
+        Sets confidence to 0.95 and source to 'explicit_correction' for audit trail.
+        """
+        try:
+            embedding = self._generate_embedding_raw(f"{trait_key}: {new_value}")
+
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, category FROM user_traits WHERE user_id = %s AND trait_key = %s",
+                    (user_id, trait_key)
+                )
+                existing = cursor.fetchone()
+
+                if existing:
+                    # Overwrite with high confidence, reset reinforcement, preserve category
+                    update_category = category or existing[1]
+                    cursor.execute(
+                        "UPDATE user_traits SET trait_value = %s, confidence = %s, "
+                        "source = 'explicit_correction', reinforcement_count = 1, "
+                        "category = %s, is_literal = TRUE, embedding = %s, "
+                        "last_conflict_at = NOW(), updated_at = NOW() "
+                        "WHERE user_id = %s AND trait_key = %s",
+                        (new_value, 0.95, update_category, embedding, user_id, trait_key)
+                    )
+                    logger.info(f"[USER_TRAITS] Corrected trait '{trait_key}' → '{new_value}' (explicit_correction)")
+                else:
+                    # New trait from explicit correction
+                    cursor.execute(
+                        "INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, "
+                        "category, source, is_literal, reinforcement_count, embedding) "
+                        "VALUES (%s, %s, %s, %s, %s, 'explicit_correction', TRUE, 1, %s)",
+                        (user_id, trait_key, new_value, 0.95, category or 'general', embedding)
+                    )
+                    logger.info(f"[USER_TRAITS] Inserted corrected trait '{trait_key}' = '{new_value}'")
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[TRAITS] Correction failed for {trait_key}: {e}")
+            return False
+
+    def delete_trait(self, trait_key: str, user_id: str = 'primary') -> bool:
+        """Delete a trait by key. Used for explicit negations ('I don't like X')."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM user_traits WHERE user_id = %s AND trait_key = %s",
+                    (user_id, trait_key)
+                )
+                deleted = cursor.rowcount
+                conn.commit()
+            if deleted > 0:
+                logger.info(f"[USER_TRAITS] Deleted trait '{trait_key}' (user negation)")
+            return deleted > 0
+        except Exception as e:
+            logger.error(f"[TRAITS] Delete failed for {trait_key}: {e}")
+            return False
+
+    def get_all_traits(self, user_id: str = 'primary') -> list:
+        """Return all stored traits for the given user."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT trait_key, trait_value, confidence, category "
+                    "FROM user_traits WHERE user_id = %s",
+                    (user_id,)
+                )
+                rows = cursor.fetchall()
+                return [
+                    {'trait_key': r[0], 'trait_value': r[1], 'confidence': r[2], 'category': r[3]}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.debug(f"[USER_TRAITS] get_all_traits failed: {e}")
+            return []
+
     def get_speaker_confidence(self, metadata: dict) -> float:
         """
         Single-user app — all authenticated requests are the primary user.
