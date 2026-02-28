@@ -28,6 +28,7 @@
 | **Autobiography Synthesis Service** (`services/autobiography_synthesis_service.py`) | `consumer.py` | Synthesizes user narrative from interactions. 6h cycle. | |
 | **Triage Calibration Service** (`services/triage_calibration_service.py`) | `consumer.py` | Scores triage/routing correctness and provides learning signals. 24h cycle. | |
 | **Profile Enrichment Service** (`services/profile_enrichment_service.py`) | `consumer.py` | Enriches tool capability profiles from execution data. 6h cycle. | |
+| **Temporal Pattern Service** (`services/temporal_pattern_service.py`) | `consumer.py` | Mines behavioral patterns from interaction timestamps — hour-of-day peaks, day-of-week peaks, topic-time clusters. Stores as `behavioral_pattern` user traits. 24h cycle, 5min startup warmup. | Uses generalized time labels ("evenings" not "10-11pm") for privacy. |
 
 ## Worker Base
 
@@ -82,6 +83,7 @@ The `WorkerManager` in `consumer.py` runs a health check loop every 30 seconds:
 | Triage Calibration | 24h cycle | None | Scoring/learning signals |
 | Profile Enrichment | 6h cycle | None | Tool profile enrichment |
 | Curiosity Pursuit | 6h cycle | None | Explores curiosity threads |
+| Temporal Pattern Service | 24h cycle | None | 5min startup warmup; mines interaction timestamps |
 
 ### Failure Handling
 
