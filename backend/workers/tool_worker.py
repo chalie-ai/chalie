@@ -13,7 +13,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-INNATE_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'persistent_task'}
+INNATE_SKILLS = {
+    'recall', 'memorize', 'introspect', 'associate', 'schedule',
+    'persistent_task', 'list', 'autobiography', 'focus', 'moment', 'emit_card',
+}
 
 
 def _is_ephemeral_tool(tool_name: str) -> bool:
@@ -193,6 +196,12 @@ def tool_worker(job_data: dict) -> str:
         # Triage-selected innate skills (passed from digest_worker via context_snapshot)
         selected_skills = context_snapshot.get('triage_selected_skills', None) or None
 
+        # Always inject emit_card when external tools are active so Chalie can
+        # decide whether to render a deferred visual card. Generic — no tool names.
+        triage_selected_tools = context_snapshot.get('triage_selected_tools', [])
+        if relevant_tools or triage_selected_tools:
+            selected_skills = list(selected_skills or []) + ['emit_card']
+
         # Repetition similarity threshold for embedding-based dedup
         repetition_sim_threshold = cortex_config.get('act_repetition_similarity_threshold', 0.85)
 
@@ -258,13 +267,42 @@ def tool_worker(job_data: dict) -> str:
                     except Exception:
                         pass
 
+            # Build act_history and append any deferred card offers as structured context.
+            # This keeps card offers out of tool output text while still informing the LLM.
+            act_history_str = act_loop.get_history_context()
+            try:
+                from services.redis_client import RedisClientService as _RCS
+                _redis_dc = _RCS.create_connection()
+                _deferred_items = _redis_dc.lrange(f"deferred_cards:{topic}", 0, -1)
+                if _deferred_items:
+                    _cards = [json.loads(i) for i in _deferred_items]
+                    _lines = ["\n## Available Card Offers"]
+                    for _card in _cards:
+                        _media = []
+                        if _card.get("has_images"):
+                            _media.append("images")
+                        _media_str = f" ({', '.join(_media)})" if _media else ""
+                        _lines.append(
+                            f"- {_card['tool_name']} "
+                            f"(id: {_card['invocation_id']}, "
+                            f"{_card['source_count']} sources, "
+                            f"{_card['unique_domains']} domains{_media_str})"
+                        )
+                    _lines.append(
+                        "\nUse emit_card with the invocation_id above to display a visual card, "
+                        "or return empty actions to respond with text."
+                    )
+                    act_history_str += "\n".join(_lines)
+            except Exception as _dc_err:
+                logger.debug(f"[TOOL WORKER] Deferred card context injection failed: {_dc_err}")
+
             # Generate action plan
             response_data = cortex_service.generate_response(
                 system_prompt_template=act_prompt,
                 original_prompt=text,
                 classification=classification,
                 chat_history=chat_history,
-                act_history=act_loop.get_history_context(),
+                act_history=act_history_str,
                 relevant_tools=relevant_tools,
                 selected_skills=selected_skills,
                 assembled_context=assembled_context,
@@ -549,8 +587,17 @@ def tool_worker(job_data: dict) -> str:
         # Enqueue tool outputs for background experience assimilation
         _enqueue_tool_reflection(act_loop.act_history, topic, text)
 
-        # Render and deliver cards; gate text follow-up for synthesize=false tools
+        # Render and deliver cards; gate text follow-up for synthesize=false tools.
         card_replaces = _enqueue_tool_cards(act_loop.act_history, topic, metadata, cycle_id=cycle_id)
+
+        # Also suppress follow-up when emit_card was called — the card IS the response.
+        # Checks structured dict result {"card_emitted": True} generically (no tool names).
+        if not card_replaces:
+            card_replaces = any(
+                isinstance(r.get('result'), dict) and r['result'].get('card_emitted') is True
+                for r in act_loop.act_history
+            )
+
         if not card_replaces:
             _enqueue_followup(
                 topic=topic,

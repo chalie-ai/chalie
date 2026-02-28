@@ -204,6 +204,8 @@ class ActLoopService:
 
             if result_text == "__CARD_ONLY__":
                 display_text = "(card emitted)"
+            elif isinstance(result_text, dict) and result_text.get("card_emitted"):
+                display_text = "(card emitted)"
             else:
                 display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
             lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
@@ -227,6 +229,8 @@ class ActLoopService:
                     result_text = result['result']
                     exec_time = result['execution_time']
                     if result_text == "__CARD_ONLY__":
+                        display_text = "(card emitted)"
+                    elif isinstance(result_text, dict) and result_text.get("card_emitted"):
                         display_text = "(card emitted)"
                     else:
                         display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"

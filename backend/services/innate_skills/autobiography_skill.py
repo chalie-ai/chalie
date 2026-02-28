@@ -1,8 +1,8 @@
 """
-Autobiography Skill — Retrieve the user's synthesized narrative.
+Autobiography Skill — Retrieve Chalie's self-narrative.
 
 Pure database retrieval (non-LLM, sub-cortical service).
-Returns the accumulated understanding of the user as coherent narrative.
+Returns Chalie's self-reflective narrative as coherent first-person prose.
 """
 
 import logging
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def handle_autobiography(topic: str, params: dict) -> str:
     """
-    Retrieve the user's synthesized autobiography.
+    Retrieve Chalie's self-narrative.
 
     Optional section parameter to extract one specific section:
     - "identity"

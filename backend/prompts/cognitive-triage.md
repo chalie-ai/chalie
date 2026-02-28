@@ -15,7 +15,7 @@ Available innate skills:
 - schedule: manage reminders, recurring tasks, timed events
 - list: manage named lists (shopping, to-do, chores, etc.)
 - focus: declare and manage deep work / focus sessions
-- autobiography: retrieve accumulated user life narrative
+- autobiography: retrieve Chalie's self-reflective narrative
 - persistent_task: create, manage, or check on multi-session background tasks (research projects, ongoing compilations, long-running work)
 
 Routing rules:

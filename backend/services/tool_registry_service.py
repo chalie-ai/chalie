@@ -19,6 +19,7 @@ import logging
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -687,11 +688,21 @@ class ToolRegistryService:
                 f"(cost: {elapsed_ms}ms) [/TOOL]"
             )
 
-        # Cache raw result for card rendering (5-min TTL)
+        # Cache raw result for card rendering (5-min TTL).
+        # Per-invocation key (tool_card_cache:{topic}:{invocation_id}) prevents
+        # data from different tool calls in the same ACT loop from colliding.
+        invocation_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
         if isinstance(result, dict):
             try:
                 from services.redis_client import RedisClientService
                 redis = RedisClientService.create_connection()
+                # Per-invocation cache entry
+                redis.set(
+                    f"tool_card_cache:{topic}:{invocation_id}",
+                    json.dumps({"tool": tool_name, "data": result, "invocation_id": invocation_id}),
+                    ex=300,
+                )
+                # Legacy flat list — kept for backwards compatibility with _enqueue_tool_cards
                 redis.rpush(
                     f"tool_raw_cache:{topic}",
                     json.dumps({"tool": tool_name, "data": result})
@@ -737,11 +748,34 @@ class ToolRegistryService:
         synthesize = output_config.get("synthesize", True)
         card_config = output_config.get("card", {})
         card_enabled = card_config.get("enabled", False)
+        card_mode = card_config.get("mode", "immediate")  # "immediate" or "deferred"
 
-        # If card is enabled, render and enqueue it.
+        # Deferred card mode: don't render the card now.
+        # Cache a metadata entry so the tool_worker can inject a structured
+        # card offer into the ACT loop context (separate from tool output text).
+        # The LLM then decides whether to call emit_card.
+        if card_enabled and card_mode == "deferred" and isinstance(result, dict):
+            try:
+                from services.redis_client import RedisClientService as _RC
+                _r = _RC.create_connection()
+                meta = result.get("_meta", {})
+                deferred_info = {
+                    "invocation_id": invocation_id,
+                    "tool_name": tool_name,
+                    "has_images": bool(meta.get("has_images") or result.get("images")),
+                    "source_count": meta.get("source_count", result.get("count", 0)),
+                    "unique_domains": meta.get("unique_domains", 0),
+                }
+                _r.rpush(f"deferred_cards:{topic}", json.dumps(deferred_info))
+                _r.expire(f"deferred_cards:{topic}", 300)
+            except Exception as _de:
+                logger.debug(f"[TOOL REGISTRY] Deferred card metadata cache failed: {_de}")
+            # Fall through to normal text output — no hint injection into result_text
+
+        # If card is enabled (immediate mode), render and enqueue it.
         # Path A: tool returned inline HTML → render_tool_html()
         # Path B: tool returned a dict with no HTML → template-based render()
-        if card_enabled and result_html:
+        elif card_enabled and card_mode != "deferred" and result_html:
             try:
                 from services.card_renderer_service import CardRendererService
                 from services.output_service import OutputService
@@ -757,7 +791,7 @@ class ToolRegistryService:
                         return output
             except Exception as e:
                 logger.warning(f"[TOOL REGISTRY] Card render failed for {tool_name}: {e}")
-        elif card_enabled and not result_html and isinstance(result, dict):
+        elif card_enabled and card_mode != "deferred" and not result_html and isinstance(result, dict):
             # Template-based rendering: loads card/template.html + card/styles.css
             # and compiles Mustache against the raw result dict.
             try:
