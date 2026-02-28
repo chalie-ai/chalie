@@ -37,18 +37,10 @@ class TestPrivacyAPI:
         """GET /privacy/data-summary returns table counts and fact count."""
         mock_conn = MagicMock()
 
-        # Each table COUNT(*) returns (5,); timestamps query returns row with dates
-        table_row = MagicMock()
-        table_row.__getitem__ = lambda self, idx: 5
-        timestamp_row = MagicMock()
-        timestamp_row.__getitem__ = lambda self, idx: "2026-01-01" if idx == 0 else "2026-02-01"
-        timestamp_row.__bool__ = lambda self: True
-
-        # conn.execute() is called for each table + timestamps
-        # 4 tables + 1 timestamp query = 5 execute calls
-        table_cursor = MagicMock()
-        table_cursor.fetchone.return_value = table_row
-        mock_conn.execute.return_value = table_cursor
+        # cursor.fetchone() returns a tuple — (count,) for COUNT(*) queries
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (5,)
+        mock_conn.cursor.return_value = mock_cursor
 
         mock_conn_ctx = MagicMock()
         mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
@@ -66,11 +58,14 @@ class TestPrivacyAPI:
 
             assert response.status_code == 200
             data = response.get_json()
-            # Table counts should be present
+            # Table counts should be present (new expanded list)
             assert "episodes" in data
             assert "semantic_concepts" in data
             assert "user_traits" in data
             assert "threads" in data
+            assert "autobiography" in data
+            assert "persistent_tasks" in data
+            assert "place_fingerprints" in data
             # Redis fact count
             assert data["facts"] == 2
 
@@ -120,8 +115,9 @@ class TestPrivacyAPI:
             assert mock_redis.keys.call_count > 0
             assert mock_redis.delete.call_count > 0
 
-            # PostgreSQL tables were truncated
-            assert mock_conn.execute.call_count > 0
+            # PostgreSQL tables were truncated via cursor pattern
+            cursor = mock_conn.cursor.return_value
+            assert cursor.execute.call_count > 0
             mock_conn.commit.assert_called_once()
 
     def test_delete_all_logs_audit_event(self, client):
