@@ -637,6 +637,16 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
+    # Register tool update checker (6h cycle, checks for new tags on installed embodiments)
+    try:
+        from services.tool_update_service import tool_update_worker
+        manager.register_service(
+            worker_id="tool-update-checker",
+            worker_func=tool_update_worker
+        )
+    except Exception as e:
+        logging.warning(f"[Consumer] Tool update checker registration failed: {e}")
+
     # One-time migration: move tools_disabled/ → tools/ with _enabled=false in DB
     try:
         from pathlib import Path as _MigPath

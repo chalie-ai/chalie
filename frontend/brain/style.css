@@ -579,6 +579,8 @@ body::before {
 
 .form-group input[type="text"],
 .form-group input[type="password"],
+.form-group input[type="url"],
+.form-group input[type="email"],
 .form-group select,
 .form-group textarea {
     width: 100%;
@@ -1149,6 +1151,50 @@ body::before {
 .tool-card--marketplace .tool-card__status.--marketplace {
     background: rgba(245, 158, 11, 0.12);
     color: var(--warning);
+}
+
+/* Installed catalog card — dimmed to communicate it's already added */
+.tool-card--installed {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+/* Version label under tool name */
+.tool-card__version {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: monospace;
+    margin-top: 1px;
+    letter-spacing: 0.2px;
+}
+
+/* Update available row inside installed tool cards */
+.tool-card__update-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(251, 191, 36, 0.06);
+    border: 1px solid rgba(251, 191, 36, 0.18);
+    border-radius: 6px;
+    margin: -2px 0 2px;
+}
+
+.tool-card__update-badge {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--warning);
+    white-space: nowrap;
+}
+
+/* Warning hint text in install modal */
+.form-hint--warning {
+    color: var(--warning);
+    font-size: 12px;
+    margin-top: 8px;
+    line-height: 1.5;
+    opacity: 0.85;
 }
 
 /* ==========================================

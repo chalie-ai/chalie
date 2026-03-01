@@ -116,39 +116,7 @@
                     <a href="#" class="section-link" id="browseMarketplaceBtn">Browse marketplace →</a>
                 </div>
                 <div class="tools-grid tools-grid--recommended" id="recommendedGrid">
-                    <div class="tool-card tool-card--marketplace">
-                        <div class="tool-card__header">
-                            <div class="tool-card__icon">🌦</div>
-                            <div><div class="tool-card__name">Weather</div><div class="tool-card__category">productivity</div></div>
-                        </div>
-                        <p class="tool-card__desc">Real-time weather forecasts and alerts based on your location.</p>
-                        <div class="tool-card__footer">
-                            <span class="tool-card__status --marketplace">Marketplace</span>
-                            <button class="tool-card__btn --primary" disabled>Coming soon</button>
-                        </div>
-                    </div>
-                    <div class="tool-card tool-card--marketplace">
-                        <div class="tool-card__header">
-                            <div class="tool-card__icon">📅</div>
-                            <div><div class="tool-card__name">Calendar</div><div class="tool-card__category">productivity</div></div>
-                        </div>
-                        <p class="tool-card__desc">Read and write Google Calendar events on your behalf.</p>
-                        <div class="tool-card__footer">
-                            <span class="tool-card__status --marketplace">Marketplace</span>
-                            <button class="tool-card__btn --primary" disabled>Coming soon</button>
-                        </div>
-                    </div>
-                    <div class="tool-card tool-card--marketplace">
-                        <div class="tool-card__header">
-                            <div class="tool-card__icon">🔍</div>
-                            <div><div class="tool-card__name">Web Search</div><div class="tool-card__category">research</div></div>
-                        </div>
-                        <p class="tool-card__desc">Search the web and retrieve summaries of results in real time.</p>
-                        <div class="tool-card__footer">
-                            <span class="tool-card__status --marketplace">Marketplace</span>
-                            <button class="tool-card__btn --primary" disabled>Coming soon</button>
-                        </div>
-                    </div>
+                    <div class="loading">Loading catalog…</div>
                 </div>
             </div>
 
@@ -410,21 +378,10 @@
                     <button class="btn-close" id="closeInstallModal">✕</button>
                 </div>
             </div>
-            <div class="platform-tabs" id="installMethodTabs">
-                <button class="platform-tab active" data-install-method="git">Git URL</button>
-                <button class="platform-tab" data-install-method="zip">Upload ZIP</button>
-            </div>
-            <div id="installGitPanel">
-                <div class="form-group">
-                    <label>Repository URL</label>
-                    <input type="url" id="installGitUrl" placeholder="https://github.com/user/tool-repo">
-                </div>
-            </div>
-            <div id="installZipPanel" class="hidden">
-                <div class="form-group">
-                    <label>ZIP File</label>
-                    <input type="file" id="installZipFile" accept=".zip">
-                </div>
+            <div class="form-group">
+                <label>Repository URL</label>
+                <input type="url" id="installGitUrl" placeholder="https://github.com/user/tool-repo">
+                <p class="form-hint form-hint--warning">Custom repos are unreviewed. Only install from sources you trust. The latest tagged release will be installed.</p>
             </div>
             <div id="installProgress" class="install-progress hidden"></div>
             <div id="installError" class="form-error hidden"></div>
@@ -448,6 +405,23 @@
             <div class="form-actions">
                 <button class="btn btn-secondary" id="cancelToolSettingsBtn">Cancel</button>
                 <button class="btn btn-primary" id="saveToolSettingsBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Update Tool Modal -->
+    <div class="modal-overlay hidden" id="updateToolModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2>Update Available</h2>
+                    <button class="btn-close" id="closeUpdateToolModal">✕</button>
+                </div>
+            </div>
+            <p id="updateToolDesc" style="color: var(--text-muted); font-size: 14px; margin: 4px 0 20px;"></p>
+            <div class="form-actions">
+                <button class="btn btn-secondary" id="cancelUpdateBtn">Later</button>
+                <button class="btn btn-primary" id="confirmUpdateBtn">Update Now</button>
             </div>
         </div>
     </div>
