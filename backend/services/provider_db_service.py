@@ -44,7 +44,7 @@ class ProviderDbService:
                     "dimensions": row[6],
                     "timeout": row[7],
                     "is_active": row[8],
-                }
+}
                 for row in rows
             ]
 
@@ -70,7 +70,7 @@ class ProviderDbService:
                     "dimensions": row[6],
                     "timeout": row[7],
                     "is_active": row[8],
-                }
+}
                 for row in rows
             ]
 

@@ -21,6 +21,7 @@
                 <button class="tab" data-tab="embodiment">Embodiment</button>
                 <button class="tab" data-tab="scheduler">Scheduler</button>
                 <button class="tab" data-tab="lists">Lists</button>
+                <button class="tab" data-tab="documents">Documents</button>
             </nav>
         </div>
     </header>
@@ -169,6 +170,45 @@
             </div>
             <div class="lists-container" id="listsContainer">
                 <div class="loading">Loading lists…</div>
+            </div>
+        </div>
+
+        <!-- Documents Tab -->
+        <div class="tab-panel" id="tab-documents">
+            <div class="panel-header">
+                <h2>Documents</h2>
+                <div class="panel-header-actions">
+                    <input type="text" id="docSearchInput" class="doc-search-input" placeholder="Search documents...">
+                    <button class="btn btn-primary" id="docUploadBtn">+ Upload</button>
+                </div>
+            </div>
+            <div class="doc-filters" id="docFilters">
+                <button class="filter-tab active" data-filter="active">Active</button>
+                <button class="filter-tab" data-filter="processing">Processing</button>
+                <button class="filter-tab" data-filter="deleted">Deleted</button>
+            </div>
+            <div class="doc-list" id="docList">
+                <div class="loading">Loading documents...</div>
+            </div>
+        </div>
+
+        <!-- Document Preview Modal -->
+        <div class="modal-overlay" id="docPreviewOverlay" style="display:none">
+            <div class="modal modal-lg">
+                <div class="modal-header">
+                    <div class="modal-title-row">
+                        <h3 id="docPreviewTitle">Document Preview</h3>
+                        <button class="btn-close" id="docPreviewClose">&times;</button>
+                    </div>
+                    <div id="docPreviewMeta" class="doc-preview-meta"></div>
+                </div>
+                <div class="modal-body" id="docPreviewBody">
+                    <div class="loading">Loading content...</div>
+                </div>
+                <div class="form-actions">
+                    <a id="docDownloadLink" class="btn btn-secondary" href="#" download>Download Original</a>
+                    <button id="docPreviewDeleteBtn" class="btn btn-danger">Delete</button>
+                </div>
             </div>
         </div>
 

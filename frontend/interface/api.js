@@ -62,6 +62,22 @@ export class ApiClient {
     return res.json();
   }
 
+  /** Public wrappers for use outside of this class */
+  get(path) { return this._get(path); }
+  post(path, body) { return this._post(path, body); }
+  del(path) { return this._delete(path); }
+
+  /** Upload a FormData payload (multipart, no JSON Content-Type) */
+  async upload(path, formData) {
+    const res = await fetch(this._buildUrl(path), {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: formData,
+    });
+    if (res.status === 401) throw new Error('AUTH');
+    return res.json();
+  }
+
   /** @returns {Promise<{status: string}>} */
   healthCheck() {
     return fetch(this._buildUrl('/health'), { credentials: 'same-origin' }).then(r => r.json()).catch(() => null);
