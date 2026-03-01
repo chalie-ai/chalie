@@ -29,9 +29,7 @@ def _strip_tool_markers(text: str) -> str:
     return text.strip()
 
 
-ACTION_FATIGUE_COSTS = {
-    'introspect': 0.5, 'memorize': 0.8, 'recall': 1.0, 'associate': 1.0,
-}
+from services.act_action_categories import ACTION_FATIGUE_COSTS
 
 
 class ActLoopService:
@@ -43,7 +41,9 @@ class ActLoopService:
         cumulative_timeout: float = 60.0,
         per_action_timeout: float = 10.0,
         max_iterations: int = 7,
-        cortex_iteration_service=None
+        cortex_iteration_service=None,
+        critic=None,
+        dispatcher=None,
     ):
         """
         Initialize ACT loop service.
@@ -54,12 +54,18 @@ class ActLoopService:
             per_action_timeout: Maximum time per individual action (seconds)
             max_iterations: Hard cap on iteration count (default 7)
             cortex_iteration_service: Service for exploration bonus calculation
+            critic: Optional CriticService instance for post-action verification
+            dispatcher: Optional ActDispatcherService instance (reused across iterations)
         """
         self.config = config
         self.cumulative_timeout = cumulative_timeout
         self.per_action_timeout = per_action_timeout
         self.max_iterations = max_iterations
         self.cortex_iteration_service = cortex_iteration_service
+
+        # Critic and dispatcher (injected, not monkey-patched)
+        self._critic = critic
+        self._dispatcher = dispatcher
 
         # Loop state
         self.loop_id = None  # Set by caller before loop starts
@@ -78,6 +84,9 @@ class ActLoopService:
         self.act_history = []  # Action results for context injection
         self.iteration_logs = []  # Iteration data for batch PostgreSQL write
         self.context_extras = {}  # Extra params merged into every action dispatch
+
+        # Per-loop flags (declared here — not monkey-patched externally)
+        self._escalation_hint_injected = False
 
     def can_continue(self, mode: str = 'ACT', max_history_tokens: int = 4000, **kwargs) -> Tuple[bool, Optional[str]]:
         """
@@ -156,6 +165,16 @@ class ActLoopService:
             else:
                 value -= 0.3
         return value * (1.0 / (1.0 + 0.2 * iteration_number))
+
+    def charge_critic_fatigue(self, cost: float) -> None:
+        """Charge fatigue for a critic evaluation. Encapsulates external fatigue mutation."""
+        self.fatigue += cost
+
+    def get_critic_telemetry(self) -> dict:
+        """Return critic telemetry if a critic was attached, else empty dict."""
+        if self._critic is not None:
+            return self._critic.get_telemetry()
+        return {}
 
     def get_fatigue_telemetry(self) -> dict:
         """Return fatigue metrics for telemetry logging."""
@@ -250,11 +269,13 @@ class ActLoopService:
         Returns:
             List of action results from dispatcher (order preserved)
         """
-        from services.act_dispatcher_service import ActDispatcherService
-
         logging.info(f"[MODE:ACT] [ACT LOOP] Iteration {self.iteration_number}: executing {len(actions)} action(s)")
 
-        dispatcher = ActDispatcherService(timeout=self.per_action_timeout)
+        # Reuse dispatcher across iterations (P5 fix) — lazy-build on first call
+        if self._dispatcher is None:
+            from services.act_dispatcher_service import ActDispatcherService
+            self._dispatcher = ActDispatcherService(timeout=self.per_action_timeout)
+
         results = []
         accumulated = {}  # outputs from completed actions, keyed by downstream param name
 
@@ -266,7 +287,7 @@ class ActLoopService:
                     enriched[field] = value
 
             logging.debug(f"[MODE:ACT] [ACT LOOP] Step {i+1}/{len(actions)} → {action.get('type', 'unknown')}")
-            result = dispatcher.dispatch_action(topic, enriched)
+            result = self._dispatcher.dispatch_action(topic, enriched)
             results.append(result)
 
             logging.info(
@@ -280,16 +301,12 @@ class ActLoopService:
                     f"[MODE:ACT] [ACT LOOP] {result['action_type']} result: {result_str!r:.200}"
                 )
 
-            # Harvest outputs for downstream chaining
+            # Generic output chaining: merge all scalar values from successful dict
+            # results into accumulated context for downstream actions (P6 fix)
             if result.get("status") == "success" and isinstance(result.get("result"), dict):
-                out = result["result"]
-                if "timezone" in out:
-                    accumulated["timezone"] = out["timezone"]
-                if "city" in out:
-                    accumulated["location"] = out["city"]
-                if "latitude" in out and "longitude" in out:
-                    accumulated["lat"] = out["latitude"]
-                    accumulated["lon"] = out["longitude"]
+                for key, value in result["result"].items():
+                    if isinstance(value, (str, int, float, bool)) and key not in ('status', 'card_emitted'):
+                        accumulated[key] = value
 
         return results
 

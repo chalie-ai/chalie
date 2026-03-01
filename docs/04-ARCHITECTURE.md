@@ -89,14 +89,24 @@ frontend/
 - **`event_bridge_service.py`** — Connects ambient context changes (place, attention, energy, session) to autonomous actions; enforces stabilization windows (90s), per-event cooldowns, confidence gating, aggregation (60s bundle window), and focus gates; config in `configs/agents/event-bridge.json`
 
 #### ACT Loop & Critic
-- **`act_loop_service.py`** — Iterative action execution with safety limits (60s timeout)
+- **`act_orchestrator_service.py`** — Unified, parameterized ACT loop runner. Single implementation replaces per-worker loop copies. Configurable: `critic_enabled`, `smart_repetition` (embedding-based), `escalation_hints` (budget warnings), `persistent_task_exit`, `deferred_card_context`. Caller-specific behavior via `on_iteration_complete` callback. Config flag `act_use_unified_orchestrator` for gradual rollout.
+- **`act_loop_service.py`** — Fatigue-based cognitive iteration manager with action execution, history tracking, and telemetry. Constructor-injected critic and dispatcher (no monkey-patching). Generic scalar output chaining between sequential actions.
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
+- **`act_completion_service.py`** — Detects when expected tools were not invoked; injects `[NO_ACTION_TAKEN]` signal
+- **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
 - **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
 - **`plan_decomposition_service.py`** — LLM-powered goal → step DAG decomposition; validates DAG (Kahn's cycle detection), step quality (4–30 word descriptions, Jaccard dedup), and cost classification (cheap/expensive); plans stored in `persistent_tasks.progress` JSONB; ready-step ordering (shallowest depth, cheapest first)
 
+#### Constants & Registries
+- **`services/innate_skills/registry.py`** — Authoritative frozenset definitions for all skill membership sets (`ALL_SKILL_NAMES`, `PLANNING_SKILLS`, `COGNITIVE_PRIMITIVES`, `CONTEXTUAL_SKILLS`, `TRIAGE_VALID_SKILLS`, etc.). Single source of truth — all consumers import from here.
+- **`services/act_action_categories.py`** — Authoritative frozenset definitions for action behavior categories (`READ_ACTIONS`, `DETERMINISTIC_ACTIONS`, `SAFE_ACTIONS`, `CRITIC_SKIP_READS`, `ACTION_FATIGUE_COSTS`).
+- **`services/act_redis_keys.py`** — Centralized Redis key patterns for the ACT system (deferred cards, tool caches, heartbeat, SSE, reflection queue).
+
 #### Tool Integration
-- **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol)
+- **`tool_registry_service.py`** — Tool discovery, metadata management via `run_interactive` (bidirectional stdin/stdout dialog protocol)
+- **`tool_output_utils.py`** — Shared tool output formatting (`format_tool_result`), sanitization (`sanitize_tool_output`), and telemetry building (`build_tool_telemetry`); used by both ToolRegistryService and CronToolWorker
+- **`tool_card_enqueue_service.py`** — Post-loop tool card rendering and delivery with dedup guards (B7/B8 fixes)
 - **`tool_container_service.py`** — Container lifecycle; `run()` for single-shot, `run_interactive()` for bidirectional tool↔Chalie dialog (JSON-lines stdout, Chalie responses via stdin)
 - **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
 - **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
@@ -150,7 +160,9 @@ frontend/
 ## Worker Processes (`backend/workers/`)
 
 ### Queue Workers
-- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue memory job
+- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue memory job; fast-path ACT loop via `ACTOrchestrator` (config-flagged)
+- **Tool Worker** — Background ACT loop execution (RQ queue); post-action critic verification; deferred card context injection; uses `ACTOrchestrator` (config-flagged)
+- **Cron Tool Worker** (`workers/cron_tool_worker.py`) — Scheduled tool execution as background service; extracted from ToolRegistryService for SRP
 - **Memory Chunker Worker** — Enriches exchanges with memory chunks via LLM
 - **Episodic Memory Worker** — Builds episodes from sequences of exchanges
 - **Semantic Consolidation Worker** — Extracts concepts + relationships from episodes

@@ -12,7 +12,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-INNATE_SKILLS = {'recall', 'memorize', 'introspect', 'associate'}
+from services.innate_skills.registry import PROCEDURAL_MEMORY_SKILLS
+
+# Only the 4 core primitives are tracked in procedural memory.
+# Dynamic tools are already recorded by ToolRegistryService._log_outcome.
+INNATE_SKILLS = PROCEDURAL_MEMORY_SKILLS
 
 UTILITY_MAP = {
     'recall': lambda r: 0.3 if r.get('status') == 'success' and 'no matches' not in str(r.get('result', '')).lower() else -0.1,

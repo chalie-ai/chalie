@@ -9,7 +9,7 @@
 import re
 import time
 import json
-from typing import List, Dict, Optional
+from typing import Optional
 import logging
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -943,10 +943,10 @@ class FrontalCortexService:
             Formatted available skills string or empty string
         """
         try:
+            from services.innate_skills.registry import PLANNING_SKILLS
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task"]
-            available = [s for s in innate if s in dispatcher.handlers]
+            available = [s for s in sorted(PLANNING_SKILLS) if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)
             return ""

@@ -13,67 +13,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-INNATE_SKILLS = {
-    'recall', 'memorize', 'introspect', 'associate', 'schedule',
-    'persistent_task', 'list', 'autobiography', 'focus', 'moment', 'emit_card',
-}
+from services.innate_skills.registry import REFLECTION_FILTER_SKILLS as INNATE_SKILLS
 
 
-def _is_ephemeral_tool(tool_name: str) -> bool:
-    """Return True if the tool declares output.ephemeral=true in its manifest."""
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        manifest = ToolRegistryService().get_tool_full_description(tool_name)
-        if manifest:
-            return manifest.get('output', {}).get('ephemeral', False)
-    except Exception:
-        pass
-    return False
-
-
-def _enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
-    """Push tool outputs to Redis for background experience assimilation.
-
-    Applies novelty gate layers 1 (ephemeral tool type) and 2 (output size).
-    Layer 3 (content hash dedup) runs in the assimilation service.
-    """
-    try:
-        tool_outputs = []
-        for action in act_history:
-            if action.get('status') != 'success':
-                continue
-            action_type = action.get('action_type', '')
-            if action_type in INNATE_SKILLS:
-                continue
-            if _is_ephemeral_tool(action_type):
-                continue
-            result_str = str(action.get('result', ''))
-            if len(result_str) < 50:
-                continue
-            tool_outputs.append({
-                'tool': action_type,
-                'result': result_str[:2000],
-            })
-
-        if not tool_outputs:
-            return
-
-        from services.redis_client import RedisClientService
-        redis_conn = RedisClientService.create_connection()
-        payload = json.dumps({
-            'topic': topic,
-            'user_prompt': user_prompt,
-            'tool_outputs': tool_outputs,
-            'timestamp': time.time(),
-        })
-        redis_conn.rpush('tool_reflection:pending', payload)
-        redis_conn.expire('tool_reflection:pending', 86400)
-        logger.debug(
-            f"[TOOL WORKER] Enqueued reflection for topic '{topic}' "
-            f"({len(tool_outputs)} tool output(s))"
-        )
-    except Exception as e:
-        logger.debug(f"[TOOL WORKER] Reflection enqueue failed: {e}")
+from services.act_reflection_service import enqueue_tool_reflection as _enqueue_tool_reflection
+from services.tool_card_enqueue_service import enqueue_tool_cards as _enqueue_tool_cards
+from services.act_completion_service import inject_no_action_signal as _inject_no_action_signal
 
 
 def tool_worker(job_data: dict) -> str:
@@ -149,8 +94,6 @@ def tool_worker(job_data: dict) -> str:
         # Load configs
         from services import ConfigService, FrontalCortexService
         from services.thread_conversation_service import ThreadConversationService
-        from services.act_loop_service import ActLoopService
-        from services.cortex_iteration_service import CortexIterationService
 
         cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
         act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
@@ -174,22 +117,6 @@ def tool_worker(job_data: dict) -> str:
             'topic_update': '',
         }
 
-        # Initialize ACT loop
-        act_cumulative_timeout = cortex_config.get('act_cumulative_timeout', 60.0)
-        act_per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
-        max_act_iterations = cortex_config.get('max_act_iterations', 7)
-
-        act_loop = ActLoopService(
-            config=cortex_config,
-            cumulative_timeout=act_cumulative_timeout,
-            per_action_timeout=act_per_action_timeout,
-            max_iterations=max_act_iterations,
-        )
-        act_loop.context_warmth = context_snapshot.get('context_warmth', 0.0)
-        act_loop.context_extras = {
-            'triage_tools': context_snapshot.get('triage_selected_tools', []),
-        }
-
         # Relevant tools from embedding-based scoring (passed from digest_worker)
         relevant_tools = context_snapshot.get('relevant_tools', None) or None
 
@@ -202,439 +129,27 @@ def tool_worker(job_data: dict) -> str:
         if relevant_tools or triage_selected_tools:
             selected_skills = list(selected_skills or []) + ['emit_card']
 
-        # Repetition similarity threshold for embedding-based dedup
-        repetition_sim_threshold = cortex_config.get('act_repetition_similarity_threshold', 0.85)
-
-        # Initialize iteration logging
-        iteration_service = None
-        loop_id = None
-        try:
-            from services.database_service import get_shared_db_service
-            db_service = get_shared_db_service()
-            iteration_service = CortexIterationService(db_service)
-            loop_id = iteration_service.create_loop_id()
-            act_loop.loop_id = loop_id
-        except Exception as e:
-            logger.warning(f"[TOOL WORKER] Iteration logging init failed: {e}")
-
-        try:
-            exchange_id = conversation_service.get_latest_exchange_id(topic)
-        except Exception:
-            exchange_id = "unknown"
-
-        from services.context_relevance_service import ContextRelevanceService
-        from services.context_assembly_service import ContextAssemblyService
-
-        inclusion_map = None
-        try:
-            inclusion_map = ContextRelevanceService().compute_inclusion_map(
-                mode='ACT', signals={}, classification=classification, returning_from_silence=False,
-            )
-        except Exception as e:
-            logger.warning(f"[TOOL WORKER] Context relevance failed: {e}")
-
-        assembled_context = None
-        try:
-            assembled_context = ContextAssemblyService({}).assemble(
-                prompt=text, topic=topic, thread_id=thread_id,
-            )
-        except Exception as e:
-            logger.warning(f"[TOOL WORKER] Context assembly failed: {e}")
-
-        # ACT loop
-        consecutive_same_action = 0
-        last_action_type = None
-        recent_action_entries = []  # (fingerprint_text, action_types_set) tuples
-        termination_reason = None
-
-        while True:
-            # Check cancellation each iteration
-            if _is_cancelled(cycle_id):
-                logger.info(f"[TOOL WORKER] Cycle {cycle_id[:8]} cancelled by user")
-                if cycle_service and cycle_id:
-                    cycle_service.complete_cycle(cycle_id, 'cancelled')
-                return f"Topic '{topic}' | CANCELLED by user"
-
-            iteration_start = time.time()
-
-            # Publish heartbeat every ~10s for SSE health monitoring
-            if _heartbeat_redis and _heartbeat_job_id:
-                _now = time.time()
-                if _now - _last_heartbeat >= 10.0:
-                    try:
-                        _heartbeat_redis.setex(f"heartbeat:{_heartbeat_job_id}", 30, "1")
-                        _last_heartbeat = _now
-                    except Exception:
-                        pass
-
-            # Build act_history and append any deferred card offers as structured context.
-            # This keeps card offers out of tool output text while still informing the LLM.
-            act_history_str = act_loop.get_history_context()
-            try:
-                from services.redis_client import RedisClientService as _RCS
-                _redis_dc = _RCS.create_connection()
-                _deferred_items = _redis_dc.lrange(f"deferred_cards:{topic}", 0, -1)
-                if _deferred_items:
-                    _cards = [json.loads(i) for i in _deferred_items]
-                    _lines = ["\n## Available Card Offers"]
-                    for _card in _cards:
-                        _media = []
-                        if _card.get("has_images"):
-                            _media.append("images")
-                        _media_str = f" ({', '.join(_media)})" if _media else ""
-                        _lines.append(
-                            f"- {_card['tool_name']} "
-                            f"(id: {_card['invocation_id']}, "
-                            f"{_card['source_count']} sources, "
-                            f"{_card['unique_domains']} domains{_media_str})"
-                        )
-                    _lines.append(
-                        "\nUse emit_card with the invocation_id above to display a visual card, "
-                        "or return empty actions to respond with text."
-                    )
-                    act_history_str += "\n".join(_lines)
-            except Exception as _dc_err:
-                logger.debug(f"[TOOL WORKER] Deferred card context injection failed: {_dc_err}")
-
-            # Generate action plan
-            response_data = cortex_service.generate_response(
-                system_prompt_template=act_prompt,
-                original_prompt=text,
-                classification=classification,
-                chat_history=chat_history,
-                act_history=act_history_str,
-                relevant_tools=relevant_tools,
-                selected_skills=selected_skills,
-                assembled_context=assembled_context,
-                inclusion_map=inclusion_map,
-            )
-
-            actions = response_data.get('actions', [])
-
-            # Log what the LLM decided to do this iteration
-            if actions:
-                logger.info(
-                    f"[TOOL WORKER] Iter {act_loop.iteration_number} actions: "
-                    f"{json.dumps([{k: v for k, v in a.items() if k != 'type'} | {'type': a.get('type')} for a in actions], default=str)}"
-                )
-                for a in actions:
-                    if a.get('type') == 'schedule':
-                        logger.info(f"[TOOL WORKER] Schedule action: {json.dumps(a, default=str)}")
-            else:
-                # Log full response to diagnose why ACT loop chose no actions
-                raw_resp = response_data.get('response', '')
-                logger.info(
-                    f"[TOOL WORKER] Iter {act_loop.iteration_number}: LLM returned no actions. "
-                    f"response_snippet={repr(raw_resp[:300]) if raw_resp else '(empty)'}"
-                )
-
-            # No actions → log and break (nothing to execute)
-            if not actions:
-                logger.info("[TOOL WORKER] No actions, exiting ACT loop")
-                termination_reason = 'no_actions'
-                act_loop.log_iteration(
-                    started_at=iteration_start,
-                    completed_at=time.time(),
-                    chosen_mode='ACT',
-                    chosen_confidence=response_data.get('confidence', 0.5),
-                    actions_executed=[],
-                    frontal_cortex_response=response_data,
-                    termination_reason=termination_reason,
-                    decision_data={'net_value': 0.0, 'total_cost': act_loop.fatigue, 'iteration_cost': 0.0},
-                )
-                act_loop.iteration_number += 1
-                break
-
-            # ── Execute actions FIRST (always execute current iteration) ──
-            actions_executed = act_loop.execute_actions(
-                topic=topic,
-                actions=actions
-            )
-
-            # ── Critic verification step ──
-            from services.critic_service import CriticService, MAX_CRITIC_RETRIES, CRITIC_FATIGUE_COST
-            if not hasattr(act_loop, '_critic'):
-                act_loop._critic = CriticService()
-            critic = act_loop._critic
-
-            critic_corrected = []
-            for idx, result in enumerate(actions_executed):
-                action_spec = actions[idx] if idx < len(actions) else {}
-                action_type = result.get('action_type', 'unknown')
-
-                if critic.should_skip(action_type, result):
-                    critic_corrected.append(result)
-                    continue
-
-                retries = 0
-                current_result = result
-                while retries < MAX_CRITIC_RETRIES:
-                    verdict = critic.evaluate(
-                        original_request=text,
-                        action_type=action_type,
-                        action_intent=action_spec,
-                        action_result=current_result,
-                    )
-                    act_loop.fatigue += CRITIC_FATIGUE_COST
-
-                    if verdict.get('verified', True):
-                        break
-
-                    correction = verdict.get('correction')
-                    if not correction:
-                        if not critic.is_safe_action(action_type):
-                            logger.info(f"[TOOL WORKER] Critic escalation for {action_type}: {verdict.get('issue', 'unknown')}")
-
-                            # Tell the user about the paused action
-                            issue = verdict.get('issue', 'something unexpected')
-                            action_desc = action_spec.get('description', action_type)
-                            escalation_text = f"I was about to {action_desc}, but I paused \u2014 {issue}. Should I go ahead?"
-
-                            try:
-                                from services.output_service import OutputService
-                                OutputService().enqueue_text(
-                                    topic=topic,
-                                    response=escalation_text,
-                                    mode='ACT',
-                                    confidence=0.0,
-                                    generation_time=0.0,
-                                    original_metadata={
-                                        'source': 'critic_escalation',
-                                        'exchange_id': exchange_id,
-                                    },
-                                )
-                            except Exception as _esc_err:
-                                logger.warning(f"[TOOL WORKER] Failed to send escalation: {_esc_err}")
-                        break
-
-                    correction_entry = {
-                        'action_type': action_type,
-                        'status': 'critic_correction',
-                        'result': critic.format_correction_entry(
-                            action_type=action_type,
-                            original_result=str(current_result.get('result', '')),
-                            correction=correction,
-                            final_result=correction,
-                        ),
-                        'execution_time': 0.0, 'confidence': 0.0,
-                        'notes': f"critic correction attempt {retries + 1}",
-                    }
-                    act_loop.append_results([correction_entry])
-
-                    if critic.is_safe_action(action_type):
-                        from services.act_dispatcher_service import ActDispatcherService
-                        retry_dispatcher = ActDispatcherService(timeout=act_loop.per_action_timeout)
-                        corrected_action = {**action_spec, '_critic_correction': correction}
-                        current_result = retry_dispatcher.dispatch_action(topic, corrected_action)
-                    else:
-                        logger.info(f"[TOOL WORKER] Critic correction for consequential {action_type}, not retrying")
-                        break
-
-                    retries += 1
-                    if retries >= MAX_CRITIC_RETRIES:
-                        critic.oscillation_events += 1
-                        logger.warning(f"[TOOL WORKER] Critic MAX_RETRIES reached for {action_type}")
-
-                critic_corrected.append(current_result)
-
-            actions_executed = critic_corrected
-            act_loop.append_results(actions_executed)
-
-            # Track fingerprint + types for repetition detection
-            current_fingerprint = _action_fingerprint(actions)
-            current_types = _action_types(actions)
-            recent_action_entries.append((current_fingerprint, current_types))
-
-            # Accumulate fatigue
-            fatigue_added = act_loop.accumulate_fatigue(actions_executed, act_loop.iteration_number)
-
-            # Estimate net value (for cortex_iterations logging + strategy analysis)
-            iteration_net_value = ActLoopService.estimate_net_value(actions_executed, act_loop.iteration_number)
-
-            # Record per-skill outcomes to procedural memory
-            from services.skill_outcome_recorder import record_skill_outcomes
-            record_skill_outcomes(actions_executed, topic)
-
-            # ── Post-execution termination checks ──
-            termination_reason = None
-
-            # 1. Type-based repetition (≥3 consecutive same single action)
-            if len(actions) == 1:
-                current_type = actions[0].get('type', '')
-                if current_type == last_action_type:
-                    consecutive_same_action += 1
-                else:
-                    consecutive_same_action = 1
-                last_action_type = current_type
-            else:
-                consecutive_same_action = 0
-                last_action_type = None
-
-            if consecutive_same_action >= 3:
-                logger.warning(f"[TOOL WORKER] Repetition detected: '{last_action_type}' x{consecutive_same_action}")
-                termination_reason = 'repetition_detected'
-
-            # 2. Embedding-based smart repetition (same-type only)
-            if not termination_reason and len(recent_action_entries) > 1:
-                try:
-                    from services.embedding_service import get_embedding_service
-                    import numpy as np
-                    emb_service = get_embedding_service()
-                    current_vec = emb_service.generate_embedding_np(current_fingerprint)
-                    for prev_fingerprint, prev_types in recent_action_entries[-4:-1]:  # last 3 prior
-                        # Only compare if action types overlap
-                        if not current_types & prev_types:
-                            continue
-                        prev_vec = emb_service.generate_embedding_np(prev_fingerprint)
-                        sim = float(np.dot(current_vec, prev_vec))
-                        if sim > repetition_sim_threshold:
-                            logger.warning(f"[TOOL WORKER] Smart repetition (same-type): sim={sim:.3f} > {repetition_sim_threshold}")
-                            termination_reason = 'smart_repetition'
-                            break
-                except Exception:
-                    pass
-
-            # 3. Fatigue / timeout / max iterations
-            if not termination_reason:
-                can_continue, fatigue_reason = act_loop.can_continue()
-                if not can_continue:
-                    termination_reason = fatigue_reason
-
-            # Log iteration
-            iteration_end = time.time()
-            act_loop.log_iteration(
-                started_at=iteration_start,
-                completed_at=iteration_end,
-                chosen_mode='ACT',
-                chosen_confidence=response_data.get('confidence', 0.5),
-                actions_executed=actions_executed,
-                frontal_cortex_response=response_data,
-                termination_reason=termination_reason,
-                decision_data={
-                    'net_value': iteration_net_value,
-                    'total_cost': act_loop.fatigue,
-                    'iteration_cost': fatigue_added,
-                },
-            )
-
-            act_loop.iteration_number += 1
-
-            if termination_reason:
-                break
-
-        # Batch write iterations
-        if iteration_service and act_loop.iteration_logs:
-            try:
-                iteration_service.log_iterations_batch(
-                    loop_id=loop_id,
-                    topic=topic,
-                    exchange_id=exchange_id,
-                    session_id="tool_worker",
-                    iterations=act_loop.iteration_logs
-                )
-            except Exception as e:
-                logger.error(f"[TOOL WORKER] Failed to log iterations: {e}")
-
-        # Log fatigue telemetry (including critic metrics)
-        telemetry = act_loop.get_fatigue_telemetry()
-        telemetry['termination_reason'] = termination_reason
-        if hasattr(act_loop, '_critic'):
-            telemetry.update(act_loop._critic.get_telemetry())
-        logger.info(f"[TOOL WORKER] Fatigue telemetry: {telemetry}")
-        try:
-            from services.interaction_log_service import InteractionLogService
-            _tel_log = InteractionLogService(db_service)
-            _tel_log.log_event(
-                event_type='act_loop_telemetry',
-                payload=telemetry,
-                topic=topic,
-                source='act_loop',
-            )
-        except Exception:
-            pass
-
-        # Build tool results summary
-        act_history_context = act_loop.get_history_context()
-
-        # Action-completion verification: if action-oriented tools were expected
-        # but none were successfully invoked, inject a [NO_ACTION_TAKEN] signal
-        # so the followup prompt knows the action failed.
-        relevant_tools_list = context_snapshot.get('relevant_tools', []) or []
-        expected_action_tools = [
-            t['name'] for t in relevant_tools_list
-            if t.get('type') == 'tool' and not _is_ephemeral_tool(t['name'])
-        ]
-        if expected_action_tools:
-            action_tool_used = any(
-                not _is_ephemeral_tool(r.get('action_type', ''))
-                and r.get('action_type', '') not in INNATE_SKILLS
-                and r.get('status') == 'success'
-                for r in act_loop.act_history
-            )
-            if not action_tool_used:
-                failed_tools = ', '.join(expected_action_tools)
-                act_history_context = (
-                    f"[NO_ACTION_TAKEN] The requested action could not be completed. "
-                    f"Expected tool(s) [{failed_tools}] were not successfully invoked. "
-                    f"Do NOT claim the action was performed.\n\n"
-                    + act_history_context
-                )
-
-        # Complete cycle
-        if cycle_service and cycle_id:
-            cycle_service.complete_cycle(cycle_id, 'completed')
-
-        # Enqueue tool outputs for background experience assimilation
-        _enqueue_tool_reflection(act_loop.act_history, topic, text)
-
-        # Render and deliver cards; gate text follow-up for synthesize=false tools.
-        card_replaces = _enqueue_tool_cards(act_loop.act_history, topic, metadata, cycle_id=cycle_id)
-
-        # Also suppress follow-up when emit_card was called — the card IS the response.
-        # Checks structured dict result {"card_emitted": True} generically (no tool names).
-        if not card_replaces:
-            card_replaces = any(
-                isinstance(r.get('result'), dict) and r['result'].get('card_emitted') is True
-                for r in act_loop.act_history
-            )
-
-        if not card_replaces:
-            _enqueue_followup(
-                topic=topic,
-                text=text,
-                act_history_context=act_history_context,
-                cycle_id=cycle_id,
-                parent_cycle_id=parent_cycle_id,
-                root_cycle_id=root_cycle_id,
-                metadata=metadata,
-                original_created_at=job_data.get('created_at', time.time()),
-            )
-
-        total_time = time.time() - act_loop.start_time
-        logger.info(
-            f"[TOOL WORKER] ACT loop complete: {act_loop.iteration_number} iterations, "
-            f"{len(act_loop.act_history)} actions, {total_time:.1f}s total"
-        )
-
-        # Record performance metrics for each tool invocation
-        try:
-            from services.tool_performance_service import ToolPerformanceService
-            perf_service = ToolPerformanceService()
-            for action in act_loop.act_history:
-                action_type = action.get('action_type', '')
-                if action_type and action_type not in INNATE_SKILLS:
-                    perf_service.record_invocation(
-                        tool_name=action_type,
-                        exchange_id=exchange_id,
-                        success=action.get('status') in ('success', 'completed', True),
-                        latency_ms=float(action.get('execution_time') or 0) * 1000,
-                    )
-        except Exception as _perf_err:
-            logger.debug(f"[TOOL WORKER] Performance recording failed: {_perf_err}")
-
-        return (
-            f"Topic '{topic}' | Tool work complete: "
-            f"{act_loop.iteration_number} iterations in {total_time:.1f}s"
+        return _tool_worker_orchestrator(
+            cortex_config=cortex_config,
+            act_config=act_config,
+            act_prompt=act_prompt,
+            cortex_service=cortex_service,
+            classification=classification,
+            chat_history=chat_history,
+            relevant_tools=relevant_tools,
+            selected_skills=selected_skills,
+            topic=topic,
+            text=text,
+            context_snapshot=context_snapshot,
+            metadata=metadata,
+            job_data=job_data,
+            cycle_id=cycle_id,
+            parent_cycle_id=parent_cycle_id,
+            root_cycle_id=root_cycle_id,
+            cycle_service=cycle_service,
+            _heartbeat_redis=_heartbeat_redis,
+            _heartbeat_job_id=_heartbeat_job_id,
+            _last_heartbeat=_last_heartbeat,
         )
 
     except TimeoutError:
@@ -655,6 +170,175 @@ def tool_worker(job_data: dict) -> str:
         signal.alarm(0)
 
 
+def _tool_worker_orchestrator(
+    cortex_config, act_config, act_prompt, cortex_service, classification,
+    chat_history, relevant_tools, selected_skills,
+    topic, text, context_snapshot, metadata, job_data,
+    cycle_id, parent_cycle_id, root_cycle_id, cycle_service,
+    _heartbeat_redis, _heartbeat_job_id, _last_heartbeat,
+):
+    """
+    Unified ACT orchestrator path for tool_worker.
+
+    Replaces the legacy inline loop with ACTOrchestrator.run().
+    """
+    from services.act_orchestrator_service import ACTOrchestrator
+
+    act_cumulative_timeout = cortex_config.get('act_cumulative_timeout', 60.0)
+    act_per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
+    max_act_iterations = cortex_config.get('max_act_iterations', 7)
+
+    orchestrator = ACTOrchestrator(
+        config=cortex_config,
+        max_iterations=max_act_iterations,
+        cumulative_timeout=act_cumulative_timeout,
+        per_action_timeout=act_per_action_timeout,
+        critic_enabled=True,
+        smart_repetition=True,
+        escalation_hints=False,
+        persistent_task_exit=False,
+        deferred_card_context=True,
+    )
+
+    # Heartbeat + cancellation callback
+    heartbeat_state = {'last': _last_heartbeat}
+
+    def on_iteration_complete(act_loop, iteration_start, actions_executed, termination_reason):
+        # Cancellation check
+        if _is_cancelled(cycle_id):
+            logger.info(f"[TOOL WORKER] Cycle {cycle_id[:8]} cancelled by user")
+            if cycle_service and cycle_id:
+                cycle_service.complete_cycle(cycle_id, 'cancelled')
+            return 'cancelled'
+
+        # Heartbeat
+        if _heartbeat_redis and _heartbeat_job_id:
+            _now = time.time()
+            if _now - heartbeat_state['last'] >= 10.0:
+                try:
+                    _heartbeat_redis.setex(f"heartbeat:{_heartbeat_job_id}", 30, "1")
+                    heartbeat_state['last'] = _now
+                except Exception:
+                    pass
+        return None
+
+    try:
+        from services.thread_conversation_service import ThreadConversationService
+        exchange_id = ThreadConversationService().get_latest_exchange_id(topic)
+    except Exception:
+        exchange_id = "unknown"
+
+    result = orchestrator.run(
+        topic=topic,
+        text=text,
+        cortex_service=cortex_service,
+        act_prompt=act_prompt,
+        classification=classification,
+        chat_history=chat_history,
+        relevant_tools=relevant_tools,
+        selected_skills=selected_skills,
+        assembled_context=_build_assembled_context(text, topic, metadata, classification),
+        inclusion_map=_build_inclusion_map(classification),
+        on_iteration_complete=on_iteration_complete,
+        context_extras={
+            'triage_tools': context_snapshot.get('triage_selected_tools', []),
+        },
+        session_id='tool_worker',
+    )
+
+    # Complete cycle
+    if cycle_service and cycle_id:
+        cycle_service.complete_cycle(cycle_id, 'completed')
+
+    # Build act_history_context for followup
+    from services.act_loop_service import ActLoopService
+    # Use a temporary ActLoopService just for get_history_context formatting
+    _tmp = ActLoopService.__new__(ActLoopService)
+    _tmp.act_history = result.act_history
+    act_history_context = _tmp.get_history_context()
+
+    # Action-completion verification
+    relevant_tools_list = context_snapshot.get('relevant_tools', []) or []
+    act_history_context = _inject_no_action_signal(
+        result.act_history, act_history_context, relevant_tools_list
+    )
+
+    # Enqueue tool reflection
+    _enqueue_tool_reflection(result.act_history, topic, text)
+
+    # Render and deliver cards
+    card_replaces = _enqueue_tool_cards(result.act_history, topic, metadata, cycle_id=cycle_id)
+
+    # Suppress follow-up when emit_card was called
+    if not card_replaces:
+        card_replaces = any(
+            isinstance(r.get('result'), dict) and r['result'].get('card_emitted') is True
+            for r in result.act_history
+        )
+
+    if not card_replaces:
+        _enqueue_followup(
+            topic=topic,
+            text=text,
+            act_history_context=act_history_context,
+            cycle_id=cycle_id,
+            parent_cycle_id=parent_cycle_id,
+            root_cycle_id=root_cycle_id,
+            metadata=metadata,
+            original_created_at=job_data.get('created_at', time.time()),
+        )
+
+    total_time = time.time() - (time.time() - result.fatigue_telemetry.get('elapsed_seconds', 0))
+    logger.info(
+        f"[TOOL WORKER] ACT loop complete (orchestrator): {result.iterations_used} iterations, "
+        f"{len(result.act_history)} actions, termination={result.termination_reason}"
+    )
+
+    # Record performance metrics
+    try:
+        from services.tool_performance_service import ToolPerformanceService
+        perf_service = ToolPerformanceService()
+        for action in result.act_history:
+            action_type = action.get('action_type', '')
+            if action_type and action_type not in INNATE_SKILLS:
+                perf_service.record_invocation(
+                    tool_name=action_type,
+                    exchange_id=exchange_id,
+                    success=action.get('status') in ('success', 'completed', True),
+                    latency_ms=float(action.get('execution_time') or 0) * 1000,
+                )
+    except Exception as _perf_err:
+        logger.debug(f"[TOOL WORKER] Performance recording failed: {_perf_err}")
+
+    return (
+        f"Topic '{topic}' | Tool work complete (orchestrator): "
+        f"{result.iterations_used} iterations"
+    )
+
+
+def _build_inclusion_map(classification):
+    """Build context inclusion map for ACT mode."""
+    try:
+        from services.context_relevance_service import ContextRelevanceService
+        return ContextRelevanceService().compute_inclusion_map(
+            mode='ACT', signals={}, classification=classification, returning_from_silence=False,
+        )
+    except Exception:
+        return None
+
+
+def _build_assembled_context(text, topic, metadata, classification):
+    """Build assembled context for ACT mode."""
+    try:
+        from services.context_assembly_service import ContextAssemblyService
+        thread_id = metadata.get('thread_id')
+        return ContextAssemblyService({}).assemble(
+            prompt=text, topic=topic, thread_id=thread_id,
+        )
+    except Exception:
+        return None
+
+
 def _notify_sse_error(metadata: dict, error_message: str):
     """Publish error to SSE channel and clean up sse_pending flag so the SSE loop is released."""
     try:
@@ -670,106 +354,6 @@ def _notify_sse_error(metadata: dict, error_message: str):
     except Exception as e:
         logger.warning(f"[TOOL WORKER] Failed to notify SSE of error: {e}")
 
-
-def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:
-    """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
-    tool was found (suppresses the text follow-up since the card was already rendered inline).
-
-    synthesize=false tools: invoke() already rendered the card. Here we just close the SSE.
-    synthesize=true tools: invoke() deferred card emission here. We render exactly once per
-    tool (using the last cached result) even if the tool was called multiple times in the
-    ACT loop (deduplication via rendered_tools set).
-    """
-    any_synthesize_false = False
-    try:
-        from services.redis_client import RedisClientService
-        from services.tool_registry_service import ToolRegistryService
-        from services.card_renderer_service import CardRendererService
-        from services.output_service import OutputService
-
-        redis = RedisClientService.create_connection()
-        raw_items = redis.lrange(f"tool_raw_cache:{topic}", 0, -1)
-        redis.delete(f"tool_raw_cache:{topic}")
-
-        # Build {tool_name: raw_result} map (last result per tool wins)
-        raw_map = {}
-        for item in raw_items:
-            entry = json.loads(item)
-            raw_map[entry['tool']] = entry['data']
-
-        registry = ToolRegistryService()
-        renderer = CardRendererService()
-        output_svc = OutputService()
-
-        # Track tools whose cards have already been enqueued to prevent duplicates.
-        # The ACT loop may invoke the same tool multiple times (e.g. retries on empty
-        # results) — each invocation appends to act_history, but we only want one card.
-        rendered_tools: set = set()
-
-        for action in act_history:
-            if action.get('status') != 'success':
-                continue
-            tool_name = action.get('action_type', '')
-            tool = registry.tools.get(tool_name)
-            if not tool:
-                continue
-            output_config = tool['manifest'].get('output', {})
-            card_config = output_config.get('card', {})
-            if not card_config or not card_config.get('enabled'):
-                continue
-
-            # If synthesize is false, invoke() already rendered the card inline.
-            # Suppress the text follow-up and close the waiting SSE connection.
-            if not output_config.get('synthesize', True):
-                any_synthesize_false = True
-                sse_uuid = metadata.get('uuid')
-                if sse_uuid:
-                    try:
-                        output_svc.enqueue_close_signal(sse_uuid)
-                    except Exception as _re:
-                        logger.warning(f"[TOOL WORKER] Failed to send close signal: {_re}")
-                continue
-
-            # synthesize=true: render exactly once per tool name.
-            if tool_name in rendered_tools:
-                continue
-
-            raw = raw_map.get(tool_name)
-            if not raw:
-                continue
-
-            # Path A: tool returned inline HTML (formalized contract) — use render_tool_html()
-            result_html = raw.get('html') if isinstance(raw, dict) else None
-            if result_html:
-                result_title = raw.get('title') or card_config.get('title', tool_name)
-                card_data = renderer.render_tool_html(tool_name, result_html, result_title, card_config)
-            else:
-                # Path B: no inline HTML — fall back to template-based render()
-                card_data = renderer.render(tool_name, raw, card_config, tool['dir'])
-
-            if card_data:
-                output_svc.enqueue_card(topic, card_data, metadata)
-                rendered_tools.add(tool_name)
-
-    except Exception as e:
-        logger.warning(f"[TOOL WORKER] Card enqueue failed: {e}")
-
-    return any_synthesize_false
-
-
-def _action_fingerprint(actions: list) -> str:
-    """Build a text fingerprint from action list for embedding-based repetition check."""
-    parts = []
-    for a in actions:
-        action_type = a.get('type', 'unknown')
-        query = a.get('query', a.get('text', a.get('input', '')))
-        parts.append(f"{action_type}: {query}")
-    return ' | '.join(parts)
-
-
-def _action_types(actions: list) -> set:
-    """Extract the set of action types from an action list."""
-    return {a.get('type', 'unknown') for a in actions}
 
 
 def _get_cycle_service():
