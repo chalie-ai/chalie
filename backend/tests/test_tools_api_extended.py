@@ -82,7 +82,7 @@ def client():
 class TestInstallValidation:
 
     def test_install_requires_source(self, client):
-        """POST /tools/install without git_url or zip_file → 400."""
+        """POST /tools/install without git_url → 400."""
         response = client.post('/tools/install', json={})
         assert response.status_code == 400
         data = response.get_json()

@@ -1,0 +1,35 @@
+# Fix: Drift-Created Persistent Tasks Leaking to Chat Spine
+
+## Problem
+When cognitive drift creates a persistent task via PlanAction, the surfacing
+message appears as a regular chat message instead of being handled silently
+via the task strip. Root cause: `source='plan_action'` is missing from the
+`source_type_map` in OutputService, so it defaults to `'response'`.
+
+## Fix (2 changes)
+
+### 1. Add `plan_action` to source_type_map in OutputService
+**File**: `backend/services/output_service.py` (line ~84)
+
+Add `'plan_action': 'task'` to the `source_type_map` dict. This routes the
+event through the `task` SSE event type, which the frontend already handles
+by refreshing the task strip (app.js line 872-874) — no chat rendering.
+
+### 2. Verify frontend `task` event handler is sufficient
+**File**: `frontend/interface/app.js` (line 872)
+
+The existing handler calls `this._loadActiveTasks()` on `task` events and
+returns early (no chat rendering). This is already correct — no change needed
+here. The expensive-plan confirmation message will appear as the task's goal
+in the task strip, where the user can act on it if they choose.
+
+## Files Modified
+- `backend/services/output_service.py` — 1-line addition to source_type_map
+
+## Why This Is Correct
+- Aligns with "judgment over activity" principle: drift tasks are internal
+  cognition, not conversational events
+- The task strip is the right surface: user sees active tasks if they look,
+  but isn't interrupted in conversation flow
+- `'task'` events already work end-to-end (persistent_task skill uses them)
+- No frontend changes required
