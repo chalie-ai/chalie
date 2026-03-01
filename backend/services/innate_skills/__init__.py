@@ -19,6 +19,7 @@ from services.innate_skills.list_skill import handle_list
 from services.innate_skills.moment_skill import handle_moment
 from services.innate_skills.persistent_task_skill import handle_persistent_task
 from services.innate_skills.emit_card_skill import handle_emit_card
+from services.innate_skills.document_skill import handle_document
 
 
 def register_innate_skills(dispatcher) -> None:
@@ -40,6 +41,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["moment"] = lambda topic, action: handle_moment(topic, action)
     dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
     dispatcher.handlers["emit_card"] = lambda topic, action: handle_emit_card(topic, action)
+    dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)

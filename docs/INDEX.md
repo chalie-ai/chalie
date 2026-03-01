@@ -225,3 +225,4 @@ All documentation reflects the current state of the codebase as of this date. Se
 - Understanding tab: Brain dashboard cognitive transparency
 - Curiosity Threads: Self-directed exploration threads seeded from cognitive drift
 - 09-TOOLS.md: Comprehensive tools system documentation
+- Document skill: Upload, extract, chunk, embed, and hybrid-search documents (warranties, contracts, manuals) via ACT loop innate skill
