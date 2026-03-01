@@ -502,8 +502,13 @@ class ToolProfileService:
         return summaries
 
     def _build_triage_summaries(self) -> str:
-        """Build domain-grouped tool summaries from profiles table (DB-driven, tool-agnostic)."""
+        """Build domain-grouped tool summaries from profiles table (DB-driven, tool-agnostic).
+
+        Falls back to manifest-derived summaries when the DB has no tool rows
+        (e.g., fresh install before LLM profile bootstrap completes).
+        """
         db = self._get_db()
+        rows = None
         try:
             rows = db.fetch_all(
                 "SELECT tool_name, tool_type, short_summary, triage_triggers, domain "
@@ -511,29 +516,27 @@ class ToolProfileService:
             )
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to fetch profiles: {e}")
-            return ""
         finally:
             if not self._db:
                 db.close_pool()
 
-        if not rows:
-            return ""
-
         # Filter to only external tools (skills are always available, not listed in triage)
         by_domain = defaultdict(list)
-        for r in rows:
-            if r['tool_type'] == 'tool':
-                domain = r.get('domain') or 'Other'
-                summary = r['short_summary']
-                triggers = r.get('triage_triggers') or []
-                if isinstance(triggers, str):
-                    triggers = json.loads(triggers)
-                if triggers:
-                    summary += f" [{', '.join(triggers[:10])}]"
-                by_domain[domain].append(f"- {r['tool_name']}: {summary}")
+        if rows:
+            for r in rows:
+                if r['tool_type'] == 'tool':
+                    domain = r.get('domain') or 'Other'
+                    summary = r['short_summary']
+                    triggers = r.get('triage_triggers') or []
+                    if isinstance(triggers, str):
+                        triggers = json.loads(triggers)
+                    if triggers:
+                        summary += f" [{', '.join(triggers[:10])}]"
+                    by_domain[domain].append(f"- {r['tool_name']}: {summary}")
 
+        # Fallback: no tool rows in DB → build from manifests directly
         if not by_domain:
-            return ""
+            return self._manifest_fallback_summaries()
 
         lines = []
         for domain in sorted(by_domain.keys()):
@@ -781,16 +784,72 @@ class ToolProfileService:
             return new_scenarios  # Accept all if filtering fails
 
     def _fallback_profile(self, tool_name: str, manifest: dict) -> dict:
-        """Simple fallback profile when LLM is unavailable."""
+        """Simple fallback profile when LLM is unavailable.
+
+        Extracts triage triggers deterministically from single-quoted phrases
+        in the documentation field (e.g., 'latest news on...' → 'latest news on').
+        Sets domain from the manifest's category field.
+        """
         desc = manifest.get('documentation') or manifest.get('description', tool_name)
+        # Extract single-quoted trigger phrases from documentation
+        triggers = re.findall(r"'([^']{4,60})'", desc) if desc else []
+        # Clean trailing ellipsis and whitespace
+        triggers = [t.rstrip('.').strip() for t in triggers][:10]
+        domain = (manifest.get('category') or 'Other').replace('_', ' ').title()
         return {
             'short_summary': desc[:100],
             'full_profile': desc,
             'usage_scenarios': [ex.get('description', '') for ex in manifest.get('examples', [])[:10] if ex.get('description')],
             'anti_scenarios': [],
             'complementary_skills': [],
-            'triage_triggers': [],
+            'triage_triggers': triggers,
+            'domain': domain,
         }
+
+    def _manifest_fallback_summaries(self) -> str:
+        """Build triage summaries from tool manifests when DB has no profile rows.
+
+        This is the safety net: if LLM-powered profile bootstrap hasn't run yet
+        (or failed entirely), triage still learns about installed tools from
+        their manifest declarations. Generic — works for all tools.
+        """
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+            on_demand = registry.get_on_demand_tools()
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Manifest fallback: registry unavailable: {e}")
+            return ""
+
+        if not on_demand:
+            return ""
+
+        by_domain = defaultdict(list)
+        for tool_name in on_demand:
+            tool_data = registry.tools.get(tool_name)
+            if not tool_data:
+                continue
+            manifest = tool_data['manifest']
+            fallback = self._fallback_profile(tool_name, manifest)
+            domain = fallback.get('domain', 'Other')
+            summary = fallback['short_summary']
+            triggers = fallback.get('triage_triggers', [])
+            if triggers:
+                summary += f" [{', '.join(triggers[:10])}]"
+            by_domain[domain].append(f"- {tool_name}: {summary}")
+
+        if not by_domain:
+            return ""
+
+        lines = []
+        for domain in sorted(by_domain.keys()):
+            lines.append(f"## {domain}")
+            lines.extend(by_domain[domain])
+            lines.append("")
+
+        result = "\n".join(lines).strip()
+        logger.info(f"{LOG_PREFIX} Manifest fallback produced summaries for {sum(len(v) for v in by_domain.values())} tool(s)")
+        return result
 
     @staticmethod
     def _profile_needs_rebuild(profile: dict) -> bool:
