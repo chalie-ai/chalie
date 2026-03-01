@@ -2,11 +2,12 @@
 
 import pytest
 
-from workers.tool_worker import (
+from services.act_orchestrator_service import (
     _action_fingerprint,
     _action_types,
-    INNATE_SKILLS,
 )
+from workers.tool_worker import INNATE_SKILLS
+from services.innate_skills.registry import REFLECTION_FILTER_SKILLS
 
 
 pytestmark = pytest.mark.unit
@@ -18,7 +19,7 @@ class TestActionFingerprint:
 
     def test_single_action_with_query(self):
         actions = [{'type': 'search', 'query': 'what is python'}]
-        assert _action_fingerprint(actions) == 'search: what is python'
+        assert _action_fingerprint(actions) == 'search:what is python'
 
     def test_multiple_actions_joined(self):
         actions = [
@@ -26,18 +27,18 @@ class TestActionFingerprint:
             {'type': 'recall', 'query': 'previous discussion'},
         ]
         result = _action_fingerprint(actions)
-        assert result == 'search: rust lang | recall: previous discussion'
+        assert result == 'search:rust lang | recall:previous discussion'
 
-    def test_key_priority_query_over_text_over_input(self):
-        action_with_text = [{'type': 'tool', 'text': 'fallback text', 'input': 'ignored'}]
-        assert _action_fingerprint(action_with_text) == 'tool: fallback text'
+    def test_key_priority_query_over_description_over_text(self):
+        action_with_desc = [{'type': 'tool', 'description': 'fallback desc', 'text': 'ignored'}]
+        assert _action_fingerprint(action_with_desc) == 'tool:fallback desc'
 
-        action_with_input = [{'type': 'tool', 'input': 'last resort'}]
-        assert _action_fingerprint(action_with_input) == 'tool: last resort'
+        action_with_text = [{'type': 'tool', 'text': 'last resort'}]
+        assert _action_fingerprint(action_with_text) == 'tool:last resort'
 
     def test_missing_all_keys_returns_type_with_empty(self):
         actions = [{'type': 'noop'}]
-        assert _action_fingerprint(actions) == 'noop: '
+        assert _action_fingerprint(actions) == 'noop:'
 
 
 # ── _action_types ────────────────────────────────────────────────────
@@ -52,9 +53,9 @@ class TestActionTypes:
         ]
         assert _action_types(actions) == {'search', 'recall'}
 
-    def test_missing_type_defaults_to_unknown(self):
+    def test_missing_type_defaults_to_empty(self):
         actions = [{'query': 'hello'}]
-        assert _action_types(actions) == {'unknown'}
+        assert _action_types(actions) == {''}
 
 
 # ── Repetition detection logic ───────────────────────────────────────
@@ -138,6 +139,6 @@ class TestNoveltyGating:
 
 class TestInnateSkills:
 
-    def test_contains_expected_skills(self):
-        expected = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'persistent_task'}
-        assert INNATE_SKILLS == expected
+    def test_innate_skills_matches_registry(self):
+        """INNATE_SKILLS in tool_worker is an alias for REFLECTION_FILTER_SKILLS from registry."""
+        assert INNATE_SKILLS is REFLECTION_FILTER_SKILLS

@@ -19,7 +19,6 @@ import hashlib
 import json
 import logging
 import re
-import time
 from collections import defaultdict
 from typing import Optional
 
@@ -27,17 +26,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[TOOL PROFILE]"
 
-# Innate skill descriptions
-SKILL_DESCRIPTIONS = {
-    'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',
-    'memorize': 'Store information, save a note, remember a fact, keep something for later',
-    'introspect': 'Self-examine internal state, check how much is known about a topic, inspect confidence',
-    'associate': 'Find related concepts, explore connections, brainstorm associations between ideas',
-    'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
-    'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
-    'focus': 'Start and manage deep focus or work sessions, Pomodoro-style timers',
-    'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
-}
+from services.innate_skills.registry import SKILL_DESCRIPTIONS
 
 # Redis cache key and TTL
 TRIAGE_SUMMARIES_CACHE_KEY = "tool_triage_summaries"
