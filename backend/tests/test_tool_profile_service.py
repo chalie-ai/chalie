@@ -159,6 +159,204 @@ class TestGetTriageSummaries:
         assert 'recall' not in result  # Skills excluded from triage prompt
 
 
+class TestManifestFallback:
+    """Test manifest-based triage fallback when DB has no tool profiles."""
+
+    @patch('services.tool_profile_service.ToolProfileService._get_redis')
+    def test_empty_db_falls_back_to_manifest(self, mock_get_redis):
+        """When DB has no tool rows, triage summaries come from manifests."""
+        from services.tool_profile_service import ToolProfileService
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None  # Cache miss
+        mock_get_redis.return_value = mock_redis
+
+        svc = ToolProfileService()
+        mock_db = MagicMock()
+        mock_db.fetch_all.return_value = []  # Empty DB
+        svc._db = mock_db
+
+        # Mock registry with one on-demand tool
+        mock_registry = MagicMock()
+        mock_registry.get_on_demand_tools.return_value = ['google_news']
+        mock_registry.tools = {
+            'google_news': {
+                'manifest': {
+                    'name': 'google_news',
+                    'description': 'Search Google News',
+                    'documentation': "Search news. Triggers: 'latest news on...', 'what's happening in...'",
+                    'category': 'research',
+                    'trigger': {'type': 'on_demand'},
+                }
+            }
+        }
+
+        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
+            result = svc.get_triage_summaries()
+
+        assert 'google_news' in result
+        assert '## Research' in result
+
+    @patch('services.tool_profile_service.ToolProfileService._get_redis')
+    def test_db_exception_falls_back_to_manifest(self, mock_get_redis):
+        """When DB fetch raises, triage summaries come from manifests."""
+        from services.tool_profile_service import ToolProfileService
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None
+        mock_get_redis.return_value = mock_redis
+
+        svc = ToolProfileService()
+        mock_db = MagicMock()
+        mock_db.fetch_all.side_effect = Exception("connection refused")
+        svc._db = mock_db
+
+        mock_registry = MagicMock()
+        mock_registry.get_on_demand_tools.return_value = ['web_search']
+        mock_registry.tools = {
+            'web_search': {
+                'manifest': {
+                    'name': 'web_search',
+                    'description': 'Search the web',
+                    'documentation': "Web search tool. Use for 'search for...', 'look up...'",
+                    'category': 'information_retrieval',
+                    'trigger': {'type': 'on_demand'},
+                }
+            }
+        }
+
+        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
+            result = svc.get_triage_summaries()
+
+        assert 'web_search' in result
+        assert '## Information Retrieval' in result
+
+    @patch('services.tool_profile_service.ToolProfileService._get_redis')
+    def test_only_skills_in_db_falls_back_to_manifest(self, mock_get_redis):
+        """When DB only has skill rows (no tools), manifest fallback triggers."""
+        from services.tool_profile_service import ToolProfileService
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None
+        mock_get_redis.return_value = mock_redis
+
+        svc = ToolProfileService()
+        mock_db = MagicMock()
+        mock_db.fetch_all.return_value = [
+            {'tool_name': 'recall', 'tool_type': 'skill', 'short_summary': 'Search memory', 'domain': 'Innate Skill', 'triage_triggers': []},
+        ]
+        svc._db = mock_db
+
+        mock_registry = MagicMock()
+        mock_registry.get_on_demand_tools.return_value = ['google_news']
+        mock_registry.tools = {
+            'google_news': {
+                'manifest': {
+                    'name': 'google_news',
+                    'description': 'Search news',
+                    'documentation': "News search. Use for 'latest news on...'",
+                    'category': 'research',
+                    'trigger': {'type': 'on_demand'},
+                }
+            }
+        }
+
+        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
+            result = svc.get_triage_summaries()
+
+        # Skills filtered out → by_domain empty → manifest fallback fires
+        assert 'google_news' in result
+
+    def test_manifest_fallback_includes_triggers(self):
+        """Manifest fallback should include trigger phrases in summaries."""
+        from services.tool_profile_service import ToolProfileService
+
+        svc = ToolProfileService()
+
+        mock_registry = MagicMock()
+        mock_registry.get_on_demand_tools.return_value = ['google_news']
+        mock_registry.tools = {
+            'google_news': {
+                'manifest': {
+                    'name': 'google_news',
+                    'description': 'Search Google News',
+                    'documentation': "News tool. Triggers: 'latest news on...', 'what's happening in...'",
+                    'category': 'research',
+                    'trigger': {'type': 'on_demand'},
+                }
+            }
+        }
+
+        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
+            result = svc._manifest_fallback_summaries()
+
+        assert 'latest news on' in result
+        assert "what's happening in" in result
+
+
+class TestFallbackProfile:
+    """Test deterministic fallback profile generation from manifests."""
+
+    def test_extracts_triggers_from_documentation_quotes(self):
+        from services.tool_profile_service import ToolProfileService
+        svc = ToolProfileService()
+        manifest = {
+            'name': 'google_news',
+            'documentation': "Use for 'latest news on...', 'any updates about...', 'catch me up on...'",
+            'category': 'research',
+        }
+        profile = svc._fallback_profile('google_news', manifest)
+        triggers = profile['triage_triggers']
+        assert len(triggers) == 3
+        assert 'latest news on' in triggers
+        assert 'any updates about' in triggers
+        assert 'catch me up on' in triggers
+
+    def test_sets_domain_from_category(self):
+        from services.tool_profile_service import ToolProfileService
+        svc = ToolProfileService()
+        manifest = {
+            'name': 'google_news',
+            'documentation': 'Search news articles',
+            'category': 'research',
+        }
+        profile = svc._fallback_profile('google_news', manifest)
+        assert profile['domain'] == 'Research'
+
+    def test_domain_normalizes_underscores(self):
+        from services.tool_profile_service import ToolProfileService
+        svc = ToolProfileService()
+        manifest = {
+            'name': 'web_search',
+            'documentation': 'Search the web',
+            'category': 'information_retrieval',
+        }
+        profile = svc._fallback_profile('web_search', manifest)
+        assert profile['domain'] == 'Information Retrieval'
+
+    def test_no_documentation_yields_empty_triggers(self):
+        from services.tool_profile_service import ToolProfileService
+        svc = ToolProfileService()
+        manifest = {
+            'name': 'simple_tool',
+            'description': 'A simple tool with no quotes',
+        }
+        profile = svc._fallback_profile('simple_tool', manifest)
+        assert profile['triage_triggers'] == []
+        assert profile['domain'] == 'Other'
+
+    def test_short_quoted_phrases_ignored(self):
+        """Phrases shorter than 4 chars should not be extracted as triggers."""
+        from services.tool_profile_service import ToolProfileService
+        svc = ToolProfileService()
+        manifest = {
+            'name': 'test_tool',
+            'documentation': "Triggers: 'hello there', 'yo'. For greetings.",
+            'category': 'social',
+        }
+        profile = svc._fallback_profile('test_tool', manifest)
+        # 'yo' is only 2 chars, below the 4-char minimum
+        assert 'yo' not in profile['triage_triggers']
+        assert 'hello there' in profile['triage_triggers']
+
+
 class TestScenarioCap:
     """Test that scenario count is capped at MAX_SCENARIOS."""
 

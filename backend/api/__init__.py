@@ -37,6 +37,7 @@ def create_app():
     from .scheduler import scheduler_bp
     from .lists import lists_bp
     from .moments import moments_bp
+    from .documents import documents_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -51,6 +52,7 @@ def create_app():
     app.register_blueprint(scheduler_bp)
     app.register_blueprint(lists_bp)
     app.register_blueprint(moments_bp)
+    app.register_blueprint(documents_bp)
 
     logger.info("[REST API] All blueprints registered")
     return app

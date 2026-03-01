@@ -775,39 +775,45 @@ class ToolRegistryService:
         # If card is enabled (immediate mode), render and enqueue it.
         # Path A: tool returned inline HTML → render_tool_html()
         # Path B: tool returned a dict with no HTML → template-based render()
+        #
+        # For synthesize=false tools: render the card NOW so it arrives before any
+        # text follow-up, then return early to suppress the text response.
+        # For synthesize=true tools: skip inline card emission. The ACT loop may call
+        # the tool multiple times (retries); emitting on each invocation produces
+        # duplicate cards. _enqueue_tool_cards() handles exactly-once delivery after
+        # the loop completes using the last cached result.
         elif card_enabled and card_mode != "deferred" and result_html:
-            try:
-                from services.card_renderer_service import CardRendererService
-                from services.output_service import OutputService
-                card_data = CardRendererService().render_tool_html(
-                    tool_name, result_html, result_title or card_config.get("title", tool_name), card_config
-                )
-                if card_data:
-                    OutputService().enqueue_card(topic, card_data, {})
-                    # If synthesize is false, suppress text response
-                    if not synthesize:
+            if not synthesize:
+                try:
+                    from services.card_renderer_service import CardRendererService
+                    from services.output_service import OutputService
+                    card_data = CardRendererService().render_tool_html(
+                        tool_name, result_html, result_title or card_config.get("title", tool_name), card_config
+                    )
+                    if card_data:
+                        OutputService().enqueue_card(topic, card_data, {})
                         output = f"[TOOL:{tool_name}] (card displayed, cost: {elapsed_ms}ms) [/TOOL]"
                         self._log_outcome(tool_name, success, topic, elapsed_ms)
                         return output
-            except Exception as e:
-                logger.warning(f"[TOOL REGISTRY] Card render failed for {tool_name}: {e}")
+                except Exception as e:
+                    logger.warning(f"[TOOL REGISTRY] Card render failed for {tool_name}: {e}")
         elif card_enabled and card_mode != "deferred" and not result_html and isinstance(result, dict):
             # Template-based rendering: loads card/template.html + card/styles.css
             # and compiles Mustache against the raw result dict.
-            try:
-                from services.card_renderer_service import CardRendererService
-                from services.output_service import OutputService
-                card_data = CardRendererService().render(
-                    tool_name, result, card_config, tool["dir"]
-                )
-                if card_data:
-                    OutputService().enqueue_card(topic, card_data, {})
-                    if not synthesize:
+            if not synthesize:
+                try:
+                    from services.card_renderer_service import CardRendererService
+                    from services.output_service import OutputService
+                    card_data = CardRendererService().render(
+                        tool_name, result, card_config, tool["dir"]
+                    )
+                    if card_data:
+                        OutputService().enqueue_card(topic, card_data, {})
                         output = f"[TOOL:{tool_name}] (card displayed, cost: {elapsed_ms}ms) [/TOOL]"
                         self._log_outcome(tool_name, success, topic, elapsed_ms)
                         return output
-            except Exception as e:
-                logger.warning(f"[TOOL REGISTRY] Template card render failed for {tool_name}: {e}")
+                except Exception as e:
+                    logger.warning(f"[TOOL REGISTRY] Template card render failed for {tool_name}: {e}")
 
         # Otherwise, return text response (possibly synthesized by frontal cortex)
         token_estimate = len(result_text) // 4

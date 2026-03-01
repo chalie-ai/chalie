@@ -126,9 +126,15 @@ frontend/
 - **`thread_service.py`** — Manages conversation threads with expiry
 - **`session_service.py`** — Tracks user sessions and topic changes
 
+#### Documents & File Management
+- **`document_service.py`** — Document CRUD, chunk storage, hybrid search (semantic + FTS + keyword boost via Reciprocal Rank Fusion), soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings)
+- **`document_processing_service.py`** — Full extraction pipeline: text extraction (pdfplumber, python-docx, python-pptx, trafilatura), regex-based metadata extraction (dates, companies, monetary values, reference numbers, document type heuristic), adaptive chunk sizing by document type, SimHash fingerprinting, language detection (langdetect)
+- **`camera_ocr_service.py`** — Vision LLM-based text extraction from camera-captured images; multi-provider (Anthropic, OpenAI, Gemini, Ollama); 10MB image limit
+- **`document_card_service.py`** — Inline HTML card emission for document search results (source attribution with type badges, confidence indicators), upload confirmations, document previews, and lifecycle events; cyan `#00F0FF` accent
+
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-10 built-in cognitive skills for the ACT loop:
+11 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
 - **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats, decision explanations, recent autonomous actions) (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
@@ -139,6 +145,7 @@ frontend/
 - **`focus_skill.py`** — Focus session management: set, check, clear with distraction detection (<50ms)
 - **`moment_skill.py`** — Natural language moment recall ("Do you remember...") and listing via pgvector search
 - **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
+- **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic+FTS+keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 
 ## Worker Processes (`backend/workers/`)
 
@@ -167,6 +174,8 @@ frontend/
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 - **Temporal Pattern Service** — Mines behavioral patterns from interaction timestamps (24h cycle, 5min warmup); detects hour-of-day peaks, day-of-week peaks, topic-time clusters; stores as `behavioral_pattern` user traits
 - **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); plan-aware execution follows step DAG when present (up to 3 steps/cycle with per-step fatigue budgets), falls back to flat loop otherwise; adaptive user surfacing at coverage milestones
+- **Document Worker** — RQ queue worker (`document-queue`) for document processing: text extraction → metadata extraction → adaptive chunking → batch embedding → storage; 10min timeout per document
+- **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
 
 ## Data Flow Pipeline
 

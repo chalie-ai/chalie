@@ -26,7 +26,7 @@ LOG_PREFIX = "[TRIAGE]"
 
 # Cognitive primitives — always selected for ACT regardless of prompt compliance
 _PRIMITIVES = ['recall', 'memorize', 'introspect']
-_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task'}
+_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task', 'document'}
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
 
 # Contextual skills — if the LLM selected any of these, it's an innate action (no external tool needed)
@@ -411,6 +411,11 @@ class CognitiveTriageService:
         if any(w in lower for w in ['research this over', 'background task',
                                      'work on this over', 'task status']):
             return 'persistent_task'
+        # Document patterns
+        if any(w in lower for w in ['my document', 'my warranty', 'uploaded file',
+                                     'in the document', 'in my file', 'search my documents',
+                                     'document library', 'what does my', 'look up my']):
+            return 'document'
         return None
 
     def _mode_to_branch(self, mode: str) -> str:

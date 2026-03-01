@@ -63,6 +63,7 @@ const JOBS = [
     // ── Tier 4: 4B sufficient ───────────────────────────────
     { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Resolves ambiguous routing with binary A-vs-B decision. Must be fast.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~600',  frequency: '<5% of messages',    strengths: ['Fast Inference', 'Classification'] },
     { id: 'topic-namer',     name: 'Topic Namer',     desc: 'Generates short display names for conversation topics.',               badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~550',  frequency: '5–10% of messages',  strengths: ['Fast Inference'] },
+
 ];
 
 // ==========================================
@@ -361,6 +362,8 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         loadScheduler();
     } else if (tabName === 'lists') {
         loadLists();
+    } else if (tabName === 'documents') {
+        loadDocuments();
     }
 });
 
@@ -2690,6 +2693,248 @@ function renderIconHtml(icon) {
     }
     return escapeHtml(icon);
 }
+
+// ==========================================
+// Documents Tab
+// ==========================================
+
+let allDocuments = [];
+let docFilter = 'active';
+
+async function loadDocuments() {
+    const el = document.getElementById('docList');
+    el.innerHTML = '<div class="loading">Loading documents...</div>';
+    try {
+        const res = await apiFetch('/documents?include_deleted=true');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        allDocuments = data.items || [];
+        renderDocuments();
+    } catch (e) {
+        el.innerHTML = '<div class="empty-state"><p>Failed to load documents.</p></div>';
+    }
+}
+
+function renderDocuments() {
+    const el = document.getElementById('docList');
+    let docs = allDocuments;
+
+    if (docFilter === 'active') {
+        docs = docs.filter(d => !d.deleted_at && d.status === 'ready');
+    } else if (docFilter === 'processing') {
+        docs = docs.filter(d => !d.deleted_at && ['pending', 'processing', 'awaiting_confirmation'].includes(d.status));
+    } else if (docFilter === 'deleted') {
+        docs = docs.filter(d => d.deleted_at);
+    }
+
+    // Apply search filter
+    const search = (document.getElementById('docSearchInput')?.value || '').trim().toLowerCase();
+    if (search) {
+        docs = docs.filter(d => d.original_name.toLowerCase().includes(search));
+    }
+
+    if (docs.length === 0) {
+        el.innerHTML = '<div class="empty-state"><p>No documents found.</p></div>';
+        return;
+    }
+
+    el.innerHTML = docs.map(doc => {
+        const meta = doc.extracted_metadata || {};
+        const docType = meta.document_type?.value || '';
+        const typeBadge = docType && docType !== 'document'
+            ? `<span class="doc-type-badge">${escapeHtml(docType)}</span>`
+            : '';
+
+        const size = doc.file_size_bytes
+            ? (doc.file_size_bytes > 1024 * 1024
+                ? `${(doc.file_size_bytes / 1024 / 1024).toFixed(1)} MB`
+                : `${Math.round(doc.file_size_bytes / 1024)} KB`)
+            : '';
+
+        const pages = doc.page_count ? `${doc.page_count}p` : '';
+        const chunks = `${doc.chunk_count || 0} chunks`;
+        const date = doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '';
+
+        const statusClass = doc.status === 'ready' ? 'status-ready'
+            : doc.status === 'failed' ? 'status-error'
+            : doc.status === 'processing' ? 'status-building'
+            : '';
+
+        const isDeleted = !!doc.deleted_at;
+
+        let actions = '';
+        if (isDeleted) {
+            actions = `<button class="tool-card__btn" onclick="restoreDocument('${doc.id}')">Restore</button>
+                       <button class="tool-card__btn btn-danger-sm" onclick="purgeDocument('${doc.id}')">Purge</button>`;
+        } else {
+            actions = `<button class="tool-card__btn" onclick="previewDocument('${doc.id}')">View</button>
+                       <button class="tool-card__btn btn-danger-sm" onclick="deleteDocument('${doc.id}')">Delete</button>`;
+        }
+
+        return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+            <div class="doc-row__info">
+                <div class="doc-row__name">
+                    <span class="doc-icon">${getDocIcon(doc.mime_type)}</span>
+                    <span>${escapeHtml(doc.original_name)}</span>
+                    ${typeBadge}
+                    <span class="doc-status ${statusClass}">${doc.status}</span>
+                </div>
+                <div class="doc-row__meta">
+                    ${[size, pages, chunks, date].filter(Boolean).join(' · ')}
+                </div>
+            </div>
+            <div class="doc-row__actions">${actions}</div>
+        </div>`;
+    }).join('');
+}
+
+function getDocIcon(mime) {
+    if (mime?.includes('pdf')) return '<i class="fa-solid fa-file-pdf"></i>';
+    if (mime?.includes('word') || mime?.includes('docx')) return '<i class="fa-solid fa-file-word"></i>';
+    if (mime?.includes('presentation') || mime?.includes('pptx')) return '<i class="fa-solid fa-file-powerpoint"></i>';
+    if (mime?.includes('html')) return '<i class="fa-solid fa-file-code"></i>';
+    if (mime?.includes('image')) return '<i class="fa-solid fa-file-image"></i>';
+    return '<i class="fa-solid fa-file-lines"></i>';
+}
+
+async function previewDocument(id) {
+    const overlay = document.getElementById('docPreviewOverlay');
+    const title = document.getElementById('docPreviewTitle');
+    const meta = document.getElementById('docPreviewMeta');
+    const body = document.getElementById('docPreviewBody');
+    const downloadLink = document.getElementById('docDownloadLink');
+    const deleteBtn = document.getElementById('docPreviewDeleteBtn');
+
+    overlay.style.display = 'flex';
+    body.innerHTML = '<div class="loading">Loading content...</div>';
+
+    try {
+        const res = await apiFetch(`/documents/${id}`);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        const doc = data.item;
+
+        title.textContent = doc.original_name;
+
+        const em = doc.extracted_metadata || {};
+        let metaHtml = '';
+        if (em.document_type?.value) metaHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language) metaHtml += `<span class="doc-meta-pill">${doc.language}</span> `;
+        if (doc.page_count) metaHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        metaHtml += `<span class="doc-meta-pill">${doc.chunk_count} chunks</span>`;
+        meta.innerHTML = metaHtml;
+
+        // Render chunks
+        const chunks = doc.chunks || [];
+        if (chunks.length === 0) {
+            body.innerHTML = '<div class="obs-empty">No content extracted.</div>';
+        } else {
+            body.innerHTML = chunks.map(c => {
+                const pageLabel = c.page_number ? `<span class="doc-chunk-page">Page ${c.page_number}</span>` : '';
+                const sectionLabel = c.section_title ? `<span class="doc-chunk-section">${escapeHtml(c.section_title)}</span>` : '';
+                return `<div class="doc-chunk">
+                    <div class="doc-chunk__header">${pageLabel}${sectionLabel}</div>
+                    <div class="doc-chunk__content">${escapeHtml(c.content)}</div>
+                </div>`;
+            }).join('');
+        }
+
+        downloadLink.href = `${API_BASE}/documents/${id}/download`;
+        deleteBtn.onclick = async () => {
+            await deleteDocument(id);
+            overlay.style.display = 'none';
+        };
+    } catch (e) {
+        body.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+    }
+}
+
+async function deleteDocument(id) {
+    if (!confirm('Delete this document? It can be restored within 30 days.')) return;
+    try {
+        const res = await apiFetch(`/documents/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Document deleted', 'success');
+            loadDocuments();
+        } else {
+            showToast('Failed to delete document', 'error');
+        }
+    } catch { showToast('Failed to delete document', 'error'); }
+}
+
+async function restoreDocument(id) {
+    try {
+        const res = await apiFetch(`/documents/${id}/restore`, { method: 'POST' });
+        if (res.ok) {
+            showToast('Document restored', 'success');
+            loadDocuments();
+        } else {
+            showToast('Failed to restore document', 'error');
+        }
+    } catch { showToast('Failed to restore document', 'error'); }
+}
+
+async function purgeDocument(id) {
+    if (!confirm('Permanently delete this document? This cannot be undone.')) return;
+    try {
+        const res = await apiFetch(`/documents/${id}/purge`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Document permanently deleted', 'success');
+            loadDocuments();
+        } else {
+            showToast('Failed to purge document', 'error');
+        }
+    } catch { showToast('Failed to purge document', 'error'); }
+}
+
+// Document filter tabs
+document.getElementById('docFilters')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-tab');
+    if (!btn) return;
+    document.querySelectorAll('#docFilters .filter-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    docFilter = btn.dataset.filter;
+    renderDocuments();
+});
+
+// Document search
+document.getElementById('docSearchInput')?.addEventListener('input', () => renderDocuments());
+
+// Document upload from brain dashboard
+document.getElementById('docUploadBtn')?.addEventListener('click', () => {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const res = await fetch(`${API_BASE}/documents/upload`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: formData,
+            });
+            if (res.ok) {
+                showToast('Document uploaded — processing...', 'success');
+                setTimeout(loadDocuments, 3000);
+            } else {
+                const err = await res.json().catch(() => ({}));
+                showToast(err.error || 'Upload failed', 'error');
+            }
+        } catch { showToast('Upload failed', 'error'); }
+    });
+    fileInput.click();
+});
+
+// Document preview modal close
+document.getElementById('docPreviewClose')?.addEventListener('click', () => {
+    document.getElementById('docPreviewOverlay').style.display = 'none';
+});
+document.getElementById('docPreviewOverlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'docPreviewOverlay') e.target.style.display = 'none';
+});
 
 // ==========================================
 // Start

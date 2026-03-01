@@ -673,7 +673,13 @@ def _notify_sse_error(metadata: dict, error_message: str):
 
 def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:
     """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
-    tool was found (suppresses the text follow-up since the card was already rendered inline)."""
+    tool was found (suppresses the text follow-up since the card was already rendered inline).
+
+    synthesize=false tools: invoke() already rendered the card. Here we just close the SSE.
+    synthesize=true tools: invoke() deferred card emission here. We render exactly once per
+    tool (using the last cached result) even if the tool was called multiple times in the
+    ACT loop (deduplication via rendered_tools set).
+    """
     any_synthesize_false = False
     try:
         from services.redis_client import RedisClientService
@@ -694,6 +700,11 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id:
         registry = ToolRegistryService()
         renderer = CardRendererService()
         output_svc = OutputService()
+
+        # Track tools whose cards have already been enqueued to prevent duplicates.
+        # The ACT loop may invoke the same tool multiple times (e.g. retries on empty
+        # results) — each invocation appends to act_history, but we only want one card.
+        rendered_tools: set = set()
 
         for action in act_history:
             if action.get('status') != 'success':
@@ -719,13 +730,26 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id:
                         logger.warning(f"[TOOL WORKER] Failed to send close signal: {_re}")
                 continue
 
+            # synthesize=true: render exactly once per tool name.
+            if tool_name in rendered_tools:
+                continue
+
             raw = raw_map.get(tool_name)
             if not raw:
                 continue
 
-            card_data = renderer.render(tool_name, raw, card_config, tool['dir'])
+            # Path A: tool returned inline HTML (formalized contract) — use render_tool_html()
+            result_html = raw.get('html') if isinstance(raw, dict) else None
+            if result_html:
+                result_title = raw.get('title') or card_config.get('title', tool_name)
+                card_data = renderer.render_tool_html(tool_name, result_html, result_title, card_config)
+            else:
+                # Path B: no inline HTML — fall back to template-based render()
+                card_data = renderer.render(tool_name, raw, card_config, tool['dir'])
+
             if card_data:
                 output_svc.enqueue_card(topic, card_data, metadata)
+                rendered_tools.add(tool_name)
 
     except Exception as e:
         logger.warning(f"[TOOL WORKER] Card enqueue failed: {e}")
