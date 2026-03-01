@@ -15,18 +15,13 @@ Supervised autonomy:
 """
 
 import json
-import time
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CRITIC]"
 
-# Actions that can be silently corrected without user confirmation
-SAFE_ACTIONS = {'recall', 'memorize', 'introspect', 'associate', 'autobiography', 'moment'}
-
-# Actions that are simple reads — skip critic entirely when high confidence
-READ_ACTIONS = {'recall', 'introspect'}
+from services.act_action_categories import SAFE_ACTIONS, CRITIC_SKIP_READS as READ_ACTIONS
 
 # Maximum retries per action to prevent oscillation
 MAX_CRITIC_RETRIES = 2

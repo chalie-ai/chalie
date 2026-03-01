@@ -4,7 +4,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
 
-from workers.digest_worker import _is_innate_skill_only, _CONTEXTUAL_SKILLS, _PRIMITIVES
+from workers.digest_worker import _is_innate_skill_only, _CONTEXTUAL_SKILLS
+from services.innate_skills.registry import COGNITIVE_PRIMITIVES as _PRIMITIVES
 
 
 pytestmark = pytest.mark.unit
@@ -76,11 +77,15 @@ class TestIsInnateSkillOnly:
 
 class TestConstants:
 
-    def test_contextual_skills_set(self):
-        assert _CONTEXTUAL_SKILLS == {'schedule', 'list', 'focus', 'persistent_task'}
+    def test_contextual_skills_matches_registry(self):
+        """CONTEXTUAL_SKILLS imported from registry — includes all non-primitive planning skills."""
+        from services.innate_skills.registry import CONTEXTUAL_SKILLS
+        assert _CONTEXTUAL_SKILLS is CONTEXTUAL_SKILLS
 
-    def test_primitives_set(self):
-        assert _PRIMITIVES == {'recall', 'memorize', 'introspect', 'associate'}
+    def test_primitives_matches_registry(self):
+        """COGNITIVE_PRIMITIVES imported from registry — the 4 core memory operations."""
+        from services.innate_skills.registry import COGNITIVE_PRIMITIVES
+        assert _PRIMITIVES is COGNITIVE_PRIMITIVES
 
 
 # ── _handle_innate_skill_dispatch ────────────────────────────────────

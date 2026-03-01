@@ -369,10 +369,6 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
     Returns:
         dict: {mode, modifiers, response, generation_time, actions, confidence}
     """
-    from services.act_loop_service import ActLoopService, ACTION_FATIGUE_COSTS
-    from services.cortex_iteration_service import CortexIterationService
-    from services.database_service import get_shared_db_service
-
     act_prompt = cortex_prompt_map['ACT']
 
     # Load ACT-specific config
@@ -387,38 +383,39 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
-    # Initialize ACT loop
+    return _generate_with_act_orchestrator(
+        topic=topic, text=text, classification=classification,
+        thread_conv_service=thread_conv_service, cortex_config=cortex_config,
+        cortex_prompt_map=cortex_prompt_map, mode_router=mode_router,
+        signals=signals, metadata=metadata,
+        relevant_tools=relevant_tools, selected_tools=selected_tools,
+        selected_skills=selected_skills, thread_id=thread_id,
+        cortex_service=cortex_service, act_prompt=act_prompt,
+        chat_history=chat_history, config=config,
+    )
+
+
+def _generate_with_act_orchestrator(
+    topic, text, classification, thread_conv_service, cortex_config,
+    cortex_prompt_map, mode_router, signals, metadata,
+    relevant_tools, selected_tools, selected_skills, thread_id,
+    cortex_service, act_prompt, chat_history, config,
+):
+    """
+    Unified ACT orchestrator path for digest_worker fast path.
+
+    Replaces the legacy inline loop with ACTOrchestrator.run(), then performs
+    the digest-worker-specific post-loop processing (re-routing, card-only
+    detection, terminal response generation, tool reflection).
+    """
+    from services.act_orchestrator_service import ACTOrchestrator
+    from services.act_loop_service import ActLoopService
+
     act_cumulative_timeout = cortex_config.get('act_cumulative_timeout', 60.0)
     act_per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
     max_act_iterations = cortex_config.get('max_act_iterations', 5)
 
-    act_loop = ActLoopService(
-        config=cortex_config,
-        cumulative_timeout=act_cumulative_timeout,
-        per_action_timeout=act_per_action_timeout,
-        max_iterations=max_act_iterations,
-    )
-    act_loop.context_warmth = context_warmth
-
-    # Generate loop ID for iteration tracking
-    iteration_service = None
-    loop_id = None
-    try:
-        db_service = get_shared_db_service()
-        iteration_service = CortexIterationService(db_service)
-        loop_id = iteration_service.create_loop_id()
-        act_loop.loop_id = loop_id
-    except Exception as e:
-        logging.warning(f"Failed to initialize iteration logging: {e}")
-
-    try:
-        exchange_id = thread_conv_service.get_latest_exchange_id(thread_id) if thread_id else "unknown"
-    except Exception:
-        exchange_id = "unknown"
-
-    session_id = "session_placeholder"
-
-    # Compute context inclusion map for ACT mode (once, before loop)
+    # Compute context inclusion map and assembled context
     act_inclusion_map = None
     try:
         context_relevance_service = get_context_relevance_service()
@@ -434,228 +431,86 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
     assembled_context = None
     try:
         assembled_context = get_context_assembly_service().assemble(
-            prompt=text,
-            topic=topic,
-            thread_id=thread_id,
+            prompt=text, topic=topic, thread_id=thread_id,
         )
     except Exception as e:
         logging.warning(f"[MODE:ACT] Context assembly failed: {e}")
 
-    # ACT loop — simplified, safety-capped at max_act_iterations
-    # Repetition detection: if same action type called 3+ times consecutively,
-    # inject a pivot hint first; force exit on second threshold
-    consecutive_same_action = 0
-    last_action_type = None
-    pivot_hint_injected = False
+    orchestrator = ACTOrchestrator(
+        config=cortex_config,
+        max_iterations=max_act_iterations,
+        cumulative_timeout=act_cumulative_timeout,
+        per_action_timeout=act_per_action_timeout,
+        critic_enabled=True,
+        smart_repetition=True,
+        escalation_hints=True,
+        persistent_task_exit=True,
+        deferred_card_context=False,
+    )
 
-    while True:
-        iteration_start = time.time()
+    result = orchestrator.run(
+        topic=topic,
+        text=text,
+        cortex_service=cortex_service,
+        act_prompt=act_prompt,
+        classification=classification,
+        chat_history=chat_history,
+        relevant_tools=relevant_tools,
+        selected_skills=selected_skills,
+        selected_tools=selected_tools,
+        assembled_context=assembled_context,
+        inclusion_map=act_inclusion_map,
+        session_id='digest_fast_path',
+    )
 
-        # Generate action plan via ACT-specific prompt
-        response_data = cortex_service.generate_response(
-            system_prompt_template=act_prompt,
-            original_prompt=text,
-            classification=classification,
-            chat_history=chat_history,
-            act_history=act_loop.get_history_context(),
-            relevant_tools=relevant_tools,
-            selected_tools=selected_tools,
-            selected_skills=selected_skills,
-            inclusion_map=act_inclusion_map,
-            assembled_context=assembled_context,
-        )
-
-        actions = response_data.get('actions', [])
-
-        # Repetition detection: detect model stuck in a loop
-        if actions and len(actions) == 1:
-            current_type = actions[0].get('type', '')
-            if current_type == last_action_type:
-                consecutive_same_action += 1
-            else:
-                consecutive_same_action = 1
-            last_action_type = current_type
-        elif actions:
-            consecutive_same_action = 0
-            last_action_type = None
-
-        if consecutive_same_action >= 3:
-            if not pivot_hint_injected:
-                # First threshold: inject pivot hint and give one more chance
-                logging.info(f"[MODE:ACT] [ACT LOOP] Repetition detected: '{last_action_type}' called {consecutive_same_action}x — injecting pivot hint")
-                act_loop.append_results([{
-                    'action_type': 'system',
-                    'status': 'info',
-                    'execution_time': 0.0,
-                    'result': f"SYSTEM: You have called '{last_action_type}' {consecutive_same_action} times with similar queries. Try a DIFFERENT action type that builds on existing results, or return empty actions to finish."
-                }])
-                pivot_hint_injected = True
-                consecutive_same_action = 0
-                # Fall through to can_continue check (don't force exit yet)
-                can_continue, termination_reason = act_loop.can_continue()
-            else:
-                # Second threshold: force exit
-                logging.warning(f"[MODE:ACT] [ACT LOOP] Repetition persists after pivot hint: '{last_action_type}' called {consecutive_same_action}x, forcing exit")
-                termination_reason = 'repetition_detected'
-                can_continue = False
-        else:
-            # Check if loop can continue
-            can_continue, termination_reason = act_loop.can_continue()
-
-        # Safety net: if the prompt-based scope evaluation didn't trigger an
-        # early persistent_task, warn the LLM when budget is nearly gone.
-        # Tight thresholds (85% fatigue, 4+ tool actions) to avoid false positives
-        # on bounded queries that legitimately use most of the budget.
-        if can_continue and actions and not getattr(act_loop, '_escalation_hint_injected', False):
-            _tool_action_count = sum(
-                1 for r in act_loop.act_history
-                if r.get('action_type') not in ('recall', 'memorize', 'introspect', 'associate', 'system', None)
-            )
-            if _tool_action_count >= 4 and act_loop.fatigue_budget > 0:
-                _predicted_cost = sum(
-                    ACTION_FATIGUE_COSTS.get(a.get('type', ''), 1.0) * (1.0 + act_loop.fatigue_growth_rate * act_loop.iteration_number)
-                    for a in actions
-                )
-                _predicted_fatigue = act_loop.fatigue + _predicted_cost
-                _predicted_util = _predicted_fatigue / act_loop.fatigue_budget
-                if _predicted_util >= 0.85:
-                    logging.info(f"[MODE:ACT] [ACT LOOP] Budget safety net: predicted {_predicted_util:.0%} after this iteration ({_tool_action_count} tool actions)")
-                    act_loop.append_results([{
-                        'action_type': 'system',
-                        'status': 'info',
-                        'execution_time': 0.0,
-                        'result': (
-                            f"SYSTEM: Action budget nearly exhausted (~{_predicted_util:.0%}). "
-                            "This is your last iteration. If significant work remains, "
-                            "create a persistent_task now. Otherwise return empty actions to finish."
-                        ),
-                    }])
-                    act_loop._escalation_hint_injected = True
-
-        # Execute actions
-        actions_executed = []
-        fatigue_added = 0.0
-        iteration_net_value = 0.0
-        if can_continue and actions:
-            actions_executed = act_loop.execute_actions(
-                topic=topic,
-                actions=actions
-            )
-            act_loop.append_results(actions_executed)
-
-            # Accumulate fatigue
-            fatigue_added = act_loop.accumulate_fatigue(actions_executed, act_loop.iteration_number)
-
-            # Estimate net value (for cortex_iterations logging + strategy analysis)
-            iteration_net_value = ActLoopService.estimate_net_value(actions_executed, act_loop.iteration_number)
-
-            # If a persistent_task was created, exit immediately — the task
-            # worker handles the deep work; no point burning more ACT budget.
-            if any(
-                r.get('action_type') == 'persistent_task' and r.get('status') == 'success'
-                for r in actions_executed
-            ):
-                logging.info("[MODE:ACT] [ACT LOOP] persistent_task dispatched — exiting loop to let background worker handle it")
-                termination_reason = 'persistent_task_dispatched'
-                can_continue = False
-
-            # Record skill outcomes to procedural memory
-            from services.skill_outcome_recorder import record_skill_outcomes
-            record_skill_outcomes(actions_executed, topic)
-        elif not actions:
-            logging.warning("[MODE:ACT] No actions specified, exiting ACT loop")
-            termination_reason = 'no_actions'
-            can_continue = False
-
-        # Log iteration
-        iteration_end = time.time()
-        act_loop.log_iteration(
-            started_at=iteration_start,
-            completed_at=iteration_end,
-            chosen_mode='ACT',
-            chosen_confidence=response_data.get('confidence', 0.5),
-            actions_executed=actions_executed,
-            frontal_cortex_response=response_data,
-            termination_reason=termination_reason if not can_continue else None,
-            decision_data={
-                'net_value': iteration_net_value,
-                'total_cost': act_loop.fatigue,
-                'iteration_cost': fatigue_added,
-            },
-        )
-
-        act_loop.iteration_number += 1
-
-        if not can_continue:
-            break
-
-    # Batch write iterations to database
-    if iteration_service and act_loop.iteration_logs:
-        try:
-            iteration_service.log_iterations_batch(
-                loop_id=loop_id,
-                topic=topic,
-                exchange_id=exchange_id,
-                session_id=session_id,
-                iterations=act_loop.iteration_logs
-            )
-        except Exception as e:
-            logging.error(f"[ACT LOOP] Failed to log iterations: {e}")
-
-    # Log fatigue telemetry
-    telemetry = act_loop.get_fatigue_telemetry()
-    telemetry['termination_reason'] = termination_reason
-    logging.info(f"[ACT LOOP] Fatigue telemetry: {telemetry}")
+    # ── Post-loop: re-route through mode router ─────────────────────
+    terminal_mode = 'RESPOND'
     try:
-        from services.database_service import get_shared_db_service
-        _tel_db = get_shared_db_service()
-        _tel_log = InteractionLogService(_tel_db)
-        _tel_log.log_event(
-            event_type='act_loop_telemetry',
-            payload=telemetry,
-            topic=topic,
-            source='act_loop',
+        re_route_result = mode_router.route(
+            signals, text, previous_mode='ACT', skip_tiebreaker=True
         )
-    except Exception:
-        pass
-
-    # Re-route through mode router (excluding ACT to prevent oscillation)
-    # Update signals with enriched context from actions
-    terminal_mode = 'RESPOND'  # Default fallback
-    try:
-        # Force ACT suppression via previous_mode; skip tie-breaker since terminal mode is implicit
-        re_route_result = mode_router.route(signals, text, previous_mode='ACT', skip_tiebreaker=True)
         terminal_mode = re_route_result['mode']
         if terminal_mode == 'ACT':
-            terminal_mode = 'RESPOND'  # Safety: never re-ACT
+            terminal_mode = 'RESPOND'
         logging.info(f"[MODE:ACT→{terminal_mode}] Re-routed after ACT loop")
     except Exception as e:
         logging.warning(f"[MODE:ACT→RESPOND] Re-routing failed: {e}")
 
-    # If ACT loop produced substantive results, force RESPOND so the LLM can
-    # synthesize them. ACKNOWLEDGE/IGNORE would discard act_history context.
+    # Force RESPOND if substantive results exist
     _has_substantive_results = any(
-        r.get('status') == 'success' and r.get('result') and r.get('result') != '__CARD_ONLY__'
-        for r in act_loop.act_history
+        r.get('status') == 'success'
+        and r.get('result')
+        and r.get('result') != '__CARD_ONLY__'
+        for r in result.act_history
     )
     if _has_substantive_results and terminal_mode in ('ACKNOWLEDGE', 'IGNORE'):
-        logging.info(f"[MODE:ACT→{terminal_mode}→RESPOND] Overriding — ACT loop has substantive results to synthesize")
+        logging.info(
+            f"[MODE:ACT→{terminal_mode}→RESPOND] Overriding — "
+            f"ACT loop has substantive results to synthesize"
+        )
         terminal_mode = 'RESPOND'
 
-    # Generate terminal response (pass act_history so LLM can reference tool results)
-    act_history_for_respond = act_loop.get_history_context()
-    logging.info(f"[MODE:ACT→{terminal_mode}] Passing act_history to terminal response ({len(act_history_for_respond)} chars, {len(act_loop.act_history)} actions)")
+    # Format act_history for terminal response
+    _tmp = ActLoopService.__new__(ActLoopService)
+    _tmp.act_history = result.act_history
+    act_history_for_respond = _tmp.get_history_context()
+    logging.info(
+        f"[MODE:ACT→{terminal_mode}] Passing act_history to terminal response "
+        f"({len(act_history_for_respond)} chars, {len(result.act_history)} actions)"
+    )
 
-    # If every action result is a card-only sentinel, the card IS the response —
-    # skip the text LLM call entirely rather than generating redundant commentary.
-    _history = act_loop.act_history
+    # Card-only detection
+    _history = result.act_history
     _all_card_only = (
         bool(_history)
         and all(r.get('status') == 'success' for r in _history)
         and all(r.get('result') == '__CARD_ONLY__' for r in _history)
     )
+
     if _all_card_only:
-        logging.info(f"[MODE:ACT→IGNORE] All actions emitted cards — skipping text response")
+        logging.info(
+            "[MODE:ACT→IGNORE] All actions emitted cards — skipping text response"
+        )
         terminal_response = {
             'mode': 'IGNORE',
             'modifiers': [],
@@ -673,18 +528,18 @@ def generate_with_act_loop(topic, text, classification, thread_conv_service, cor
             signals=signals,
         )
 
-    # Enqueue tool outputs for background experience assimilation
+    # Enqueue tool reflection
     try:
-        from workers.tool_worker import _enqueue_tool_reflection
-        _enqueue_tool_reflection(act_loop.act_history, topic, text)
+        from services.act_reflection_service import enqueue_tool_reflection
+        enqueue_tool_reflection(result.act_history, topic, text)
     except Exception as _e:
         logging.debug(f"[MODE:ACT] Reflection enqueue skipped: {_e}")
 
     # Carry over action history
     terminal_response['actions'] = [
         {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
-        for r in act_loop.act_history
-    ] if act_loop.act_history else None
+        for r in result.act_history
+    ] if result.act_history else None
 
     return terminal_response
 
@@ -1693,9 +1548,9 @@ def _handle_social_triage(
         }
 
 
-# Contextual skills that can be dispatched directly (fire-and-done)
-_CONTEXTUAL_SKILLS = {'schedule', 'list', 'focus', 'persistent_task'}
-_PRIMITIVES = {'recall', 'memorize', 'introspect', 'associate'}
+from services.innate_skills.registry import (
+    CONTEXTUAL_SKILLS as _CONTEXTUAL_SKILLS,
+)
 
 
 def _is_innate_skill_only(triage_result) -> bool:
