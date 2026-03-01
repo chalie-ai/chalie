@@ -37,6 +37,48 @@ def health_check():
     return jsonify({"status": "ok", "version": APP_VERSION}), 200
 
 
+@system_bp.route('/ready', methods=['GET'])
+def readiness_check():
+    """Readiness probe — true only when PostgreSQL, Redis, and prompt-queue worker are all available."""
+    checks = {'postgres': False, 'redis': False, 'workers': False}
+    redis_conn = None
+
+    # PostgreSQL
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT 1')
+            cursor.close()
+        checks['postgres'] = True
+    except Exception as e:
+        logger.debug(f'[READY] postgres not ready: {e}')
+
+    # Redis
+    try:
+        from services.redis_client import RedisClientService
+        redis_conn = RedisClientService.create_connection()
+        redis_conn.ping()
+        checks['redis'] = True
+    except Exception as e:
+        logger.debug(f'[READY] redis not ready: {e}')
+
+    # prompt-queue worker (only if Redis is reachable)
+    if redis_conn and checks['redis']:
+        try:
+            from rq import Worker
+            workers = Worker.all(connection=redis_conn)
+            checks['workers'] = any(
+                any(q.name == 'prompt-queue' for q in w.queues) for w in workers
+            )
+        except Exception as e:
+            logger.debug(f'[READY] worker check failed: {e}')
+
+    ready = all(checks.values())
+    return jsonify({'ready': ready}), (200 if ready else 503)
+
+
 @system_bp.route('/metrics', methods=['GET'])
 @require_session
 def metrics_endpoint():

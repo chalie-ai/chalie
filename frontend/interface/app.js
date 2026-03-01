@@ -112,6 +112,7 @@ class ChalieApp {
     await this._showPwaDialogIfNeeded();
 
     // Show the "Waking up" overlay while we wait for the backend
+    this._readyPollActive = true;
     this._showSparkOverlay();
 
     // Start the app
@@ -144,9 +145,23 @@ class ChalieApp {
     });
   }
 
+  async _pollUntilReady() {
+    const POLL_INTERVAL_MS = 2000;
+    const MAX_WAIT_MS = 120_000;
+    const deadline = Date.now() + MAX_WAIT_MS;
+
+    while (this._readyPollActive && Date.now() < deadline) {
+      const result = await this.api.readyCheck();
+      if (result?.ready) return;
+      if (!this._readyPollActive) return; // skip was clicked
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    }
+    // Timed out or skipped — proceed anyway so the UI is not permanently blocked
+  }
+
   async _start() {
     try {
-      await this.api.healthCheck();
+      await this._pollUntilReady();
       this._dismissSparkOverlay();
       this.presence.setState('resting');
       const voiceReady = await this.voice.init();
@@ -804,7 +819,10 @@ class ChalieApp {
     // Skip button
     const skipBtn = overlay.querySelector('.spark-overlay__skip');
     if (skipBtn) {
-      skipBtn.addEventListener('click', () => this._dismissSparkOverlay(), { once: true });
+      skipBtn.addEventListener('click', () => {
+        this._readyPollActive = false;
+        this._dismissSparkOverlay();
+      }, { once: true });
     }
   }
 
