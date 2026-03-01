@@ -24,8 +24,9 @@ let deletingProviderId = null;
 
 // Embodiment state
 let embodyTools = [];           // full tool list from API
+let catalogItems = [];          // curated library from API
 let settingsTool = null;        // tool name open in settings modal
-let installMethod = 'git';      // 'git' or 'zip'
+let updatingTool = null;        // tool name being updated
 let pollTimer = null;           // setInterval id for build polling
 
 // Cognition observability state
@@ -710,6 +711,110 @@ async function loadEmbodiment() {
         console.error('loadEmbodiment error:', e);
         document.getElementById('toolsGrid').innerHTML = `<div class="empty-state"><h3>Error loading tools</h3><p>${escapeHtml(e.message)}</p></div>`;
     }
+    // Load catalog independently (non-blocking)
+    loadCatalog();
+}
+
+async function loadCatalog() {
+    try {
+        const res = await apiFetch('/tools/catalog');
+        if (!res.ok) return;
+        const data = await res.json();
+        catalogItems = data.catalog || [];
+        renderCatalog();
+    } catch (e) {
+        console.error('loadCatalog error:', e);
+        document.getElementById('recommendedGrid').innerHTML =
+            '<div class="empty-state" style="grid-column:1/-1"><p>Could not load recommendations</p></div>';
+    }
+}
+
+function renderCatalog(filter = '') {
+    const grid = document.getElementById('recommendedGrid');
+    const section = document.getElementById('recommendedSection');
+    if (!grid) return;
+
+    // Collapse the whole recommended section when the library is empty (no "coming soon" feeling)
+    if (!catalogItems.length) {
+        if (section) section.style.display = 'none';
+        return;
+    }
+    if (section) section.style.display = '';
+
+    let items = catalogItems;
+    if (filter.trim()) {
+        const q = filter.toLowerCase();
+        items = catalogItems.filter(item =>
+            (item.name || '').toLowerCase().includes(q) ||
+            (item.title || '').toLowerCase().includes(q) ||
+            (item.summary || '').toLowerCase().includes(q) ||
+            (item.category || '').toLowerCase().includes(q)
+        );
+    }
+
+    if (!items.length) {
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1; text-align:center; padding:32px 0;"><p>No catalog results for "${escapeHtml(filter)}"</p></div>`;
+        return;
+    }
+
+    const triggerLabels = { on_demand: 'On demand', cron: 'Scheduled', webhook: 'Webhook' };
+
+    grid.innerHTML = items.map(item => {
+        const installed = item.installed;
+        const building = item.building;
+        const triggerLabel = triggerLabels[item.trigger] || item.trigger || '';
+
+        let btnHtml;
+        if (building) {
+            btnHtml = `<button class="tool-card__btn --primary" disabled>Installing…</button>`;
+        } else if (installed) {
+            btnHtml = `<button class="tool-card__btn" disabled>Installed</button>`;
+        } else {
+            btnHtml = `<button class="tool-card__btn --primary" onclick="confirmCatalogInstall('${escapeHtml(item.name)}')">Install</button>`;
+        }
+
+        return `
+            <div class="tool-card tool-card--marketplace ${installed ? 'tool-card--installed' : ''}">
+                <div class="tool-card__header">
+                    <div class="tool-card__icon">${renderIconHtml(item.icon || '⚙')}</div>
+                    <div>
+                        <div class="tool-card__name">${escapeHtml(item.title || item.name)}</div>
+                        <div class="tool-card__category">${escapeHtml(item.category || '')}${triggerLabel ? ` · ${escapeHtml(triggerLabel)}` : ''}</div>
+                    </div>
+                </div>
+                <p class="tool-card__desc">${escapeHtml(item.summary || '')}</p>
+                <div class="tool-card__footer">
+                    <span class="tool-card__status ${installed ? '--system' : '--marketplace'}">
+                        ${installed ? 'Installed' : 'Curated'}
+                    </span>
+                    ${btnHtml}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function confirmCatalogInstall(name) {
+    const item = catalogItems.find(c => c.name === name);
+    if (!item) return;
+
+    // Install directly — no separate confirmation modal needed since it's a curated, trusted source
+    try {
+        const res = await apiFetch('/tools/install', {
+            method: 'POST',
+            body: JSON.stringify({ git_url: item.repo, source_type: 'catalog' }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            showToast(`Installing ${escapeHtml(item.title || item.name)}…`, 'success');
+            loadEmbodiment();
+            startBuildPoll();
+        } else {
+            showToast(data.error || 'Installation failed', 'error');
+        }
+    } catch (e) {
+        showToast(`Network error: ${e.message}`, 'error');
+    }
 }
 
 function renderTools(filter = '') {
@@ -805,6 +910,20 @@ function renderToolCard(tool) {
         }
     }
 
+    // Update badge (shown when a newer tag is available)
+    const hasUpdate = tool.update_available && !isBuilding && !isDisabled;
+    let updateHtml = '';
+    if (hasUpdate) {
+        const curTag = escapeHtml(tool.installed_tag || '');
+        const newTag = escapeHtml(tool.update_available);
+        updateHtml = `
+            <div class="tool-card__update-row">
+                <span class="tool-card__update-badge">${newTag} available</span>
+                <button class="tool-card__btn --primary" onclick="confirmUpdate('${escapeHtml(name)}', '${curTag}', '${newTag}')">Update</button>
+            </div>
+        `;
+    }
+
     return `
         <div class="tool-card ${isBuilding ? '--building' : ''} ${isDisabled ? '--disabled' : ''} ${hasError ? '--error' : ''}">
             <div class="tool-card__header">
@@ -812,11 +931,13 @@ function renderToolCard(tool) {
                 <div>
                     <div class="tool-card__name">${escapeHtml(tool.display_name || tool.name)}</div>
                     ${tool.category ? `<div class="tool-card__category">${escapeHtml(tool.category)}</div>` : ''}
+                    ${tool.installed_tag ? `<div class="tool-card__version">${escapeHtml(tool.installed_tag)}</div>` : ''}
                 </div>
             </div>
             <p class="tool-card__desc">${escapeHtml(tool.description)}</p>
             ${errorHtml}
             ${oauthBadgeHtml}
+            ${updateHtml}
             <div class="tool-card__footer">
                 <span class="tool-card__status ${statusInfo.class}">${statusInfo.label}</span>
                 <div class="tool-card__actions">
@@ -854,24 +975,12 @@ function startBuildPoll() {
 function openInstallModal() {
     document.getElementById('installModal').classList.remove('hidden');
     document.getElementById('installGitUrl').value = '';
-    document.getElementById('installZipFile').value = '';
     document.getElementById('installProgress').classList.add('hidden');
     document.getElementById('installError').classList.add('hidden');
-    installMethod = 'git';
-    selectInstallMethod('git');
 }
 
 function closeInstallModal() {
     document.getElementById('installModal').classList.add('hidden');
-}
-
-function selectInstallMethod(method) {
-    installMethod = method;
-    document.querySelectorAll('#installMethodTabs .platform-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.installMethod === method);
-    });
-    document.getElementById('installGitPanel').classList.toggle('hidden', method !== 'git');
-    document.getElementById('installZipPanel').classList.toggle('hidden', method !== 'zip');
 }
 
 async function handleInstall() {
@@ -879,37 +988,22 @@ async function handleInstall() {
     const progressEl = document.getElementById('installProgress');
     const btn = document.getElementById('installBtn');
 
-    errorEl.classList.add('hidden');
-    progressEl.classList.remove('hidden');
-
-    let formData;
-
-    if (installMethod === 'git') {
-        const url = document.getElementById('installGitUrl').value.trim();
-        if (!url) {
-            showError(errorEl, 'Enter a repository URL');
-            return;
-        }
-        progressEl.innerHTML = 'Cloning repository…';
-        formData = JSON.stringify({ git_url: url });
-    } else {
-        const fileInput = document.getElementById('installZipFile');
-        if (!fileInput.files.length) {
-            showError(errorEl, 'Select a ZIP file');
-            return;
-        }
-        progressEl.innerHTML = 'Uploading…';
-        formData = new FormData();
-        formData.append('zip_file', fileInput.files[0]);
+    const url = document.getElementById('installGitUrl').value.trim();
+    if (!url) {
+        showError(errorEl, 'Enter a repository URL');
+        return;
     }
 
+    errorEl.classList.add('hidden');
+    progressEl.classList.remove('hidden');
+    progressEl.innerHTML = 'Resolving latest tag…';
     btn.disabled = true;
 
     try {
         const res = await apiFetch('/tools/install', {
             method: 'POST',
-            body: formData,
-        }, installMethod === 'zip');
+            body: JSON.stringify({ git_url: url, source_type: 'custom' }),
+        });
 
         const data = await res.json();
 
@@ -1194,6 +1288,35 @@ function handleOAuthCallback() {
     }
 }
 
+function confirmUpdate(name, currentTag, newTag) {
+    updatingTool = name;
+    const displayName = name.replace(/_/g, ' ');
+    document.getElementById('updateToolDesc').textContent =
+        `Update ${displayName} from ${currentTag || 'unknown'} to ${newTag}? The tool will be unavailable during the container rebuild.`;
+    document.getElementById('updateToolModal').classList.remove('hidden');
+}
+
+async function executeUpdate() {
+    if (!updatingTool) return;
+    document.getElementById('updateToolModal').classList.add('hidden');
+    const name = updatingTool;
+    updatingTool = null;
+
+    try {
+        const res = await apiFetch(`/tools/${name}/update`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+            showToast(`Updating ${name.replace(/_/g, ' ')} to ${data.new_tag}…`, 'success');
+            loadEmbodiment();
+            startBuildPoll();
+        } else {
+            showToast(data.error || 'Update failed', 'error');
+        }
+    } catch (e) {
+        showToast(`Network error: ${e.message}`, 'error');
+    }
+}
+
 // ==========================================
 // Embodiment Event Listeners
 // ==========================================
@@ -1202,12 +1325,9 @@ document.getElementById('closeInstallModal').addEventListener('click', closeInst
 document.getElementById('cancelInstallBtn').addEventListener('click', closeInstallModal);
 document.getElementById('installBtn').addEventListener('click', handleInstall);
 document.getElementById('toolSearch').addEventListener('input', (e) => {
-    renderTools(e.target.value);
-});
-
-document.getElementById('installMethodTabs').addEventListener('click', (e) => {
-    const tab = e.target.closest('.platform-tab');
-    if (tab) selectInstallMethod(tab.dataset.installMethod);
+    const q = e.target.value;
+    renderTools(q);
+    renderCatalog(q);
 });
 
 document.getElementById('closeToolSettingsModal').addEventListener('click', () => {
@@ -1224,8 +1344,18 @@ document.getElementById('saveToolSettingsBtn').addEventListener('click', saveToo
 
 document.getElementById('browseMarketplaceBtn').addEventListener('click', (e) => {
     e.preventDefault();
-    showToast('Chalie Marketplace coming soon!', 'info');
+    document.getElementById('recommendedSection').scrollIntoView({ behavior: 'smooth' });
 });
+
+document.getElementById('closeUpdateToolModal').addEventListener('click', () => {
+    document.getElementById('updateToolModal').classList.add('hidden');
+    updatingTool = null;
+});
+document.getElementById('cancelUpdateBtn').addEventListener('click', () => {
+    document.getElementById('updateToolModal').classList.add('hidden');
+    updatingTool = null;
+});
+document.getElementById('confirmUpdateBtn').addEventListener('click', executeUpdate);
 
 // ==========================================
 // Scheduler Tab
