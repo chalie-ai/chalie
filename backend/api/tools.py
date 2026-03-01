@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import zipfile
 from pathlib import Path
 from urllib.parse import quote as url_quote
 
@@ -229,95 +228,94 @@ def generate_webhook_key(tool_name: str):
 @require_session
 def install_tool():
     """
-    Install a tool from a git URL or uploaded ZIP file.
+    Install a tool from a git URL.
 
-    Supports:
-    - JSON body: {"git_url": "https://..."}
-    - Multipart form: file field "zip_file"
+    Resolves the latest tag from the repository, clones it at that tag,
+    validates the manifest, and triggers an async Docker image build.
+
+    Body: {"git_url": "https://...", "source_type": "catalog"|"custom"}
 
     Returns:
-        {"ok": true, "status": "building", "tool_name": "..."} on success
+        {"ok": true, "status": "building", "tool_name": "...", "installed_tag": "..."} on success
         {"ok": false, "error": "..."} on failure
     """
     try:
         from services.tool_registry_service import ToolRegistryService
         from services.database_service import get_shared_db_service
 
-        # Get tools directory
         registry = ToolRegistryService()
         tools_dir = registry.tools_dir
 
-        # Determine source: git URL or ZIP upload
-        git_url = None
-        zip_file = None
+        if not request.is_json:
+            return jsonify({"ok": False, "error": "JSON body required"}), 400
 
-        if request.is_json:
-            data = request.get_json()
-            git_url = data.get("git_url", "").strip()
-        elif request.files.get("zip_file"):
-            zip_file = request.files["zip_file"]
+        data = request.get_json()
+        git_url = data.get("git_url", "").strip()
+        source_type = data.get("source_type", "custom")
 
-        if not git_url and not zip_file:
-            return jsonify({"ok": False, "error": "Provide either git_url or zip_file"}), 400
+        if not git_url:
+            return jsonify({"ok": False, "error": "Provide a git_url"}), 400
 
-        # Create temporary directory for extraction
+        # Create temporary directory for cloning
         temp_dir = Path(tempfile.mkdtemp(prefix="chalie_tool_install_"))
+        resolved_tag = None
 
         try:
-            if git_url:
-                # Clone from git with security limits
-                logger.info(f"[TOOLS API] Cloning from {git_url}")
-                try:
-                    result = subprocess.run(
-                        [
-                            "git", "clone",
-                            "--depth=1",
-                            "--no-recurse-submodules",
-                            git_url,
-                            str(temp_dir),
-                        ],
-                        timeout=60,
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode != 0:
-                        return jsonify({
-                            "ok": False,
-                            "error": f"Git clone failed: {result.stderr[:200]}"
-                        }), 400
-                except subprocess.TimeoutExpired:
-                    return jsonify({
-                        "ok": False,
-                        "error": "Git clone timed out (>60s)"
-                    }), 400
-                except Exception as e:
-                    return jsonify({
-                        "ok": False,
-                        "error": f"Git clone error: {str(e)[:200]}"
-                    }), 400
+            # Resolve latest tag before cloning — we never install from HEAD
+            logger.info(f"[TOOLS API] Resolving latest tag for {git_url}")
+            try:
+                ls_result = subprocess.run(
+                    ["git", "ls-remote", "--tags", "--sort=-v:refname", git_url],
+                    timeout=30,
+                    capture_output=True,
+                    text=True,
+                )
+                if ls_result.returncode == 0:
+                    for line in ls_result.stdout.strip().split("\n"):
+                        if line and "^{}" not in line and "\t" in line:
+                            resolved_tag = line.split("\t")[1].replace("refs/tags/", "").strip()
+                            break
+            except subprocess.TimeoutExpired:
+                return jsonify({"ok": False, "error": "Could not reach repository (timeout resolving tags)"}), 400
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"Could not resolve tags: {str(e)[:200]}"}), 400
 
-            elif zip_file:
-                # Extract ZIP with path traversal validation
-                logger.info(f"[TOOLS API] Extracting ZIP: {zip_file.filename}")
-                try:
-                    with zipfile.ZipFile(zip_file, "r") as zf:
-                        # Validate all paths before extracting
-                        for member in zf.namelist():
-                            target = (temp_dir / member).resolve()
-                            if not str(target).startswith(str(temp_dir.resolve())):
-                                raise ValueError(f"Zip path traversal detected: {member}")
+            if not resolved_tag:
+                return jsonify({
+                    "ok": False,
+                    "error": "Repository has no tagged releases. Only tagged versions can be installed."
+                }), 400
 
-                        zf.extractall(temp_dir)
-                except zipfile.BadZipFile:
+            # Clone at the resolved tag
+            logger.info(f"[TOOLS API] Cloning {git_url} at tag {resolved_tag}")
+            try:
+                result = subprocess.run(
+                    [
+                        "git", "clone",
+                        "--depth=1",
+                        f"--branch={resolved_tag}",
+                        "--no-recurse-submodules",
+                        git_url,
+                        str(temp_dir),
+                    ],
+                    timeout=60,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
                     return jsonify({
                         "ok": False,
-                        "error": "Invalid ZIP file"
+                        "error": f"Git clone failed: {result.stderr[:200]}"
                     }), 400
-                except ValueError as e:
-                    return jsonify({
-                        "ok": False,
-                        "error": str(e)
-                    }), 400
+            except subprocess.TimeoutExpired:
+                return jsonify({"ok": False, "error": "Git clone timed out (>60s)"}), 400
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"Git clone error: {str(e)[:200]}"}), 400
+
+            # Strip .git directory to save space and prevent git ops inside tools/
+            git_dir = temp_dir / ".git"
+            if git_dir.exists():
+                shutil.rmtree(git_dir, ignore_errors=True)
 
             # Size check (200MB limit)
             total_size = sum(
@@ -407,6 +405,15 @@ def install_tool():
             shutil.move(str(temp_dir), str(final_dir))
             logger.info(f"[TOOLS API] Installed tool directory: {final_dir}")
 
+            # Persist source metadata for update tracking
+            try:
+                from services.tool_config_service import ToolConfigService
+                ToolConfigService(get_shared_db_service())._set_source_metadata(
+                    tool_name, source_type, git_url, resolved_tag
+                )
+            except Exception as meta_err:
+                logger.warning(f"[TOOLS API] Failed to write source metadata for '{tool_name}': {meta_err}")
+
             # Trigger async build
             if not registry.register_tool_async(final_dir):
                 # If register_tool_async returns False, build is already in progress
@@ -418,7 +425,8 @@ def install_tool():
             return jsonify({
                 "ok": True,
                 "status": "building",
-                "tool_name": tool_name
+                "tool_name": tool_name,
+                "installed_tag": resolved_tag,
             }), 200
 
         except Exception as e:
@@ -434,6 +442,156 @@ def install_tool():
     except Exception as e:
         logger.error(f"[TOOLS API] Install endpoint error: {e}", exc_info=True)
         return jsonify({"error": "Failed to install tool"}), 500
+
+
+@tools_bp.route("/tools/catalog", methods=["GET"])
+@require_session
+def get_catalog():
+    """
+    Return the curated embodiment library with install status for each entry.
+
+    Returns:
+        {"catalog": [{"name", "title", "icon", "repo", "summary", "category", "trigger", "installed", "building"}]}
+    """
+    try:
+        from services.tool_registry_service import ToolRegistryService
+
+        catalog_path = Path(__file__).parent.parent / "configs" / "embodiment_library.json"
+        if not catalog_path.exists():
+            return jsonify({"catalog": []}), 200
+
+        with open(catalog_path, "r") as f:
+            library = json.load(f)
+
+        registry = ToolRegistryService()
+        build_statuses = registry.get_all_build_statuses()
+        installed_names = set(registry.tools.keys())
+
+        # Also include tools that exist on disk (disabled/errored)
+        tools_dir = registry.tools_dir
+        if tools_dir.exists():
+            for tool_dir in tools_dir.iterdir():
+                if tool_dir.is_dir() and not tool_dir.name.startswith(("_", ".")):
+                    installed_names.add(tool_dir.name)
+
+        enriched = []
+        for entry in library:
+            name = entry.get("name", "")
+            enriched.append({
+                **entry,
+                "installed": name in installed_names,
+                "building": name in build_statuses and build_statuses[name].get("status") == "building",
+            })
+
+        return jsonify({"catalog": enriched}), 200
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] Catalog error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to load catalog"}), 500
+
+
+@tools_bp.route("/tools/<tool_name>/update", methods=["POST"])
+@require_session
+def update_tool(tool_name: str):
+    """
+    Update an installed tool to the latest detected tag.
+
+    Clones the new tag to a temp dir, validates it, then replaces the existing tool directory.
+    Tool config keys (API keys, OAuth tokens) survive the update because they're keyed by tool_name in DB.
+
+    Returns:
+        {"ok": true, "status": "building", "new_tag": "v1.x.x"} on success
+        {"error": "..."} on failure
+    """
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.tool_config_service import ToolConfigService
+        from services.database_service import get_shared_db_service
+
+        registry = ToolRegistryService()
+        db = get_shared_db_service()
+        config_svc = ToolConfigService(db)
+        tools_dir = registry.tools_dir
+
+        meta = config_svc.get_source_metadata(tool_name)
+        source_url = meta.get("_source_url")
+        latest_tag = meta.get("_latest_tag")
+
+        if not source_url or not latest_tag:
+            return jsonify({"error": "No update available for this tool"}), 400
+
+        if tool_name in registry.get_all_build_statuses():
+            return jsonify({"error": f"Tool '{tool_name}' is already building"}), 409
+
+        # Clone the new tag to a temp dir first — validate before touching existing install
+        temp_dir = Path(tempfile.mkdtemp(prefix="chalie_tool_update_"))
+        try:
+            result = subprocess.run(
+                [
+                    "git", "clone",
+                    "--depth=1",
+                    f"--branch={latest_tag}",
+                    "--no-recurse-submodules",
+                    source_url,
+                    str(temp_dir),
+                ],
+                timeout=60,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return jsonify({"error": f"Git clone failed: {result.stderr[:200]}"}), 400
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return jsonify({"error": "Git clone timed out (>60s)"}), 400
+
+        # Strip .git directory
+        git_dir = temp_dir / ".git"
+        if git_dir.exists():
+            shutil.rmtree(git_dir, ignore_errors=True)
+
+        # Validate the new version has manifest and Dockerfile
+        if not (temp_dir / "manifest.json").exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return jsonify({"error": "manifest.json not found in new version"}), 400
+        if not (temp_dir / "Dockerfile").exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return jsonify({"error": "Dockerfile not found in new version"}), 400
+
+        # Now replace the old tool directory
+        old_dir = tools_dir / tool_name
+        registry.unregister_tool(tool_name)
+        if old_dir.exists():
+            shutil.rmtree(old_dir)
+
+        shutil.move(str(temp_dir), str(old_dir))
+        logger.info(f"[TOOLS API] Updated tool '{tool_name}' to {latest_tag}")
+
+        # Update source metadata: installed_tag = latest_tag, clear _latest_tag
+        config_svc._set_source_metadata(
+            tool_name,
+            meta.get("_source_type", "custom"),
+            source_url,
+            latest_tag,
+        )
+        config_svc._clear_latest_tag(tool_name)
+
+        # Trigger async rebuild
+        if not registry.register_tool_async(old_dir):
+            return jsonify({"error": "Failed to start rebuild"}), 500
+
+        return jsonify({"ok": True, "status": "building", "new_tag": latest_tag}), 200
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] Update error for '{tool_name}': {e}", exc_info=True)
+        # Clean up temp dir if it still exists (clone succeeded but move/rebuild failed)
+        try:
+            if temp_dir and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except NameError:
+            pass  # temp_dir never created
+        return jsonify({"error": f"Update failed: {str(e)[:200]}"}), 500
 
 
 @tools_bp.route("/tools/<tool_name>/disable", methods=["POST"])
@@ -604,6 +762,10 @@ def list_tools():
 
             config_schema_array = _normalize_config_schema(schema_dict)
 
+            installed_tag = stored_config.get("_installed_tag")
+            latest_tag = stored_config.get("_latest_tag")
+            update_available = latest_tag if latest_tag and latest_tag != installed_tag else None
+
             tool_entry = {
                 "name": name,
                 "display_name": display_name,
@@ -616,6 +778,10 @@ def list_tools():
                 "config_schema": config_schema_array,
                 "has_sandbox": bool(manifest.get("sandbox")),
                 "last_error": None,
+                "source_type": stored_config.get("_source_type"),
+                "source_url": stored_config.get("_source_url"),
+                "installed_tag": installed_tag,
+                "update_available": update_available,
             }
             if trigger.get("type") == "webhook":
                 tool_entry["webhook_url"] = f"/api/tools/webhook/{name}"
@@ -663,6 +829,12 @@ def list_tools():
                     except Exception:
                         pass
 
+            # Source metadata (best-effort from DB)
+            build_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
+            b_installed_tag = build_config.get("_installed_tag")
+            b_latest_tag = build_config.get("_latest_tag")
+            b_update = b_latest_tag if b_latest_tag and b_latest_tag != b_installed_tag else None
+
             result.append({
                 "name": name,
                 "display_name": name.replace("_", " ").title(),
@@ -673,6 +845,10 @@ def list_tools():
                 "status": status,
                 "config_schema": config_schema,
                 "last_error": error,
+                "source_type": build_config.get("_source_type"),
+                "source_url": build_config.get("_source_url"),
+                "installed_tag": b_installed_tag,
+                "update_available": b_update,
             })
             processed_names.add(name)
 
@@ -714,6 +890,10 @@ def list_tools():
                     schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
                 config_schema = _normalize_config_schema(schema_dict)
 
+                fs_installed_tag = stored_config.get("_installed_tag")
+                fs_latest_tag = stored_config.get("_latest_tag")
+                fs_update = fs_latest_tag if fs_latest_tag and fs_latest_tag != fs_installed_tag else None
+
                 result.append({
                     "name": name,
                     "display_name": name.replace("_", " ").title(),
@@ -724,6 +904,10 @@ def list_tools():
                     "status": status,
                     "config_schema": config_schema,
                     "last_error": last_error,
+                    "source_type": stored_config.get("_source_type"),
+                    "source_url": stored_config.get("_source_url"),
+                    "installed_tag": fs_installed_tag,
+                    "update_available": fs_update,
                 })
                 processed_names.add(name)
 

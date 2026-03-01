@@ -17,6 +17,7 @@ Available innate skills:
 - focus: declare and manage deep work / focus sessions
 - autobiography: retrieve Chalie's self-reflective narrative
 - persistent_task: create, manage, or check on multi-session background tasks (research projects, ongoing compilations, long-running work)
+- document: search uploaded documents (warranties, contracts, manuals, invoices)
 
 Routing rules:
 - ACT: the message needs real-time data, live event results, current prices/status, today's news, external lookup, a tool listed above, OR the user wants an action performed via a built-in action skill. For action skill requests set tools=[] and include the relevant skill in skills[].
@@ -27,6 +28,7 @@ Routing rules:
   - "add X to my list" / "remove from shopping list" → list
   - "start a focus session" / "am I focused" → focus
   - "research this over the next few days" / "task status" → persistent_task
+  - "what does my warranty say" / "search my documents" / "in my uploaded file" → document
 
 Critical bias: when in doubt between RESPOND and ACT, choose ACT. Accuracy matters more than speed.
 freshness_risk scale: 0.0 = timeless/opinion → 1.0 = live event results, today's data, current status.
