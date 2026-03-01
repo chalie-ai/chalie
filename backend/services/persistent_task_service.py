@@ -45,15 +45,7 @@ DEFAULT_FATIGUE_BUDGET = 15.0
 DUPLICATE_SIMILARITY_THRESHOLD = 0.6
 
 
-def _jaccard_similarity(a: str, b: str) -> float:
-    """Compute Jaccard similarity between two strings (word-level)."""
-    words_a = set(a.lower().split())
-    words_b = set(b.lower().split())
-    if not words_a or not words_b:
-        return 0.0
-    intersection = words_a & words_b
-    union = words_a | words_b
-    return len(intersection) / len(union)
+from utils.text_utils import jaccard_similarity as _jaccard_similarity
 
 
 class PersistentTaskService:

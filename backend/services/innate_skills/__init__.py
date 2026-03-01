@@ -5,6 +5,13 @@ Skills provide the ACT loop LLM with data, capabilities, and access to systems.
 They are tools, not thoughts — the ACT prompt is the sole reasoner.
 
 All innate skills are non-LLM operations (fast, sub-cortical services).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT: All skill/action-type sets MUST be defined in:
+  - services/innate_skills/registry.py (skill membership)
+  - services/act_action_categories.py (action behavior categories)
+Do NOT define local skill sets elsewhere. Import from the registry.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import logging

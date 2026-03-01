@@ -12,19 +12,12 @@ import json
 import logging
 from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
+
+from utils.text_utils import jaccard_similarity as _jaccard_similarity
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PLAN DECOMPOSITION]"
-
-
-def _jaccard_similarity(a: str, b: str) -> float:
-    """Word-level Jaccard similarity between two strings."""
-    words_a = set(a.lower().split())
-    words_b = set(b.lower().split())
-    if not words_a or not words_b:
-        return 0.0
-    return len(words_a & words_b) / len(words_a | words_b)
 
 
 class PlanDecompositionService:
@@ -37,7 +30,6 @@ class PlanDecompositionService:
         self.min_steps = self.config.get('min_steps', 2)
         self.max_steps = self.config.get('max_steps', 8)
         self.confidence_threshold = self.config.get('confidence_threshold', 0.5)
-        self.auto_accept_confidence = self.config.get('auto_accept_confidence', 0.9)
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -285,6 +277,8 @@ class PlanDecompositionService:
         if failure_reason:
             step['failure_reason'] = failure_reason
         if new_status == 'failed':
+            # TODO: retryable step retry not yet implemented — flag is stored
+            # but no consumer reads it to schedule re-execution
             step['retryable'] = retryable
 
         # Recalculate blocked state
@@ -410,18 +404,11 @@ class PlanDecompositionService:
     @staticmethod
     def _get_available_skills() -> str:
         """List innate skills for the prompt."""
-        skills = [
-            ('recall', 'Memory retrieval and search'),
-            ('memorize', 'Explicit memory encoding'),
-            ('introspect', 'Self-reflection and meta-cognition'),
-            ('associate', 'Semantic relationship discovery'),
-            ('schedule', 'Reminders and task scheduling'),
-            ('autobiography', 'Personal narrative synthesis'),
-            ('list', 'List management and organization'),
-            ('focus', 'Focus session management'),
-            ('persistent_task', 'Background task management'),
-        ]
-        return '\n'.join(f'- **{name}**: {desc}' for name, desc in skills)
+        from services.innate_skills.registry import PLANNING_SKILLS, SKILL_DESCRIPTIONS
+        return '\n'.join(
+            f'- **{name}**: {SKILL_DESCRIPTIONS.get(name, "")}'
+            for name in sorted(PLANNING_SKILLS)
+        )
 
     @staticmethod
     def _get_available_tools() -> str:
