@@ -343,6 +343,7 @@ if __name__ == "__main__":
     from services.autobiography_service import autobiography_synthesis_worker
     from services.curiosity_pursuit_service import curiosity_pursuit_worker
     from workers.persistent_task_worker import persistent_task_worker, run_immediate_task
+    from workers.document_worker import process_document_job, document_purge_worker
 
     # 5. RESOLVE HOSTNAMES (BEFORE FORKING)
     # This prevents DNS lookup segfaults in child processes on macOS
@@ -494,6 +495,14 @@ if __name__ == "__main__":
         queue=pt_immediate_queue
     )
 
+    # Register document processing worker (RQ queue for upload → extract → chunk → embed)
+    doc_queue = PromptQueue(queue_name="document-queue", worker_func=process_document_job)
+    manager.register_worker(
+        worker_id="document-worker-1",
+        worker_type="idle-busy",
+        queue=doc_queue
+    )
+
     # Register idle consolidation service (STORY-12)
     manager.register_service(
         worker_id="idle-consolidation-service",
@@ -578,6 +587,12 @@ if __name__ == "__main__":
         worker_func=persistent_task_worker
     )
 
+    # Register document purge service (6h cycle, hard-deletes expired soft-deleted docs)
+    manager.register_service(
+        worker_id="document-purge-service",
+        worker_func=document_purge_worker
+    )
+
     # Register moment enrichment service (5min poll, enriches pinned moments)
     from services.moment_enrichment_service import moment_enrichment_worker
     manager.register_service(
@@ -621,6 +636,16 @@ if __name__ == "__main__":
         )
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
+
+    # Register tool update checker (6h cycle, checks for new tags on installed embodiments)
+    try:
+        from services.tool_update_service import tool_update_worker
+        manager.register_service(
+            worker_id="tool-update-checker",
+            worker_func=tool_update_worker
+        )
+    except Exception as e:
+        logging.warning(f"[Consumer] Tool update checker registration failed: {e}")
 
     # One-time migration: move tools_disabled/ → tools/ with _enabled=false in DB
     try:
