@@ -4,7 +4,7 @@ Homeostatic Stability Regulator
 Control-theoretic approach to topic classification parameter tuning.
 
 Principles:
-- One metric → one parameter (no coupling)
+- One metric -> one parameter (no coupling)
 - Primary + fallback control for boundary conditions
 - Stability bands with persistence (3-day deviation required)
 - Single adjustment per day (prevent compounding)
@@ -24,14 +24,14 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from services.database_service import DatabaseService, get_merged_db_config
+from services.database_service import DatabaseService, get_shared_db_service
 
 
 logger = logging.getLogger(__name__)
 
 
 def _json_default(obj):
-    """JSON serializer for types not supported by default (Decimal from PostgreSQL)."""
+    """JSON serializer for types not supported by default (Decimal, numpy)."""
     if isinstance(obj, Decimal):
         return float(obj)
     if isinstance(obj, np.floating):
@@ -114,7 +114,7 @@ class TopicStabilityRegulator:
         "newma_window_slow": (10, 30)
     }
 
-    # Metric → Parameter mapping (primary + fallback for boundary conditions)
+    # Metric -> Parameter mapping (primary + fallback for boundary conditions)
     # Format: (primary_parameter, fallback_parameter)
     CONTROL_MAP = {
         "switch_frequency": ("accumulator_boundary_base", "switch_threshold"),
@@ -127,7 +127,7 @@ class TopicStabilityRegulator:
     # - fragmentation_rate: boundary_base raises bar; leak_rate as fallback slows accumulation
 
     def __init__(self, db=None):
-        self.db = db or DatabaseService(get_merged_db_config())
+        self.db = db or get_shared_db_service()
 
         # Ensure generated config directory exists
         os.makedirs(GENERATED_CONFIG_DIR, exist_ok=True)
@@ -255,7 +255,7 @@ class TopicStabilityRegulator:
 
             logger.info(
                 f"[STABILITY REGULATOR] Saved config to {CONFIG_FILE}. "
-                f"Updated {parameter}: {config[parameter] - adjustment:.4f} → {config[parameter]:.4f}"
+                f"Updated {parameter}: {config[parameter] - adjustment:.4f} -> {config[parameter]:.4f}"
             )
         except Exception as e:
             logger.error(f"[STABILITY REGULATOR] Failed to save config: {e}")
@@ -322,9 +322,9 @@ class TopicStabilityRegulator:
                 created_at,
                 last_updated,
                 message_count,
-                EXTRACT(EPOCH FROM (last_updated - created_at)) as lifespan_seconds
+                (CAST(strftime('%s', last_updated) AS REAL) - CAST(strftime('%s', created_at) AS REAL)) as lifespan_seconds
             FROM topics
-            WHERE last_updated >= %s
+            WHERE last_updated >= ?
         """
 
         topics = []
@@ -438,8 +438,8 @@ class TopicStabilityRegulator:
 
         Primary + fallback logic:
         1. Try primary parameter
-        2. If primary at bound → use fallback (if available)
-        3. If both at bound → return None
+        2. If primary at bound -> use fallback (if available)
+        3. If both at bound -> return None
 
         Args:
             config: Current configuration
@@ -518,11 +518,11 @@ class TopicStabilityRegulator:
         Calculate minimal correction for parameter.
 
         Direction logic:
-        - switch_frequency too high → INCREASE accumulator_boundary_base (harder to cross)
-        - switch_frequency too low → DECREASE accumulator_boundary_base (easier to cross)
-        - lifespan too short → INCREASE decay_constant (longer memory)
-        - lifespan too long → DECREASE decay_constant (shorter memory)
-        - fragmentation too high → INCREASE accumulator_boundary_base, or INCREASE leak_rate
+        - switch_frequency too high -> INCREASE accumulator_boundary_base (harder to cross)
+        - switch_frequency too low -> DECREASE accumulator_boundary_base (easier to cross)
+        - lifespan too short -> INCREASE decay_constant (longer memory)
+        - lifespan too long -> DECREASE decay_constant (shorter memory)
+        - fragmentation too high -> INCREASE accumulator_boundary_base, or INCREASE leak_rate
         - switch_threshold retained as fallback for switch_frequency
 
         Returns:
@@ -539,13 +539,13 @@ class TopicStabilityRegulator:
                     # Legacy fallback: switch_threshold
                     adjustment = +self.MAX_DAILY_ADJUSTMENT
             elif metric_name == "avg_topic_lifespan":
-                # Topics too long → DECREASE decay
+                # Topics too long -> DECREASE decay
                 adjustment = -10  # Decay constant in seconds
             elif metric_name == "fragmentation_rate":
                 if parameter == "accumulator_boundary_base":
                     adjustment = +self.MAX_DAILY_ADJUSTMENT
                 elif parameter == "accumulator_leak_rate":
-                    # More leakage → slower accumulation
+                    # More leakage -> slower accumulation
                     adjustment = +self.MAX_DAILY_ADJUSTMENT
                 else:
                     adjustment = +self.MAX_DAILY_ADJUSTMENT
@@ -560,7 +560,7 @@ class TopicStabilityRegulator:
                 else:
                     adjustment = -self.MAX_DAILY_ADJUSTMENT
             elif metric_name == "avg_topic_lifespan":
-                # Topics too short → INCREASE decay
+                # Topics too short -> INCREASE decay
                 adjustment = +10
             elif metric_name == "fragmentation_rate":
                 # Low fragmentation is good — no action
@@ -603,7 +603,7 @@ class TopicStabilityRegulator:
 
         logger.info(
             f"[STABILITY REGULATOR] {parameter}: "
-            f"{old_value:.4f} → {new_value:.4f} (Δ={adjustment:+.4f})"
+            f"{old_value:.4f} -> {new_value:.4f} (delta={adjustment:+.4f})"
         )
 
         return new_config

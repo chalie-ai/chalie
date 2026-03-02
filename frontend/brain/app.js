@@ -729,12 +729,48 @@ async function loadCatalog() {
     }
 }
 
+const _catalogTriggerLabels = { on_demand: 'On demand', cron: 'Scheduled', webhook: 'Webhook' };
+
+function _buildCatalogItemHtml(item) {
+    const installed = item.installed;
+    const building = item.building;
+    const triggerLabel = _catalogTriggerLabels[item.trigger] || item.trigger || '';
+
+    let btnHtml;
+    if (building) {
+        btnHtml = `<button class="tool-card__btn --primary" disabled>Installing…</button>`;
+    } else if (installed) {
+        btnHtml = `<button class="tool-card__btn" disabled>Installed</button>`;
+    } else {
+        btnHtml = `<button class="tool-card__btn --primary" onclick="confirmCatalogInstall('${escapeHtml(item.name)}')">Install</button>`;
+    }
+
+    return `
+        <div class="tool-card tool-card--marketplace ${installed ? 'tool-card--installed' : ''}">
+            <div class="tool-card__header">
+                <div class="tool-card__icon">${renderIconHtml(item.icon || '⚙')}</div>
+                <div>
+                    <div class="tool-card__name">${escapeHtml(item.title || item.name)}</div>
+                    <div class="tool-card__category">${escapeHtml(item.category || '')}${triggerLabel ? ` · ${escapeHtml(triggerLabel)}` : ''}</div>
+                </div>
+            </div>
+            <p class="tool-card__desc">${escapeHtml(item.summary || '')}</p>
+            <div class="tool-card__footer">
+                <span class="tool-card__status ${installed ? '--system' : '--marketplace'}">
+                    ${installed ? 'Installed' : 'Curated'}
+                </span>
+                ${btnHtml}
+            </div>
+        </div>
+    `;
+}
+
 function renderCatalog(filter = '') {
     const grid = document.getElementById('recommendedGrid');
     const section = document.getElementById('recommendedSection');
     if (!grid) return;
 
-    // Collapse the whole recommended section when the library is empty (no "coming soon" feeling)
+    // Collapse the whole section when library is empty
     if (!catalogItems.length) {
         if (section) section.style.display = 'none';
         return;
@@ -752,53 +788,40 @@ function renderCatalog(filter = '') {
         );
     }
 
-    if (!items.length) {
-        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1; text-align:center; padding:32px 0;"><p>No catalog results for "${escapeHtml(filter)}"</p></div>`;
+    grid.innerHTML = items.length
+        ? items.map(_buildCatalogItemHtml).join('')
+        : `<div class="empty-state" style="grid-column:1/-1; text-align:center; padding:32px 0;"><p>No catalog results for "${escapeHtml(filter)}"</p></div>`;
+}
+
+function renderInstallCatalog() {
+    const grid = document.getElementById('installCatalogGrid');
+    if (!grid) return;
+
+    if (!catalogItems.length) {
+        grid.innerHTML = `
+            <div class="empty-state" style="grid-column:1/-1; text-align:center; padding:40px 0;">
+                <p>No tools in the library yet.</p>
+                <p style="margin-top:8px; font-size:12px; color:var(--text-muted)">Use the Custom URL tab to install from a git repository.</p>
+            </div>`;
         return;
     }
 
-    const triggerLabels = { on_demand: 'On demand', cron: 'Scheduled', webhook: 'Webhook' };
+    grid.innerHTML = catalogItems.map(_buildCatalogItemHtml).join('');
+}
 
-    grid.innerHTML = items.map(item => {
-        const installed = item.installed;
-        const building = item.building;
-        const triggerLabel = triggerLabels[item.trigger] || item.trigger || '';
-
-        let btnHtml;
-        if (building) {
-            btnHtml = `<button class="tool-card__btn --primary" disabled>Installing…</button>`;
-        } else if (installed) {
-            btnHtml = `<button class="tool-card__btn" disabled>Installed</button>`;
-        } else {
-            btnHtml = `<button class="tool-card__btn --primary" onclick="confirmCatalogInstall('${escapeHtml(item.name)}')">Install</button>`;
-        }
-
-        return `
-            <div class="tool-card tool-card--marketplace ${installed ? 'tool-card--installed' : ''}">
-                <div class="tool-card__header">
-                    <div class="tool-card__icon">${renderIconHtml(item.icon || '⚙')}</div>
-                    <div>
-                        <div class="tool-card__name">${escapeHtml(item.title || item.name)}</div>
-                        <div class="tool-card__category">${escapeHtml(item.category || '')}${triggerLabel ? ` · ${escapeHtml(triggerLabel)}` : ''}</div>
-                    </div>
-                </div>
-                <p class="tool-card__desc">${escapeHtml(item.summary || '')}</p>
-                <div class="tool-card__footer">
-                    <span class="tool-card__status ${installed ? '--system' : '--marketplace'}">
-                        ${installed ? 'Installed' : 'Curated'}
-                    </span>
-                    ${btnHtml}
-                </div>
-            </div>
-        `;
-    }).join('');
+function selectInstallTab(method) {
+    document.querySelectorAll('#installMethodTabs .platform-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.installMethod === method);
+    });
+    document.getElementById('installLibraryPanel').classList.toggle('hidden', method !== 'library');
+    document.getElementById('installCustomPanel').classList.toggle('hidden', method !== 'custom');
 }
 
 async function confirmCatalogInstall(name) {
     const item = catalogItems.find(c => c.name === name);
     if (!item) return;
 
-    // Install directly — no separate confirmation modal needed since it's a curated, trusted source
+    closeInstallModal(); // safe no-op if called from the recommended section
     try {
         const res = await apiFetch('/tools/install', {
             method: 'POST',
@@ -974,6 +997,9 @@ function startBuildPoll() {
 
 function openInstallModal() {
     document.getElementById('installModal').classList.remove('hidden');
+    renderInstallCatalog();
+    // Default to Library if catalog has entries, otherwise drop straight to Custom URL
+    selectInstallTab(catalogItems.length ? 'library' : 'custom');
     document.getElementById('installGitUrl').value = '';
     document.getElementById('installProgress').classList.add('hidden');
     document.getElementById('installError').classList.add('hidden');
@@ -1324,6 +1350,10 @@ document.getElementById('addToolBtn').addEventListener('click', openInstallModal
 document.getElementById('closeInstallModal').addEventListener('click', closeInstallModal);
 document.getElementById('cancelInstallBtn').addEventListener('click', closeInstallModal);
 document.getElementById('installBtn').addEventListener('click', handleInstall);
+document.getElementById('installMethodTabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('.platform-tab');
+    if (tab) selectInstallTab(tab.dataset.installMethod);
+});
 document.getElementById('toolSearch').addEventListener('input', (e) => {
     const q = e.target.value;
     renderTools(q);

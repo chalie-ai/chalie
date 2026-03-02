@@ -480,7 +480,7 @@ class CuriosityPursuitService:
 
 
 def curiosity_pursuit_worker(shared_state=None):
-    """Module-level wrapper for multiprocessing."""
+    """Module-level wrapper for threading."""
     logging.basicConfig(level=logging.INFO)
     try:
         config = ConfigService.resolve_agent_config("cognitive-drift")

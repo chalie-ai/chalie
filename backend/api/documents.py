@@ -21,6 +21,7 @@ import os
 import re
 import mimetypes
 from datetime import datetime
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_file
 
@@ -60,8 +61,9 @@ ALLOWED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.webp', '.gif',
 }
 
-# Document storage root
-DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', '/app/data/documents')
+# Document storage root — env var overrides for Docker; local default mirrors backend/data/
+_DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
+DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +449,60 @@ def augment_document(doc_id):
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] augment error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/create-from-conversation", methods=["POST"])
+@require_session
+def create_from_conversation():
+    """Create a document from conversation content (save suggestion accept)."""
+    data = request.get_json(silent=True) or {}
+    thread_id = (data.get('thread_id') or '').strip()
+    topic = (data.get('topic') or '').strip()
+    content_type = (data.get('content_type') or '').strip()
+
+    if not thread_id:
+        return jsonify({"error": "thread_id is required"}), 400
+
+    try:
+        from services.save_suggestion_service import SaveSuggestionService
+
+        save_svc = SaveSuggestionService()
+        doc_id = save_svc.create_document_from_conversation(
+            thread_id, topic, content_type,
+        )
+        if not doc_id:
+            return jsonify({"error": "Failed to create document"}), 500
+
+        return jsonify({"id": doc_id, "status": "processing"}), 201
+
+    except Exception as e:
+        logger.error(f"[DOCS API] create_from_conversation error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to create document"}), 500
+
+
+@documents_bp.route("/documents/dismiss-save", methods=["POST"])
+@require_session
+def dismiss_save():
+    """Track save suggestion rejection for rate limiting."""
+    data = request.get_json(silent=True) or {}
+    thread_id = (data.get('thread_id') or '').strip()
+    topic = (data.get('topic') or '').strip()
+
+    if not thread_id:
+        return jsonify({"error": "thread_id is required"}), 400
+
+    try:
+        from services.save_suggestion_service import SaveSuggestionService
+
+        save_svc = SaveSuggestionService()
+        save_svc.clear_flag(thread_id)
+        save_svc.record_rejection(thread_id, topic)
+
+        return jsonify({"status": "dismissed"}), 200
+
+    except Exception as e:
+        logger.error(f"[DOCS API] dismiss_save error: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 

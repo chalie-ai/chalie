@@ -5,8 +5,8 @@ Tracks success rate, latency, cost, and user preferences per tool.
 Provides ranked candidates from triage selection for the ACT dispatch.
 
 Ranking formula (weights sum to 1.0, correctness-biased):
-  0.50 * success_rate          — correctness is king
-  0.15 * (1 - normalized_latency)  — speed matters less than accuracy
+  0.50 * success_rate          -- correctness is king
+  0.15 * (1 - normalized_latency)  -- speed matters less than accuracy
   0.15 * reliability_score
   0.10 * (1 - normalized_cost)
   0.10 * normalized_preference
@@ -61,21 +61,21 @@ class ToolPerformanceService:
                 """
                 INSERT INTO tool_performance_metrics
                     (tool_name, exchange_id, invocation_success, latency_ms, cost_estimate)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (tool_name, exchange_id or '', success, latency_ms, cost)
+                (tool_name, exchange_id or '', 1 if success else 0, latency_ms, cost)
             )
 
             # Update user preferences: usage_count++, success_count if success
             db.execute(
                 """
                 INSERT INTO user_tool_preferences (user_id, tool_name, usage_count, success_count, last_used_at)
-                VALUES (%s, %s, 1, %s, NOW())
+                VALUES (?, ?, 1, ?, datetime('now'))
                 ON CONFLICT (user_id, tool_name) DO UPDATE SET
                     usage_count = user_tool_preferences.usage_count + 1,
                     success_count = user_tool_preferences.success_count + EXCLUDED.success_count,
-                    last_used_at = NOW(),
-                    updated_at = NOW()
+                    last_used_at = datetime('now'),
+                    updated_at = datetime('now')
                 """,
                 (user_id, tool_name, 1 if success else 0)
             )
@@ -85,9 +85,9 @@ class ToolPerformanceService:
                 db.execute(
                     """
                     UPDATE user_tool_preferences
-                    SET implicit_preference = LEAST(1.0, implicit_preference + 0.05),
-                        updated_at = NOW()
-                    WHERE user_id = %s AND tool_name = %s
+                    SET implicit_preference = MIN(1.0, implicit_preference + 0.05),
+                        updated_at = datetime('now')
+                    WHERE user_id = ? AND tool_name = ?
                     """,
                     (user_id, tool_name)
                 )
@@ -110,8 +110,8 @@ class ToolPerformanceService:
             db.execute(
                 """
                 UPDATE tool_performance_metrics
-                SET user_correction = TRUE
-                WHERE exchange_id = %s AND tool_name = %s
+                SET user_correction = 1
+                WHERE exchange_id = ? AND tool_name = ?
                 """,
                 (exchange_id, tool_name)
             )
@@ -119,9 +119,9 @@ class ToolPerformanceService:
             db.execute(
                 """
                 UPDATE user_tool_preferences
-                SET implicit_preference = GREATEST(-1.0, implicit_preference - 0.10),
-                    updated_at = NOW()
-                WHERE user_id = %s AND tool_name = %s
+                SET implicit_preference = MAX(-1.0, implicit_preference - 0.10),
+                    updated_at = datetime('now')
+                WHERE user_id = ? AND tool_name = ?
                 """,
                 (user_id, tool_name)
             )
@@ -139,15 +139,15 @@ class ToolPerformanceService:
                 """
                 SELECT
                     COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE invocation_success) AS successes,
+                    SUM(CASE WHEN invocation_success THEN 1 ELSE 0 END) AS successes,
                     AVG(latency_ms) AS avg_latency,
                     SUM(cost_estimate) AS total_cost,
                     AVG(cost_estimate) AS avg_cost
                 FROM tool_performance_metrics
-                WHERE tool_name = %s
-                AND created_at > NOW() - INTERVAL '%s days'
+                WHERE tool_name = ?
+                AND created_at > datetime('now', ? || ' days')
                 """,
-                (tool_name, days)
+                (tool_name, -days)
             )
             if not rows or not rows[0]['total']:
                 return {'success_rate': 0.5, 'avg_latency': 0, 'avg_cost': 0, 'total': 0}
@@ -176,16 +176,16 @@ class ToolPerformanceService:
                 SELECT
                     tool_name,
                     COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE invocation_success) AS successes,
+                    SUM(CASE WHEN invocation_success THEN 1 ELSE 0 END) AS successes,
                     AVG(latency_ms) AS avg_latency,
                     AVG(cost_estimate) AS avg_cost,
                     MAX(created_at) AS last_used_at
                 FROM tool_performance_metrics
-                WHERE created_at > NOW() - INTERVAL '%s days'
+                WHERE created_at > datetime('now', ? || ' days')
                 GROUP BY tool_name
                 ORDER BY total DESC
                 """,
-                (days,)
+                (-days,)
             )
             results = []
             for row in (rows or []):
@@ -196,7 +196,7 @@ class ToolPerformanceService:
                     'avg_latency': round(float(row['avg_latency'] or 0), 1),
                     'avg_cost': round(float(row['avg_cost'] or 0), 4),
                     'total': row['total'],
-                    'last_used_at': row['last_used_at'].isoformat() if row.get('last_used_at') else None,
+                    'last_used_at': row['last_used_at'] if row.get('last_used_at') else None,
                 })
             return results
         except Exception as e:
@@ -247,10 +247,10 @@ class ToolPerformanceService:
             db.execute(
                 """
                 UPDATE user_tool_preferences
-                SET implicit_preference = implicit_preference * %s,
-                    updated_at = NOW()
-                WHERE user_id = %s
-                AND last_used_at < NOW() - INTERVAL '30 days'
+                SET implicit_preference = implicit_preference * ?,
+                    updated_at = datetime('now')
+                WHERE user_id = ?
+                AND last_used_at < datetime('now', '-30 days')
                 AND ABS(implicit_preference) > 0.01
                 """,
                 (PREFERENCE_DECAY_FACTOR, user_id)
@@ -266,7 +266,7 @@ class ToolPerformanceService:
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT explicit_preference, implicit_preference FROM user_tool_preferences WHERE user_id = %s AND tool_name = %s",
+                "SELECT explicit_preference, implicit_preference FROM user_tool_preferences WHERE user_id = ? AND tool_name = ?",
                 (user_id, tool_name)
             )
             if rows:
@@ -283,7 +283,7 @@ class ToolPerformanceService:
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT reliability_score FROM tool_capability_profiles WHERE tool_name = %s",
+                "SELECT reliability_score FROM tool_capability_profiles WHERE tool_name = ?",
                 (tool_name,)
             )
             if rows:

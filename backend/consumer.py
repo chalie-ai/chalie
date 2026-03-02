@@ -6,75 +6,70 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-import os
-import multiprocessing
-import logging
+"""
+Consumer — Master supervisor for Chalie's single-process architecture.
 
+All workers run as daemon threads in one Python process.
+PromptQueue handles job dispatch via threads (no RQ dependency).
+SQLite replaces PostgreSQL, MemoryStore replaces Redis.
+"""
+
+import os
+import logging
 import time
 import signal
-import logging
+import sys
+import threading
 from typing import Dict, List, Tuple
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
+
+
+def _thread_excepthook(args):
+    """Global exception handler for threads — threads die silently by default."""
+    logging.error(
+        f"[ThreadException] Uncaught exception in thread '{args.thread.name}': "
+        f"{args.exc_type.__name__}: {args.exc_value}",
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback)
+    )
+
+
+# Install global thread exception handler
+threading.excepthook = _thread_excepthook
 
 
 class WorkerManager:
-    """Master supervisor for managing worker processes"""
+    """Master supervisor for managing worker threads."""
 
     def __init__(self):
-        # We delay manager initialization until run() to ensure
-        # the 'spawn' start method is fully active.
-        self.shared_state = None
-        self.processes: Dict[str, multiprocessing.Process] = {}
-        self.worker_definitions: List[Tuple[str, str, 'PromptQueue']] = []
-        self.service_definitions: List[Tuple[str, 'worker_func']] = []
+        self.shared_state: Dict = {}
+        self._state_lock = threading.Lock()
+        self.threads: Dict[str, threading.Thread] = {}
+        self.service_definitions: List[Tuple[str, callable]] = []
         self.running = True
-        self.health_monitor = None  # Initialized in run() after imports
-        self._tool_scanner = None           # ToolScannerThread, set before run()
-        self._tool_scanner_registry = None  # ToolRegistryService reference
-
-    def register_worker(self, worker_id: str, worker_type: str, queue: 'PromptQueue'):
-        self.worker_definitions.append((worker_id, worker_type, queue))
-        logging.info(f"[Manager] Registered worker definition: {worker_id} ({worker_type})")
+        self._tool_scanner = None
+        self._tool_scanner_registry = None
 
     def register_service(self, worker_id: str, worker_func):
         self.service_definitions.append((worker_id, worker_func))
         logging.info(f"[Manager] Registered service definition: {worker_id}")
 
-    def spawn_worker(self, worker_id: str, worker_type: str, queue: 'PromptQueue'):
-        if worker_id in self.processes and self.processes[worker_id].is_alive():
-            return
-
-        # Ensure manager is alive before spawning
-        if self.shared_state is None:
-            raise RuntimeError("Manager not initialized. Call run() first.")
-
-        # Pass the shared_state (the dict created by the Manager) to the worker
-        process = queue.consume_multiprocess(worker_id, worker_type, self.shared_state)
-        self.processes[worker_id] = process
-        if self.health_monitor:
-            self.health_monitor.record_spawn(worker_id)
-        logging.info(f"[Manager] Spawned worker: {worker_id} (PID: {process.pid})")
-
     def spawn_service(self, worker_id: str, worker_func):
-        if worker_id in self.processes and self.processes[worker_id].is_alive():
+        if worker_id in self.threads and self.threads[worker_id].is_alive():
             return
 
-        # Ensure manager is alive before spawning
-        if self.shared_state is None:
-            raise RuntimeError("Manager not initialized. Call run() first.")
+        def _run():
+            try:
+                worker_func(self.shared_state)
+            except Exception:
+                logging.exception(f"[Manager] Service {worker_id} crashed")
 
-        # Create process directly for service workers
-        process = multiprocessing.Process(target=worker_func, args=(self.shared_state,))
-        process.start()
-        self.processes[worker_id] = process
-        logging.info(f"[Manager] Spawned service: {worker_id} (PID: {process.pid})")
+        t = threading.Thread(target=_run, daemon=True, name=worker_id)
+        t.start()
+        self.threads[worker_id] = t
+        logging.info(f"[Manager] Spawned service: {worker_id} (thread)")
 
-    def spawn_all_workers(self):
-        logging.info("[Manager] Spawning all workers...")
-        for worker_id, worker_type, queue in self.worker_definitions:
-            self.spawn_worker(worker_id, worker_type, queue)
-
+    def spawn_all_services(self):
         logging.info("[Manager] Spawning all services...")
         for worker_id, worker_func in self.service_definitions:
             try:
@@ -82,108 +77,55 @@ class WorkerManager:
             except Exception as e:
                 logging.error(f"[Manager] Failed to spawn service '{worker_id}': {e}")
 
-    def check_worker_health(self):
-        # Check RQ workers with comprehensive health monitoring
-        for worker_id, worker_type, queue in self.worker_definitions:
-            try:
-                process = self.processes.get(worker_id)
-
-                # Get queue name from queue object
-                queue_name = queue.queue_name if hasattr(queue, 'queue_name') else 'unknown-queue'
-
-                # Comprehensive health check (process + Redis heartbeat + job activity)
-                if self.health_monitor:
-                    is_healthy, reason = self.health_monitor.comprehensive_health_check(
-                        worker_id, process, queue_name
-                    )
-                else:
-                    # Fallback to simple check if health monitor not initialized
-                    is_healthy = process and process.is_alive()
-                    reason = "ok" if is_healthy else "process_dead"
-
-                if not is_healthy:
-                    logging.warning(f"[Manager] Worker {worker_id} is unhealthy (reason: {reason}). Restarting...")
-                    if self.health_monitor:
-                        self.health_monitor.record_restart(worker_id)
-                    self.spawn_worker(worker_id, worker_type, queue)
-            except Exception as e:
-                logging.error(f"[Manager] Health check failed for worker {worker_id}: {e}")
-
-        # Check service workers (simple process check only)
+    def check_health(self):
+        """Check service thread health and restart dead threads."""
         for worker_id, worker_func in self.service_definitions:
             try:
-                process = self.processes.get(worker_id)
-
-                # Simple health check: if process is alive, it's healthy
-                if not process or not process.is_alive():
+                t = self.threads.get(worker_id)
+                if not t or not t.is_alive():
                     logging.warning(f"[Manager] Service {worker_id} is dead. Restarting...")
-                    if self.health_monitor:
-                        self.health_monitor.record_restart(worker_id)
                     self.spawn_service(worker_id, worker_func)
             except Exception as e:
                 logging.error(f"[Manager] Health check failed for service {worker_id}: {e}")
 
-    def log_health_stats(self):
-        """Log health statistics for all workers (called periodically)."""
-        if not self.health_monitor:
-            return
-
-        stats = self.health_monitor.get_all_stats()
-        restart_counts = stats['restart_counts']
-
-        if restart_counts:
-            restart_summary = ", ".join([f"{wid}: {count}" for wid, count in restart_counts.items()])
-            logging.info(f"[HealthMonitor] Worker restarts: {restart_summary}")
-
     def shutdown_all(self):
         logging.info("\n[Manager] Initiating graceful shutdown...")
         self.running = False
-
-        # Log final health stats
-        self.log_health_stats()
-
-        for worker_id, process in self.processes.items():
-            if process.is_alive():
-                process.terminate()
-        logging.info("[Manager] All workers and services stopped")
+        # Daemon threads will be killed when main thread exits
+        logging.info("[Manager] All services stopped")
 
     def run(self):
-        # 2. INITIALIZE MANAGER HERE (inside the protected run)
-        # Use context manager to ensure proper cleanup
-        with multiprocessing.Manager() as manager:
-            self.shared_state = manager.dict()
+        signal.signal(signal.SIGINT, lambda sig, frame: self.shutdown_all())
+        signal.signal(signal.SIGTERM, lambda sig, frame: self.shutdown_all())
 
-            signal.signal(signal.SIGINT, lambda sig, frame: self.shutdown_all())
-            signal.signal(signal.SIGTERM, lambda sig, frame: self.shutdown_all())
+        logging.info("[Manager] Starting Worker Manager (single-process, threaded)")
+        self.spawn_all_services()
 
-            logging.info("[Manager] Starting Worker Manager")
-            self.spawn_all_workers()
+        # Start hot-reload tool scanner (daemon thread, in-process)
+        if self._tool_scanner is not None:
+            self._tool_scanner.start(self._tool_scanner_registry)
 
-            # Start hot-reload tool scanner (daemon thread, in-process)
-            if self._tool_scanner is not None:
-                self._tool_scanner.start(self._tool_scanner_registry)
+        try:
+            health_check_counter = 0
+            while self.running:
+                time.sleep(5)
+                self.check_health()
 
-            try:
-                health_check_counter = 0
-                while self.running:
-                    time.sleep(5)
-                    self.check_worker_health()
+                health_check_counter += 1
+                if health_check_counter >= 60:
+                    alive = sum(1 for t in self.threads.values() if t.is_alive())
+                    logging.info(f"[Manager] Health: {alive}/{len(self.threads)} threads alive")
+                    health_check_counter = 0
 
-                    # Log health stats every 5 minutes (60 health checks)
-                    health_check_counter += 1
-                    if health_check_counter >= 60:
-                        self.log_health_stats()
-                        health_check_counter = 0
-
-            except KeyboardInterrupt:
-                pass
-            finally:
-                self.shutdown_all()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.shutdown_all()
 
 
 def _migrate_tools_disabled(tools_dir, db):
     """One-time startup migration: move tools from legacy tools_disabled/ back to tools/
-    and write _enabled=false to DB for each. Safe to call on every startup (no-op if gone)."""
+    and write _enabled=false to DB for each."""
     import json as _json
     import shutil as _shutil
     from pathlib import Path as _Path
@@ -205,7 +147,7 @@ def _migrate_tools_disabled(tools_dir, db):
         except Exception:
             tool_name = entry.name
         config_svc._set_enabled_flag(tool_name, enabled=False)
-        logging.info(f"[Startup] Migrated disabled tool '{tool_name}' → tools/ with _enabled=false")
+        logging.info(f"[Startup] Migrated disabled tool '{tool_name}' -> tools/ with _enabled=false")
     try:
         disabled_dir.rmdir()
     except OSError:
@@ -214,10 +156,8 @@ def _migrate_tools_disabled(tools_dir, db):
 
 class ToolScannerThread:
     """
-    Daemon thread that scans backend/tools/ every TOOL_SCANNER_INTERVAL_SECONDS (default 30)
-    for new tool directories and registers them without a restart.
-
-    Runs in the main process to allow direct calls to manager.spawn_service().
+    Daemon thread that scans backend/tools/ for new tool directories
+    and registers them without a restart.
     """
 
     DEFAULT_INTERVAL = 30
@@ -231,13 +171,12 @@ class ToolScannerThread:
     def start(self, registry):
         self._registry = registry
         registry.set_on_tool_registered(self._on_tool_registered)
-        import threading
         t = threading.Thread(target=self._scan_loop, name="tool-scanner", daemon=True)
         t.start()
         logging.info(f"[ToolScanner] Started (interval={self._interval}s)")
 
     def _on_tool_registered(self, tool_name: str):
-        """Callback fired by _build_worker after a successful build. Spawns cron worker if needed."""
+        """Callback fired after a successful build. Spawns cron worker if needed."""
         tool = self._registry.tools.get(tool_name)
         if not tool:
             return
@@ -246,7 +185,7 @@ class ToolScannerThread:
             return
 
         worker_id = f"tool-{tool_name}-service"
-        existing = self._manager.processes.get(worker_id)
+        existing = self._manager.threads.get(worker_id)
         if existing and existing.is_alive():
             return
 
@@ -265,14 +204,13 @@ class ToolScannerThread:
         logging.info(f"[ToolScanner] Spawned cron worker: {worker_id}")
 
     def _scan_loop(self):
-        import time as _time
-        _time.sleep(self._interval)  # Initial delay — startup build already ran
+        time.sleep(self._interval)
         while True:
             try:
                 self._scan_once()
             except Exception as e:
                 logging.error(f"[ToolScanner] Scan error: {e}")
-            _time.sleep(self._interval)
+            time.sleep(self._interval)
 
     def _scan_once(self):
         import json as _json
@@ -313,19 +251,9 @@ class ToolScannerThread:
 
 
 if __name__ == "__main__":
-    # 3. FORCE SPAWN METHOD
-    # This must be the very first thing called inside the name-main guard.
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-        logging.info("[System] Multiprocessing start method set to 'spawn'")
-    except RuntimeError:
-        pass
-
     logging.basicConfig(level=logging.INFO)
 
-    # 4. DEFERRED IMPORTS
-    # We import these HERE to ensure no library (like Transformers) initializes
-    # global state before the 'spawn' method is set.
+    # Deferred imports
     from services import PromptQueue, DatabaseService, SchemaService
     from workers import digest_worker, memory_chunker_worker, episodic_memory_worker, semantic_consolidation_worker, rest_api_worker, tool_worker
     from services.config_service import ConfigService
@@ -336,7 +264,6 @@ if __name__ == "__main__":
     from services.cognitive_drift_engine import cognitive_drift_worker
     from services.routing_stability_regulator_service import routing_stability_regulator_worker
     from services.routing_reflection_service import routing_reflection_worker
-    from services.worker_health_monitor import WorkerHealthMonitor
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.thread_expiry_service import thread_expiry_worker
     from services.scheduler_service import scheduler_worker
@@ -345,88 +272,47 @@ if __name__ == "__main__":
     from workers.persistent_task_worker import persistent_task_worker, run_immediate_task
     from workers.document_worker import process_document_job, document_purge_worker
 
-    # 5. RESOLVE HOSTNAMES (BEFORE FORKING)
-    # This prevents DNS lookup segfaults in child processes on macOS
-    ConfigService.resolve_hostnames()
-
-    # 5.1. ENSURE ENCRYPTION KEY (REQUIRED FOR SENSITIVE DATABASE COLUMNS)
-    # Auto-generates if not present, stores in .key with restrictive permissions (0600)
+    # Ensure encryption key
     from services.encryption_key_service import get_encryption_key
     get_encryption_key()
 
-    # 5.4. PRELOAD EMBEDDING MODEL AND SERVICE SINGLETON
-    # Load embedding model and initialize singleton before forking
-    # This prevents HuggingFace requests in child processes
+    # Preload embedding model singleton
     try:
-        logging.info("[System] Preloading embedding model and service singleton...")
+        logging.info("[System] Preloading embedding model...")
         from services.embedding_service import get_embedding_service
-        get_embedding_service()  # Lazy-loads model and creates singleton
-        logging.info("[System] ✓ Embedding model and service singleton ready")
+        get_embedding_service()
+        logging.info("[System] Embedding model ready")
     except Exception as e:
         logging.warning(f"[System] Embedding model preload failed: {e}")
-        logging.warning("[System] Continuing without preload (will load on first embedding request)")
 
-    # 5.5. INITIALIZE DATABASE
-    # Wait for postgres to be ready, then create database and schema if needed.
-    # This is FATAL — the app cannot function without a database.
-    import time
-    from services.database_service import get_merged_db_config
+    # Initialize SQLite database
+    from services.database_service import get_shared_db_service, get_db_path
+    from services.config_service import ConfigService
 
-    db_config = get_merged_db_config()
     episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-
-    # Create database service for admin connection
-    admin_config = db_config.copy()
-    admin_db = admin_config.pop('database')
-    admin_config['database'] = 'postgres'
-
-    # Wait for postgres to accept connections (up to 30s)
-    max_retries = 15
-    for attempt in range(1, max_retries + 1):
-        try:
-            admin_database_service = DatabaseService(admin_config)
-            with admin_database_service.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                cursor.close()
-            logging.info(f"[DB] Postgres is ready (attempt {attempt}/{max_retries})")
-            break
-        except Exception as e:
-            if attempt == max_retries:
-                logging.error(f"[DB] Postgres not reachable after {max_retries} attempts: {e}")
-                raise SystemExit(1)
-            logging.warning(f"[DB] Waiting for postgres (attempt {attempt}/{max_retries}): {e}")
-            time.sleep(2)
-
     embedding_dimensions = episodic_config.get('embedding_dimensions', 768)
-    schema_service = SchemaService(admin_database_service, embedding_dimensions)
 
-    # Check if database exists
-    if not schema_service.database_exists(admin_db):
-        logging.info(f"Database '{admin_db}' does not exist, creating...")
-        schema_service.create_database(admin_db)
-        logging.info(f"✓ Database '{admin_db}' created")
-    else:
-        logging.info(f"✓ Database '{admin_db}' exists")
-
-    # Connect to the actual database
-    database_service = DatabaseService(db_config)
+    database_service = get_shared_db_service()
     schema_service = SchemaService(database_service, embedding_dimensions)
 
-    # Initialize schema (idempotent)
-    current_version = schema_service.schema_version()
-    if current_version == 0:
-        logging.info("Initializing episodic memory schema...")
-        schema_service.initialize_schema()
-        logging.info("✓ Schema initialized")
+    if not schema_service.database_exists():
+        logging.info("Initializing database...")
+        schema_service.create_database()
+        logging.info("Database initialized")
     else:
-        logging.info(f"✓ Schema up to date (version {current_version})")
+        current_version = schema_service.schema_version()
+        if current_version == 0:
+            logging.info("Initializing schema...")
+            schema_service.initialize_schema()
+            logging.info("Schema initialized")
+        else:
+            logging.info(f"Schema up to date (version {current_version})")
 
     # Run pending migrations
     logging.info("Checking for pending database migrations...")
     database_service.run_pending_migrations()
 
-    # Initialize API key in settings table (auto-generate if not present)
+    # Initialize API key
     try:
         from services.settings_service import SettingsService
         settings_service = SettingsService(database_service)
@@ -435,237 +321,77 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"Settings initialization failed: {e}")
 
-    database_service.close_pool()
-    admin_database_service.close_pool()
-
-    # Initialize and run
+    # Initialize worker manager
     manager = WorkerManager()
 
-    # Initialize enhanced health monitor
-    manager.health_monitor = WorkerHealthMonitor(
-        heartbeat_timeout_seconds=900,  # 15min — must far exceed RQ SimpleWorker's BLPOP timeout (~405s)
-        activity_timeout_seconds=600    # 10 minutes for hung worker detection
-    )
-    logging.info("[Manager] Enhanced health monitoring initialized")
+    # Register service workers (all run as daemon threads)
+    manager.register_service("idle-consolidation-service", idle_consolidation_process)
+    manager.register_service("decay-engine-service", decay_engine_worker)
+    manager.register_service("growth-pattern-service", growth_pattern_worker)
+    manager.register_service("topic-stability-regulator-service", topic_stability_regulator_worker)
+    manager.register_service("cognitive-drift-engine", cognitive_drift_worker)
+    manager.register_service("routing-stability-regulator-service", routing_stability_regulator_worker)
+    manager.register_service("routing-reflection-service", routing_reflection_worker)
+    manager.register_service("rest-api-worker-1", rest_api_worker)
+    manager.register_service("experience-assimilation-service", experience_assimilation_worker)
+    manager.register_service("thread-expiry-service", thread_expiry_worker)
+    manager.register_service("scheduler-service", scheduler_worker)
+    manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
+    manager.register_service("curiosity-pursuit-service", curiosity_pursuit_worker)
+    manager.register_service("persistent-task-worker", persistent_task_worker)
+    manager.register_service("document-purge-service", document_purge_worker)
 
-    digest_queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-    manager.register_worker(
-        worker_id="digest-worker-1",
-        worker_type="idle-busy",
-        queue=digest_queue
-    )
-
-    # Register memory chunker worker
-    memory_queue = PromptQueue(queue_name="memory-chunker-queue", worker_func=memory_chunker_worker)
-    manager.register_worker(
-        worker_id="memory-chunker-worker-1",
-        worker_type="idle-busy",
-        queue=memory_queue
-    )
-
-    # Register episodic memory worker
-    episodic_queue = PromptQueue(queue_name="episodic-memory-queue", worker_func=episodic_memory_worker)
-    manager.register_worker(
-        worker_id="episodic-memory-worker-1",
-        worker_type="idle-busy",
-        queue=episodic_queue
-    )
-
-    # Register semantic consolidation worker
-    semantic_queue = PromptQueue(queue_name="semantic_consolidation_queue", worker_func=semantic_consolidation_worker)
-    manager.register_worker(
-        worker_id="semantic-consolidation-worker-1",
-        worker_type="idle-busy",
-        queue=semantic_queue
-    )
-
-    # Register tool worker (background ACT loop processing)
-    tool_queue = PromptQueue(queue_name="tool-queue", worker_func=tool_worker)
-    manager.register_worker(
-        worker_id="tool-worker-1",
-        worker_type="idle-busy",
-        queue=tool_queue
-    )
-
-    # Register persistent task immediate queue (immediate full execution)
-    pt_immediate_queue = PromptQueue(queue_name="persistent-task-immediate", worker_func=run_immediate_task)
-    manager.register_worker(
-        worker_id="persistent-task-immediate-1",
-        worker_type="idle-busy",
-        queue=pt_immediate_queue
-    )
-
-    # Register document processing worker (RQ queue for upload → extract → chunk → embed)
-    doc_queue = PromptQueue(queue_name="document-queue", worker_func=process_document_job)
-    manager.register_worker(
-        worker_id="document-worker-1",
-        worker_type="idle-busy",
-        queue=doc_queue
-    )
-
-    # Register idle consolidation service (STORY-12)
-    manager.register_service(
-        worker_id="idle-consolidation-service",
-        worker_func=idle_consolidation_process
-    )
-
-    # Register decay engine service
-    manager.register_service(
-        worker_id="decay-engine-service",
-        worker_func=decay_engine_worker
-    )
-
-    # Register growth pattern awareness service (30-min cycle, longitudinal style shift detection)
-    manager.register_service(
-        worker_id="growth-pattern-service",
-        worker_func=growth_pattern_worker
-    )
-
-    # Register homeostatic stability regulator service (runs every 24h)
-    manager.register_service(
-        worker_id="topic-stability-regulator-service",
-        worker_func=topic_stability_regulator_worker
-    )
-
-    # Register cognitive drift engine (spontaneous thought during idle)
-    manager.register_service(
-        worker_id="cognitive-drift-engine",
-        worker_func=cognitive_drift_worker
-    )
-
-    # Register routing stability regulator (24h cycle, single authority for weight mutation)
-    manager.register_service(
-        worker_id="routing-stability-regulator-service",
-        worker_func=routing_stability_regulator_worker
-    )
-
-    # Register routing reflection service (idle-time peer review of routing decisions)
-    manager.register_service(
-        worker_id="routing-reflection-service",
-        worker_func=routing_reflection_worker
-    )
-
-    # Register REST API service
-    manager.register_service(
-        worker_id="rest-api-worker-1",
-        worker_func=rest_api_worker
-    )
-
-    # Register experience assimilation service (tool output → episodic memory)
-    manager.register_service(
-        worker_id="experience-assimilation-service",
-        worker_func=experience_assimilation_worker
-    )
-
-    # Register thread expiry service (5-minute cycle, expires stale threads)
-    manager.register_service(
-        worker_id="thread-expiry-service",
-        worker_func=thread_expiry_worker
-    )
-
-    # Register scheduler service (60s poll cycle, fires due reminders/tasks)
-    manager.register_service(
-        worker_id="scheduler-service",
-        worker_func=scheduler_worker
-    )
-
-    # Register autobiography synthesis service (6h cycle, synthesizes user narrative)
-    manager.register_service(
-        worker_id="autobiography-synthesis-service",
-        worker_func=autobiography_synthesis_worker
-    )
-
-    # Register curiosity pursuit service (6h cycle, explores curiosity threads)
-    manager.register_service(
-        worker_id="curiosity-pursuit-service",
-        worker_func=curiosity_pursuit_worker
-    )
-
-    # Register persistent task worker (30min cycle, multi-session ACT tasks)
-    manager.register_service(
-        worker_id="persistent-task-worker",
-        worker_func=persistent_task_worker
-    )
-
-    # Register document purge service (6h cycle, hard-deletes expired soft-deleted docs)
-    manager.register_service(
-        worker_id="document-purge-service",
-        worker_func=document_purge_worker
-    )
-
-    # Register moment enrichment service (5min poll, enriches pinned moments)
+    # Moment enrichment service
     from services.moment_enrichment_service import moment_enrichment_worker
-    manager.register_service(
-        worker_id="moment-enrichment-service",
-        worker_func=moment_enrichment_worker
-    )
+    manager.register_service("moment-enrichment-service", moment_enrichment_worker)
 
-    # Register background LLM worker (single process — serializes all background provider calls)
+    # Background LLM worker
     from workers.background_llm_worker import background_llm_worker
-    manager.register_service(
-        worker_id="background-llm-worker",
-        worker_func=background_llm_worker
-    )
+    manager.register_service("background-llm-worker", background_llm_worker)
 
-    # Register triage calibration service (24h cycle, computes correctness scores)
+    # Triage calibration service
     try:
         from services.triage_calibration_service import triage_calibration_worker
-        manager.register_service(
-            worker_id="triage-calibration-service",
-            worker_func=triage_calibration_worker
-        )
+        manager.register_service("triage-calibration-service", triage_calibration_worker)
     except Exception as e:
         logging.warning(f"[Consumer] Triage calibration service registration failed: {e}")
 
-    # Register profile enrichment service (6h cycle, enriches tool profiles)
+    # Profile enrichment service
     try:
         from services.profile_enrichment_service import profile_enrichment_worker
-        manager.register_service(
-            worker_id="profile-enrichment-service",
-            worker_func=profile_enrichment_worker
-        )
+        manager.register_service("profile-enrichment-service", profile_enrichment_worker)
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
 
-    # Register temporal pattern service (24h cycle, mines behavioral patterns from interaction history)
+    # Temporal pattern service
     try:
         from services.temporal_pattern_service import temporal_pattern_worker
-        manager.register_service(
-            worker_id="temporal-pattern-service",
-            worker_func=temporal_pattern_worker
-        )
+        manager.register_service("temporal-pattern-service", temporal_pattern_worker)
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
-    # Register tool update checker (6h cycle, checks for new tags on installed embodiments)
+    # Tool update checker
     try:
         from services.tool_update_service import tool_update_worker
-        manager.register_service(
-            worker_id="tool-update-checker",
-            worker_func=tool_update_worker
-        )
+        manager.register_service("tool-update-checker", tool_update_worker)
     except Exception as e:
         logging.warning(f"[Consumer] Tool update checker registration failed: {e}")
 
-    # One-time migration: move tools_disabled/ → tools/ with _enabled=false in DB
+    # One-time migration: tools_disabled → tools
     try:
         from pathlib import Path as _MigPath
-        from services.database_service import get_shared_db_service as _get_db
         _tools_dir = _MigPath(__file__).parent / "tools"
-        _migrate_tools_disabled(_tools_dir, _get_db())
+        _migrate_tools_disabled(_tools_dir, get_shared_db_service())
     except Exception as _mig_err:
         logging.warning(f"[Consumer] tools_disabled migration failed: {_mig_err}")
 
-    # Register cron-triggered tools as background services
+    # Register cron-triggered tools
     try:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()
         for tool in registry.get_cron_tools():
             worker_func = registry.create_cron_worker(tool)
-            manager.register_service(
-                worker_id=f"tool-{tool['name']}-service",
-                worker_func=worker_func
-            )
+            manager.register_service(f"tool-{tool['name']}-service", worker_func)
         tool_count = len(registry.get_tool_names())
         if tool_count > 0:
             logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
@@ -674,17 +400,15 @@ if __name__ == "__main__":
 
     # Wire up hot-reload tool scanner
     try:
-        from pathlib import Path
         scanner = ToolScannerThread(manager=manager, tools_dir=registry.tools_dir)
         manager._tool_scanner = scanner
         manager._tool_scanner_registry = registry
     except Exception as e:
         logging.warning(f"[Consumer] Tool scanner setup failed: {e}")
 
-    # Bootstrap tool capability profiles on startup (background thread — does not block REST API start)
+    # Bootstrap tool profiles (background thread)
     try:
         from services.tool_profile_service import ToolProfileService
-        import threading
         def _run_bootstrap():
             try:
                 ToolProfileService().bootstrap_all()

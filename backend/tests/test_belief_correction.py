@@ -31,11 +31,13 @@ class TestCorrectTrait:
             result = svc.correct_trait('favourite_food', 'ramen', user_id='primary')
 
         assert result is True
-        # Should have called UPDATE
-        update_call = cursor.execute.call_args_list[-1]
-        sql = update_call[0][0]
-        assert 'UPDATE user_traits' in sql
-        assert 'explicit_correction' in sql
+        # Should have called UPDATE (may not be the last call due to vec table ops)
+        update_sqls = [
+            c[0][0] for c in cursor.execute.call_args_list
+            if 'UPDATE user_traits' in c[0][0]
+        ]
+        assert len(update_sqls) >= 1
+        assert 'explicit_correction' in update_sqls[0]
 
     def test_correct_new_trait_inserts_row(self):
         """correct_trait() inserts when trait does not exist."""
@@ -45,10 +47,12 @@ class TestCorrectTrait:
             result = svc.correct_trait('name', 'Dylan', user_id='primary')
 
         assert result is True
-        insert_call = cursor.execute.call_args_list[-1]
-        sql = insert_call[0][0]
-        assert 'INSERT INTO user_traits' in sql
-        assert 'explicit_correction' in sql
+        insert_sqls = [
+            c[0][0] for c in cursor.execute.call_args_list
+            if 'INSERT INTO user_traits' in c[0][0]
+        ]
+        assert len(insert_sqls) >= 1
+        assert 'explicit_correction' in insert_sqls[0]
 
     def test_correct_trait_sets_confidence_095(self):
         """correct_trait() always sets confidence to 0.95."""
@@ -58,8 +62,12 @@ class TestCorrectTrait:
             svc.correct_trait('name', 'Dylan', user_id='primary')
 
         # Confidence 0.95 must appear in the UPDATE args
-        update_call = cursor.execute.call_args_list[-1]
-        args = update_call[0][1]
+        update_calls = [
+            c for c in cursor.execute.call_args_list
+            if 'UPDATE user_traits' in c[0][0]
+        ]
+        assert len(update_calls) >= 1
+        args = update_calls[0][0][1]
         assert 0.95 in args
 
     def test_correct_trait_preserves_existing_category_when_not_specified(self):
@@ -69,8 +77,12 @@ class TestCorrectTrait:
         with patch.object(svc, '_generate_embedding_raw', return_value=None):
             svc.correct_trait('favourite_food', 'ramen')
 
-        update_call = cursor.execute.call_args_list[-1]
-        args = update_call[0][1]
+        update_calls = [
+            c for c in cursor.execute.call_args_list
+            if 'UPDATE user_traits' in c[0][0]
+        ]
+        assert len(update_calls) >= 1
+        args = update_calls[0][0][1]
         # 'preference' (existing category) should be in the args
         assert 'preference' in args
 
@@ -93,8 +105,11 @@ class TestCorrectTrait:
             result = svc.correct_trait('name', 'Dylan', user_id='primary')
 
         assert result is True
-        update_call = cursor.execute.call_args_list[-1]
-        assert 'UPDATE user_traits' in update_call[0][0]
+        update_sqls = [
+            c[0][0] for c in cursor.execute.call_args_list
+            if 'UPDATE user_traits' in c[0][0]
+        ]
+        assert len(update_sqls) >= 1
 
 
 # ── UserTraitService.delete_trait ─────────────────────────────────────────────

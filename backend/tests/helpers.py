@@ -4,7 +4,7 @@ Test data factories — produce realistic row tuples matching actual DB column o
 Usage:
     from tests.helpers import make_task_row, make_scheduled_item, make_trait_row
 
-All factories return tuples (matching psycopg2 cursor.fetchone/fetchall) unless
+All factories return tuples (matching cursor.fetchone/fetchall) unless
 noted otherwise.  Override any field via keyword argument.
 """
 

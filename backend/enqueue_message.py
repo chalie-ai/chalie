@@ -1,28 +1,24 @@
 #!/usr/bin/env python3
 """Simple script to enqueue messages to the prompt queue."""
 import sys
-from rq import Queue
-from redis import Redis
+import uuid
+
 
 def enqueue_message(message, metadata=None):
-    """Enqueue a message to the prompt-queue using RQ."""
-    # Connect to Redis
-    redis_conn = Redis(host='grck.lan', port=6379, decode_responses=False)
+    """Enqueue a message via the digest worker (thread-based)."""
+    from services.prompt_queue import PromptQueue
+    from workers.digest_worker import digest_worker
 
-    # Create RQ queue
-    queue = Queue(name='prompt-queue', connection=redis_conn)
+    metadata = metadata or {}
+    if 'uuid' not in metadata:
+        metadata['uuid'] = str(uuid.uuid4())
 
-    # Enqueue the job - RQ expects the function path as a string
-    # The worker will call: digest_worker(message, metadata=metadata)
-    job = queue.enqueue(
-        'workers.digest_worker.digest_worker',
-        message,
-        metadata=metadata or {}
-    )
+    queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+    queue.enqueue(message, metadata=metadata)
 
-    print(f"✓ Enqueued job {job.id} to prompt-queue")
+    print(f"Enqueued message to prompt-queue")
     print(f"  Message: {message[:50]}...")
-    return job.id
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -30,6 +26,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     message = sys.argv[1]
-    metadata = {'source': 'cli_audit', 'uuid': 'claude-test'}
+    metadata = {'source': 'cli_audit', 'uuid': str(uuid.uuid4())}
 
     enqueue_message(message, metadata)

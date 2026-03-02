@@ -54,6 +54,8 @@ class _CronToolWorker:
         self.prompt_template = tool_config["prompt"]
         self.image = tool_config["image"]
         self.sandbox = tool_config.get("sandbox", {})
+        self.trust = tool_config.get("trust", "sandboxed")
+        self.runner_path = tool_config.get("runner_path")
         manifest = tool_config.get("manifest", {})
         self._auth = manifest.get("auth", {})
         output_config = manifest.get("output", {})
@@ -102,7 +104,6 @@ class _CronToolWorker:
                     except Exception as e:
                         _log.warning(f"[TOOL CRON] OAuth refresh failed for '{self.tool_name}': {e}")
 
-                from services.tool_container_service import ToolContainerService
                 raw_telemetry = {}
                 try:
                     from services.client_context_service import ClientContextService
@@ -160,10 +161,19 @@ class _CronToolWorker:
                     dialog_turns.append({"request": request_text, "response": response})
                     return response
 
-                result = ToolContainerService().run_interactive(
-                    self.image, payload, sandbox_config=self.sandbox,
-                    timeout=self.timeout, on_tool_output=_on_tool_output,
-                )
+                # Branch: trusted → subprocess, sandboxed → Docker container
+                if self.trust == "trusted" and self.runner_path:
+                    from services.tool_subprocess_service import ToolSubprocessService
+                    result = ToolSubprocessService().run_interactive(
+                        self.runner_path, payload,
+                        timeout=self.timeout, on_tool_output=_on_tool_output,
+                    )
+                else:
+                    from services.tool_container_service import ToolContainerService
+                    result = ToolContainerService().run_interactive(
+                        self.image, payload, sandbox_config=self.sandbox,
+                        timeout=self.timeout, on_tool_output=_on_tool_output,
+                    )
 
                 # Persist returned state back to Redis (7-day TTL)
                 if isinstance(result, dict) and "_state" in result:
@@ -403,8 +413,28 @@ class ToolRegistryService:
 
         self._discover_and_load()
 
+    def _is_tool_trusted(self, tool_name: str) -> bool:
+        """Check if a tool has been granted trusted status via the embodiment library.
+
+        Trust is an internal Chalie decision stored in configs/embodiment_library.json.
+        Tool authors cannot self-declare trust — only the curated catalog can.
+        """
+        if not hasattr(self, '_trust_cache'):
+            self._trust_cache = {}
+            try:
+                catalog_path = Path(__file__).parent.parent / "configs" / "embodiment_library.json"
+                if catalog_path.exists():
+                    with open(catalog_path) as f:
+                        library = json.load(f)
+                    for entry in library:
+                        if entry.get("trust") == "trusted":
+                            self._trust_cache[entry.get("name", "")] = True
+            except Exception as e:
+                logger.warning(f"[TOOL REGISTRY] Failed to load trust from embodiment library: {e}")
+        return self._trust_cache.get(tool_name, False)
+
     def _discover_and_load(self):
-        """Scan tools/ folder for subdirectories with manifest.json + Dockerfile. Build images in parallel."""
+        """Scan tools/ folder for subdirectories with manifest.json. Build images in parallel."""
         if not self.tools_dir.exists():
             logger.info(f"[TOOL REGISTRY] Tools directory not found: {self.tools_dir}")
             return
@@ -417,14 +447,33 @@ class ToolRegistryService:
                 continue
 
             manifest_path = entry / "manifest.json"
-            dockerfile_path = entry / "Dockerfile"
 
             if not manifest_path.exists():
                 logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing manifest.json")
                 continue
-            if not dockerfile_path.exists():
-                logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing Dockerfile (required for sandboxing)")
-                continue
+
+            # Determine trust from Chalie's DB config (not the tool's manifest)
+            try:
+                with open(manifest_path) as f:
+                    _mf = json.load(f)
+                tool_name = _mf.get("name", entry.name)
+            except Exception:
+                tool_name = entry.name
+
+            trusted = self._is_tool_trusted(tool_name)
+
+            if trusted:
+                # Trusted tools need runner.py, no Dockerfile required
+                runner_path = entry / "runner.py"
+                if not runner_path.exists():
+                    logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: trusted tool missing runner.py")
+                    continue
+            else:
+                # Sandboxed tools need Dockerfile
+                dockerfile_path = entry / "Dockerfile"
+                if not dockerfile_path.exists():
+                    logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing Dockerfile (required for sandboxing)")
+                    continue
 
             candidates.append((entry, manifest_path))
 
@@ -484,43 +533,66 @@ class ToolRegistryService:
         return h.hexdigest()
 
     def _load_tool(self, tool_dir: Path, manifest_path: Path):
-        """Load, validate, and build Docker image for a single tool."""
+        """Load, validate, and optionally build Docker image for a tool.
+
+        Trusted tools (per Chalie's DB config) skip Docker and use subprocess.
+        Sandboxed tools (default) build Docker images as before.
+        """
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
 
         self._validate_manifest(manifest, tool_dir.name)
 
         tool_name = manifest["name"]
-        version = manifest.get("version", "latest")
-        image_tag = f"chalie-tool-{tool_name}:{version}"
+        trusted = self._is_tool_trusted(tool_name)
 
-        from services.tool_container_service import ToolContainerService
-        container_svc = ToolContainerService()
-
-        source_hash = self._compute_tool_hash(tool_dir)
-        existing_hash = container_svc.get_image_source_hash(image_tag) if container_svc.image_exists(image_tag) else None
-
-        if existing_hash == source_hash:
-            logger.info(f"[TOOL REGISTRY] Image {image_tag} is up to date, skipping build")
+        if trusted:
+            # Trusted tool — subprocess execution, no Docker
+            runner_path = str(tool_dir / "runner.py")
+            with self._lock:
+                self.tools[tool_name] = {
+                    "manifest": manifest,
+                    "image": None,
+                    "dir": str(tool_dir),
+                    "sandbox": {},
+                    "trust": "trusted",
+                    "runner_path": runner_path,
+                }
+            trigger_type = manifest.get("trigger", {}).get("type", "unknown")
+            logger.info(f"[TOOL REGISTRY] Loaded trusted tool '{tool_name}' (trigger={trigger_type})")
         else:
-            if existing_hash is not None:
-                logger.info(f"[TOOL REGISTRY] Tool '{tool_name}' source changed, rebuilding {image_tag}...")
+            # Sandboxed tool — Docker container execution
+            version = manifest.get("version", "latest")
+            image_tag = f"chalie-tool-{tool_name}:{version}"
+
+            from services.tool_container_service import ToolContainerService
+            container_svc = ToolContainerService()
+
+            source_hash = self._compute_tool_hash(tool_dir)
+            existing_hash = container_svc.get_image_source_hash(image_tag) if container_svc.image_exists(image_tag) else None
+
+            if existing_hash == source_hash:
+                logger.info(f"[TOOL REGISTRY] Image {image_tag} is up to date, skipping build")
             else:
-                logger.info(f"[TOOL REGISTRY] Building image {image_tag}...")
-            if not container_svc.build_image(str(tool_dir), image_tag, source_hash=source_hash):
-                raise RuntimeError(f"Failed to build image for tool '{tool_name}'")
+                if existing_hash is not None:
+                    logger.info(f"[TOOL REGISTRY] Tool '{tool_name}' source changed, rebuilding {image_tag}...")
+                else:
+                    logger.info(f"[TOOL REGISTRY] Building image {image_tag}...")
+                if not container_svc.build_image(str(tool_dir), image_tag, source_hash=source_hash):
+                    raise RuntimeError(f"Failed to build image for tool '{tool_name}'")
 
-        # Thread-safe mutation of self.tools
-        with self._lock:
-            self.tools[tool_name] = {
-                "manifest": manifest,
-                "image": image_tag,
-                "dir": str(tool_dir),
-                "sandbox": manifest.get("sandbox", {}),
-            }
+            with self._lock:
+                self.tools[tool_name] = {
+                    "manifest": manifest,
+                    "image": image_tag,
+                    "dir": str(tool_dir),
+                    "sandbox": manifest.get("sandbox", {}),
+                    "trust": "sandboxed",
+                    "runner_path": None,
+                }
 
-        trigger_type = manifest.get("trigger", {}).get("type", "unknown")
-        logger.info(f"[TOOL REGISTRY] Loaded tool '{tool_name}' (trigger={trigger_type}, image={image_tag})")
+            trigger_type = manifest.get("trigger", {}).get("type", "unknown")
+            logger.info(f"[TOOL REGISTRY] Loaded tool '{tool_name}' (trigger={trigger_type}, image={image_tag})")
 
     def _validate_manifest(self, manifest: dict, dir_name: str):
         """Validate manifest has required fields and correct structure."""
@@ -666,13 +738,21 @@ class ToolRegistryService:
         start_time = time.time()
         success = False
         try:
-            from services.tool_container_service import ToolContainerService
-            result = ToolContainerService().run(
-                tool["image"],
-                payload,
-                sandbox_config=tool.get("sandbox", {}),
-                timeout=timeout,
-            )
+            if tool.get("trust") == "trusted" and tool.get("runner_path"):
+                from services.tool_subprocess_service import ToolSubprocessService
+                result = ToolSubprocessService().run(
+                    tool["runner_path"],
+                    payload,
+                    timeout=timeout,
+                )
+            else:
+                from services.tool_container_service import ToolContainerService
+                result = ToolContainerService().run(
+                    tool["image"],
+                    payload,
+                    sandbox_config=tool.get("sandbox", {}),
+                    timeout=timeout,
+                )
             success = True
         except TimeoutError as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
@@ -1081,17 +1161,19 @@ class ToolRegistryService:
 
     def get_cron_tools(self) -> List[dict]:
         """
-        Return cron tools with schedule, prompt, image, sandbox config, and tool directory.
+        Return cron tools with schedule, prompt, image/runner, sandbox config, and tool directory.
 
         Returns:
             List of {
                 "name": str,
                 "schedule": str,
                 "prompt": str,
-                "image": str,
+                "image": str | None,
                 "sandbox": dict,
                 "dir": str,
                 "manifest": dict,
+                "trust": str,
+                "runner_path": str | None,
             }
         """
         cron_tools = []
@@ -1106,6 +1188,8 @@ class ToolRegistryService:
                     "sandbox": tool.get("sandbox", {}),
                     "dir": tool["dir"],
                     "manifest": tool["manifest"],
+                    "trust": tool.get("trust", "sandboxed"),
+                    "runner_path": tool.get("runner_path"),
                 })
         return cron_tools
 
@@ -1185,7 +1269,7 @@ class ToolRegistryService:
 
     def create_cron_worker(self, tool_config: dict):
         """
-        Create a worker callable for consumer.py service registration.
+        Create a worker callable for run.py service registration.
 
         Returns a _CronToolWorker instance (picklable with spawn start method).
         """
@@ -1258,13 +1342,21 @@ class ToolRegistryService:
         }
 
         timeout = manifest.get("constraints", {}).get("timeout_seconds", 120)
-        from services.tool_container_service import ToolContainerService
-        result = ToolContainerService().run_interactive(
-            tool["image"], payload,
-            sandbox_config=tool.get("sandbox", {}),
-            timeout=timeout,
-            on_tool_output=dialog_callback,
-        )
+        if tool.get("trust") == "trusted" and tool.get("runner_path"):
+            from services.tool_subprocess_service import ToolSubprocessService
+            result = ToolSubprocessService().run_interactive(
+                tool["runner_path"], payload,
+                timeout=timeout,
+                on_tool_output=dialog_callback,
+            )
+        else:
+            from services.tool_container_service import ToolContainerService
+            result = ToolContainerService().run_interactive(
+                tool["image"], payload,
+                sandbox_config=tool.get("sandbox", {}),
+                timeout=timeout,
+                on_tool_output=dialog_callback,
+            )
 
         # Persist returned state
         if isinstance(result, dict) and "_state" in result:

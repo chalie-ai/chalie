@@ -420,6 +420,7 @@ class PlanDecompositionService:
             ('list', 'List management and organization'),
             ('focus', 'Focus session management'),
             ('persistent_task', 'Background task management'),
+            ('read', 'Read content from URLs or local files (PDF, DOCX, PPTX, HTML, Markdown, text)'),
         ]
         return '\n'.join(f'- **{name}**: {desc}' for name, desc in skills)
 

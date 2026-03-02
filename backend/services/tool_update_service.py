@@ -92,7 +92,7 @@ class ToolUpdateService:
 
 def tool_update_worker(shared_state=None):
     """
-    Entry point for consumer.py service registration.
+    Entry point for run.py service registration.
 
     Runs a 6-hour cycle checking for new upstream tags on installed embodiments.
     An initial delay gives the system time to complete startup builds before

@@ -2,7 +2,7 @@
 Tests for backend/services/settings_service.py
 
 Covers: get/set settings, sensitive value masking, API key generation.
-Uses SQLAlchemy session mock pattern (db.get_session() context manager).
+Uses session mock pattern (db.get_session() context manager).
 """
 
 import pytest
@@ -37,7 +37,8 @@ class TestSettingsService:
     def test_get_returns_value_when_found(self, service, mock_db):
         """get should return the resolved value when a matching row exists."""
         _, _, result = mock_db
-        result.fetchone.return_value = ('my-setting-value',)
+        # get() SELECTs: value, encrypted_value, is_sensitive
+        result.fetchone.return_value = ('my-setting-value', None, False)
 
         value = service.get('theme')
 
@@ -118,8 +119,8 @@ class TestSettingsService:
     def test_get_api_key_or_generate_returns_existing(self, service, mock_db):
         """get_api_key_or_generate should return existing key without generating."""
         _, _, result = mock_db
-        # The get('api_key') call returns an existing key
-        result.fetchone.return_value = ('existing-api-key-abc123',)
+        # The get('api_key') call returns an existing key (value, encrypted_value, is_sensitive)
+        result.fetchone.return_value = ('existing-api-key-abc123', None, False)
 
         key = service.get_api_key_or_generate()
 

@@ -2,7 +2,7 @@
  * Chalie — Application bootstrap & orchestrator.
  */
 import { ApiClient } from './api.js';
-import { SSEClient } from './sse.js';
+import { WSClient } from './ws.js';
 import { Presence } from './presence.js';
 import { Renderer } from './renderer.js';
 import { VoiceIO } from './voice.js';
@@ -23,12 +23,11 @@ class ChalieApp {
     this._backendHost = _lsGet('chalie_backend_host') || '';
     this._isSending = false;
     this._healthRetryTimeout = null;
-    this._driftSource = null;
     this._deferredInstallPrompt = null;
 
     // Modules
     this.api = new ApiClient(() => this._backendHost);
-    this.sse = new SSEClient(() => this._backendHost);
+    this.ws = new WSClient(() => this._backendHost);
     this.heartbeat = new ClientHeartbeat(() => this._backendHost);
     this.presence = null;
     this.renderer = null;
@@ -156,9 +155,9 @@ class ChalieApp {
       this._loadActiveTasks();
       // Poll every 60s as a safety net for tasks that complete without a drift event
       this._taskStripInterval = setInterval(() => this._loadActiveTasks(), 60_000);
-      this._connectDriftStream();
+      this._connectWebSocket();
       window.addEventListener('beforeunload', () => {
-        this._closeDriftStream();
+        this.ws.close();
         clearInterval(this._taskStripInterval);
       }, { once: true });
       this._requestNotificationPermission();
@@ -317,6 +316,47 @@ class ChalieApp {
         clearTimeout(forgetTimer);
         cardElement.classList.remove('moment-card--pending-forget');
       }, 10000);
+    });
+
+    // Generic card action handler (tool-agnostic)
+    document.addEventListener('chalie:card-action', async (e) => {
+      const { action, payload, cardEl } = e.detail;
+      const base = this._backendHost ? this._backendHost.replace(/\/$/, '') : '';
+
+      if (action === 'save-document') {
+        try {
+          const res = await fetch(base + '/documents/create-from-conversation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            const bodyEl = cardEl.querySelector('.tool-result-card__body');
+            if (bodyEl) {
+              bodyEl.innerHTML =
+                '<div style="padding:12px;color:#34d399;font-size:14px;">Saved! Processing your document\u2026</div>';
+            }
+          } else {
+            this._showToast('Failed to save document');
+          }
+        } catch (err) {
+          console.error('Save document failed:', err);
+          this._showToast('Failed to save document');
+        }
+      } else if (action === 'dismiss-save') {
+        cardEl.style.transition = 'opacity 300ms ease';
+        cardEl.style.opacity = '0';
+        setTimeout(() => cardEl.remove(), 300);
+        try {
+          await fetch(base + '/documents/dismiss-save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload),
+          });
+        } catch { /* silent dismiss */ }
+      }
     });
 
     // First-use hint (one-time)
@@ -703,7 +743,7 @@ class ChalieApp {
     let responseText = '';
     let responseMeta = {};
 
-    await this.sse.send(text, source, {
+    this.ws.send(text, source, {
       onStatus: (stage) => {
         this.presence.setState(stage);
       },
@@ -826,45 +866,12 @@ class ChalieApp {
   }
 
   // ---------------------------------------------------------------------------
-  // Unified Event Stream (SSE — drift, tool follow-ups, delegate results)
+  // WebSocket (drift, tool follow-ups, delegate results, chat)
   // ---------------------------------------------------------------------------
 
-  _connectDriftStream() {
-    this._closeDriftStream();
-
-    let baseUrl = '/events/stream';
-    if (this._backendHost) {
-      baseUrl = this._backendHost.replace(/\/$/, '') + '/events/stream';
-    }
-    this._driftSource = new EventSource(baseUrl, { withCredentials: true });
-
-    const handler = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        this._handleEvent(data);
-      } catch { /* ignore parse errors */ }
-    };
-
-    this._driftSource.addEventListener('drift', handler);
-    this._driftSource.addEventListener('tool_followup', handler);
-    this._driftSource.addEventListener('delegate_followup', handler);
-    this._driftSource.addEventListener('response', handler);
-    this._driftSource.addEventListener('card', handler);
-    this._driftSource.addEventListener('reminder', handler);
-    this._driftSource.addEventListener('task', handler);
-    this._driftSource.addEventListener('escalation', handler);
-    this._driftSource.addEventListener('notification', handler);
-
-    this._driftSource.onerror = () => {
-      // EventSource auto-reconnects; nothing to do
-    };
-  }
-
-  _closeDriftStream() {
-    if (this._driftSource) {
-      this._driftSource.close();
-      this._driftSource = null;
-    }
+  _connectWebSocket() {
+    this.ws.onDrift((data) => this._handleEvent(data));
+    this.ws.connect();
   }
 
   _handleEvent(data) {
@@ -1100,9 +1107,9 @@ class ChalieApp {
   _initVisibilityTracking() {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        // Reconnect drift stream if it was closed
-        if (!this._driftSource || this._driftSource.readyState === EventSource.CLOSED) {
-          this._connectDriftStream();
+        // Reconnect WebSocket if it was closed (mobile sleep/resume)
+        if (!this.ws.isConnected) {
+          this.ws.connect();
         }
         // Dismiss stale notifications now that the user is back
         this._dismissNotifications();

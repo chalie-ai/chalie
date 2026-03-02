@@ -25,9 +25,66 @@ _MAX_TOTAL_BYTES = 200 * 1024      # 200KB cumulative stdout
 _MAX_TURNS = 10                    # Max tool↔Chalie dialog turns
 
 
+_docker_checked = False
+_docker_available = False
+
+
+def _ensure_docker_running(max_wait: int = 30) -> bool:
+    """Start Docker Desktop if the daemon isn't reachable. Returns True if available."""
+    global _docker_checked, _docker_available
+    if _docker_checked:
+        return _docker_available
+
+    import docker, time, platform
+
+    try:
+        docker.from_env().ping()
+        _docker_checked = True
+        _docker_available = True
+        return True
+    except Exception:
+        pass
+
+    # Attempt to start Docker Desktop (macOS / Linux Desktop)
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", "-gja", "Docker"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif system == "Linux":
+            subprocess.Popen(["systemctl", "start", "docker"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            _docker_checked = True
+            _docker_available = False
+            return False
+    except FileNotFoundError:
+        _docker_checked = True
+        _docker_available = False
+        return False
+
+    logger.info("[CONTAINER] Docker daemon not running — starting Docker Desktop...")
+
+    # Poll until the daemon responds
+    for _ in range(max_wait):
+        time.sleep(1)
+        try:
+            docker.from_env().ping()
+            logger.info("[CONTAINER] Docker daemon is now available")
+            _docker_checked = True
+            _docker_available = True
+            return True
+        except Exception:
+            continue
+
+    logger.warning(f"[CONTAINER] Docker daemon did not start within {max_wait}s")
+    _docker_checked = True
+    _docker_available = False
+    return False
+
+
 class ToolContainerService:
     def __init__(self):
         import docker
+        _ensure_docker_running()
         self.client = docker.from_env()
 
     def build_image(self, tool_dir: str, image_tag: str, source_hash: str = None) -> bool:

@@ -88,7 +88,7 @@ def enqueue_prompts(prompt_list):
     Args:
         prompt_list: List of prompt strings to enqueue
 
-    Note: Make sure workers are running with: python3 src/consumer.py
+    Note: Make sure workers are running with: python3 src/run.py
     """
     # Create PromptQueue instance
     queue = PromptQueue(queue_name='prompt-queue', worker_func=digest_worker)
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     prompts = read_prompts_from_file('prompts.md')
     if prompts:
         logger.info("Enqueuing prompts to worker queue...")
-        logger.info("Make sure workers are running: python3 src/consumer.py")
+        logger.info("Make sure workers are running: python3 src/run.py")
         enqueue_prompts(prompts)
     else:
         logger.warning("No prompts found to process")

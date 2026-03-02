@@ -24,9 +24,15 @@ def _get_st_model(model_name: str = 'all-mpnet-base-v2'):
     global _st_model
     if _st_model is None:
         from sentence_transformers import SentenceTransformer
-        logger.info(f"[EMBEDDING] Loading sentence-transformers model '{model_name}' (first run may download ~438MB)...")
-        _st_model = SentenceTransformer(model_name)
-        logger.info(f"[EMBEDDING] Model '{model_name}' ready")
+        # Try loading from local cache first to avoid HuggingFace revision checks on
+        # every startup. Falls back to normal load (with network) only on first run.
+        try:
+            _st_model = SentenceTransformer(model_name, local_files_only=True)
+            logger.info(f"[EMBEDDING] Model '{model_name}' ready (loaded from cache)")
+        except Exception:
+            logger.info(f"[EMBEDDING] Loading sentence-transformers model '{model_name}' (first run may download ~438MB)...")
+            _st_model = SentenceTransformer(model_name)
+            logger.info(f"[EMBEDDING] Model '{model_name}' ready")
     return _st_model
 
 
@@ -51,7 +57,7 @@ class EmbeddingService:
         self.model_name = self.config.get('embedding_model', 'all-mpnet-base-v2')
 
     def generate_embedding(self, text: str) -> list:
-        """Single embedding → list (for PostgreSQL storage). L2-normalized."""
+        """Single embedding → list (for SQLite storage). L2-normalized."""
         try:
             model = _get_st_model(self.model_name)
             embedding = model.encode(text, normalize_embeddings=True)

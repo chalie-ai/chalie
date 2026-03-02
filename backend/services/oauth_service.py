@@ -367,10 +367,10 @@ class OAuthService:
                     cursor.execute(
                         """
                         INSERT INTO tool_configs (tool_name, config_key, config_value)
-                        VALUES (%s, %s, %s)
+                        VALUES (?, ?, ?)
                         ON CONFLICT (tool_name, config_key)
                         DO UPDATE SET config_value = EXCLUDED.config_value,
-                                      updated_at = NOW()
+                                      updated_at = datetime('now')
                         """,
                         (tool_name, key, str(value))
                     )
@@ -408,49 +408,42 @@ class OAuthService:
         return None
 
     def _store_oauth_state(self, state: str, data: dict):
-        """Store OAuth state data in Redis with TTL."""
+        """Store OAuth state data in MemoryStore with TTL."""
         try:
             from services.redis_client import RedisClientService
-            redis_conn = RedisClientService.create_connection()
+            store = RedisClientService.create_connection()
             key = f"{self._REDIS_STATE_PREFIX}{state}"
             payload = json.dumps(data)
-            redis_conn.setex(key, self._STATE_TTL, payload)
+            store.setex(key, self._STATE_TTL, payload)
 
             # Verify the key was actually stored
-            verify = redis_conn.get(key)
-            conn_kwargs = redis_conn.connection_pool.connection_kwargs
-            redis_addr = f"{conn_kwargs.get('host', '?')}:{conn_kwargs.get('port', '?')}/db{conn_kwargs.get('db', 0)}"
+            verify = store.get(key)
             if verify:
-                logger.info(
-                    f"[OAUTH] Stored state in Redis: key={key} "
-                    f"ttl={redis_conn.ttl(key)}s redis={redis_addr}"
-                )
+                logger.info(f"[OAUTH] Stored state: key={key} ttl={store.ttl(key)}s")
             else:
                 logger.error(f"[OAUTH] State stored but immediate read-back returned None: key={key}")
-                raise ValueError("Failed to initiate OAuth flow (Redis write failed)")
+                raise ValueError("Failed to initiate OAuth flow (store write failed)")
         except ValueError:
             raise
         except Exception as e:
-            logger.error(f"[OAUTH] Failed to store state in Redis: {e}", exc_info=True)
-            raise ValueError("Failed to initiate OAuth flow (Redis unavailable)")
+            logger.error(f"[OAUTH] Failed to store state: {e}", exc_info=True)
+            raise ValueError("Failed to initiate OAuth flow (store unavailable)")
 
     def _pop_oauth_state(self, state: str) -> dict | None:
-        """Retrieve and delete OAuth state data from Redis."""
+        """Retrieve and delete OAuth state data from MemoryStore."""
         try:
             from services.redis_client import RedisClientService
-            redis_conn = RedisClientService.create_connection()
+            store = RedisClientService.create_connection()
             key = f"{self._REDIS_STATE_PREFIX}{state}"
-            ttl = redis_conn.ttl(key)
-            data = redis_conn.get(key)
-            conn_kwargs = redis_conn.connection_pool.connection_kwargs
-            redis_addr = f"{conn_kwargs.get('host', '?')}:{conn_kwargs.get('port', '?')}/db{conn_kwargs.get('db', 0)}"
+            ttl = store.ttl(key)
+            data = store.get(key)
             logger.info(
-                f"[OAUTH] Pop state from Redis: key={key} "
-                f"found={data is not None} ttl={ttl} redis={redis_addr}"
+                f"[OAUTH] Pop state: key={key} "
+                f"found={data is not None} ttl={ttl}"
             )
             if data:
-                redis_conn.delete(key)
+                store.delete(key)
                 return json.loads(data)
         except Exception as e:
-            logger.error(f"[OAUTH] Failed to retrieve state from Redis: {e}", exc_info=True)
+            logger.error(f"[OAUTH] Failed to retrieve state: {e}", exc_info=True)
         return None

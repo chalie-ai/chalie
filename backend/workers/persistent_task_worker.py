@@ -33,7 +33,7 @@ def persistent_task_worker(shared_state):
     Background service process for persistent task processing.
 
     Args:
-        shared_state: Shared state dict from multiprocessing.Manager
+        shared_state: Shared state dict from WorkerManager
     """
     logger.info(f"{LOG_PREFIX} Starting persistent task worker")
 

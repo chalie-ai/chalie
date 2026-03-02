@@ -65,16 +65,26 @@ def _make_cluster_row(
     sample_queries=None, last_seen=None, last_activated=None,
     distance=0.1,
 ):
-    """Build a tuple matching the _find_matching_reflex query result."""
-    if embedding is None:
-        embedding = _make_embedding()
+    """Build a tuple matching the _find_matching_reflex sqlite-vec JOIN query result.
+
+    New column order (sqlite-vec migration):
+        cr.id, cr.times_seen, cr.times_unnecessary,
+        cr.times_activated, cr.times_succeeded, cr.times_failed,
+        cr.sample_queries, cr.last_seen, cr.last_activated,
+        v.distance
+    """
     if sample_queries is None:
-        sample_queries = ['2+2', '3*5']
+        sample_queries = json.dumps(['2+2', '3*5'])
+    elif isinstance(sample_queries, list):
+        sample_queries = json.dumps(sample_queries)
     if last_seen is None:
-        last_seen = datetime.now(timezone.utc)
+        last_seen = datetime.now(timezone.utc).isoformat()
+    elif isinstance(last_seen, datetime):
+        last_seen = last_seen.isoformat()
+    if isinstance(last_activated, datetime):
+        last_activated = last_activated.isoformat()
     return (
         cluster_id,
-        embedding,
         times_seen,
         times_unnecessary,
         times_activated,
@@ -301,24 +311,28 @@ class TestCognitiveReflexService:
     def test_record_creates_new_cluster(self, mock_emb, service, cursor):
         """When no matching cluster, record_observation creates a new one."""
         emb = _make_embedding()
-        cursor.fetchone.side_effect = [None, (42,)]  # No match, then INSERT RETURNING
+        cursor.fetchone.return_value = None  # No match from vec table
+        cursor.lastrowid = 42  # SQLite lastrowid after INSERT
 
         service.record_observation("What is 2+2?", emb, was_useful=False)
 
         # Verify INSERT was called
         calls = cursor.execute.call_args_list
         insert_call = [c for c in calls if 'INSERT INTO cognitive_reflexes' in str(c)]
-        assert len(insert_call) == 1
+        assert len(insert_call) >= 1
 
     @patch('services.embedding_service.get_embedding_service')
     def test_record_merges_into_existing(self, mock_emb, service, cursor):
         """When matching cluster exists, record_observation updates it."""
+        import struct as _struct
         emb = _make_embedding(seed=42)
+        emb_blob = _struct.pack(f'{len(emb)}f', *emb)
 
-        # First call: _find_matching_reflex returns a match
-        cursor.fetchone.return_value = _make_cluster_row(
-            times_seen=5, times_unnecessary=4,
-        )
+        # _find_matching_reflex returns a match, then _merge reads vec embedding
+        cursor.fetchone.side_effect = [
+            _make_cluster_row(times_seen=5, times_unnecessary=4),  # vec JOIN match
+            (emb_blob,),  # vec table embedding read
+        ]
 
         service.record_observation("What is 3*5?", emb, was_useful=False)
 

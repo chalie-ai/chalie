@@ -13,11 +13,10 @@ frontend/interface/
 ├── index.html          # Main HTML file
 ├── app.js              # Main application logic
 ├── api.js              # API client
+├── ws.js               # WebSocket client
 ├── renderer.js         # Card and message rendering
 ├── voice.js            # Voice interaction
 ├── presence.js         # Presence/status indicators
-├── heartbeat.js        # Connection heartbeat
-├── sse.js              # Server-sent events
 ├── sw.js               # Service worker
 ├── style.css           # All styling
 ├── manifest.json       # PWA manifest
@@ -40,13 +39,14 @@ Code organization follows a service-oriented architecture:
 ```
 backend/
 ├── services/           # Business logic and service classes
-├── workers/            # Async worker processes
-├── api/                # REST API blueprints
+├── workers/            # Background worker threads
+├── api/                # REST API + WebSocket blueprints
 ├── configs/            # Configuration files
-├── migrations/         # Database migrations
+├── data/               # SQLite database (auto-created)
 ├── prompts/            # LLM prompt templates
 ├── tests/              # Test suite
-└── consumer.py         # Main supervisor process
+├── schema.sql          # Database schema
+└── run.py              # Single entry point
 ```
 
 ## Development Workflow
@@ -57,7 +57,7 @@ backend/
 cd backend
 pip install -r requirements.txt
 source .venv/bin/activate  # or use poetry
-cp .env.example .env
+# Optional: copy .env.example to .env only if you need a non-default PORT or VOICE_ENABLED=false
 ```
 
 ### Running Tests
@@ -79,19 +79,14 @@ pytest tests/test_file.py
 ### Running Locally
 
 ```bash
-# Terminal 1: Start consumer (all workers)
-python consumer.py
+# Start everything (SQLite auto-initializes, no external services required)
+python backend/run.py
 
-# Terminal 2: Or run Flask directly for debugging
-python -c "from api import create_app; app = create_app(); app.run(host='0.0.0.0', port=8080)"
-```
+# Custom port
+PORT=9000 python backend/run.py
 
-### Docker Development
-
-```bash
-docker-compose build
-docker-compose up -d
-docker-compose logs -f backend
+# Run Flask directly for debugging (without background workers)
+cd backend && python -c "from api import create_app; app = create_app(); app.run(host='0.0.0.0', port=8081)"
 ```
 
 ## Code Style
@@ -115,14 +110,14 @@ docker-compose logs -f backend
 1. Create `backend/services/my_service.py`
 2. Implement class with clear public interface
 3. Add unit tests in `backend/tests/test_my_service.py`
-4. Register in `consumer.py` if background execution needed
+4. Register in `run.py` if background execution needed
 5. Document in this file's "Architecture" section
 
 ### Adding a New Worker
 
 1. Create `backend/workers/my_worker.py` extending `WorkerBase`
-2. Implement process main loop
-3. Register in `consumer.py`
+2. Implement worker main loop
+3. Register in `run.py` as a daemon thread
 4. Add integration tests
 
 ### Modifying the Web Interface
@@ -152,7 +147,7 @@ docker-compose logs -f backend
 
 - **Precedence**: Environment variables > .env file > JSON config files
 - **Secrets**: Never commit API keys or credentials
-- **Changes**: Document in `.env.example`
+- **New env vars**: Document in root `.env.example` (only PORT and VOICE_ENABLED belong there; all secrets auto-generate)
 
 See `docs/02-PROVIDERS-SETUP.md` for provider configuration details.
 
@@ -166,9 +161,10 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration details.
 
 ## Debugging
 
-- **Worker logs**: `docker-compose logs -f backend` or terminal output
-- **Database**: Enable SQLAlchemy echo in `database_service.py`
+- **All logs**: `python backend/run.py` (single process, all logs to stdout)
+- **Database**: SQLite file at `backend/data/chalie.db` — inspect with `sqlite3` CLI
 - **API requests**: Add logging to Flask blueprints
+- **WebSocket**: Browser DevTools → Network → WS tab
 - **Memory state**: Use REST API endpoints to inspect state
 
 ## Performance Considerations
@@ -176,7 +172,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration details.
 - **Memory system**: Uses hierarchical compression (working memory → gists → episodes → concepts)
 - **Routing**: Deterministic ~5ms router before LLM generation
 - **Timeouts**: All operations have hard timeouts (ACT loop 60s, actions 10s each)
-- **Database queries**: Use PostgreSQL efficiently, leverage pgvector for semantic search
+- **Database queries**: Use SQLite efficiently, leverage sqlite-vec for semantic search
 
 ## Safety & Constraints
 

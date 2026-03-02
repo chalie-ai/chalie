@@ -44,6 +44,6 @@ logger.info("✓ Default configuration correct")
 
 logger.info("\n✅ All integration tests passed")
 logger.info("\nNext steps:")
-logger.info("1. Start consumer: python3 src/consumer.py")
+logger.info("1. Start consumer: python3 src/run.py")
 logger.info("2. Test simple RESPOND: python3 src/listener.py \"Hello!\"")
 logger.info("3. Monitor logs for ACT loop execution")

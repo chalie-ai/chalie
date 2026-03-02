@@ -1,8 +1,11 @@
 """
 Tests for backend/api/conversation.py — conversation blueprint.
 
-Covers /chat (SSE), /conversation/spark-status, /conversation/recent,
+Covers /conversation/spark-status, /conversation/recent,
 and /conversation/summary endpoints.
+
+Note: The /chat endpoint was replaced by the WebSocket handler in
+api/websocket.py (Phase 4). WebSocket tests live separately.
 """
 
 import json
@@ -30,70 +33,6 @@ class TestConversationAPI:
         """Bypass session auth for all tests."""
         with patch('services.auth_session_service.validate_session', return_value=True):
             yield
-
-    # ------------------------------------------------------------------
-    # POST /chat
-    # ------------------------------------------------------------------
-
-    def test_chat_returns_sse_stream_with_request_id(self, client):
-        """POST /chat returns text/event-stream content type and X-Request-ID header."""
-        with patch('workers.digest_worker.digest_worker'), \
-             patch('services.redis_client.RedisClientService.create_connection') as mock_redis:
-            mock_r = MagicMock()
-            mock_pubsub = MagicMock()
-            mock_pubsub.get_message.return_value = None
-            mock_r.pubsub.return_value = mock_pubsub
-            mock_r.get.return_value = None
-            mock_redis.return_value = mock_r
-
-            response = client.post(
-                '/chat',
-                json={"text": "hello"},
-                content_type='application/json',
-            )
-
-            assert response.status_code == 200
-            assert 'text/event-stream' in response.content_type
-            assert 'X-Request-ID' in response.headers
-            assert len(response.headers['X-Request-ID']) > 0
-
-    def test_chat_missing_text_returns_400(self, client):
-        """POST /chat without text field returns 400."""
-        response = client.post(
-            '/chat',
-            json={"source": "text"},
-            content_type='application/json',
-        )
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
-        assert "text" in data["error"].lower()
-
-    def test_chat_empty_text_returns_400(self, client):
-        """POST /chat with empty text returns 400."""
-        response = client.post(
-            '/chat',
-            json={"text": "   "},
-            content_type='application/json',
-        )
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
-
-    def test_chat_non_json_content_type_returns_400(self, client):
-        """POST /chat with non-JSON content type returns 400."""
-        response = client.post(
-            '/chat',
-            data="hello",
-            content_type='text/plain',
-        )
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
-        assert "json" in data["error"].lower()
 
     # ------------------------------------------------------------------
     # GET /conversation/spark-status

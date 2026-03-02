@@ -3,17 +3,21 @@ Autobiography Service - Synthesis of Chalie's self-narrative from memory layers.
 
 Background service that periodically synthesizes prose from episode, trait,
 concept, and relationship data via LLM. Supports incremental updates with
-concurrency protection via PostgreSQL advisory locks.
+concurrency protection via a threading lock.
 """
 
 import time
 import logging
 import hashlib
+import threading
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timedelta
-from sqlalchemy import text
+from services.database_service import text
 
 logger = logging.getLogger(__name__)
+
+# Module-level lock replaces PostgreSQL advisory locks for concurrency protection
+_synthesis_lock = threading.Lock()
 
 
 class AutobiographyService:
@@ -72,8 +76,8 @@ class AutobiographyService:
         Check if enough new material exists to warrant synthesis.
 
         Returns True if:
-        - No autobiography exists and ≥5 total episodes exist, OR
-        - Autobiography exists and ≥3 new episodes since last cursor
+        - No autobiography exists and >=5 total episodes exist, OR
+        - Autobiography exists and >=3 new episodes since last cursor
 
         Args:
             user_id: User identifier (default: "primary")
@@ -104,7 +108,7 @@ class AutobiographyService:
                 total_episodes = result.scalar() or 0
 
                 if not current:
-                    # No autobiography yet — need ≥5 episodes
+                    # No autobiography yet — need >=5 episodes
                     return total_episodes >= 5
 
                 # Autobiography exists — check for new episodes
@@ -150,7 +154,7 @@ class AutobiographyService:
                     "relationships": [],
                 }
 
-                # Gather episodes (≤50, sorted by salience DESC)
+                # Gather episodes (<=50, sorted by salience DESC)
                 if since_cursor:
                     query = text("""
                         SELECT gist, action, outcome, emotion, salience, topic, created_at
@@ -177,6 +181,11 @@ class AutobiographyService:
                     if len(gist) > 500:
                         gist = gist[:500] + "..."
 
+                    # SQLite returns created_at as ISO string; handle both str and datetime
+                    created_at = row[6]
+                    if created_at and hasattr(created_at, 'isoformat'):
+                        created_at = created_at.isoformat()
+
                     inputs["episodes"].append({
                         "gist": gist,
                         "action": row[1],
@@ -184,7 +193,7 @@ class AutobiographyService:
                         "emotion": row[3],
                         "salience": row[4],
                         "topic": row[5],
-                        "created_at": row[6].isoformat() if row[6] else None
+                        "created_at": created_at
                     })
 
                 # Gather traits (confidence > 0.3)
@@ -226,7 +235,7 @@ class AutobiographyService:
                         "strength": row[4]
                     })
 
-                # Gather relationships (join to resolve UUIDs → names)
+                # Gather relationships (join to resolve UUIDs -> names)
                 result = session.execute(
                     text("""
                     SELECT sc1.concept_name, sc2.concept_name, sr.relationship_type, sr.strength
@@ -259,9 +268,9 @@ class AutobiographyService:
 
     def synthesize(self, user_id: str = "primary") -> bool:
         """
-        Full synthesis pipeline: acquire lock → gather → prompt → LLM → store.
+        Full synthesis pipeline: acquire lock -> gather -> prompt -> LLM -> store.
 
-        Acquires a PostgreSQL advisory lock to prevent concurrent synthesis.
+        Acquires a threading lock to prevent concurrent synthesis.
 
         Args:
             user_id: User identifier
@@ -269,125 +278,117 @@ class AutobiographyService:
         Returns:
             True if synthesis succeeded, False otherwise
         """
+        # Try to acquire lock (non-blocking)
+        lock_acquired = _synthesis_lock.acquire(blocking=False)
+        if not lock_acquired:
+            logger.info("[AUTOBIOGRAPHY] Another worker is synthesizing, skipping")
+            return False
+
         try:
             with self.db.get_session() as session:
-                # Try to acquire advisory lock (non-blocking)
-                lock_result = session.execute(
-                    text("SELECT pg_try_advisory_lock(hashtext('autobiography'))")
-                )
-                lock_acquired = lock_result.scalar()
+                # Get current narrative for context
+                current = self.get_current_narrative(user_id)
+                since_cursor = None
 
-                if not lock_acquired:
-                    logger.info("[AUTOBIOGRAPHY] Another worker is synthesizing, skipping")
-                    return False
-
-                try:
-                    # Get current narrative for context
-                    current = self.get_current_narrative(user_id)
-                    since_cursor = None
-
-                    if current:
-                        # Incremental update — fetch episodes since last cursor
-                        result = session.execute(
-                            text("""
-                            SELECT episode_cursor FROM autobiography
-                            WHERE user_id = :user_id
-                            ORDER BY version DESC
-                            LIMIT 1
-                            """),
-                            {"user_id": user_id}
-                        )
-                        cursor_row = result.fetchone()
-                        if cursor_row and cursor_row[0]:
-                            since_cursor = cursor_row[0]
-
-                    # Gather inputs
-                    inputs = self.gather_synthesis_inputs(user_id, since_cursor)
-
-                    if not inputs["episodes"]:
-                        logger.debug("[AUTOBIOGRAPHY] No episodes to synthesize")
-                        return False
-
-                    # Build and execute synthesis prompt
-                    start_time = time.time()
-                    narrative = self._synthesize_via_llm(inputs, current)
-                    synthesis_ms = int((time.time() - start_time) * 1000)
-
-                    if not narrative:
-                        logger.error("[AUTOBIOGRAPHY] LLM synthesis returned empty")
-                        return False
-
-                    # Get newest episode timestamp for cursor
+                if current:
+                    # Incremental update — fetch episodes since last cursor
                     result = session.execute(
                         text("""
-                        SELECT MAX(created_at) FROM episodes WHERE deleted_at IS NULL
+                        SELECT episode_cursor FROM autobiography
+                        WHERE user_id = :user_id
+                        ORDER BY version DESC
+                        LIMIT 1
                         """),
-                        {}
+                        {"user_id": user_id}
                     )
-                    newest_episode = result.scalar()
+                    cursor_row = result.fetchone()
+                    if cursor_row and cursor_row[0]:
+                        since_cursor = cursor_row[0]
 
-                    # Store new version
-                    self._store_narrative(
-                        session,
-                        user_id,
-                        narrative,
-                        newest_episode,
-                        len(inputs["episodes"]),
-                        synthesis_ms
-                    )
+                # Gather inputs
+                inputs = self.gather_synthesis_inputs(user_id, since_cursor)
 
-                    logger.info(
-                        f"[AUTOBIOGRAPHY] Synthesis complete: "
-                        f"v{self.get_current_narrative(user_id)['version']} "
-                        f"({synthesis_ms}ms)"
-                    )
+                if not inputs["episodes"]:
+                    logger.debug("[AUTOBIOGRAPHY] No episodes to synthesize")
+                    return False
 
-                    # Post-synthesis: compute growth delta and reinforce stable traits (non-fatal)
-                    try:
-                        from services.autobiography_delta_service import AutobiographyDeltaService
-                        from sqlalchemy import text as _text
-                        import json as _json
+                # Build and execute synthesis prompt
+                start_time = time.time()
+                narrative = self._synthesize_via_llm(inputs, current)
+                synthesis_ms = int((time.time() - start_time) * 1000)
 
-                        delta_service = AutobiographyDeltaService(self.db)
+                if not narrative:
+                    logger.error("[AUTOBIOGRAPHY] LLM synthesis returned empty")
+                    return False
 
-                        # Compute growth delta
-                        delta = delta_service.compute_growth_delta(user_id)
-                        if delta and delta.get('section_deltas'):
-                            # Store delta_summary on latest autobiography row
-                            with self.db.get_session() as delta_session:
-                                delta_session.execute(
-                                    _text("""
-                                    UPDATE autobiography
-                                    SET delta_summary = :delta
-                                    WHERE user_id = :user_id
-                                      AND version = (
-                                          SELECT MAX(version) FROM autobiography
-                                          WHERE user_id = :user_id
-                                      )
-                                    """),
-                                    {"user_id": user_id, "delta": _json.dumps(delta)}
-                                )
-                                delta_session.commit()
-                            logger.info(
-                                f"[AUTOBIOGRAPHY] Delta computed: "
-                                f"{len(delta['section_deltas'])} sections changed"
+                # Get newest episode timestamp for cursor
+                result = session.execute(
+                    text("""
+                    SELECT MAX(created_at) FROM episodes WHERE deleted_at IS NULL
+                    """),
+                    {}
+                )
+                newest_episode = result.scalar()
+
+                # Store new version
+                self._store_narrative(
+                    session,
+                    user_id,
+                    narrative,
+                    newest_episode,
+                    len(inputs["episodes"]),
+                    synthesis_ms
+                )
+
+                logger.info(
+                    f"[AUTOBIOGRAPHY] Synthesis complete: "
+                    f"v{self.get_current_narrative(user_id)['version']} "
+                    f"({synthesis_ms}ms)"
+                )
+
+                # Post-synthesis: compute growth delta and reinforce stable traits (non-fatal)
+                try:
+                    from services.autobiography_delta_service import AutobiographyDeltaService
+                    import json as _json
+
+                    delta_service = AutobiographyDeltaService(self.db)
+
+                    # Compute growth delta
+                    delta = delta_service.compute_growth_delta(user_id)
+                    if delta and delta.get('section_deltas'):
+                        # Store delta_summary on latest autobiography row
+                        with self.db.get_session() as delta_session:
+                            delta_session.execute(
+                                text("""
+                                UPDATE autobiography
+                                SET delta_summary = :delta
+                                WHERE user_id = :user_id
+                                  AND version = (
+                                      SELECT MAX(version) FROM autobiography
+                                      WHERE user_id = :user_id
+                                  )
+                                """),
+                                {"user_id": user_id, "delta": _json.dumps(delta)}
                             )
+                        logger.info(
+                            f"[AUTOBIOGRAPHY] Delta computed: "
+                            f"{len(delta['section_deltas'])} sections changed"
+                        )
 
-                        # Reinforce stable traits
-                        delta_service.reinforce_stable_traits(user_id)
+                    # Reinforce stable traits
+                    delta_service.reinforce_stable_traits(user_id)
 
-                    except Exception as de:
-                        logger.warning(f"[AUTOBIOGRAPHY] Delta computation non-fatal error: {de}")
+                except Exception as de:
+                    logger.warning(f"[AUTOBIOGRAPHY] Delta computation non-fatal error: {de}")
 
-                    return True
-
-                finally:
-                    # Always release lock
-                    session.execute(text("SELECT pg_advisory_unlock(hashtext('autobiography'))"))
+                return True
 
         except Exception as e:
             logger.error(f"[AUTOBIOGRAPHY] Synthesis failed: {e}", exc_info=True)
             return False
+        finally:
+            # Always release lock
+            _synthesis_lock.release()
 
     def _synthesize_via_llm(
         self,
@@ -488,7 +489,7 @@ class AutobiographyService:
             narrative: Synthesized narrative text
 
         Returns:
-            Dict mapping section_name (lowercase snake_case) → hash string
+            Dict mapping section_name (lowercase snake_case) -> hash string
         """
         import re as _re
 
@@ -528,7 +529,7 @@ class AutobiographyService:
         Insert new autobiography version into database.
 
         Args:
-            session: SQLAlchemy session
+            session: SessionProxy instance
             user_id: User identifier
             narrative: Synthesized narrative text
             episode_cursor: Timestamp of newest episode included
@@ -564,7 +565,6 @@ class AutobiographyService:
                 "section_hashes": _json.dumps(section_hashes),
             }
         )
-        session.commit()
 
 
 def autobiography_synthesis_worker(shared_state=None) -> None:

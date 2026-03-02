@@ -22,7 +22,7 @@ responds → learns from the interaction.
 
 Behind that loop: a layered memory system that decays gracefully, a deterministic
 mode router that decides *how* to respond before any LLM is invoked, and a tool
-framework that can act on your behalf in sandboxed containers.
+framework that can act on your behalf.
 
 ---
 
@@ -48,12 +48,12 @@ Chalie maintains memory across multiple layers, each operating on a different ti
 
 | Layer | Storage | TTL | Purpose |
 |---|---|---|---|
-| Working Memory | Redis | 24h / 4 turns | Current conversation context |
-| Gists | Redis | 30min | Compressed exchange summaries |
-| Facts | Redis | 24h | Atomic key-value assertions |
-| Episodes | PostgreSQL + pgvector | Permanent (decaying) | Narrative memory units |
-| Concepts | PostgreSQL + pgvector | Permanent (decaying) | Knowledge nodes and relationships |
-| Traits | PostgreSQL | Permanent (category decay) | Stable personal context |
+| Working Memory | MemoryStore | 24h / 4 turns | Current conversation context |
+| Gists | MemoryStore | 30min | Compressed exchange summaries |
+| Facts | MemoryStore | 24h | Atomic key-value assertions |
+| Episodes | SQLite + sqlite-vec | Permanent (decaying) | Narrative memory units |
+| Concepts | SQLite + sqlite-vec | Permanent (decaying) | Knowledge nodes and relationships |
+| Traits | SQLite | Permanent (category decay) | Stable personal context |
 
 Memories decay naturally over time — unless reinforced by use, which makes retrieval smarter rather than noisier.
 
@@ -109,7 +109,7 @@ Supported providers:
 
 ### Tools
 
-Tools extend Chalie with real-world capabilities — web search, weather, reading pages, and more. Each tool runs in an isolated container, completely separated from Chalie's internal services.
+Tools extend Chalie with real-world capabilities — web search, weather, reading pages, and more. Tools run either as **trusted** (subprocess, no Docker) or **sandboxed** (Docker container), completely separated from Chalie's internal services. Docker is only needed for sandboxed tools — trusted tools and all core features work without it.
 
 > **A tool marketplace is coming.** For now, tools must be installed manually by following each tool's setup instructions.
 
@@ -129,22 +129,23 @@ More tools are on the way via the marketplace. See [docs/09-TOOLS.md](docs/09-TO
 
 ## Getting Started
 
-### Requirements
-
-- Docker & Docker Compose
-- An LLM provider (local or cloud)
-
-### Quick Start
-
 ```bash
-git clone https://github.com/chalie-ai/chalie.git
-cd chalie
-docker-compose build && docker-compose up -d
+curl -fsSL https://chalie.ai/install | bash
 ```
 
-Open http://localhost:8081/on-boarding/ — create an account, configure a provider, and begin.
+The installer checks prerequisites (Python 3.9+, Docker optional), downloads the latest release, and installs the `chalie` CLI. Takes about 2 minutes on a typical connection.
 
-**Using Ollama (recommended — local, free, private):**
+```bash
+chalie                 # Start → http://localhost:8081
+chalie --port=9000     # Start on a custom port
+chalie stop            # Stop
+chalie update          # Update to latest release
+chalie logs            # Follow the log
+```
+
+Open **http://localhost:8081/on-boarding/** to create an account and configure a provider.
+
+**Recommended provider — Ollama (local, free, private):**
 
 ```bash
 ollama pull qwen:8b
@@ -155,16 +156,36 @@ For full setup instructions, see [docs/01-QUICK-START.md](docs/01-QUICK-START.md
 
 ---
 
+## Build from Source
+
+Want to run from source or contribute?
+
+**Prerequisites:** Python 3.9+, git
+
+```bash
+git clone https://github.com/chalie-ai/chalie.git
+cd chalie
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt
+python backend/run.py
+```
+
+Open **http://localhost:8081/on-boarding/** to get started. Run tests with `cd backend && pytest`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+
+---
+
 ## Privacy First
 
-All memory, conversation history, and learned traits stay on your machine. Chalie
-makes zero external calls unless you configure an external LLM provider — and even
-then, only the message being processed is transmitted. API keys are encrypted at
-rest in the local database.
+All memory, conversation history, and learned traits stay on your machine in a
+single SQLite database. Chalie makes zero external calls unless you configure an
+external LLM provider — and even then, only the message being processed is
+transmitted. API keys are encrypted at rest in the local database.
 
 No telemetry. No analytics. No background sync. You own your data.
 
-**Before any public deployment:** change default credentials, enable HTTPS, restrict CORS.
+**Before any public deployment:** enable HTTPS and restrict CORS.
 
 ---
 

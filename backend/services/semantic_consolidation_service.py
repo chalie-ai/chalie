@@ -13,9 +13,21 @@ Responsibility: Episode analysis and concept extraction (SRP).
 
 import logging
 import json
+import struct
 from typing import Dict, List, Optional
 from services.semantic_storage_service import SemanticStorageService
 from services.config_service import ConfigService
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    return embedding
 
 
 class SemanticConsolidationService:
@@ -204,6 +216,9 @@ class SemanticConsolidationService:
         """
         Find similar concept using hybrid search (name match + vector similarity).
 
+        Uses sqlite-vec virtual table for vector similarity search, combined with
+        exact name matching for hybrid retrieval.
+
         Args:
             concept_name: Name of concept
             embedding: Embedding vector
@@ -212,60 +227,92 @@ class SemanticConsolidationService:
         Returns:
             Existing concept dict or None
         """
-        conn = None
         try:
-            conn = self.storage.db_service.get_connection()
-            cursor = conn.cursor()
+            with self.storage.db_service.connection() as conn:
+                cursor = conn.cursor()
 
-            # Hybrid search: exact name match OR high cosine similarity (>0.85)
-            cursor.execute("""
-                SELECT
-                    id, concept_name, concept_type, definition, embedding,
-                    abstraction_level, domain, strength, confidence
-                FROM semantic_concepts
-                WHERE deleted_at IS NULL
-                  AND concept_type = %s
-                  AND (
-                    LOWER(concept_name) = LOWER(%s)
-                    OR (1 - (embedding <=> %s::vector)) > %s
-                  )
-                ORDER BY
-                    CASE WHEN LOWER(concept_name) = LOWER(%s) THEN 0 ELSE 1 END,
-                    (1 - (embedding <=> %s::vector)) DESC
-                LIMIT 1
-            """, (
-                concept_type,
-                concept_name,
-                embedding,
-                self.config['similarity_threshold'],
-                concept_name,
-                embedding
-            ))
+                similarity_threshold = self.config['similarity_threshold']
+                packed = _pack_embedding(embedding)
 
-            row = cursor.fetchone()
-            cursor.close()
+                # Step 1: Check for exact name match (highest priority)
+                cursor.execute("""
+                    SELECT
+                        id, concept_name, concept_type, definition,
+                        abstraction_level, domain, strength, confidence
+                    FROM semantic_concepts
+                    WHERE deleted_at IS NULL
+                      AND concept_type = ?
+                      AND LOWER(concept_name) = LOWER(?)
+                    LIMIT 1
+                """, (concept_type, concept_name))
 
-            if not row:
-                return None
+                row = cursor.fetchone()
+                if row:
+                    cursor.close()
+                    return {
+                        'id': str(row[0]),
+                        'concept_name': row[1],
+                        'concept_type': row[2],
+                        'definition': row[3],
+                        'embedding': None,
+                        'abstraction_level': row[4],
+                        'domain': row[5],
+                        'strength': row[6],
+                        'confidence': row[7]
+                    }
 
-            return {
-                'id': str(row[0]),
-                'concept_name': row[1],
-                'concept_type': row[2],
-                'definition': row[3],
-                'embedding': row[4],
-                'abstraction_level': row[5],
-                'domain': row[6],
-                'strength': row[7],
-                'confidence': row[8]
-            }
+                # Step 2: Vector similarity search via sqlite-vec virtual table
+                # sqlite-vec distance is L2 (Euclidean); we retrieve top-K and
+                # compute cosine similarity in Python to honour the threshold.
+                cursor.execute("""
+                    SELECT
+                        sc.id, sc.concept_name, sc.concept_type, sc.definition,
+                        sc.abstraction_level, sc.domain, sc.strength, sc.confidence,
+                        v.distance
+                    FROM semantic_concepts_vec v
+                    JOIN semantic_concepts sc ON sc.rowid = v.rowid
+                    WHERE v.embedding MATCH ?
+                      AND k = 5
+                      AND sc.deleted_at IS NULL
+                      AND sc.concept_type = ?
+                """, (packed, concept_type))
+
+                rows = cursor.fetchall()
+                cursor.close()
+
+                if not rows:
+                    return None
+
+                # Pick best match above threshold.
+                # sqlite-vec returns L2 distance; convert to a 0-1 similarity
+                # approximation: sim ~ 1 / (1 + distance).
+                best = None
+                best_sim = 0.0
+                for r in rows:
+                    distance = r[8] if r[8] is not None else float('inf')
+                    sim = 1.0 / (1.0 + distance)
+                    if sim > similarity_threshold and sim > best_sim:
+                        best_sim = sim
+                        best = r
+
+                if best is None:
+                    return None
+
+                return {
+                    'id': str(best[0]),
+                    'concept_name': best[1],
+                    'concept_type': best[2],
+                    'definition': best[3],
+                    'embedding': None,
+                    'abstraction_level': best[4],
+                    'domain': best[5],
+                    'strength': best[6],
+                    'confidence': best[7]
+                }
 
         except Exception as e:
             logging.error(f"Failed to find similar concept: {e}")
             return None
-        finally:
-            if conn:
-                self.storage.db_service.release_connection(conn)
 
     def consolidate_relationship(
         self,

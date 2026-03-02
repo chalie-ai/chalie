@@ -1,11 +1,12 @@
 """
 Interaction Log Service - Immutable audit trail of all raw events.
 
-Append-only PostgreSQL-backed log of user inputs, classifications, and system responses.
+Append-only SQLite-backed log of user inputs, classifications, and system responses.
 Follows EpisodicStorageService pattern (DatabaseService injection, get_connection/release_connection).
 """
 
 import json
+import uuid
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
@@ -88,17 +89,19 @@ class InteractionLogService:
             UUID of the created log entry, or None on failure
         """
         try:
+            event_id = str(uuid.uuid4())
+
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
                 cursor.execute("""
                     INSERT INTO interaction_log (
-                        event_type, topic, exchange_id, session_id, source,
+                        id, event_type, topic, exchange_id, session_id, source,
                         payload, metadata, thread_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
+                    event_id,
                     event_type,
                     topic,
                     exchange_id,
@@ -109,11 +112,10 @@ class InteractionLogService:
                     thread_id,
                 ))
 
-                event_id = cursor.fetchone()[0]
                 cursor.close()
 
                 logging.info(f"[INTERACTION LOG] Logged {event_type} event {event_id} for topic '{topic}'")
-                return str(event_id)
+                return event_id
 
         except Exception as e:
             logging.error(f"[INTERACTION LOG] Failed to log event: {e}")
@@ -145,18 +147,18 @@ class InteractionLogService:
                         SELECT id, event_type, topic, exchange_id, session_id, source,
                                payload, metadata, created_at
                         FROM interaction_log
-                        WHERE topic = %s AND event_type = %s
+                        WHERE topic = ? AND event_type = ?
                         ORDER BY created_at ASC
-                        LIMIT %s
+                        LIMIT ?
                     """, (topic, event_type, limit))
                 else:
                     cursor.execute("""
                         SELECT id, event_type, topic, exchange_id, session_id, source,
                                payload, metadata, created_at
                         FROM interaction_log
-                        WHERE topic = %s
+                        WHERE topic = ?
                         ORDER BY created_at ASC
-                        LIMIT %s
+                        LIMIT ?
                     """, (topic, limit))
 
                 rows = cursor.fetchall()
@@ -186,7 +188,7 @@ class InteractionLogService:
                     SELECT id, event_type, topic, exchange_id, session_id, source,
                            payload, metadata, created_at
                     FROM interaction_log
-                    WHERE exchange_id = %s
+                    WHERE exchange_id = ?
                     ORDER BY created_at ASC
                 """, (exchange_id,))
 
@@ -222,9 +224,9 @@ class InteractionLogService:
                     SELECT id, event_type, topic, exchange_id, session_id, source,
                            payload, metadata, created_at
                     FROM interaction_log
-                    WHERE topic = %s AND event_type IN ('user_input', 'system_response')
+                    WHERE topic = ? AND event_type IN ('user_input', 'system_response')
                     ORDER BY created_at ASC
-                    LIMIT %s
+                    LIMIT ?
                 """, (topic, limit))
 
                 rows = cursor.fetchall()
@@ -252,6 +254,7 @@ class InteractionLogService:
         """
         since_hours = max(1, min(since_hours, 168))
         since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        since_str = since.isoformat()
         items = []
 
         # SQL-level cap prevents memory exhaustion on long time windows.
@@ -263,21 +266,22 @@ class InteractionLogService:
                 cursor = conn.cursor()
 
                 # 1. Autonomous events from interaction_log
-                placeholders = ','.join(['%s'] * len(_ACTIVITY_EVENT_TYPES))
+                placeholders = ','.join(['?'] * len(_ACTIVITY_EVENT_TYPES))
                 cursor.execute(
                     f"SELECT id, event_type, topic, payload, source, created_at "
                     f"FROM interaction_log "
-                    f"WHERE created_at > %s AND event_type IN ({placeholders}) "
-                    f"ORDER BY created_at DESC LIMIT %s",
-                    (since, *_ACTIVITY_EVENT_TYPES, sql_cap)
+                    f"WHERE created_at > ? AND event_type IN ({placeholders}) "
+                    f"ORDER BY created_at DESC LIMIT ?",
+                    (since_str, *_ACTIVITY_EVENT_TYPES, sql_cap)
                 )
                 for row in cursor.fetchall():
+                    payload = row[3] if isinstance(row[3], dict) else (json.loads(row[3]) if row[3] else {})
                     items.append({
                         'source': 'autonomous',
                         'type': row[1],
                         'topic': row[2],
-                        'summary': _summarize_event(row[1], row[3]),
-                        'occurred_at': row[5].isoformat() if row[5] else None,
+                        'summary': _summarize_event(row[1], payload),
+                        'occurred_at': row[5],
                     })
 
                 # 2. Persistent tasks that changed in the window
@@ -285,12 +289,12 @@ class InteractionLogService:
                     cursor.execute(
                         "SELECT id, goal, status, progress, updated_at "
                         "FROM persistent_tasks "
-                        "WHERE updated_at > %s "
-                        "ORDER BY updated_at DESC LIMIT %s",
-                        (since, sql_cap)
+                        "WHERE updated_at > ? "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (since_str, sql_cap)
                     )
                     for row in cursor.fetchall():
-                        progress = row[3] or {}
+                        progress = row[3] if isinstance(row[3], dict) else (json.loads(row[3]) if row[3] else {})
                         items.append({
                             'source': 'background_task',
                             'type': f'task_{row[2]}',
@@ -302,7 +306,7 @@ class InteractionLogService:
                                 'coverage': progress.get('coverage_estimate'),
                                 'cycles': progress.get('cycles_completed'),
                             },
-                            'occurred_at': row[4].isoformat() if row[4] else None,
+                            'occurred_at': row[4],
                         })
                 except Exception as e:
                     logging.debug(f"[ACTIVITY FEED] persistent_tasks unavailable: {e}")
@@ -312,9 +316,9 @@ class InteractionLogService:
                     cursor.execute(
                         "SELECT id, message, item_type, topic, last_fired_at "
                         "FROM scheduled_items "
-                        "WHERE status = 'fired' AND last_fired_at > %s "
-                        "ORDER BY last_fired_at DESC LIMIT %s",
-                        (since, sql_cap)
+                        "WHERE status = 'fired' AND last_fired_at > ? "
+                        "ORDER BY last_fired_at DESC LIMIT ?",
+                        (since_str, sql_cap)
                     )
                     for row in cursor.fetchall():
                         items.append({
@@ -323,7 +327,7 @@ class InteractionLogService:
                             'topic': row[3],
                             'summary': row[1],
                             'detail': {'item_type': row[2], 'schedule_id': row[0]},
-                            'occurred_at': row[4].isoformat() if row[4] else None,
+                            'occurred_at': row[4],
                         })
                 except Exception as e:
                     logging.debug(f"[ACTIVITY FEED] scheduled_items unavailable: {e}")
@@ -347,7 +351,7 @@ class InteractionLogService:
             'exchange_id': row[3],
             'session_id': row[4],
             'source': row[5],
-            'payload': row[6],
-            'metadata': row[7],
+            'payload': row[6] if isinstance(row[6], dict) else (json.loads(row[6]) if row[6] else {}),
+            'metadata': row[7] if isinstance(row[7], dict) else (json.loads(row[7]) if row[7] else {}),
             'created_at': row[8]
         }

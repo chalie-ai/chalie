@@ -237,7 +237,7 @@ class CognitiveDriftEngine:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Deferred processing failed: {e}")
 
-    # ── Precondition checks ──────────────────────────────────────────
+    # -- Precondition checks --------------------------------------------------
 
     def _are_workers_idle(self) -> bool:
         """Check if all worker queues are empty."""
@@ -261,9 +261,9 @@ class CognitiveDriftEngine:
                     """
                     SELECT COUNT(*) FROM episodes
                     WHERE deleted_at IS NULL
-                      AND created_at > NOW() - INTERVAL '%s hours'
+                      AND created_at > datetime('now', ? || ' hours')
                     """,
-                    (self.episode_lookback_hours,)
+                    (str(-self.episode_lookback_hours),)
                 )
                 count = cursor.fetchone()[0]
                 cursor.close()
@@ -272,7 +272,7 @@ class CognitiveDriftEngine:
             logger.error(f"{LOG_PREFIX} Failed to check recent episodes: {e}")
             return False
 
-    # ── Timing ───────────────────────────────────────────────────────
+    # -- Timing ----------------------------------------------------------------
 
     def _next_interval(self) -> float:
         """Stochastic jitter with occasional long gaps."""
@@ -281,7 +281,7 @@ class CognitiveDriftEngine:
             return base * random.uniform(1.8, 2.5)
         return base * random.uniform(self.jitter_range[0], self.jitter_range[1])
 
-    # ── Fatigue ──────────────────────────────────────────────────────
+    # -- Fatigue ---------------------------------------------------------------
 
     def _is_fatigued(self) -> bool:
         """Check if cumulative drift activation exceeds budget."""
@@ -318,7 +318,7 @@ class CognitiveDriftEngine:
         except Exception:
             return False
 
-    # ── Cooldown ─────────────────────────────────────────────────────
+    # -- Cooldown --------------------------------------------------------------
 
     def _is_on_cooldown(self, concept_id: str) -> bool:
         """Check if a concept was recently used in drift."""
@@ -333,7 +333,7 @@ class CognitiveDriftEngine:
         cutoff = time.time() - (self.cooldown_minutes * 60)
         self.redis.zremrangebyscore(COOLDOWN_KEY, '-inf', cutoff)
 
-    # ── Activation energy ────────────────────────────────────────────
+    # -- Activation energy -----------------------------------------------------
 
     def _has_sufficient_activation(self, activated_concepts: list) -> bool:
         """Check if spreading activation produced strong enough results."""
@@ -342,7 +342,7 @@ class CognitiveDriftEngine:
         max_activation = max(c.get('activation_score', 0) for c in activated_concepts)
         return max_activation >= self.min_activation_energy
 
-    # ── Seed selection ───────────────────────────────────────────────
+    # -- Seed selection --------------------------------------------------------
 
     def _select_seed(self) -> Optional[Dict[str, Any]]:
         """
@@ -425,13 +425,13 @@ class CognitiveDriftEngine:
             # Fetch top-20 recent episodes within lookback window
             cursor.execute("""
                 SELECT id,
-                       EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600.0 AS age_hours
+                       (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', created_at) AS REAL)) / 3600.0 AS age_hours
                 FROM episodes
                 WHERE deleted_at IS NULL
-                  AND created_at > NOW() - INTERVAL '%s hours'
+                  AND created_at > datetime('now', ? || ' hours')
                 ORDER BY created_at DESC
                 LIMIT 20
-            """, (self.episode_lookback_hours,))
+            """, (str(-self.episode_lookback_hours),))
             episodes = cursor.fetchall()
             if not episodes:
                 cursor.close()
@@ -447,7 +447,7 @@ class CognitiveDriftEngine:
                 SELECT id, concept_name, definition, strength, domain
                 FROM semantic_concepts
                 WHERE deleted_at IS NULL
-                  AND source_episodes::jsonb @> to_jsonb(ARRAY[%s]::text[])
+                  AND EXISTS (SELECT 1 FROM json_each(source_episodes) WHERE value = ?)
                 ORDER BY strength DESC
                 LIMIT 5
             """, (episode_id,))
@@ -467,28 +467,28 @@ class CognitiveDriftEngine:
         }
 
     def _seed_salient(self) -> Optional[Dict[str, Any]]:
-        """Select a concept from a high-salience episode, weighted by salience × recency."""
+        """Select a concept from a high-salience episode, weighted by salience x recency."""
         with self.db_service.connection() as conn:
             cursor = conn.cursor()
 
             # Fetch top-20 salient episodes within lookback window
             cursor.execute("""
                 SELECT id, gist, topic,
-                       EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600.0 AS age_hours,
+                       (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', created_at) AS REAL)) / 3600.0 AS age_hours,
                        salience
                 FROM episodes
                 WHERE deleted_at IS NULL
-                  AND created_at > NOW() - INTERVAL '%s days'
+                  AND created_at > datetime('now', ? || ' days')
                 ORDER BY salience DESC
                 LIMIT 20
-            """, (self.salience_lookback_days,))
+            """, (str(-self.salience_lookback_days),))
             episodes = cursor.fetchall()
             cursor.close()
 
         if not episodes:
             return None
 
-        # Combined weight: salience × exp(-decay * age_hours)
+        # Combined weight: salience x exp(-decay * age_hours)
         weights = [
             max(float(row[4] or 0.1), 0.01) * math.exp(-self.episode_recency_decay * float(row[3]))
             for row in episodes
@@ -563,7 +563,7 @@ class CognitiveDriftEngine:
                 cursor.execute("""
                     SELECT topic, COUNT(*) AS cnt
                     FROM interaction_log
-                    WHERE created_at > NOW() - INTERVAL '7 days'
+                    WHERE created_at > datetime('now', '-7 days')
                       AND topic IS NOT NULL
                       AND topic != 'general'
                     GROUP BY topic
@@ -588,7 +588,7 @@ class CognitiveDriftEngine:
                     FROM semantic_concepts
                     WHERE deleted_at IS NULL
                       AND confidence >= 0.4
-                      AND (domain = %s OR concept_name ILIKE %s)
+                      AND (domain = ? OR concept_name LIKE ?)
                     ORDER BY strength DESC
                     LIMIT 5
                 """, (chosen_topic, f'%{chosen_topic}%'))
@@ -613,7 +613,7 @@ class CognitiveDriftEngine:
             logger.warning(f"{LOG_PREFIX} Insight seed selection failed: {e}")
             return None
 
-    # ── Decaying concept reinforcement ───────────────────────────────
+    # -- Decaying concept reinforcement ----------------------------------------
 
     def _maybe_reinforce_seed(self, seed: Dict, drift_succeeded: bool):
         """Small strength bump for decaying seeds on successful drift only."""
@@ -628,9 +628,9 @@ class CognitiveDriftEngine:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE semantic_concepts
-                    SET strength = LEAST(10.0, strength + %s),
-                        updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET strength = MIN(10.0, strength + ?),
+                        updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (self.decaying_reinforce_bump, seed['concept_id']))
                 cursor.close()
 
@@ -641,7 +641,7 @@ class CognitiveDriftEngine:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to reinforce seed: {e}")
 
-    # ── Thought synthesis ────────────────────────────────────────────
+    # -- Thought synthesis -----------------------------------------------------
 
     def _synthesize_thought(self, seed: Dict, activated: List[Dict],
                             episode: Optional[Dict]) -> Optional[Dict]:
@@ -731,7 +731,7 @@ class CognitiveDriftEngine:
         logger.warning(f"{LOG_PREFIX} Failed to parse LLM response after {max_retries} attempts: {last_error}")
         return None
 
-    # ── Gist storage ─────────────────────────────────────────────────
+    # -- Gist storage ----------------------------------------------------------
 
     def _store_drift(self, topic: str, drift_type: str, thought: str):
         """Store drift thought as a gist."""
@@ -747,7 +747,7 @@ class CognitiveDriftEngine:
         )
         logger.info(f"{LOG_PREFIX} Stored drift gist: [{drift_type}] {thought[:80]}...")
 
-    # ── State tracking ───────────────────────────────────────────────
+    # -- State tracking --------------------------------------------------------
 
     def _update_state(self, seed: Dict):
         """Update Redis state hash for debugging/monitoring."""
@@ -759,7 +759,7 @@ class CognitiveDriftEngine:
             'last_seed_concept': seed['concept_name'],
         })
 
-    # ── Main drift cycle ─────────────────────────────────────────────
+    # -- Main drift cycle ------------------------------------------------------
 
     def _run_drift_cycle(self):
         """Execute one complete drift cycle."""
@@ -840,7 +840,7 @@ class CognitiveDriftEngine:
         # Maybe reinforce decaying seed
         self._maybe_reinforce_seed(seed, drift_succeeded)
 
-    # ── Action routing ────────────────────────────────────────────
+    # -- Action routing --------------------------------------------------------
 
     def _route_thought(self, thought: Dict, seed: Dict, max_activation: float,
                        activated: List[Dict] = None, grounding_episode: Optional[Dict] = None):
@@ -908,7 +908,7 @@ class CognitiveDriftEngine:
 
 
 def cognitive_drift_worker(shared_state=None):
-    """Module-level wrapper for multiprocessing."""
+    """Module-level wrapper for threading."""
     logging.basicConfig(level=logging.INFO)
     try:
         config = ConfigService.get_agent_config("cognitive-drift")

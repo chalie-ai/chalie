@@ -42,8 +42,11 @@ export class VoiceIO {
     try {
       const res = await fetch('/voice/health', { signal: AbortSignal.timeout(3000) });
       if (res.ok) {
-        this._available = true;
-        return { tts: true, stt: true };
+        const data = await res.json();
+        if (data.status !== 'unavailable') {
+          this._available = true;
+          return { tts: true, stt: true };
+        }
       }
     } catch (_) {
       // Voice service not available — graceful degradation

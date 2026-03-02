@@ -88,7 +88,7 @@ class ReflectAction(AutonomousAction):
         if not config.get('enabled', True):
             self.enabled = False
 
-    # ── Gate 1: Relevance ──────────────────────────────────────────
+    # -- Gate 1: Relevance -----------------------------------------------------
 
     def _relevance_score(self, thought: ThoughtContext) -> Tuple[float, bool, Dict]:
         """
@@ -201,7 +201,7 @@ class ReflectAction(AutonomousAction):
             return 0.0
         return dot / (norm_a * norm_b)
 
-    # ── Gate 2: Fatigue ────────────────────────────────────────────
+    # -- Gate 2: Fatigue -------------------------------------------------------
 
     def _fatigue_passes(self, thought: ThoughtContext) -> Tuple[bool, Dict]:
         """Check if REFLECT's share of fatigue budget is available."""
@@ -227,7 +227,7 @@ class ReflectAction(AutonomousAction):
 
         return (True, details)
 
-    # ── Main interface ─────────────────────────────────────────────
+    # -- Main interface --------------------------------------------------------
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
         """
@@ -373,7 +373,7 @@ class ReflectAction(AutonomousAction):
         self.redis.rpush(outcomes_key, entry)
         self.redis.ltrim(outcomes_key, -20, -1)
 
-    # ── Helpers ────────────────────────────────────────────────────
+    # -- Helpers ---------------------------------------------------------------
 
     def _analyze_act_strategies(self, topic: str) -> Optional[Dict]:
         """Compare recent ACT loop tool combinations for strategy insights."""
@@ -382,38 +382,85 @@ class ReflectAction(AutonomousAction):
         try:
             with self._db_service.connection() as conn:
                 cursor = conn.cursor()
+                # SQLite: use json_each to expand actions_executed array,
+                # then json_extract to pull action_type from each element.
                 cursor.execute("""
-                    SELECT loop_id,
-                           array_agg(DISTINCT (ae->>'action_type')) as tool_types,
-                           SUM(COALESCE(net_value, 0)) as total_net_value,
-                           COUNT(*) as iteration_count,
-                           MIN(started_at) as loop_start,
-                           MAX(completed_at) as loop_end,
-                           MAX(termination_reason) as termination
-                    FROM cortex_iterations,
-                         LATERAL jsonb_array_elements(actions_executed) ae
-                    WHERE topic = %s
-                      AND created_at > NOW() - INTERVAL '24 hours'
-                      AND actions_executed IS NOT NULL
-                      AND jsonb_array_length(actions_executed) > 0
-                    GROUP BY loop_id
-                    ORDER BY MAX(created_at) DESC
-                    LIMIT 10
+                    SELECT ci.loop_id,
+                           ci.net_value,
+                           ci.started_at,
+                           ci.completed_at,
+                           ci.termination_reason,
+                           ci.actions_executed
+                    FROM cortex_iterations ci
+                    WHERE ci.topic = ?
+                      AND ci.created_at > datetime('now', '-24 hours')
+                      AND ci.actions_executed IS NOT NULL
+                      AND json_array_length(ci.actions_executed) > 0
+                    ORDER BY ci.created_at DESC
+                    LIMIT 50
                 """, (topic,))
-                rows = cursor.fetchall()
+                raw_rows = cursor.fetchall()
                 cursor.close()
 
-                if len(rows) < 2:
+                if len(raw_rows) < 2:
+                    return None
+
+                # Group by loop_id and aggregate
+                loop_data = {}
+                for row in raw_rows:
+                    loop_id = row[0]
+                    net_value = row[1] or 0.0
+                    started_at = row[2]
+                    completed_at = row[3]
+                    actions_json = row[5]
+
+                    # Parse actions_executed JSON
+                    tool_types = set()
+                    if actions_json:
+                        try:
+                            actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
+                            for a in actions:
+                                if isinstance(a, dict) and 'action_type' in a:
+                                    tool_types.add(a['action_type'])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    if loop_id not in loop_data:
+                        loop_data[loop_id] = {
+                            'tool_types': set(),
+                            'total_net_value': 0.0,
+                            'iteration_count': 0,
+                            'loop_start': started_at,
+                            'loop_end': completed_at,
+                        }
+                    entry = loop_data[loop_id]
+                    entry['tool_types'] |= tool_types
+                    entry['total_net_value'] += net_value
+                    entry['iteration_count'] += 1
+                    if started_at and (entry['loop_start'] is None or started_at < entry['loop_start']):
+                        entry['loop_start'] = started_at
+                    if completed_at and (entry['loop_end'] is None or completed_at > entry['loop_end']):
+                        entry['loop_end'] = completed_at
+
+                loops = list(loop_data.values())[:10]
+
+                if len(loops) < 2:
                     return None
 
                 strategy_outcomes = {}
-                for row in rows:
-                    tools = frozenset(row[1]) if row[1] else frozenset()
-                    net_value = row[2] or 0.0
-                    iterations = row[3] or 0
+                for loop in loops:
+                    tools = frozenset(loop['tool_types'])
+                    net_value = loop['total_net_value']
+                    iterations = loop['iteration_count']
                     seconds = 0.0
-                    if row[4] and row[5]:
-                        seconds = (row[5] - row[4]).total_seconds()
+                    if loop['loop_start'] and loop['loop_end']:
+                        try:
+                            from datetime import datetime
+                            t_start = datetime.fromisoformat(loop['loop_start']) if isinstance(loop['loop_start'], str) else loop['loop_start']
+                            t_end = datetime.fromisoformat(loop['loop_end']) if isinstance(loop['loop_end'], str) else loop['loop_end']
+                            seconds = (t_end - t_start).total_seconds()
+                        except Exception:
+                            pass
                     complexity = 'simple' if iterations <= 2 else ('moderate' if iterations <= 4 else 'complex')
 
                     strategy_outcomes.setdefault(tools, []).append({
@@ -444,7 +491,7 @@ class ReflectAction(AutonomousAction):
                     'worst_strategy': ', '.join(sorted(worst[0])),
                     'worst_avg_value': sum(e['net_value'] for e in worst_entries) / len(worst_entries),
                     'worst_avg_seconds': sum(e['seconds'] for e in worst_entries) / len(worst_entries),
-                    'loops_analyzed': len(rows),
+                    'loops_analyzed': len(loops),
                 }
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Strategy analysis failed: {e}")
@@ -466,8 +513,8 @@ class ReflectAction(AutonomousAction):
                     cursor.execute("""
                         UPDATE semantic_concepts
                         SET access_count = access_count + 1,
-                            last_accessed_at = NOW()
-                        WHERE id = %s AND deleted_at IS NULL
+                            last_accessed_at = datetime('now')
+                        WHERE id = ? AND deleted_at IS NULL
                     """, (concept_id,))
                     boosted.append(str(concept_id))
                 cursor.close()

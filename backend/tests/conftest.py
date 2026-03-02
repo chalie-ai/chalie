@@ -1,7 +1,7 @@
 """
 Shared test fixtures — full sandbox isolation.
 
-No real Redis, PostgreSQL, or Ollama connections are made.
+No real external connections. MemoryStore IS the production implementation.
 """
 
 import sys
@@ -12,16 +12,15 @@ from unittest.mock import MagicMock, patch, MagicMock
 from io import BytesIO
 
 import pytest
-import fakeredis
 
 
 @pytest.fixture
 def mock_redis():
-    """Isolated in-memory Redis — no real Redis touched."""
-    r = fakeredis.FakeRedis(decode_responses=True)
-    with patch('services.redis_client.RedisClientService.create_connection', return_value=r):
-        yield r
-    r.flushall()
+    """Isolated MemoryStore — same implementation used in production."""
+    from services.memory_store import MemoryStore
+    store = MemoryStore()
+    with patch('services.redis_client.RedisClientService.create_connection', return_value=store):
+        yield store
 
 
 @pytest.fixture
@@ -94,8 +93,9 @@ def mock_config():
         'mode-tiebreaker': 'Test tiebreaker prompt',
     }
     connections = {
-        'redis': {'host': 'localhost', 'port': 6379},
-        'postgres': {'host': 'localhost', 'port': 5432, 'database': 'test'},
+        'redis': {},
+        'rest_api': {'host': '0.0.0.0', 'port': 8081},
+        'voice': {'enabled': False},
     }
 
     with patch('services.config_service.ConfigService.get_agent_config', side_effect=lambda name: agent_configs.get(name, {})), \
@@ -121,7 +121,7 @@ def mock_ollama():
 
 @pytest.fixture
 def mock_db():
-    """Mock DatabaseService — no real PostgreSQL touched."""
+    """Mock DatabaseService — no real SQLite touched."""
     mock = MagicMock()
     ctx = MagicMock()
     cursor = MagicMock()
@@ -173,7 +173,7 @@ def mock_db_rows():
     session_ctx.__exit__ = MagicMock(return_value=False)
     db.get_session.return_value = session_ctx
 
-    # Expose session_result for tests that need SQLAlchemy-style control
+    # Expose session_result for tests that need session-style control
     db._test_session = session
     db._test_session_result = session_result
 

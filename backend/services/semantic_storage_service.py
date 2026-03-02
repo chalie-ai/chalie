@@ -5,6 +5,7 @@ Responsibility: Storage layer only (SRP).
 
 import logging
 import json
+import struct
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -12,10 +13,21 @@ from services.database_service import DatabaseService
 
 
 def _json_default(obj):
-    """Handle UUID and other non-serializable types from PostgreSQL."""
+    """Handle UUID and other non-serializable types."""
     if isinstance(obj, uuid.UUID):
         return str(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    return embedding
 
 
 class SemanticStorageService:
@@ -29,6 +41,27 @@ class SemanticStorageService:
             database_service: DatabaseService instance for connection management
         """
         self.db_service = database_service
+
+    def _store_embedding(self, conn, concept_id: str, embedding):
+        """Store embedding in the companion vec table."""
+        try:
+            blob = _pack_embedding(embedding)
+            if blob is None:
+                return
+
+            # Get the rowid of the concept for vec table linking
+            cursor = conn.cursor()
+            cursor.execute("SELECT rowid FROM semantic_concepts WHERE id = ?", (concept_id,))
+            row = cursor.fetchone()
+            if row:
+                rowid = row[0]
+                cursor.execute(
+                    "INSERT OR REPLACE INTO semantic_concepts_vec(rowid, embedding) VALUES (?, ?)",
+                    (rowid, blob)
+                )
+            cursor.close()
+        except Exception as e:
+            logging.warning(f"Failed to store concept embedding: {e}")
 
     def store_concept(self, concept_data: dict) -> str:
         """
@@ -52,22 +85,24 @@ class SemanticStorageService:
                 raise ValueError(f"Missing required field: {field}")
 
         try:
+            concept_id = str(uuid.uuid4())
+            embedding = concept_data.get('embedding')
+
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
                 cursor.execute("""
                     INSERT INTO semantic_concepts (
-                        concept_name, concept_type, definition, embedding,
+                        id, concept_name, concept_type, definition,
                         abstraction_level, domain, confidence, source_episodes,
                         context_constraints, examples
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
+                    concept_id,
                     concept_data['concept_name'],
                     concept_data['concept_type'],
                     concept_data['definition'],
-                    concept_data.get('embedding'),
                     concept_data.get('abstraction_level', 3),
                     concept_data.get('domain'),
                     concept_data.get('confidence', 0.5),
@@ -76,7 +111,10 @@ class SemanticStorageService:
                     json.dumps(concept_data.get('examples', []), default=_json_default)
                 ))
 
-                concept_id = cursor.fetchone()[0]
+                # Insert embedding into vec table if available
+                if embedding is not None:
+                    self._store_embedding(conn, concept_id, embedding)
+
                 cursor.close()
 
                 logging.info(f"Stored concept {concept_id}: '{concept_data['concept_name']}' ({concept_data['concept_type']})")
@@ -102,14 +140,14 @@ class SemanticStorageService:
 
                 cursor.execute("""
                     SELECT
-                        id, concept_name, concept_type, definition, embedding,
+                        id, concept_name, concept_type, definition,
                         abstraction_level, domain, strength, activation_score,
                         access_count, consolidation_count, confidence, source_episodes,
                         verification_status, context_constraints, examples,
                         first_learned_at, last_accessed_at, last_reinforced_at,
                         utility_score, decay_resistance, created_at, updated_at
                     FROM semantic_concepts
-                    WHERE id = %s AND deleted_at IS NULL
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (concept_id,))
 
                 row = cursor.fetchone()
@@ -118,34 +156,30 @@ class SemanticStorageService:
                 if not row:
                     return None
 
-                embedding = row[4]
-                if isinstance(embedding, str):
-                    embedding = json.loads(embedding)
-
                 return {
                     'id': str(row[0]),
                     'concept_name': row[1],
                     'concept_type': row[2],
                     'definition': row[3],
-                    'embedding': embedding,
-                    'abstraction_level': row[5],
-                    'domain': row[6],
-                    'strength': row[7],
-                    'activation_score': row[8],
-                    'access_count': row[9],
-                    'consolidation_count': row[10],
-                    'confidence': row[11],
-                    'source_episodes': row[12],
-                    'verification_status': row[13],
-                    'context_constraints': row[14],
-                    'examples': row[15],
-                    'first_learned_at': row[16],
-                    'last_accessed_at': row[17],
-                    'last_reinforced_at': row[18],
-                    'utility_score': row[19],
-                    'decay_resistance': row[20],
-                    'created_at': row[21],
-                    'updated_at': row[22]
+                    'embedding': None,  # Embeddings live in vec table, not base table
+                    'abstraction_level': row[4],
+                    'domain': row[5],
+                    'strength': row[6],
+                    'activation_score': row[7],
+                    'access_count': row[8],
+                    'consolidation_count': row[9],
+                    'confidence': row[10],
+                    'source_episodes': row[11],
+                    'verification_status': row[12],
+                    'context_constraints': row[13],
+                    'examples': row[14],
+                    'first_learned_at': row[15],
+                    'last_accessed_at': row[16],
+                    'last_reinforced_at': row[17],
+                    'utility_score': row[18],
+                    'decay_resistance': row[19],
+                    'created_at': row[20],
+                    'updated_at': row[21]
                 }
 
         except Exception as e:
@@ -171,7 +205,7 @@ class SemanticStorageService:
                 cursor.execute("""
                     SELECT strength, source_episodes, consolidation_count, decay_resistance
                     FROM semantic_concepts
-                    WHERE id = %s AND deleted_at IS NULL
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (concept_id,))
 
                 row = cursor.fetchone()
@@ -180,9 +214,15 @@ class SemanticStorageService:
                     cursor.close()
                     return False
 
-                current_strength, source_episodes, consolidation_count, decay_resistance = row
+                current_strength, source_episodes_raw, consolidation_count, decay_resistance = row
 
-                # Strengthening formula: new_strength = min(10.0, old_strength × 1.1)
+                # Parse source_episodes from JSON text
+                if isinstance(source_episodes_raw, str):
+                    source_episodes = json.loads(source_episodes_raw)
+                else:
+                    source_episodes = source_episodes_raw or []
+
+                # Strengthening formula: new_strength = min(10.0, old_strength * 1.1)
                 new_strength = min(10.0, current_strength * 1.1)
 
                 # Add episode to source_episodes if not already present
@@ -192,7 +232,7 @@ class SemanticStorageService:
                 # Increment consolidation count
                 new_consolidation_count = consolidation_count + 1
 
-                # Update decay_resistance based on consolidation (0.5 + 0.05 × log(consolidation_count + 1))
+                # Update decay_resistance based on consolidation (0.5 + 0.05 * log(consolidation_count + 1))
                 import math
                 new_decay_resistance = min(1.0, 0.5 + 0.05 * math.log(new_consolidation_count + 1))
 
@@ -200,13 +240,13 @@ class SemanticStorageService:
                 cursor.execute("""
                     UPDATE semantic_concepts
                     SET
-                        strength = %s,
-                        source_episodes = %s,
-                        consolidation_count = %s,
-                        decay_resistance = %s,
-                        last_reinforced_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = %s
+                        strength = ?,
+                        source_episodes = ?,
+                        consolidation_count = ?,
+                        decay_resistance = ?,
+                        last_reinforced_at = datetime('now'),
+                        updated_at = datetime('now')
+                    WHERE id = ?
                 """, (
                     new_strength,
                     json.dumps(source_episodes, default=_json_default),
@@ -217,7 +257,7 @@ class SemanticStorageService:
 
                 cursor.close()
 
-                logging.info(f"Strengthened concept {concept_id}: {current_strength:.2f} → {new_strength:.2f}")
+                logging.info(f"Strengthened concept {concept_id}: {current_strength:.2f} -> {new_strength:.2f}")
                 return True
 
         except Exception as e:
@@ -248,9 +288,9 @@ class SemanticStorageService:
                 cursor.execute("""
                     SELECT id, strength, source_episodes
                     FROM semantic_relationships
-                    WHERE source_concept_id = %s
-                      AND target_concept_id = %s
-                      AND relationship_type = %s
+                    WHERE source_concept_id = ?
+                      AND target_concept_id = ?
+                      AND relationship_type = ?
                       AND deleted_at IS NULL
                 """, (
                     relationship_data['source_concept_id'],
@@ -262,7 +302,14 @@ class SemanticStorageService:
 
                 if existing:
                     # Strengthen existing relationship
-                    relationship_id, current_strength, source_episodes = existing
+                    relationship_id, current_strength, source_episodes_raw = existing
+
+                    # Parse source_episodes from JSON text
+                    if isinstance(source_episodes_raw, str):
+                        source_episodes = json.loads(source_episodes_raw)
+                    else:
+                        source_episodes = source_episodes_raw or []
+
                     new_strength = min(1.0, current_strength * 1.1)
 
                     # Add new episodes
@@ -273,21 +320,23 @@ class SemanticStorageService:
 
                     cursor.execute("""
                         UPDATE semantic_relationships
-                        SET strength = %s, source_episodes = %s, updated_at = NOW()
-                        WHERE id = %s
+                        SET strength = ?, source_episodes = ?, updated_at = datetime('now')
+                        WHERE id = ?
                     """, (new_strength, json.dumps(source_episodes, default=_json_default), relationship_id))
 
-                    logging.info(f"Strengthened relationship {relationship_id}: {current_strength:.2f} → {new_strength:.2f}")
+                    logging.info(f"Strengthened relationship {relationship_id}: {current_strength:.2f} -> {new_strength:.2f}")
                 else:
                     # Create new relationship
+                    relationship_id = str(uuid.uuid4())
+
                     cursor.execute("""
                         INSERT INTO semantic_relationships (
-                            source_concept_id, target_concept_id, relationship_type,
+                            id, source_concept_id, target_concept_id, relationship_type,
                             strength, bidirectional, source_episodes, confidence
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
+                        relationship_id,
                         relationship_data['source_concept_id'],
                         relationship_data['target_concept_id'],
                         relationship_data['relationship_type'],
@@ -297,7 +346,6 @@ class SemanticStorageService:
                         relationship_data.get('confidence', 0.5)
                     ))
 
-                    relationship_id = cursor.fetchone()[0]
                     logging.info(f"Created relationship {relationship_id}: {relationship_data['relationship_type']}")
 
                 cursor.close()
@@ -318,17 +366,19 @@ class SemanticStorageService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
+                # Join with vec table to only return concepts that have embeddings
                 cursor.execute("""
                     SELECT
-                        id, concept_name, concept_type, definition, embedding,
-                        abstraction_level, domain, strength, activation_score,
-                        access_count, consolidation_count, confidence, source_episodes,
-                        verification_status, context_constraints, examples,
-                        first_learned_at, last_accessed_at, last_reinforced_at,
-                        utility_score, decay_resistance, created_at, updated_at
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL AND embedding IS NOT NULL
-                    ORDER BY strength DESC, confidence DESC
+                        sc.id, sc.concept_name, sc.concept_type, sc.definition,
+                        sc.abstraction_level, sc.domain, sc.strength, sc.activation_score,
+                        sc.access_count, sc.consolidation_count, sc.confidence, sc.source_episodes,
+                        sc.verification_status, sc.context_constraints, sc.examples,
+                        sc.first_learned_at, sc.last_accessed_at, sc.last_reinforced_at,
+                        sc.utility_score, sc.decay_resistance, sc.created_at, sc.updated_at
+                    FROM semantic_concepts sc
+                    JOIN semantic_concepts_vec v ON v.rowid = sc.rowid
+                    WHERE sc.deleted_at IS NULL
+                    ORDER BY sc.strength DESC, sc.confidence DESC
                 """)
 
                 rows = cursor.fetchall()
@@ -336,33 +386,30 @@ class SemanticStorageService:
 
                 concepts = []
                 for row in rows:
-                    embedding = row[4]
-                    if isinstance(embedding, str):
-                        embedding = json.loads(embedding)
                     concepts.append({
                         'id': str(row[0]),
                         'concept_name': row[1],
                         'concept_type': row[2],
                         'definition': row[3],
-                        'embedding': embedding,
-                        'abstraction_level': row[5],
-                        'domain': row[6],
-                        'strength': row[7],
-                        'activation_score': row[8],
-                        'access_count': row[9],
-                        'consolidation_count': row[10],
-                        'confidence': row[11],
-                        'source_episodes': row[12],
-                        'verification_status': row[13],
-                        'context_constraints': row[14],
-                        'examples': row[15],
-                        'first_learned_at': row[16],
-                        'last_accessed_at': row[17],
-                        'last_reinforced_at': row[18],
-                        'utility_score': row[19],
-                        'decay_resistance': row[20],
-                        'created_at': row[21],
-                        'updated_at': row[22]
+                        'embedding': None,  # Embeddings live in vec table
+                        'abstraction_level': row[4],
+                        'domain': row[5],
+                        'strength': row[6],
+                        'activation_score': row[7],
+                        'access_count': row[8],
+                        'consolidation_count': row[9],
+                        'confidence': row[10],
+                        'source_episodes': row[11],
+                        'verification_status': row[12],
+                        'context_constraints': row[13],
+                        'examples': row[14],
+                        'first_learned_at': row[15],
+                        'last_accessed_at': row[16],
+                        'last_reinforced_at': row[17],
+                        'utility_score': row[18],
+                        'decay_resistance': row[19],
+                        'created_at': row[20],
+                        'updated_at': row[21]
                     })
 
                 logging.debug(f"Retrieved {len(concepts)} concepts")
@@ -393,7 +440,7 @@ class SemanticStorageService:
                             id, source_concept_id, target_concept_id, relationship_type,
                             strength, bidirectional, source_episodes, confidence
                         FROM semantic_relationships
-                        WHERE source_concept_id = %s AND deleted_at IS NULL
+                        WHERE source_concept_id = ? AND deleted_at IS NULL
                     """, (concept_id,))
                 elif direction == 'incoming':
                     cursor.execute("""
@@ -401,7 +448,7 @@ class SemanticStorageService:
                             id, source_concept_id, target_concept_id, relationship_type,
                             strength, bidirectional, source_episodes, confidence
                         FROM semantic_relationships
-                        WHERE target_concept_id = %s AND deleted_at IS NULL
+                        WHERE target_concept_id = ? AND deleted_at IS NULL
                     """, (concept_id,))
                 else:  # both
                     cursor.execute("""
@@ -409,7 +456,7 @@ class SemanticStorageService:
                             id, source_concept_id, target_concept_id, relationship_type,
                             strength, bidirectional, source_episodes, confidence
                         FROM semantic_relationships
-                        WHERE (source_concept_id = %s OR target_concept_id = %s)
+                        WHERE (source_concept_id = ? OR target_concept_id = ?)
                           AND deleted_at IS NULL
                     """, (concept_id, concept_id))
 
