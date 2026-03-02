@@ -28,6 +28,150 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ─── Default Tool Auto-Install ───────────────────────────────────────────────
+
+def _safe_tar_extract(tf, dest):
+    """Extract tarball with path traversal and symlink protection."""
+    dest_resolved = str(dest.resolve())
+    sep = os.sep
+    for member in tf.getmembers():
+        member_path = (dest / member.name).resolve()
+        if not str(member_path).startswith(dest_resolved + sep) and str(member_path) != dest_resolved:
+            raise RuntimeError(f"Unsafe tar member rejected: {member.name}")
+        if member.issym() or member.islnk():
+            raise RuntimeError(f"Tar symlink/hardlink rejected: {member.name}")
+    tf.extractall(dest)
+
+
+def _auto_install_from_release(name, repo, tools_dir):
+    """Download and install a default tool from its latest GitHub release tarball.
+
+    Uses stdlib only (urllib + tarfile). Short timeouts; atomic move via staging dir.
+    """
+    import json as _json
+    import tarfile
+    import tempfile
+    import shutil
+    from pathlib import Path as _Path
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    logger.info(f"[Startup] Auto-installing default tool '{name}' from {repo}")
+
+    tmp_dir = None
+    staging = tools_dir / f".{name}_installing"
+    try:
+        # 1. Resolve latest release tag (5s timeout — fail fast)
+        req = Request(api_url, headers={"Accept": "application/vnd.github+json",
+                                         "User-Agent": "Chalie/1.0"})
+        with urlopen(req, timeout=5) as resp:
+            release = _json.loads(resp.read())
+        tag = release.get("tag_name")
+        if not tag:
+            logger.warning(f"[Startup] No release found for '{name}', skipping auto-install")
+            return
+
+        # 2. Download source tarball (10s timeout)
+        tarball_url = f"https://github.com/{repo}/archive/refs/tags/{tag}.tar.gz"
+        tmp_dir = _Path(tempfile.mkdtemp(prefix=f"chalie_default_{name}_"))
+        tarball_path = tmp_dir / "tool.tar.gz"
+        with urlopen(tarball_url, timeout=10) as resp:
+            tarball_path.write_bytes(resp.read())
+
+        # 3. Safe extraction (path traversal + symlink protection)
+        extract_dir = tmp_dir / "extracted"
+        extract_dir.mkdir()
+        with tarfile.open(tarball_path) as tf:
+            _safe_tar_extract(tf, extract_dir)
+
+        # GitHub tarballs have a single top-level dir like "repo-tag/"
+        children = list(extract_dir.iterdir())
+        source_dir = children[0] if len(children) == 1 and children[0].is_dir() else extract_dir
+
+        # 4. Validate manifest exists
+        if not (source_dir / "manifest.json").exists():
+            logger.warning(f"[Startup] '{name}' release has no manifest.json, skipping")
+            return
+
+        # 5. Atomic install: move to staging, then rename to final path
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.move(str(source_dir), str(staging))
+        staging.rename(tools_dir / name)
+        logger.info(f"[Startup] Installed default tool '{name}' (release {tag})")
+
+        # 6. Record source metadata so the update checker can track it
+        try:
+            from services.tool_config_service import ToolConfigService
+            from services.database_service import get_shared_db_service
+            cfg = ToolConfigService(get_shared_db_service())
+            cfg.set_tool_config(name, "_source_type", "default")
+            cfg.set_tool_config(name, "_source_url", f"https://github.com/{repo}")
+            cfg.set_tool_config(name, "_installed_tag", tag)
+        except Exception:
+            pass  # non-fatal
+
+    except (URLError, OSError) as e:
+        logger.warning(f"[Startup] Failed to auto-install '{name}': {e}")
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    except Exception as e:
+        logger.warning(f"[Startup] Unexpected error auto-installing '{name}': {e}")
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    finally:
+        if tmp_dir is not None and tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _install_default_tools():
+    """Kick off background install of any missing tools marked installs_by_default.
+
+    Skipped entirely if backend/data/.no-default-tools exists (written by the
+    installer when --disable-default-tools was passed).
+    Returns immediately — actual downloads happen in a daemon thread.
+    """
+    import json as _json
+    import threading
+    from pathlib import Path as _Path
+
+    backend_dir = _Path(__file__).parent
+    marker = backend_dir / "data" / ".no-default-tools"
+    if marker.exists():
+        logger.info("[Startup] Default tools disabled (.no-default-tools marker found)")
+        return
+
+    lib_path = backend_dir / "configs" / "embodiment_library.json"
+    if not lib_path.exists():
+        return
+
+    tools_dir = backend_dir / "tools"
+
+    with open(lib_path) as f:
+        library = _json.load(f)
+
+    pending = [
+        (e["name"], e["repo"])
+        for e in library
+        if e.get("installs_by_default") and e.get("name") and e.get("repo")
+        and not (tools_dir / e["name"]).exists()
+    ]
+
+    if not pending:
+        return
+
+    def _bg():
+        for name, repo in pending:
+            _auto_install_from_release(name, repo, tools_dir)
+        logger.info(f"[Startup] Default tool install complete ({len(pending)} installed)")
+
+    t = threading.Thread(target=_bg, name="default-tool-installer", daemon=True)
+    t.start()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
@@ -150,6 +294,9 @@ def main():
                   "services.temporal_pattern_service", "temporal_pattern_worker")
     _try_register(manager, "tool-update-checker",
                   "services.tool_update_service", "tool_update_worker")
+
+    # Auto-install any missing default tools (background thread, non-blocking)
+    _install_default_tools()
 
     # Register cron-triggered tools
     registry = None
