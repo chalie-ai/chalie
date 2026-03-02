@@ -6,11 +6,6 @@ from .redis_client import RedisClientService
 from .config_service import ConfigService
 from .semantic_consolidation_tracker import SemanticConsolidationTracker
 
-try:
-    from rq import Queue
-except ImportError:
-    Queue = None
-
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +115,9 @@ class IdleConsolidationService:
 
     def _trigger_consolidation(self) -> None:
         """Trigger batch consolidation by enqueuing a batch job."""
-        if Queue is None:
-            logger.error("[IDLE CONSOLIDATION] RQ not available, cannot enqueue batch job")
-            return
-
         try:
-            redis_connection = RedisClientService.create_connection(decode_responses=False)
-            queue = Queue(self.semantic_queue, connection=redis_connection)
+            from services.prompt_queue import PromptQueue
+            from workers.semantic_consolidation_worker import semantic_consolidation_worker
 
             batch_job = {
                 "type": "batch_consolidation",
@@ -134,10 +125,11 @@ class IdleConsolidationService:
                 "timestamp": time.time()
             }
 
-            queue.enqueue(
-                'workers.semantic_consolidation_worker.semantic_consolidation_worker',
-                batch_job
+            queue = PromptQueue(
+                queue_name=self.semantic_queue,
+                worker_func=semantic_consolidation_worker,
             )
+            queue.enqueue(batch_job)
 
             logger.info("[IDLE CONSOLIDATION] Enqueued batch consolidation job")
 
@@ -149,7 +141,7 @@ class IdleConsolidationService:
 
 
 def idle_consolidation_process(shared_state):
-    """Top-level entry point for multiprocessing spawn.
+    """Top-level entry point for thread spawn.
 
     Creates the service instance inside the child process to avoid
     pickling Redis connections (which contain _thread.lock objects).

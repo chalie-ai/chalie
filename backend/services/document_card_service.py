@@ -75,6 +75,19 @@ class DocumentCardService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} emit_restore_card failed: {e}")
 
+    def emit_save_suggestion_card(
+        self,
+        topic: str,
+        content_type: str,
+        thread_id: str,
+    ) -> None:
+        """Emit a card suggesting the user save conversation content as a document."""
+        try:
+            html = self._build_save_suggestion_html(topic, content_type, thread_id)
+            self._emit(topic, html, "save_suggestion", "Save Document")
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} emit_save_suggestion_card failed: {e}")
+
     # ─────────────────────────────────────────────────────────────────────────
     # Core emit
     # ─────────────────────────────────────────────────────────────────────────
@@ -334,6 +347,53 @@ class DocumentCardService:
             f'{self._escape(doc_name)}</span>'
             f'{badge}'
             f'</div>'
+        )
+
+    def _build_save_suggestion_html(
+        self,
+        topic: str,
+        content_type: str,
+        thread_id: str,
+    ) -> str:
+        """Build save suggestion card with accept/dismiss buttons."""
+        import json as _json
+
+        scope_id = uuid.uuid4().hex[:8]
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        display_type = content_type.replace('_', ' ')
+
+        payload_accept = _json.dumps({
+            "thread_id": thread_id,
+            "topic": topic,
+            "content_type": content_type,
+        })
+        payload_dismiss = _json.dumps({
+            "thread_id": thread_id,
+            "topic": topic,
+        })
+
+        return (
+            f'<div data-card-type="save-suggestion" data-scope-id="{scope_id}"'
+            f' data-tool="document" data-created-at="{created_at}"'
+            f' style="padding:16px 18px;font-family:inherit;">'
+            f'<div style="font-size:14px;color:rgba(234,230,242,0.75);line-height:1.5;">'
+            f'I noticed we put together a nice {self._escape(display_type)}. '
+            f'Want me to save it so you can find it later?</div>'
+            f'<div style="display:flex;gap:8px;margin-top:12px;">'
+            f'<button data-card-action="save-document"'
+            f' data-card-payload=\'{self._escape(payload_accept)}\''
+            f' style="padding:6px 14px;border-radius:6px;border:1px solid {ACCENT};'
+            f'background:rgba(0,240,255,0.08);color:{ACCENT};font-size:13px;'
+            f'font-weight:500;cursor:pointer;transition:all 220ms ease;">'
+            f'Yes, save it</button>'
+            f'<button data-card-action="dismiss-save"'
+            f' data-card-payload=\'{self._escape(payload_dismiss)}\''
+            f' style="padding:6px 14px;border-radius:6px;border:1px solid rgba(255,255,255,0.10);'
+            f'background:transparent;color:rgba(234,230,242,0.45);font-size:13px;'
+            f'cursor:pointer;transition:all 220ms ease;">'
+            f'No thanks</button>'
+            f'</div></div>'
         )
 
     # ─────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 # Data Schemas
 
-## Redis Topics (configurations)
-The Redis configuration is defined in `configs/connections.json`.  Current topic queue names:
+## MemoryStore Queue Topics (configurations)
+Queue topic names are defined in `configs/connections.json`.  Current topic queue names:
 ```json
 {
   "chat_history": "llm-chat",
@@ -20,7 +20,7 @@ The Redis configuration is defined in `configs/connections.json`.  Current topic
 ```
 Each key maps to a queue name that the worker services consume from.
 
-## PostgreSQL – Episodes Table
+## SQLite – Episodes Table
 The `episodic_storage_service.py` inserts rows into the `episodes` table. The table schema (partial) is:
 ```sql
 CREATE TABLE episodes (
@@ -70,9 +70,9 @@ CREATE TABLE episodes (
 - `last_accessed_at` (TIMESTAMP) – Last retrieval time (for freshness decay)
 - `access_count` (INTEGER) – Number of accesses
 
-## PostgreSQL – Threads Table
+## SQLite – Threads Table
 
-Conversations are stored as Redis-backed threads with metadata in PostgreSQL.
+Conversations are stored as MemoryStore-backed threads with metadata in SQLite.
 
 **Threads Table:**
 ```sql
@@ -96,9 +96,9 @@ CREATE TABLE threads (
 - `metadata`: Thread state including confidence, classifier info
 - `expires_at`: Thread expiry time (managed by thread_expiry_service)
 
-Conversation history is stored in Redis via `ThreadConversationService` with a 24h TTL. Thread metadata is persisted in PostgreSQL for durability.
+Conversation history is stored in MemoryStore via `ThreadConversationService` with a 24h TTL. Thread metadata is persisted in SQLite for durability.
 
-## PostgreSQL – Lists Tables
+## SQLite – Lists Tables
 
 Three tables provide deterministic list management with full history (`list_service.py`).
 
@@ -152,7 +152,7 @@ CREATE TABLE list_events (
 - Name resolution is case-insensitive; `list_service._resolve_list()` tries exact ID first, then name match
 - Context injection: `list_service.get_lists_for_prompt()` formats a compact summary injected as `{{active_lists}}` into all four mode prompts (RESPOND, ACT, CLARIFY, ACKNOWLEDGE)
 
-## PostgreSQL – Additional Core Tables
+## SQLite – Additional Core Tables
 
 ### Scheduled Items
 ```sql

@@ -945,7 +945,7 @@ class FrontalCortexService:
         try:
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task"]
+            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read"]
             available = [s for s in innate if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)

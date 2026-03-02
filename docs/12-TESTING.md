@@ -55,7 +55,7 @@ def test_get_returns_value_when_found(self, mock_db):
 ### Markers
 
 ```python
-@pytest.mark.unit          # No external deps (Redis, Postgres, LLM)
+@pytest.mark.unit          # No external deps (MemoryStore, SQLite, LLM)
 @pytest.mark.integration   # Requires running services
 ```
 
@@ -70,8 +70,8 @@ def test_get_returns_value_when_found(self, mock_db):
 
 All fixtures live in `tests/conftest.py`.
 
-### `mock_redis`
-In-memory Redis via `fakeredis.FakeRedis(decode_responses=True)`. Patches `RedisClientService.create_connection`. Flushes on teardown.
+### `mock_memory_store`
+In-memory MemoryStore instance. Patches `MemoryStore` connections. Flushes on teardown.
 
 ### `mock_config`
 Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for memory-chunker, mode-router, fact-store, frontal-cortex.
@@ -98,7 +98,7 @@ def test_something(self, mock_llm):
 ```
 
 ### `authed_client`
-Full Flask app with all blueprints, auth bypassed, DB/Redis mocked:
+Full Flask app with all blueprints, auth bypassed, DB/MemoryStore mocked:
 ```python
 def test_endpoint(self, authed_client):
     client, mock_db, mock_redis = authed_client
@@ -226,7 +226,7 @@ with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}):
 1. Create `tests/test_my_service.py`
 2. Import the service: `from services.my_service import MyService`
 3. Add `@pytest.mark.unit` to the test class
-4. Mock external deps (DB, Redis, LLM) in fixtures
+4. Mock external deps (DB, MemoryStore, LLM) in fixtures
 5. Write tests following AAA structure
 6. Run: `pytest tests/test_my_service.py -v`
 7. Verify: `pytest -m unit` still passes

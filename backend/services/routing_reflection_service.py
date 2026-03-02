@@ -315,7 +315,7 @@ class RoutingReflectionService:
 
 
 def routing_reflection_worker(shared_state=None):
-    """Module-level wrapper for multiprocessing."""
+    """Module-level wrapper for threading."""
     try:
         config = ConfigService.get_agent_config("mode-reflection")
         check_interval = config.get('check_interval', 300)

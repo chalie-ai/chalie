@@ -1,5 +1,5 @@
 """
-Routing Decision Service — Logs routing decisions to PostgreSQL.
+Routing Decision Service — Logs routing decisions to SQLite.
 
 Lightweight service following CortexIterationService pattern.
 Handles logging, feedback updates, and reflection storage.
@@ -18,7 +18,7 @@ LOG_PREFIX = "[ROUTING DECISION]"
 
 
 class RoutingDecisionService:
-    """Manages routing decision audit trail in PostgreSQL."""
+    """Manages routing decision audit trail in SQLite."""
 
     def __init__(self, db_service: DatabaseService):
         self.db_service = db_service
@@ -55,7 +55,7 @@ class RoutingDecisionService:
                         signal_snapshot, weight_snapshot, routing_time_ms,
                         previous_mode
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                 """, (
                     decision_id,
@@ -64,7 +64,7 @@ class RoutingDecisionService:
                     routing_result['mode'],
                     routing_result.get('router_confidence'),
                     json.dumps(routing_result.get('scores', {})),
-                    routing_result.get('tiebreaker_used', False),
+                    1 if routing_result.get('tiebreaker_used', False) else 0,
                     json.dumps(routing_result.get('tiebreaker_candidates')),
                     routing_result.get('margin'),
                     routing_result.get('effective_margin'),
@@ -99,8 +99,8 @@ class RoutingDecisionService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE routing_decisions
-                    SET feedback = %s
-                    WHERE id = %s
+                    SET feedback = ?
+                    WHERE id = ?
                 """, (json.dumps(feedback), decision_id))
                 cursor.close()
 
@@ -126,8 +126,8 @@ class RoutingDecisionService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE routing_decisions
-                    SET reflection = %s
-                    WHERE id = %s
+                    SET reflection = ?
+                    WHERE id = ?
                 """, (json.dumps(reflection), decision_id))
                 cursor.close()
 
@@ -161,10 +161,10 @@ class RoutingDecisionService:
                            signal_snapshot, feedback, reflection,
                            previous_mode, created_at
                     FROM routing_decisions
-                    WHERE created_at > NOW() - INTERVAL '%s hours'
+                    WHERE created_at > datetime('now', ? || ' hours')
                     ORDER BY created_at DESC
-                    LIMIT %s
-                """, (hours, limit))
+                    LIMIT ?
+                """, (str(-hours), limit))
 
                 rows = cursor.fetchall()
                 cursor.close()
@@ -218,7 +218,7 @@ class RoutingDecisionService:
                     FROM routing_decisions
                     WHERE reflection IS NULL
                     ORDER BY created_at ASC
-                    LIMIT %s
+                    LIMIT ?
                 """, (limit,))
 
                 rows = cursor.fetchall()
@@ -262,7 +262,7 @@ class RoutingDecisionService:
                 cursor.execute("""
                     SELECT selected_mode
                     FROM routing_decisions
-                    WHERE topic = %s
+                    WHERE topic = ?
                     ORDER BY created_at DESC
                     LIMIT 1
                 """, (topic,))
@@ -290,9 +290,9 @@ class RoutingDecisionService:
                 cursor.execute("""
                     SELECT selected_mode, COUNT(*) as cnt
                     FROM routing_decisions
-                    WHERE created_at > NOW() - INTERVAL '%s hours'
+                    WHERE created_at > datetime('now', ? || ' hours')
                     GROUP BY selected_mode
-                """, (hours,))
+                """, (str(-hours),))
 
                 rows = cursor.fetchall()
                 cursor.close()
@@ -322,18 +322,18 @@ class RoutingDecisionService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT
-                        COUNT(*) FILTER (WHERE tiebreaker_used = TRUE) as tb_count,
+                        SUM(CASE WHEN tiebreaker_used = 1 THEN 1 ELSE 0 END) as tb_count,
                         COUNT(*) as total
                     FROM routing_decisions
-                    WHERE created_at > NOW() - INTERVAL '%s hours'
-                """, (hours,))
+                    WHERE created_at > datetime('now', ? || ' hours')
+                """, (str(-hours),))
 
                 row = cursor.fetchone()
                 cursor.close()
 
                 if row[1] == 0:
                     return 0.0
-                return row[0] / row[1]
+                return (row[0] or 0) / row[1]
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Failed to get tiebreaker rate: {e}")

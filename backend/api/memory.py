@@ -143,7 +143,7 @@ def memory_forget():
                 if keys:
                     redis.delete(*keys)
 
-            # Truncate PostgreSQL tables
+            # Truncate SQLite tables
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             with db.connection() as conn:

@@ -97,7 +97,7 @@ FORK_TRIGGERS: Dict[str, str] = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Growth reflection templates — one dimension → list of variant phrasings
+# Growth reflection templates — one dimension -> list of variant phrasings
 # ─────────────────────────────────────────────────────────────────────────────
 GROWTH_REFLECTIONS: Dict[str, List[str]] = {
     'certainty_level': [
@@ -187,28 +187,28 @@ class AdaptiveLayerService:
             current_signals = current_signals or {}
             working_memory_turns = working_memory_turns or []
 
-            # ── 1. Fetch style ────────────────────────────────────────────────
+            # -- 1. Fetch style ------------------------------------------------
             style = self._get_communication_style(user_id)
 
-            # ── 2. Cold-start gate ────────────────────────────────────────────
+            # -- 2. Cold-start gate --------------------------------------------
             if not style:
                 return ""
             observation_count = style.get('_observation_count', 0)
             if observation_count < _MIN_OBSERVATION_COUNT:
                 return ""
 
-            # ── 3. Fetch supporting data ──────────────────────────────────────
+            # -- 3. Fetch supporting data --------------------------------------
             micro_prefs    = self._get_micro_preferences(user_id)
             challenge_tol  = self._get_challenge_tolerance(user_id)
 
-            # ── 4. Cognitive load ─────────────────────────────────────────────
+            # -- 4. Cognitive load ---------------------------------------------
             load_tier = self._estimate_cognitive_load(working_memory_turns, micro_prefs)
             load_directive = LOAD_DIRECTIVES.get(load_tier, "")
 
-            # ── 5. Energy mirror ──────────────────────────────────────────────
+            # -- 5. Energy mirror ----------------------------------------------
             mirror_directive = self._get_energy_mirror_directive(style, current_signals)
 
-            # ── 6. Build core directive slots ─────────────────────────────────
+            # -- 6. Build core directive slots ----------------------------------
             directives: List[str] = []
 
             # Load directive takes the first slot when load is HIGH/OVERLOAD
@@ -269,13 +269,13 @@ class AdaptiveLayerService:
             if mirror_directive and len(directives) < _MAX_DIRECTIVES:
                 directives.append(mirror_directive)
 
-            # ── 7. Fork directive (at most one) ───────────────────────────────
+            # -- 7. Fork directive (at most one) --------------------------------
             fork_directive = self._get_fork_directive(style, thread_id)
 
-            # ── 8. Growth reflection ──────────────────────────────────────────
+            # -- 8. Growth reflection -------------------------------------------
             growth_reflection = self._get_growth_reflection(user_id)
 
-            # ── 9. Assemble output ────────────────────────────────────────────
+            # -- 9. Assemble output ---------------------------------------------
             if not directives and not micro_prefs and not fork_directive and not growth_reflection:
                 return ""
 
@@ -318,7 +318,7 @@ class AdaptiveLayerService:
         Retrieve stored communication style dict from UserTraitService.
 
         Returns:
-            dict with dimension scores (1–10 scale) and '_observation_count', or {}.
+            dict with dimension scores (1-10 scale) and '_observation_count', or {}.
         """
         try:
             from services.user_trait_service import UserTraitService
@@ -348,7 +348,7 @@ class AdaptiveLayerService:
                 cursor.execute("""
                     SELECT trait_key, confidence
                     FROM user_traits
-                    WHERE user_id = %s
+                    WHERE user_id = ?
                       AND category = 'micro_preference'
                       AND confidence > 0.4
                     ORDER BY confidence DESC
@@ -369,7 +369,7 @@ class AdaptiveLayerService:
 
     def _get_challenge_tolerance(self, user_id: str) -> Optional[float]:
         """
-        Retrieve explicit challenge tolerance float (1–10) from user_traits.
+        Retrieve explicit challenge tolerance float (1-10) from user_traits.
 
         Stored as trait_key='challenge_tolerance', category='micro_preference'.
 
@@ -384,7 +384,7 @@ class AdaptiveLayerService:
                 cursor.execute("""
                     SELECT trait_value
                     FROM user_traits
-                    WHERE user_id = %s
+                    WHERE user_id = ?
                       AND trait_key = 'challenge_tolerance'
                       AND category = 'micro_preference'
                     ORDER BY updated_at DESC
@@ -419,10 +419,10 @@ class AdaptiveLayerService:
           +1  2 of the last 3 user turns are < 10 words
 
         Thresholds:
-          score < 2  → LOW
-          score < 4  → NORMAL
-          score < 6  → HIGH
-          score >= 6 → OVERLOAD
+          score < 2  -> LOW
+          score < 4  -> NORMAL
+          score < 6  -> HIGH
+          score >= 6 -> OVERLOAD
 
         Returns:
             str: One of LOW | NORMAL | HIGH | OVERLOAD
@@ -439,14 +439,14 @@ class AdaptiveLayerService:
 
             score = 0
 
-            # ── Length trend: last 3 user turns decreasing ────────────────────
+            # -- Length trend: last 3 user turns decreasing --------------------
             recent = user_turns[-3:] if len(user_turns) >= 3 else user_turns
             if len(recent) >= 3:
                 lengths = [len(t.split()) for t in recent]
                 if lengths[0] > lengths[1] > lengths[2]:
                     score += 2
 
-            # ── Question-mark density (confusion signal) ──────────────────────
+            # -- Question-mark density (confusion signal) ----------------------
             for turn in recent:
                 words = turn.split()
                 if not words:
@@ -457,11 +457,11 @@ class AdaptiveLayerService:
                     score += 2
                     break  # count once even if multiple turns trigger it
 
-            # ── prefers_concise micro-preference ─────────────────────────────
+            # -- prefers_concise micro-preference ------------------------------
             if any('concise' in p.lower() for p in micro_prefs):
                 score += 1
 
-            # ── Short turn density in last 3 ─────────────────────────────────
+            # -- Short turn density in last 3 ----------------------------------
             last_three = user_turns[-3:] if len(user_turns) >= 3 else user_turns
             short_count = sum(1 for t in last_three if len(t.split()) < 10)
             if short_count >= 2:
@@ -547,7 +547,7 @@ class AdaptiveLayerService:
 
         Only fires when:
           - thread_id is provided
-          - a dimension in FORK_TRIGGERS sits in the 4–7 mid-range (ambiguous)
+          - a dimension in FORK_TRIGGERS sits in the 4-7 mid-range (ambiguous)
           - the Redis cooldown key is not set
 
         Sets adaptive_fork_pending:{thread_id} (TTL 600s) when a fork is chosen.
@@ -566,7 +566,7 @@ class AdaptiveLayerService:
             if r.exists(cooldown_key):
                 return ""
 
-            # Find eligible dims: in fork triggers AND in ambiguous zone (4–7)
+            # Find eligible dims: in fork triggers AND in ambiguous zone (4-7)
             candidates: List[tuple] = []
             for dim, fork_text in FORK_TRIGGERS.items():
                 val = style.get(dim)
@@ -626,8 +626,8 @@ class AdaptiveLayerService:
                 cursor.execute("""
                     SELECT trait_key, trait_value
                     FROM user_traits
-                    WHERE user_id = %s
-                      AND trait_key LIKE 'growth_signal:%%'
+                    WHERE user_id = ?
+                      AND trait_key LIKE 'growth_signal:%'
                       AND category = 'core'
                 """, (user_id,))
                 rows = cursor.fetchall()
@@ -722,11 +722,11 @@ class AdaptiveLayerService:
     @staticmethod
     def _challenge_tier(tolerance: float) -> str:
         """
-        Map a 1–10 challenge tolerance value to a tier name.
+        Map a 1-10 challenge tolerance value to a tier name.
 
-          1–3  → low
-          4–7  → medium
-          8–10 → high
+          1-3  -> low
+          4-7  -> medium
+          8-10 -> high
         """
         if tolerance <= 3:
             return 'low'

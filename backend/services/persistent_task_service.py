@@ -62,7 +62,7 @@ class PersistentTaskService:
     def __init__(self, db_service):
         self.db = db_service
 
-    # ── CRUD ──────────────────────────────────────────────────────────
+    # -- CRUD ----------------------------------------------------------------
 
     def create_task(
         self,
@@ -80,7 +80,7 @@ class PersistentTaskService:
 
         Returns the created task dict.
         """
-        expires_at = datetime.now(timezone.utc) + timedelta(days=DEFAULT_EXPIRY_DAYS)
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=DEFAULT_EXPIRY_DAYS)).isoformat()
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -88,17 +88,14 @@ class PersistentTaskService:
                 INSERT INTO persistent_tasks
                     (account_id, thread_id, goal, scope, status, priority,
                      max_iterations, fatigue_budget, expires_at, deadline)
-                VALUES (%s, %s, %s, %s, 'proposed', %s, %s, %s, %s, %s)
-                RETURNING id, created_at
+                VALUES (?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?)
             """, (
                 account_id, thread_id, goal, scope, priority,
                 max_iterations, fatigue_budget, expires_at,
                 deadline,
             ))
-            row = cursor.fetchone()
-            conn.commit()
+            task_id = cursor.lastrowid
 
-        task_id = row[0]
         logger.info(f"{LOG_PREFIX} Created task {task_id}: {goal[:80]}")
 
         return self.get_task(task_id)
@@ -113,7 +110,7 @@ class PersistentTaskService:
                        max_iterations, created_at, updated_at, expires_at,
                        deadline, next_run_after, fatigue_budget
                 FROM persistent_tasks
-                WHERE id = %s
+                WHERE id = ?
             """, (task_id,))
             row = cursor.fetchone()
 
@@ -132,7 +129,7 @@ class PersistentTaskService:
                        max_iterations, created_at, updated_at, expires_at,
                        deadline, next_run_after, fatigue_budget
                 FROM persistent_tasks
-                WHERE account_id = %s
+                WHERE account_id = ?
                   AND status IN ('proposed', 'accepted', 'in_progress', 'paused')
                 ORDER BY priority ASC, created_at ASC
             """, (account_id,))
@@ -147,7 +144,7 @@ class PersistentTaskService:
         Eligibility: ACCEPTED or IN_PROGRESS, not expired, next_run_after passed.
         FIFO within priority (oldest first).
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).isoformat()
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -157,8 +154,8 @@ class PersistentTaskService:
                        deadline, next_run_after, fatigue_budget
                 FROM persistent_tasks
                 WHERE status IN ('accepted', 'in_progress')
-                  AND expires_at > %s
-                  AND (next_run_after IS NULL OR next_run_after <= %s)
+                  AND expires_at > ?
+                  AND (next_run_after IS NULL OR next_run_after <= ?)
                   AND iterations_used < max_iterations
                 ORDER BY priority ASC, created_at ASC
                 LIMIT 1
@@ -170,7 +167,7 @@ class PersistentTaskService:
 
         return self._row_to_dict(row)
 
-    # ── State Transitions ────────────────────────────────────────────
+    # -- State Transitions ---------------------------------------------------
 
     def transition(self, task_id: int, new_status: str) -> Tuple[bool, str]:
         """
@@ -192,12 +189,11 @@ class PersistentTaskService:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE persistent_tasks
-                SET status = %s, updated_at = NOW()
-                WHERE id = %s
+                SET status = ?, updated_at = datetime('now')
+                WHERE id = ?
             """, (new_status, task_id))
-            conn.commit()
 
-        logger.info(f"{LOG_PREFIX} Task {task_id}: {current} → {new_status}")
+        logger.info(f"{LOG_PREFIX} Task {task_id}: {current} -> {new_status}")
         return True, f"Task transitioned to {new_status}"
 
     def accept_task(self, task_id: int, scope: Optional[str] = None) -> Tuple[bool, str]:
@@ -216,9 +212,8 @@ class PersistentTaskService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE persistent_tasks SET scope = %s WHERE id = %s
+                    UPDATE persistent_tasks SET scope = ? WHERE id = ?
                 """, (scope, task_id))
-                conn.commit()
 
         return self.transition(task_id, 'accepted')
 
@@ -226,7 +221,7 @@ class PersistentTaskService:
         """
         Update task scope mid-execution (goal drift handling).
 
-        Retains previous progress — evaluates overlap for delta processing.
+        Retains previous progress -- evaluates overlap for delta processing.
         """
         task = self.get_task(task_id)
         if not task:
@@ -240,12 +235,12 @@ class PersistentTaskService:
 
         progress = task.get('progress', {}) or {}
         if overlap < 0.3:
-            # Minimal overlap → soft restart
+            # Minimal overlap -> soft restart
             progress['coverage_estimate'] = 0.0
             progress['last_summary'] = f"Scope updated (low overlap). Previous: {progress.get('last_summary', 'none')}"
             logger.info(f"{LOG_PREFIX} Task {task_id}: scope update with soft restart (overlap={overlap:.2f})")
         else:
-            # Significant overlap → delta processing
+            # Significant overlap -> delta processing
             progress['last_summary'] = f"Scope expanded. {progress.get('last_summary', '')}"
             logger.info(f"{LOG_PREFIX} Task {task_id}: scope update with delta processing (overlap={overlap:.2f})")
 
@@ -253,10 +248,9 @@ class PersistentTaskService:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE persistent_tasks
-                SET scope = %s, progress = %s, updated_at = NOW()
-                WHERE id = %s
+                SET scope = ?, progress = ?, updated_at = datetime('now')
+                WHERE id = ?
             """, (new_scope, json.dumps(progress), task_id))
-            conn.commit()
 
         return True, f"Scope updated (overlap: {overlap:.0%})"
 
@@ -267,13 +261,12 @@ class PersistentTaskService:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE persistent_tasks
-                SET priority = %s, updated_at = NOW()
-                WHERE id = %s
+                SET priority = ?, updated_at = datetime('now')
+                WHERE id = ?
             """, (new_priority, task_id))
-            conn.commit()
         return True, f"Priority set to {new_priority}"
 
-    # ── Checkpoint & Completion ──────────────────────────────────────
+    # -- Checkpoint & Completion ---------------------------------------------
 
     def checkpoint(
         self,
@@ -290,22 +283,21 @@ class PersistentTaskService:
             cursor = conn.cursor()
 
             updates = [
-                "progress = %s",
+                "progress = ?",
                 "iterations_used = iterations_used + 1",
-                "updated_at = NOW()",
+                "updated_at = datetime('now')",
             ]
             params = [json.dumps(progress)]
 
             if result_fragment:
-                updates.append("result = COALESCE(result, '') || %s")
+                updates.append("result = COALESCE(result, '') || ?")
                 params.append(result_fragment)
 
             params.append(task_id)
             cursor.execute(
-                f"UPDATE persistent_tasks SET {', '.join(updates)} WHERE id = %s",
+                f"UPDATE persistent_tasks SET {', '.join(updates)} WHERE id = ?",
                 params,
             )
-            conn.commit()
 
         logger.debug(f"{LOG_PREFIX} Checkpoint for task {task_id}")
         return True
@@ -316,11 +308,10 @@ class PersistentTaskService:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE persistent_tasks
-                SET status = 'completed', result = %s, result_artifact = %s,
-                    updated_at = NOW()
-                WHERE id = %s
+                SET status = 'completed', result = ?, result_artifact = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
             """, (result, json.dumps(artifact) if artifact else None, task_id))
-            conn.commit()
 
         logger.info(f"{LOG_PREFIX} Task {task_id} completed")
         return True
@@ -330,16 +321,15 @@ class PersistentTaskService:
         import random
         jitter = random.uniform(0.7, 1.3)
         delay = int(delay_seconds * jitter)
-        next_run = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        next_run = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE persistent_tasks
-                SET next_run_after = %s, updated_at = NOW()
-                WHERE id = %s
+                SET next_run_after = ?, updated_at = datetime('now')
+                WHERE id = ?
             """, (next_run, task_id))
-            conn.commit()
 
     def check_rate_limit(self, task_id: int) -> bool:
         """Check if a task has exceeded MAX_CYCLES_PER_HOUR."""
@@ -365,7 +355,7 @@ class PersistentTaskService:
 
         return True
 
-    # ── Duplicate Detection ──────────────────────────────────────────
+    # -- Duplicate Detection -------------------------------------------------
 
     def find_duplicate(self, account_id: int, goal: str) -> Optional[Dict[str, Any]]:
         """
@@ -386,29 +376,35 @@ class PersistentTaskService:
 
         return None
 
-    # ── Auto-Expiry ──────────────────────────────────────────────────
+    # -- Auto-Expiry ---------------------------------------------------------
 
     def expire_stale_tasks(self) -> int:
         """Expire tasks past their expires_at timestamp. Returns count expired."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).isoformat()
         with self.db.connection() as conn:
             cursor = conn.cursor()
+            # SQLite does not support RETURNING; select first, then update.
             cursor.execute("""
-                UPDATE persistent_tasks
-                SET status = 'expired', updated_at = NOW()
+                SELECT id FROM persistent_tasks
                 WHERE status IN ('accepted', 'in_progress', 'paused')
-                  AND expires_at <= %s
-                RETURNING id
+                  AND expires_at <= ?
             """, (now,))
             expired_ids = [r[0] for r in cursor.fetchall()]
-            conn.commit()
+
+            if expired_ids:
+                placeholders = ','.join(['?'] * len(expired_ids))
+                cursor.execute(f"""
+                    UPDATE persistent_tasks
+                    SET status = 'expired', updated_at = datetime('now')
+                    WHERE id IN ({placeholders})
+                """, expired_ids)
 
         if expired_ids:
             logger.info(f"{LOG_PREFIX} Expired {len(expired_ids)} tasks: {expired_ids}")
 
         return len(expired_ids)
 
-    # ── Progress Summary ─────────────────────────────────────────────
+    # -- Progress Summary ----------------------------------------------------
 
     def get_status_summary(self, task_id: int) -> str:
         """Get a human-readable status summary for a task."""
@@ -440,7 +436,7 @@ class PersistentTaskService:
 
         return summary
 
-    # ── Helpers ───────────────────────────────────────────────────────
+    # -- Helpers -------------------------------------------------------------
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
         """Convert a database row tuple to a task dict."""

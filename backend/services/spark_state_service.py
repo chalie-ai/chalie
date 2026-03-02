@@ -99,13 +99,18 @@ class SparkStateService:
             if raw:
                 return json.loads(raw)
 
-            # Fallback: check if user already has established traits
-            if self._has_established_traits(5):
+            # Fallback: check if welcome was already sent (persisted in interaction_log)
+            if self._has_been_welcomed():
                 state = self._default_state()
-                state['phase'] = 'graduated'
                 state['welcome_sent'] = True
+                # Promote phase based on trait count
+                if self._has_established_traits(5):
+                    state['phase'] = 'graduated'
+                    logger.info(f"{LOG_PREFIX} Initialized as graduated (5+ existing traits)")
+                elif self._has_established_traits(1):
+                    state['phase'] = 'surface'
+                    logger.info(f"{LOG_PREFIX} Initialized as surface (returning user, <5 traits)")
                 self._save_state(state)
-                logger.info(f"{LOG_PREFIX} Initialized as graduated (5+ existing traits)")
                 return state
 
             return self._default_state()
@@ -344,6 +349,22 @@ class SparkStateService:
         return state
 
     # ── Helpers ────────────────────────────────────────────────────
+
+    def _has_been_welcomed(self) -> bool:
+        """Check if a welcome was ever sent, using the persisted interaction_log."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM interaction_log WHERE event_type = 'spark_welcome_sent'"
+                )
+                count = cursor.fetchone()[0]
+                cursor.close()
+                return count > 0
+        except Exception:
+            return False
 
     def _has_established_traits(self, min_count: int) -> bool:
         """Check if user has enough traits in the database."""

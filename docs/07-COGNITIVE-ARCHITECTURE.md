@@ -8,7 +8,7 @@ Mode selection is decoupled from response generation. A mathematical router sele
 
 ### Why Deterministic Routing Matters
 
-Most systems route through an LLM — asking it "what should I do?" before asking it "what should I say?" This doubles latency and introduces unpredictability. Chalie separates the two: a fast mathematical router selects the engagement mode from observable conversation signals in ~5ms. The LLM only enters the loop for response generation, shaped by the mode the router already decided. The result is predictable, auditable, and fast — and routing decisions are logged to a PostgreSQL audit trail for inspection and improvement.
+Most systems route through an LLM — asking it "what should I do?" before asking it "what should I say?" This doubles latency and introduces unpredictability. Chalie separates the two: a fast mathematical router selects the engagement mode from observable conversation signals in ~5ms. The LLM only enters the loop for response generation, shaped by the mode the router already decided. The result is predictable, auditable, and fast — and routing decisions are logged to a SQLite audit trail for inspection and improvement.
 
 ---
 

@@ -8,7 +8,7 @@ Returns Chalie's self-reflective narrative as coherent first-person prose.
 import logging
 import re
 from typing import Optional
-from sqlalchemy import text
+from services.database_service import text
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ def _get_delta_summary(db, user_id: str) -> str:
             if not section_deltas:
                 return f"[AUTOBIOGRAPHY] No changes detected between v{from_v} and v{to_v}."
 
-            lines = [f"## Growth Delta (v{from_v} → v{to_v})"]
+            lines = [f"## Growth Delta (v{from_v} -> v{to_v})"]
             for section, summary in section_deltas.items():
                 display = section.replace('_', ' ').title()
                 lines.append(f"\n**{display}**: {summary}")

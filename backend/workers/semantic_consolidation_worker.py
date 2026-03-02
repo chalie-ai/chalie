@@ -252,7 +252,7 @@ class SemanticConsolidationWorker:
             return {'status': 'error', 'message': str(e)}
 
 
-# Worker function for consumer.py (matches pattern of other workers)
+# Worker function for run.py (matches pattern of other workers)
 def semantic_consolidation_worker(job_data: dict) -> str:
     """
     Process episode for semantic extraction.

@@ -1,6 +1,7 @@
 # Environment & secrets
 *.env
 *.key
+*.session_secret
 backend/.env
 backend/.key
 backend/data/

@@ -147,7 +147,7 @@ class ThreadService:
         })
         self.redis.expire(f"thread:{thread_id}", 86400)
 
-        # Write to PostgreSQL for durable tracking
+        # Write to SQLite for durable tracking
         self._persist_thread_created(thread_id, user_id, channel_id, platform)
 
         logging.info(f"[THREAD] Created new thread: {thread_id}")
@@ -231,7 +231,7 @@ class ThreadService:
         if current_pointer == thread_id:
             self.redis.delete(pointer_key)
 
-        # Persist expiry to PostgreSQL
+        # Persist expiry to SQLite
         self._persist_thread_expired(thread_id, thread_data)
 
         logging.info(f"[THREAD] Expired thread: {thread_id}")
@@ -282,7 +282,7 @@ class ThreadService:
             return None
 
     def _persist_thread_created(self, thread_id: str, user_id: str, channel_id: str, platform: str):
-        """Write thread creation to PostgreSQL."""
+        """Write thread creation to SQLite."""
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
@@ -290,15 +290,15 @@ class ThreadService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO threads (thread_id, user_id, channel_id, platform, state)
-                    VALUES (%s, %s, %s, %s, 'active')
+                    VALUES (?, ?, ?, ?, 'active')
                     ON CONFLICT (thread_id) DO NOTHING
                 """, (thread_id, user_id, channel_id, platform))
                 cursor.close()
         except Exception as e:
-            logging.debug(f"[THREAD] PostgreSQL persist failed (non-critical): {e}")
+            logging.debug(f"[THREAD] SQLite persist failed (non-critical): {e}")
 
     def _persist_thread_expired(self, thread_id: str, thread_data: dict):
-        """Update thread record in PostgreSQL on expiry."""
+        """Update thread record in SQLite on expiry."""
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
@@ -307,11 +307,11 @@ class ThreadService:
                 cursor.execute("""
                     UPDATE threads SET
                         state = 'expired',
-                        current_topic = %s,
-                        topic_history = %s,
-                        exchange_count = %s,
-                        expired_at = NOW()
-                    WHERE thread_id = %s
+                        current_topic = ?,
+                        topic_history = ?,
+                        exchange_count = ?,
+                        expired_at = datetime('now')
+                    WHERE thread_id = ?
                 """, (
                     thread_data.get("current_topic", ""),
                     thread_data.get("topic_history", "[]"),
@@ -320,7 +320,7 @@ class ThreadService:
                 ))
                 cursor.close()
         except Exception as e:
-            logging.debug(f"[THREAD] PostgreSQL expire persist failed (non-critical): {e}")
+            logging.debug(f"[THREAD] SQLite expire persist failed (non-critical): {e}")
 
 
 # Singleton accessor

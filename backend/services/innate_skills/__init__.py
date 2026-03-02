@@ -20,6 +20,7 @@ from services.innate_skills.moment_skill import handle_moment
 from services.innate_skills.persistent_task_skill import handle_persistent_task
 from services.innate_skills.emit_card_skill import handle_emit_card
 from services.innate_skills.document_skill import handle_document
+from services.innate_skills.read_skill import handle_read
 
 
 def register_innate_skills(dispatcher) -> None:
@@ -42,6 +43,9 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
     dispatcher.handlers["emit_card"] = lambda topic, action: handle_emit_card(topic, action)
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
+    dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)
+    # web_read was the former Docker tool — route to the innate skill
+    dispatcher.handlers["web_read"] = lambda topic, action: handle_read(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)
@@ -55,6 +59,10 @@ def register_innate_skills(dispatcher) -> None:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()
         for tool_name in registry.get_on_demand_tools():
+            # Innate skills take precedence over same-named external tools
+            if tool_name in dispatcher.handlers:
+                logging.debug(f"[INNATE SKILLS] Skipping dynamic tool '{tool_name}' — innate skill registered")
+                continue
             # Strip "type" key before passing to registry — action dict
             # contains type for dispatcher routing, tools don't need it
             dispatcher.handlers[tool_name] = (

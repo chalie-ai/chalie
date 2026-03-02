@@ -17,6 +17,12 @@
  *     Dot indicators: [data-dot]
  *     First slide must be visible (display:flex/block), rest display:none.
  *     Supports click navigation, dot navigation, and pointer drag/swipe.
+ *
+ *   Card actions
+ *     Mark a button with [data-card-action="action_name"].
+ *     Optionally add [data-card-payload='{"key":"val"}'] for action data.
+ *     On click: dispatches chalie:card-action CustomEvent with {action, payload, cardEl}.
+ *     The button is disabled after first click to prevent double-fires.
  */
 
 export class ToolResultCard {
@@ -105,6 +111,22 @@ export class ToolResultCard {
       carousel.addEventListener('pointerup', e => {
         const dx = e.clientX - dragStartX;
         if (Math.abs(dx) > 40) showSlide(cur + (dx < 0 ? 1 : -1));
+      });
+    });
+
+    // --- Generic card actions ---
+    // Tools declare: <button data-card-action="name" data-card-payload='{"key":"val"}'>Label</button>
+    body.querySelectorAll('[data-card-action]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.cardAction;
+        let payload = {};
+        try { payload = JSON.parse(btn.dataset.cardPayload || '{}'); } catch { /* ignore */ }
+        document.dispatchEvent(new CustomEvent('chalie:card-action', {
+          detail: { action, payload, cardEl: card },
+        }));
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
       });
     });
 

@@ -158,7 +158,7 @@ class SemanticRetrievalService:
         Returns:
             Cosine similarity score (0-1)
         """
-        # pgvector may return embeddings as strings via psycopg2
+        # SQLite may return embeddings as strings via JSON storage
         if isinstance(vec1, str):
             vec1 = json.loads(vec1)
         if isinstance(vec2, str):
@@ -299,30 +299,23 @@ class SemanticRetrievalService:
             logging.warning("Database service not available for access tracking")
             return
 
-        conn = None
         try:
-            conn = self.db_service.get_connection()
-            cursor = conn.cursor()
+            with self.db_service.connection() as conn:
+                cursor = conn.cursor()
 
-            # Batch update access tracking
-            for concept_id in concept_ids:
-                cursor.execute("""
-                    UPDATE semantic_concepts
-                    SET
-                        access_count = access_count + 1,
-                        last_accessed_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
-                """, (concept_id,))
+                # Batch update access tracking
+                for concept_id in concept_ids:
+                    cursor.execute("""
+                        UPDATE semantic_concepts
+                        SET
+                            access_count = access_count + 1,
+                            last_accessed_at = datetime('now'),
+                            updated_at = datetime('now')
+                        WHERE id = ? AND deleted_at IS NULL
+                    """, (concept_id,))
 
-            conn.commit()
-            cursor.close()
-            logging.debug(f"Tracked access for {len(concept_ids)} concepts")
+                cursor.close()
+                logging.debug(f"Tracked access for {len(concept_ids)} concepts")
 
         except Exception as e:
-            if conn:
-                conn.rollback()
             logging.error(f"Failed to track access: {e}")
-        finally:
-            if conn:
-                self.db_service.release_connection(conn)

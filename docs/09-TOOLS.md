@@ -1,15 +1,26 @@
 # Tools System
 
-Tools extend Chalie's capabilities by allowing sandboxed execution of external code. Tools are containerized, versioned, and can be triggered on-demand or on a schedule.
+Tools extend Chalie's capabilities by allowing execution of external code. Tools can run as **sandboxed** (Docker container) or **trusted** (Python subprocess), and can be triggered on-demand or on a schedule.
 
 ## Overview
 
 The tools system provides:
-- **Sandboxing**: Each tool runs in an isolated Docker container with resource constraints
-- **Configuration Management**: Per-tool secrets and credentials stored in PostgreSQL (encrypted)
+- **Two trust levels**: Sandboxed tools run in isolated Docker containers; trusted tools run as subprocesses (no Docker required)
+- **Configuration Management**: Per-tool secrets and credentials stored in SQLite (encrypted)
 - **Semantic Matching**: Tool relevance determined via embedding-based similarity, not regex patterns
-- **Safety Limits**: Timeouts (default 9s), memory limits (256MB), network isolation, no privilege escalation
+- **Safety Limits**: Timeouts (default 9s), memory limits (256MB for sandboxed), no privilege escalation
 - **Audit Trail**: All tool invocations logged to procedural memory with success/failure and execution time
+
+## Trust Levels
+
+| Level | Execution | Docker Required | Isolation | Use Case |
+|---|---|---|---|---|
+| **Sandboxed** (default) | Docker container | Yes | Full (cgroups, namespaces, read-only FS) | Untrusted or third-party tools |
+| **Trusted** | Python subprocess | No | None (same OS user) | Curated, verified tools |
+
+Trust is determined by Chalie's internal `configs/embodiment_library.json` catalog — tool authors **cannot** self-declare trust via their own manifest. Only tools explicitly marked `"trust": "trusted"` in the catalog bypass Docker sandboxing.
+
+Trusted tools must include a `runner.py` entry point. Sandboxed tools must include a `Dockerfile`.
 
 ## Architecture
 
@@ -17,17 +28,22 @@ The tools system provides:
 
 **Tool Registry Service**
 - Singleton that discovers and validates tools from `backend/tools/` directory
-- Loads manifest.json and builds Docker images at startup
-- Dispatches tool invocations via ToolContainerService
+- Loads manifest.json; builds Docker images for sandboxed tools at startup
+- Dispatches invocations via `ToolContainerService` (sandboxed) or `ToolSubprocessService` (trusted)
 - Logs outcomes for feedback/learning
 
-**Tool Container Service**
+**Tool Container Service** (sandboxed tools only)
 - Manages Docker lifecycle: building images, running containers
 - Enforces sandbox constraints: memory limits, network isolation, read-only filesystem (by default)
 - Handles timeouts, captures stdout/stderr, parses JSON output
 
+**Tool Subprocess Service** (trusted tools only)
+- Runs trusted tools as Python subprocesses (same IPC contract as containers)
+- No sandboxing — runs as the same OS user as Chalie
+- Mirrors `ToolContainerService` API: `run()` and `run_interactive()`
+
 **Tool Config Service**
-- PostgreSQL backend for per-tool configuration
+- SQLite backend for per-tool configuration
 - Stores API keys, credentials, and parameters as key-value pairs
 - Secrets are masked in API responses (shows `***` instead of actual value)
 
@@ -549,7 +565,7 @@ docker run --rm chalie-tool-tool_example:1.0 "$ENCODED"
 2. Check tool directory exists: `backend/tools/tool_name/`
 3. Check manifest.json is valid JSON: `python -m json.tool manifest.json`
 4. Check Dockerfile exists: `ls backend/tools/tool_name/Dockerfile`
-5. View logs: `docker-compose logs -f backend | grep TOOL`
+5. View logs in the `python backend/run.py` console output
 
 ### "Tool not found" Error
 

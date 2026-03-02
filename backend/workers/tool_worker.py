@@ -124,10 +124,7 @@ def tool_worker(job_data: dict) -> str:
         try:
             from services.redis_client import RedisClientService
             _heartbeat_redis = RedisClientService.create_connection()
-            # Try to get the RQ job ID from the current job context
-            import rq
-            current_job = rq.get_current_job()
-            _heartbeat_job_id = current_job.id if current_job else cycle_id
+            _heartbeat_job_id = cycle_id
         except Exception:
             _heartbeat_job_id = cycle_id
 
@@ -656,26 +653,26 @@ def tool_worker(job_data: dict) -> str:
 
 
 def _notify_sse_error(metadata: dict, error_message: str):
-    """Publish error to SSE channel and clean up sse_pending flag so the SSE loop is released."""
+    """Publish error to the request channel and clean up sse_pending flag so the WebSocket chat handler is released."""
     try:
-        sse_uuid = metadata.get('uuid')
-        if not sse_uuid:
+        ws_uuid = metadata.get('uuid')
+        if not ws_uuid:
             return
         from services.redis_client import RedisClientService
         redis_conn = RedisClientService.create_connection()
-        # Publish error to SSE channel
-        redis_conn.publish(f"sse:{sse_uuid}", json.dumps({"error": error_message}))
-        # Delete sse_pending flag so SSE loop breaks immediately
-        redis_conn.delete(f"sse_pending:{sse_uuid}")
+        # Publish error to per-request channel
+        redis_conn.publish(f"sse:{ws_uuid}", json.dumps({"error": error_message}))
+        # Delete pending flag so WebSocket chat handler breaks immediately
+        redis_conn.delete(f"sse_pending:{ws_uuid}")
     except Exception as e:
-        logger.warning(f"[TOOL WORKER] Failed to notify SSE of error: {e}")
+        logger.warning(f"[TOOL WORKER] Failed to notify WebSocket of error: {e}")
 
 
 def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:
     """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
     tool was found (suppresses the text follow-up since the card was already rendered inline).
 
-    synthesize=false tools: invoke() already rendered the card. Here we just close the SSE.
+    synthesize=false tools: invoke() already rendered the card. Here we just close the WebSocket response.
     synthesize=true tools: invoke() deferred card emission here. We render exactly once per
     tool (using the last cached result) even if the tool was called multiple times in the
     ACT loop (deduplication via rendered_tools set).

@@ -4,7 +4,7 @@ User authentication blueprint — /auth endpoints for master account.
 
 import logging
 from flask import Blueprint, request, jsonify
-from sqlalchemy import text
+from services.database_service import text
 from werkzeug.security import generate_password_hash, check_password_hash
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def auth_status():
         # Check providers (count only — avoids decryption which can fail if key changed)
         with db.get_session() as session:
             provider_count = session.execute(
-                text("SELECT COUNT(*) FROM providers WHERE is_active = TRUE")
+                text("SELECT COUNT(*) FROM providers WHERE is_active = 1")
             ).fetchone()[0]
 
         # Check session

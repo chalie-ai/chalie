@@ -5,11 +5,11 @@ Profiles are LLM-generated structured descriptions of what each tool/skill does,
 when to use it, and example usage scenarios. Used by CognitiveTriageService to
 inject rich capability context into the triage LLM prompt.
 
-Profiles are stored in tool_capability_profiles PostgreSQL table with:
+Profiles are stored in tool_capability_profiles SQLite table with:
 - short_summary: one-sentence description for triage prompt injection
 - full_profile: detailed description for ACT prompt injection
 - usage_scenarios: up to 50 scenarios for semantic matching
-- embedding: 768-dim vector for cosine similarity
+- embedding: stored in tool_capability_profiles_vec virtual table for cosine similarity
 
 Bootstrap: called on startup to build profiles for any missing tool/skill.
 Enrichment: triggered by high-salience episodes or idle-time background service.
@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import re
+import struct
 import time
 from collections import defaultdict
 from typing import Optional
@@ -51,6 +52,13 @@ def _compute_manifest_hash(manifest: dict) -> str:
     """MD5 hash of manifest for staleness detection."""
     content = json.dumps(manifest, sort_keys=True)
     return hashlib.md5(content.encode()).hexdigest()
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    return struct.pack(f'{len(embedding)}f', *embedding)
 
 
 def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:
@@ -89,10 +97,10 @@ def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:
             if total_lines + len(file_lines) > max_lines:
                 remaining = max_lines - total_lines
                 if remaining > 0:
-                    parts.append(f"── {rel_path} (truncated) ──\n" + "\n".join(file_lines[:remaining]))
+                    parts.append(f"-- {rel_path} (truncated) --\n" + "\n".join(file_lines[:remaining]))
                     total_lines += remaining
                 break
-            parts.append(f"── {rel_path} ──\n{source}")
+            parts.append(f"-- {rel_path} --\n{source}")
             total_lines += len(file_lines)
         except Exception:
             continue
@@ -136,7 +144,7 @@ class ToolProfileService:
         from services.redis_client import RedisClientService
         return RedisClientService.create_connection(decode_responses=True)
 
-    # ── Profile Building ──────────────────────────────────────────────
+    # -- Profile Building ------------------------------------------------------
 
     def build_profile(self, tool_name: str, manifest: dict, force: bool = False) -> dict:
         """Build and store a capability profile for an external tool."""
@@ -189,41 +197,55 @@ class ToolProfileService:
         # Upsert into database
         db = self._get_db()
         try:
-            embedding_str = f"[{','.join(str(x) for x in embedding)}]" if embedding else None
             triage_triggers = profile_data.get('triage_triggers', [])[:10]
-            db.execute(
-                """
-                INSERT INTO tool_capability_profiles
-                    (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain,
-                     triage_triggers, updated_at)
-                VALUES (%s, 'tool', %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (tool_name) DO UPDATE SET
-                    tool_type = 'tool',
-                    short_summary = EXCLUDED.short_summary,
-                    full_profile = EXCLUDED.full_profile,
-                    usage_scenarios = EXCLUDED.usage_scenarios,
-                    anti_scenarios = EXCLUDED.anti_scenarios,
-                    complementary_skills = EXCLUDED.complementary_skills,
-                    embedding = EXCLUDED.embedding,
-                    manifest_hash = EXCLUDED.manifest_hash,
-                    domain = EXCLUDED.domain,
-                    triage_triggers = EXCLUDED.triage_triggers,
-                    updated_at = NOW()
-                """,
-                (
-                    tool_name,
-                    profile_data.get('short_summary', f'{tool_name} tool')[:100],
-                    profile_data.get('full_profile', description),
-                    json.dumps(usage_scenarios),
-                    json.dumps(anti_scenarios),
-                    json.dumps(profile_data.get('complementary_skills', [])),
-                    embedding_str,
-                    manifest_hash,
-                    profile_data.get('domain', 'Other'),
-                    json.dumps(triage_triggers),
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO tool_capability_profiles
+                        (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                         anti_scenarios, complementary_skills, manifest_hash, domain,
+                         triage_triggers, updated_at)
+                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT (tool_name) DO UPDATE SET
+                        tool_type = 'tool',
+                        short_summary = EXCLUDED.short_summary,
+                        full_profile = EXCLUDED.full_profile,
+                        usage_scenarios = EXCLUDED.usage_scenarios,
+                        anti_scenarios = EXCLUDED.anti_scenarios,
+                        complementary_skills = EXCLUDED.complementary_skills,
+                        manifest_hash = EXCLUDED.manifest_hash,
+                        domain = EXCLUDED.domain,
+                        triage_triggers = EXCLUDED.triage_triggers,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        tool_name,
+                        profile_data.get('short_summary', f'{tool_name} tool')[:100],
+                        profile_data.get('full_profile', description),
+                        json.dumps(usage_scenarios),
+                        json.dumps(anti_scenarios),
+                        json.dumps(profile_data.get('complementary_skills', [])),
+                        manifest_hash,
+                        profile_data.get('domain', 'Other'),
+                        json.dumps(triage_triggers),
+                    )
                 )
-            )
+
+                # Store embedding in vec table
+                if embedding is not None:
+                    row = cursor.execute(
+                        "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
+                        (tool_name,)
+                    ).fetchone()
+                    if row:
+                        blob = _pack_embedding(embedding)
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                            (row[0], blob)
+                        )
+
+                cursor.close()
             logger.info(f"{LOG_PREFIX} Upserted profile for {tool_name}")
         except Exception as e:
             logger.error(f"{LOG_PREFIX} DB upsert failed for {tool_name}: {e}")
@@ -286,40 +308,54 @@ class ToolProfileService:
 
         db = self._get_db()
         try:
-            embedding_str = f"[{','.join(str(x) for x in embedding)}]" if embedding else None
             triage_triggers = profile_data.get('triage_triggers', [])[:10]
-            db.execute(
-                """
-                INSERT INTO tool_capability_profiles
-                    (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                     anti_scenarios, complementary_skills, embedding, manifest_hash, domain,
-                     triage_triggers, updated_at)
-                VALUES (%s, 'skill', %s, %s, %s, %s, %s, %s, %s, 'Innate Skill', %s, NOW())
-                ON CONFLICT (tool_name) DO UPDATE SET
-                    tool_type = 'skill',
-                    short_summary = EXCLUDED.short_summary,
-                    full_profile = EXCLUDED.full_profile,
-                    usage_scenarios = EXCLUDED.usage_scenarios,
-                    anti_scenarios = EXCLUDED.anti_scenarios,
-                    complementary_skills = EXCLUDED.complementary_skills,
-                    embedding = EXCLUDED.embedding,
-                    manifest_hash = EXCLUDED.manifest_hash,
-                    domain = EXCLUDED.domain,
-                    triage_triggers = EXCLUDED.triage_triggers,
-                    updated_at = NOW()
-                """,
-                (
-                    skill_name,
-                    profile_data.get('short_summary', skill_desc[:100]),
-                    profile_data.get('full_profile', skill_desc),
-                    json.dumps(usage_scenarios),
-                    json.dumps(profile_data.get('anti_scenarios', [])[:20]),
-                    json.dumps(profile_data.get('complementary_skills', [])),
-                    embedding_str,
-                    manifest_hash,
-                    json.dumps(triage_triggers),
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO tool_capability_profiles
+                        (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+                         anti_scenarios, complementary_skills, manifest_hash, domain,
+                         triage_triggers, updated_at)
+                    VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, 'Innate Skill', ?, datetime('now'))
+                    ON CONFLICT (tool_name) DO UPDATE SET
+                        tool_type = 'skill',
+                        short_summary = EXCLUDED.short_summary,
+                        full_profile = EXCLUDED.full_profile,
+                        usage_scenarios = EXCLUDED.usage_scenarios,
+                        anti_scenarios = EXCLUDED.anti_scenarios,
+                        complementary_skills = EXCLUDED.complementary_skills,
+                        manifest_hash = EXCLUDED.manifest_hash,
+                        domain = EXCLUDED.domain,
+                        triage_triggers = EXCLUDED.triage_triggers,
+                        updated_at = datetime('now')
+                    """,
+                    (
+                        skill_name,
+                        profile_data.get('short_summary', skill_desc[:100]),
+                        profile_data.get('full_profile', skill_desc),
+                        json.dumps(usage_scenarios),
+                        json.dumps(profile_data.get('anti_scenarios', [])[:20]),
+                        json.dumps(profile_data.get('complementary_skills', [])),
+                        manifest_hash,
+                        json.dumps(triage_triggers),
+                    )
                 )
-            )
+
+                # Store embedding in vec table
+                if embedding is not None:
+                    row = cursor.execute(
+                        "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
+                        (skill_name,)
+                    ).fetchone()
+                    if row:
+                        blob = _pack_embedding(embedding)
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                            (row[0], blob)
+                        )
+
+                cursor.close()
             logger.info(f"{LOG_PREFIX} Upserted profile for skill {skill_name}")
         except Exception as e:
             logger.error(f"{LOG_PREFIX} DB upsert failed for skill {skill_name}: {e}")
@@ -330,7 +366,7 @@ class ToolProfileService:
         self._invalidate_cache()
         return profile_data
 
-    # ── Enrichment ────────────────────────────────────────────────────
+    # -- Enrichment ------------------------------------------------------------
 
     def enrich_from_episodes(self, tool_name: str, episode_ids: list) -> int:
         """Enrich tool profile with new scenarios from episodes. Returns count of new scenarios added."""
@@ -388,26 +424,38 @@ class ToolProfileService:
 
         db = self._get_db()
         try:
-            embedding_str = f"[{','.join(str(x) for x in embedding)}]" if embedding else None
             current_ids = profile.get('enrichment_episode_ids', [])
             new_ids = list(set(current_ids + episode_ids))
 
-            update_sql = """
-                UPDATE tool_capability_profiles
-                SET usage_scenarios = %s,
-                    enrichment_episode_ids = %s,
-                    enrichment_count = enrichment_count + 1,
-                    last_enriched_at = NOW(),
-                    updated_at = NOW()
-                    {embedding_clause}
-                WHERE tool_name = %s
-            """
-            if embedding_str:
-                update_sql = update_sql.replace('{embedding_clause}', ', embedding = %s')
-                db.execute(update_sql, (json.dumps(merged), json.dumps(new_ids), embedding_str, tool_name))
-            else:
-                update_sql = update_sql.replace('{embedding_clause}', '')
-                db.execute(update_sql, (json.dumps(merged), json.dumps(new_ids), tool_name))
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE tool_capability_profiles
+                    SET usage_scenarios = ?,
+                        enrichment_episode_ids = ?,
+                        enrichment_count = enrichment_count + 1,
+                        last_enriched_at = datetime('now'),
+                        updated_at = datetime('now')
+                    WHERE tool_name = ?
+                    """,
+                    (json.dumps(merged), json.dumps(new_ids), tool_name)
+                )
+
+                # Update embedding in vec table
+                if embedding is not None:
+                    row = cursor.execute(
+                        "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
+                        (tool_name,)
+                    ).fetchone()
+                    if row:
+                        blob = _pack_embedding(embedding)
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                            (row[0], blob)
+                        )
+
+                cursor.close()
 
             logger.info(f"{LOG_PREFIX} Enriched {tool_name} with {len(accepted)} new scenarios")
         except Exception as e:
@@ -435,8 +483,8 @@ class ToolProfileService:
         try:
             db.execute(
                 """UPDATE tool_capability_profiles
-                   SET usage_scenarios = %s, updated_at = NOW()
-                   WHERE tool_name = %s""",
+                   SET usage_scenarios = ?, updated_at = datetime('now')
+                   WHERE tool_name = ?""",
                 (json.dumps(merged), tool_name)
             )
             self._invalidate_cache()
@@ -452,31 +500,46 @@ class ToolProfileService:
         """Check if an episode is relevant to any tool profile; enrich if so."""
         db = self._get_db()
         try:
-            embedding_str = f"[{','.join(str(x) for x in episode_embedding)}]"
-            rows = db.fetch_all(
-                """
-                SELECT tool_name, 1 - (embedding <=> %s::vector) AS similarity
-                FROM tool_capability_profiles
-                WHERE embedding IS NOT NULL
-                ORDER BY similarity DESC
-                LIMIT 1
-                """,
-                (embedding_str,)
-            )
-            if rows and rows[0]['similarity'] > 0.7:
-                tool_name = rows[0]['tool_name']
-                logger.info(
-                    f"{LOG_PREFIX} Episode {episode_id} relevant to {tool_name} "
-                    f"(similarity={rows[0]['similarity']:.3f}), triggering enrichment"
+            blob = _pack_embedding(episode_embedding)
+            if blob is None:
+                return
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                # Use vec0 MATCH to find the closest tool profile
+                cursor.execute(
+                    """
+                    SELECT tcp.tool_name, v.distance
+                    FROM tool_capability_profiles_vec v
+                    JOIN tool_capability_profiles tcp ON tcp.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = 1
+                    ORDER BY v.distance
+                    """,
+                    (blob,)
                 )
-                self.enrich_from_episodes(tool_name, [episode_id])
+                row = cursor.fetchone()
+                cursor.close()
+
+            if row:
+                # vec0 returns L2 distance; convert to similarity (approximate)
+                # For normalized vectors, similarity ~ 1 - distance/2
+                distance = row['distance'] if isinstance(row, dict) else row[1]
+                tool_name = row['tool_name'] if isinstance(row, dict) else row[0]
+                similarity = max(0.0, 1.0 - distance / 2.0)
+
+                if similarity > 0.7:
+                    logger.info(
+                        f"{LOG_PREFIX} Episode {episode_id} relevant to {tool_name} "
+                        f"(similarity={similarity:.3f}), triggering enrichment"
+                    )
+                    self.enrich_from_episodes(tool_name, [episode_id])
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Episode relevance check failed: {e}")
         finally:
             if not self._db:
                 db.close_pool()
 
-    # ── Query ─────────────────────────────────────────────────────────
+    # -- Query -----------------------------------------------------------------
 
     def get_triage_summaries(self) -> str:
         """
@@ -534,7 +597,7 @@ class ToolProfileService:
                         summary += f" [{', '.join(triggers[:10])}]"
                     by_domain[domain].append(f"- {r['tool_name']}: {summary}")
 
-        # Fallback: no tool rows in DB → build from manifests directly
+        # Fallback: no tool rows in DB -> build from manifests directly
         if not by_domain:
             return self._manifest_fallback_summaries()
 
@@ -551,12 +614,12 @@ class ToolProfileService:
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT * FROM tool_capability_profiles WHERE tool_name = %s",
+                "SELECT * FROM tool_capability_profiles WHERE tool_name = ?",
                 (tool_name,)
             )
             if rows:
                 row = dict(rows[0])
-                # Parse JSONB fields
+                # Parse JSON fields
                 for field in ('usage_scenarios', 'anti_scenarios', 'complementary_skills', 'enrichment_episode_ids', 'triage_triggers'):
                     if isinstance(row.get(field), str):
                         row[field] = json.loads(row[field])
@@ -575,7 +638,7 @@ class ToolProfileService:
             return []
         db = self._get_db()
         try:
-            placeholders = ','.join(['%s'] * len(tool_names))
+            placeholders = ','.join(['?'] * len(tool_names))
             rows = db.fetch_all(
                 f"SELECT tool_name, short_summary, full_profile FROM tool_capability_profiles WHERE tool_name IN ({placeholders})",
                 tuple(tool_names)
@@ -593,7 +656,7 @@ class ToolProfileService:
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT manifest_hash FROM tool_capability_profiles WHERE tool_name = %s",
+                "SELECT manifest_hash FROM tool_capability_profiles WHERE tool_name = ?",
                 (tool_name,)
             )
             if not rows:
@@ -674,7 +737,7 @@ class ToolProfileService:
 
         logger.info(f"{LOG_PREFIX} Bootstrap complete")
 
-    # ── Helpers ───────────────────────────────────────────────────────
+    # -- Helpers ---------------------------------------------------------------
 
     def _load_prompt(self, name: str) -> str:
         """Load a prompt template from backend/prompts/."""
@@ -689,25 +752,33 @@ class ToolProfileService:
         try:
             emb_service = self._get_embedding_service()
             embedding = emb_service.generate_embedding(description)
-            embedding_str = f"[{','.join(str(x) for x in embedding)}]"
+            blob = _pack_embedding(embedding)
+            if blob is None:
+                return "No past interactions available."
 
             db = self._get_db()
             try:
-                rows = db.fetch_all(
-                    """
-                    SELECT outcome, gist, 1 - (embedding <=> %s::vector) AS similarity
-                    FROM episodes
-                    WHERE embedding IS NOT NULL
-                    ORDER BY similarity DESC
-                    LIMIT %s
-                    """,
-                    (embedding_str, top_k)
-                )
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        SELECT e.outcome, e.gist, v.distance
+                        FROM episodes_vec v
+                        JOIN episodes e ON e.rowid = v.rowid
+                        WHERE v.embedding MATCH ? AND k = ?
+                          AND e.deleted_at IS NULL
+                        ORDER BY v.distance
+                        """,
+                        (blob, top_k)
+                    )
+                    rows = cursor.fetchall()
+                    cursor.close()
+
                 if not rows:
                     return "No past interactions available."
                 texts = []
                 for r in rows:
-                    text = r.get('gist') or r.get('outcome', '')
+                    text = (r['gist'] if isinstance(r, dict) else r[1]) or (r['outcome'] if isinstance(r, dict) else r[0]) or ''
                     if text:
                         texts.append(f"- {text[:200]}")
                 return "\n".join(texts) if texts else "No past interactions available."
@@ -724,9 +795,9 @@ class ToolProfileService:
             return ""
         db = self._get_db()
         try:
-            placeholders = ','.join(['%s'] * len(episode_ids))
+            placeholders = ','.join(['?'] * len(episode_ids))
             rows = db.fetch_all(
-                f"SELECT outcome, gist FROM episodes WHERE id::text IN ({placeholders})",
+                f"SELECT outcome, gist FROM episodes WHERE CAST(id AS TEXT) IN ({placeholders})",
                 tuple(str(eid) for eid in episode_ids)
             )
             if not rows:
@@ -787,7 +858,7 @@ class ToolProfileService:
         """Simple fallback profile when LLM is unavailable.
 
         Extracts triage triggers deterministically from single-quoted phrases
-        in the documentation field (e.g., 'latest news on...' → 'latest news on').
+        in the documentation field (e.g., 'latest news on...' -> 'latest news on').
         Sets domain from the manifest's category field.
         """
         desc = manifest.get('documentation') or manifest.get('description', tool_name)
@@ -811,7 +882,7 @@ class ToolProfileService:
 
         This is the safety net: if LLM-powered profile bootstrap hasn't run yet
         (or failed entirely), triage still learns about installed tools from
-        their manifest declarations. Generic — works for all tools.
+        their manifest declarations. Generic -- works for all tools.
         """
         try:
             from services.tool_registry_service import ToolRegistryService

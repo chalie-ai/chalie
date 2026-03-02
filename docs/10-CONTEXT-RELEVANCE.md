@@ -10,7 +10,7 @@ Previously, **every response generation** retrieved and injected ALL context nod
 
 ### Example Waste
 An ACKNOWLEDGE for "Hey!" would trigger:
-- PostgreSQL vector search for episodic memory
+- sqlite-vec vector search for episodic memory
 - Redis reads for facts, gists, working memory
 - Skill registry queries
 

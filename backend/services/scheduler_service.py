@@ -1,11 +1,11 @@
 """
-Scheduler Service — Background poller for scheduled items in PostgreSQL.
+Scheduler Service — Background poller for scheduled items in SQLite.
 
 Polls scheduled_items table every 60 seconds. Fires due items through
 the prompt queue — frontal cortex handles tone and framing naturally.
 
-Uses FOR UPDATE SKIP LOCKED to prevent double-firing with multiple workers.
-Entry point: scheduler_worker(shared_state=None) registered in consumer.py.
+SQLite's WAL mode provides implicit locking — no explicit row locks needed.
+Entry point: scheduler_worker(shared_state=None) registered in run.py.
 """
 
 import logging
@@ -19,7 +19,7 @@ _POLL_INTERVAL = 60  # seconds
 
 
 def scheduler_worker(shared_state=None):
-    """Module-level entry point for consumer.py."""
+    """Module-level entry point for run.py."""
     logging.basicConfig(level=logging.INFO)
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
@@ -46,13 +46,14 @@ def _poll_and_fire():
 
         db = get_shared_db_service()
         now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
 
         # Check for overdue items (potential stall warning)
         with db.connection() as conn:
             cursor = conn.cursor()
-            overdue_threshold = now - timedelta(minutes=5)
+            overdue_threshold = (now - timedelta(minutes=5)).isoformat()
             cursor.execute(
-                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < %s",
+                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < ?",
                 (overdue_threshold,)
             )
             overdue_count = cursor.fetchone()[0]
@@ -61,8 +62,8 @@ def _poll_and_fire():
                     f"{LOG_PREFIX} {overdue_count} item(s) overdue by >5min — possible stall"
                 )
 
-        # Atomic claim: lock rows (SKIP LOCKED = safe with multiple workers)
-        # LIMIT 100 prevents long transaction locks / prompt queue floods
+        # Atomic claim: SQLite WAL mode provides implicit locking.
+        # LIMIT 100 prevents long transaction locks / prompt queue floods.
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -70,11 +71,10 @@ def _poll_and_fire():
                        window_start, window_end, topic, created_by_session, group_id,
                        is_prompt
                 FROM scheduled_items
-                WHERE status = 'pending' AND due_at <= %s
+                WHERE status = 'pending' AND due_at <= ?
                 ORDER BY due_at
                 LIMIT 100
-                FOR UPDATE SKIP LOCKED
-            """, (now,))
+            """, (now_iso,))
             rows = cursor.fetchall()
 
             cols = [
@@ -87,11 +87,9 @@ def _poll_and_fire():
                 item = dict(zip(cols, row))
                 try:
                     # Cancel-wins guard: re-check status before firing.
-                    # FOR UPDATE held the lock, but a cancel may have committed
-                    # just before we got here.  If status is no longer 'pending'
-                    # we skip without firing.
+                    # If status is no longer 'pending' we skip without firing.
                     cursor.execute(
-                        "SELECT status FROM scheduled_items WHERE id=%s",
+                        "SELECT status FROM scheduled_items WHERE id=?",
                         (item["id"],)
                     )
                     current = cursor.fetchone()
@@ -100,8 +98,8 @@ def _poll_and_fire():
 
                     _fire_item(item)
                     cursor.execute(
-                        "UPDATE scheduled_items SET status='fired', last_fired_at=%s WHERE id=%s",
-                        (now, item["id"])
+                        "UPDATE scheduled_items SET status='fired', last_fired_at=? WHERE id=?",
+                        (now_iso, item["id"])
                     )
 
                     if item["recurrence"]:
@@ -112,26 +110,26 @@ def _poll_and_fire():
                                   (id, item_type, message, due_at, recurrence,
                                    window_start, window_end, status, topic,
                                    created_by_session, created_at, group_id, is_prompt)
-                                VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s)
+                                VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)
                             """, (
                                 next_item["id"],
                                 next_item["item_type"],
                                 next_item["message"],
-                                next_item["due_at"],
+                                next_item["due_at"].isoformat() if isinstance(next_item["due_at"], datetime) else next_item["due_at"],
                                 next_item["recurrence"],
                                 next_item.get("window_start"),
                                 next_item.get("window_end"),
                                 next_item["topic"],
                                 next_item["created_by_session"],
-                                now,
+                                now_iso,
                                 next_item.get("group_id"),
-                                next_item.get("is_prompt", False),
+                                1 if next_item.get("is_prompt", False) else 0,
                             ))
 
                 except Exception as e:
                     logger.error(f"{LOG_PREFIX} Failed to fire {item['id']}: {e}")
                     cursor.execute(
-                        "UPDATE scheduled_items SET status='failed' WHERE id=%s",
+                        "UPDATE scheduled_items SET status='failed' WHERE id=?",
                         (item["id"],)
                     )
 
@@ -148,7 +146,7 @@ def _fire_item(item: dict):
     is_prompt = (source == "prompt")
 
     if is_prompt:
-        # Route through digest_worker → cognitive triage → LLM (original behaviour)
+        # Route through digest_worker -> cognitive triage -> LLM (original behaviour)
         from services.prompt_queue import PromptQueue
         from services.client_context_service import ClientContextService
         from workers.digest_worker import digest_worker
@@ -158,7 +156,7 @@ def _fire_item(item: dict):
         queue.enqueue(message, {
             "source": source,
             "destination": "web",
-            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat(),
+            "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat() if isinstance(item.get("due_at"), datetime) else str(item.get("due_at", "")),
             "scheduled_message": message,
             "topic": item.get("topic", "general"),
             "client_context": client_context_text,

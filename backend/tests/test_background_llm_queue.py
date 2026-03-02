@@ -1,13 +1,12 @@
 """
 Unit tests for BackgroundLLMProxy and background_llm_worker helpers.
 
-All Redis interactions use fakeredis — no real connections are made.
+Uses MemoryStore (production implementation) — no external dependencies.
 """
 
 import json
 import time
 import pytest
-import fakeredis
 from unittest.mock import patch, MagicMock
 
 from services.background_llm_queue import (
@@ -27,14 +26,14 @@ from workers.background_llm_worker import _get_sleep_interval, BUSY_SLEEP, NORMA
 
 @pytest.fixture
 def fake_redis():
-    r = fakeredis.FakeRedis(decode_responses=True)
-    yield r
-    r.flushall()
+    from services.memory_store import MemoryStore
+    store = MemoryStore()
+    yield store
 
 
 @pytest.fixture
 def proxy(fake_redis):
-    """BackgroundLLMProxy wired to a fakeredis instance."""
+    """BackgroundLLMProxy wired to a MemoryStore instance."""
     with patch("services.background_llm_queue.RedisClientService.create_connection",
                return_value=fake_redis):
         yield BackgroundLLMProxy("test-agent")

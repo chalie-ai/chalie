@@ -6,7 +6,7 @@ Spawns the Flask app from the api/ package and runs it on the configured host/po
 
 import sys
 import logging
-from services.config_service import ConfigService
+import runtime_config
 
 
 logging.basicConfig(level=logging.INFO)
@@ -18,20 +18,16 @@ def rest_api_worker(shared_state=None):
     Main entry point for REST API worker.
 
     Can be run standalone: python -m workers.rest_api_worker
-    Or integrated into consumer.py via multiprocessing.
+    Or integrated into run.py as a daemon thread.
 
     Args:
-        shared_state: Shared state dict from multiprocessing.Manager (optional)
+        shared_state: Shared state dict from WorkerManager (optional)
     """
     try:
         logger.info("[REST API] Starting REST API worker...")
 
-        # Load configuration
-        config = ConfigService.connections()
-        api_config = config.get("rest_api", {})
-
-        host = api_config.get('host', '0.0.0.0')
-        port = api_config.get('port', 8080)
+        host = runtime_config.get("host", "0.0.0.0")
+        port = runtime_config.get("port", 8081)
 
         logger.info(f"[REST API] Starting Flask server on {host}:{port}")
 

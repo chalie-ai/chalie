@@ -3,7 +3,7 @@ Place Learning Service — Accumulates place fingerprints over time so
 inference improves beyond heuristics.
 
 Uses geohash (~1km precision) for privacy: raw coordinates are never stored
-in PostgreSQL.
+in the database.
 """
 
 import hashlib
@@ -18,7 +18,7 @@ LEARNED_THRESHOLD = 20  # minimum observations before learned label overrides he
 
 
 class PlaceLearningService:
-    """Accumulates and looks up learned place fingerprints in PostgreSQL."""
+    """Accumulates and looks up learned place fingerprints in SQLite."""
 
     def __init__(self, database_service):
         self.db = database_service
@@ -46,16 +46,16 @@ class PlaceLearningService:
                 INSERT INTO place_fingerprints
                     (fingerprint_hash, device_class, hour_bucket, location_hash,
                      connection_type, place_label, count, last_seen_at)
-                VALUES (%s, %s, %s, %s, %s, %s, 1, NOW())
+                VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now'))
                 ON CONFLICT (fingerprint_hash)
                 DO UPDATE SET
                     count = place_fingerprints.count + 1,
                     place_label = CASE
                         WHEN place_fingerprints.count + 1 > place_fingerprints.count
-                        THEN %s
+                        THEN ?
                         ELSE place_fingerprints.place_label
                     END,
-                    last_seen_at = NOW()
+                    last_seen_at = datetime('now')
                 """,
                 (fp_hash, device_class, hour_bucket, location_hash,
                  connection_type, place_label, place_label)
@@ -79,7 +79,7 @@ class PlaceLearningService:
                 """
                 SELECT place_label, count
                 FROM place_fingerprints
-                WHERE fingerprint_hash = %s AND count >= %s
+                WHERE fingerprint_hash = ? AND count >= ?
                 LIMIT 1
                 """,
                 (fp_hash, LEARNED_THRESHOLD)

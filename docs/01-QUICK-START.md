@@ -1,180 +1,145 @@
-# Chalie
+# Quick Start
 
-**What is Chalie?**
-
-Chalie is a human-in-the-loop cognitive assistant that helps you think, remember, and act across your digital life. It combines memory consolidation, semantic reasoning, and proactive assistance into a unified system designed to augment human cognition rather than replace it.
-
-## Features
-
-- **Memory Hierarchy**: Working memory, gists, facts, episodes, and concepts — each with decay and reinforcement
-- **Context Assembly**: Intelligent retrieval of relevant memories based on semantic similarity and activation
-- **Cognitive Modes**: RESPOND, ACT, CLARIFY, ACKNOWLEDGE — adaptive routing based on conversation context
-- **Experience Consolidation**: Tool results are automatically integrated into episodic memory via novelty gates
-- **Proactive Assistance**: Spontaneous thoughts and outreach during idle time (DMN-inspired)
-- **Voice I/O**: Optional Text-to-Speech and Speech-to-Text via OpenAI-compatible endpoints
-
-## Architecture
-
-```
-User Input
-  ├─ Immediate Commit (working memory, Redis)
-  ├─ Retrieval (context assembly from all memory layers)
-  ├─ Classification & Routing (topic + mode selection)
-  ├─ LLM Generation (mode-specific prompt, context injection)
-  ├─ Post-Response Commit (working memory, PostgreSQL logging)
-  └─ Async Background (memory chunking, episodic consolidation, semantic extraction)
-```
-
-**Memory Layers**:
-- **Working Memory** (Redis, 4 turns, 24h TTL)
-- **Gists** (Redis, 30min TTL) — compressed exchange summaries
-- **Facts** (Redis, 24h TTL) — atomic key-value assertions
-- **Episodes** (PostgreSQL + pgvector) — narrative units with decay
-- **Concepts** (PostgreSQL + pgvector) — knowledge nodes and relationships
-- **User Traits** (PostgreSQL) — personal facts, category-specific decay
-- **Lists** (PostgreSQL) — deterministic list management (shopping, to-do, chores)
-
-## Prerequisites
-
-- Docker & Docker Compose
-- An LLM provider:
-  - **Local**: [Ollama](https://ollama.ai) (recommended for development)
-  - **API**: OpenAI, Anthropic, or Google Gemini
-
-## Quick Start
-
-### 1. Clone & Start
+## Install Chalie
 
 ```bash
-git clone https://github.com/chalie-ai/chalie.git
-cd chalie
-docker-compose build && docker-compose up -d
+curl -fsSL https://chalie.ai/install | bash
 ```
 
-Check status:
-```bash
-docker-compose logs -f backend
-docker-compose ps
-```
+The installer:
+1. Checks prerequisites (Python 3.9+, Docker optional)
+2. Downloads the latest release and builds in place (~2 min)
+3. Installs the `chalie` CLI and opens Chalie at **http://localhost:8081**
 
-### 2. Onboard
-
-Open http://localhost:8081/on-boarding/ in your browser.
-
-- **Create Account**: Set a password
-- **Configure Provider**: Choose your LLM provider:
-  - **For Local**: Ollama (install from ollama.ai, select any available model, point to `http://localhost:11434`)
-  - **For Cloud**: OpenAI, Anthropic, or Google Gemini (requires API key)
-- **Redirect**: After setup, you'll be redirected to the chat interface
-
-### 3. Chat
-
-Start chatting! Chalie will:
-- Remember context across exchanges
-- Consolidate memories in the background
-- Suggest actions when relevant
-- Execute tools if configured
-
-## LLM Provider Options
-
-### For Local Runtime
-
-**Ollama** — Run models locally on your machine (no API costs, privacy-first)
-
-1. Install from [ollama.ai](https://ollama.ai)
-2. Pull any available model: `ollama pull <model-name>`
-   - Popular options: `qwen:8b`, `mistral:latest`, `llama2:latest`, etc.
-3. Ensure Ollama is running (`ollama serve`)
-4. In onboarding, select **Ollama** and set endpoint to `http://localhost:11434`
-
-### For Cloud Runtime
-
-Choose based on your preference:
-
-**OpenAI**
-- Get API key from [platform.openai.com](https://platform.openai.com)
-- Models available: GPT-4, GPT-4o, etc.
-- In onboarding, select **OpenAI** and paste your key
-
-**Anthropic**
-- Get API key from [console.anthropic.com](https://console.anthropic.com)
-- Models available: Claude Haiku, Claude Sonnet, Claude Opus
-- In onboarding, select **Anthropic** and paste your key
-
-**Google Gemini**
-- Get API key from [ai.google.dev](https://ai.google.dev)
-- Models available: Gemini Pro, Gemini Flash, etc.
-- In onboarding, select **Gemini** and paste your key
-
-## Voice (Built-in)
-
-Voice is built into Chalie as a local Docker service — no configuration needed. When the `voice` container is running, the mic button and speaker buttons appear automatically in the chat interface. When it's not running, they stay hidden. Zero setup, zero settings.
-
-- **STT**: faster-whisper (`small` model) — records from mic, transcribes to text
-- **TTS**: KittenTTS Mini (80M params) — speaks Chalie's responses aloud
-- **Verify**: `curl localhost:8081/voice/health` should return `{"status": "ok"}`
-
-## Security
-
-- **Local by Default**: Runs entirely on your machine. No cloud uploads unless you configure external providers.
-- **API Keys**: Managed via master account auth. Stored securely in PostgreSQL with encryption.
-- **CORS**: Defaults to `localhost`. Restrict before exposing publicly.
-- **Default Credentials**: Postgres password is `chalie` — **change before production use**.
-- **No Telemetry**: Zero tracking or external calls (except to your configured LLM/voice providers).
-
-## Architecture Deep Dive
-
-See the source code for implementation details:
-
-- `backend/consumer.py` — Worker supervisor
-- `backend/services/frontal_cortex_service.py` — LLM response generation
-- `backend/services/episodic_retrieval_service.py` — Memory search with hybrid ranking
-- `backend/services/semantic_consolidation_service.py` — Concept extraction
-- `backend/workers/` — Background processing pipeline
-
-## Deployment
-
-### Docker Compose (Single Machine)
-
-The included `docker-compose.yml` runs everything:
-
-```bash
-docker-compose up -d
-```
-
-Services:
-- **postgres**: Vector database (pgvector extension)
-- **redis**: Session & queue storage
-- **backend**: Python Flask + workers
-- **frontend**: Vanilla JS UI (nginx)
-
-### Production
-
-Before exposing to a network:
-
-1. Change `POSTGRES_PASSWORD` in `.env`
-2. Set HTTPS in nginx or reverse proxy
-3. Restrict CORS origins in `frontend/interface/api.js`
-4. Use strong API keys
-5. Enable firewall rules
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Commit changes (`git commit -am 'Add your feature'`)
-4. Push to branch (`git push origin feature/your-feature`)
-5. Open a Pull Request
-
-## License
-
-Apache 2.0 — see [LICENSE](LICENSE)
+No root access required. Everything lives in `~/.chalie/`.
 
 ---
 
-**Support & Questions**
+## After Install
 
-- Issues: [GitHub Issues](https://github.com/chalie-ai/chalie/issues)
-- Discussions: [GitHub Discussions](https://github.com/chalie-ai/chalie/discussions)
+```bash
+chalie                 # Start Chalie → http://localhost:8081
+chalie --port=9000     # Start on a custom port
+chalie stop            # Stop the process
+chalie restart         # Restart
+chalie update          # Update to the latest release
+chalie status          # Check if running
+chalie logs            # Follow the log
+```
+
+---
+
+## Onboarding
+
+Open **http://localhost:8081/on-boarding/** and:
+
+1. **Create an account** — set a password
+2. **Configure an LLM provider** — choose from the options below
+3. **Begin** — you'll be redirected to the chat interface
+
+---
+
+## LLM Providers
+
+### Ollama (local, recommended)
+
+Free, private, runs entirely on your machine.
+
+```bash
+# Install from https://ollama.ai, then:
+ollama pull qwen:8b
+```
+
+In onboarding, select **Ollama** and set the endpoint to `http://localhost:11434`.
+
+### OpenAI
+
+1. Get an API key from [platform.openai.com](https://platform.openai.com)
+2. In onboarding, select **OpenAI** and paste your key
+
+### Anthropic
+
+1. Get an API key from [console.anthropic.com](https://console.anthropic.com)
+2. In onboarding, select **Anthropic** and paste your key
+
+### Google Gemini
+
+1. Get an API key from [ai.google.dev](https://ai.google.dev)
+2. In onboarding, select **Gemini** and paste your key
+
+---
+
+## Configuration
+
+All configuration (LLM providers, API keys, settings) is done via the web UI after first run. The only runtime option is the port:
+
+```bash
+chalie --port=9000     # Start on a custom port (default: 8081)
+```
+
+Voice features auto-detect native dependencies — no Docker needed. When voice deps are installed (via the installer or `pip install -r backend/requirements-voice.txt`), voice appears automatically. When they're not, voice is silently hidden. Use `--disable-voice` during install to skip voice dependencies entirely.
+
+---
+
+## Updating
+
+```bash
+chalie update
+```
+
+Re-runs the installer with `CHALIE_UPDATE=1`: stops the running process, downloads the latest source, reinstalls dependencies. Your database and memory in `~/.chalie/data/` are never touched.
+
+---
+
+## Uninstalling
+
+```bash
+chalie stop
+rm -rf ~/.chalie ~/.local/bin/chalie
+```
+
+Remove the `export PATH="$HOME/.local/bin:$PATH"` line from `~/.bashrc` or `~/.zshrc` if it was added by the installer.
+
+---
+
+## For Hackers & Contributors
+
+Want to run from source, patch internals, or contribute?
+
+**Prerequisites:** Python 3.9+, git
+
+**Steps:**
+
+**1. Clone the repo**
+```bash
+git clone https://github.com/chalie-ai/chalie.git
+cd chalie
+```
+
+**2. Create a virtual environment and install dependencies**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+**3. Run Chalie**
+```bash
+python backend/run.py
+# Opens at http://localhost:8081
+```
+
+**4. Run tests**
+```bash
+cd backend && pytest
+```
+
+**Port override** (optional):
+
+```bash
+python backend/run.py --port=9000
+```
+
+All other configuration (LLM providers, API keys) is done via the web UI after first run. Voice auto-detects native dependencies (no Docker needed).
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.

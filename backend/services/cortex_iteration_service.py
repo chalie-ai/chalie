@@ -1,7 +1,7 @@
 """
 Cortex Iteration Service - Batch logging of ACT loop iterations.
 
-Responsibility: Write iteration data to PostgreSQL in batches for reflection analysis.
+Responsibility: Write iteration data to SQLite in batches for reflection analysis.
 """
 
 import uuid
@@ -47,7 +47,7 @@ class CortexIterationService:
                 cursor.execute("""
                     SELECT actions_executed
                     FROM cortex_iterations
-                    WHERE topic = %s
+                    WHERE topic = ?
                     ORDER BY created_at DESC
                     LIMIT 20
                 """, (topic,))
@@ -60,6 +60,12 @@ class CortexIterationService:
 
                 for row in rows:
                     actions_executed = row[0] if row[0] else []
+                    # Parse JSON if stored as string
+                    if isinstance(actions_executed, str):
+                        try:
+                            actions_executed = json.loads(actions_executed)
+                        except (json.JSONDecodeError, TypeError):
+                            actions_executed = []
                     executed_actions = set()
 
                     for action in actions_executed:
@@ -148,10 +154,10 @@ class CortexIterationService:
                             actions_executed, action_count, action_success_count,
                             frontal_cortex_response, config_snapshot
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?
                         )
                     """, (
                         loop_id,

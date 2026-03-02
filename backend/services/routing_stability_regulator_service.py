@@ -2,7 +2,7 @@
 Routing Stability Regulator — Single authority for mode router weight mutation.
 
 Follows TopicStabilityRegulatorService pattern:
-- Runs on 24h cycle (registered as service in consumer.py)
+- Runs on 24h cycle (registered as service in run.py)
 - Reads pressure signals from routing_decisions table
 - Computes: tie-breaker rate, mode entropy, misroute rate, reflection disagreement
 - Selects worst pressure, maps to single parameter adjustment
