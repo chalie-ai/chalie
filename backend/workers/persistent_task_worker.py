@@ -314,7 +314,6 @@ def _execute_flat_loop(task: dict) -> dict:
     """
     from services.config_service import ConfigService
     from services import FrontalCortexService
-    from services.act_loop_service import ActLoopService
 
     # Load config
     try:
@@ -326,14 +325,6 @@ def _execute_flat_loop(task: dict) -> dict:
 
     cortex_service = FrontalCortexService(cortex_config)
 
-    # Initialize ACT loop with task's fatigue budget
-    act_loop = ActLoopService(
-        config={**cortex_config, 'fatigue_budget': task.get('fatigue_budget', 15.0)},
-        cumulative_timeout=120.0,  # 2min per cycle (generous for background work)
-        per_action_timeout=15.0,
-        max_iterations=5,          # Bounded per cycle
-    )
-
     # Build task context for prompt
     progress = task.get('progress', {}) or {}
     task_context = {
@@ -343,51 +334,69 @@ def _execute_flat_loop(task: dict) -> dict:
         'task_intermediate_results': task.get('result', 'None yet'),
     }
 
+    # Fill skill/tool/context placeholders (B1 fix — these were previously unfilled)
+    from services.innate_skills.registry import PLANNING_SKILLS, SKILL_DESCRIPTIONS
+    from services.plan_decomposition_service import PlanDecompositionService
+    skills_text = '\n'.join(
+        f'- **{name}**: {SKILL_DESCRIPTIONS.get(name, "")}'
+        for name in sorted(PLANNING_SKILLS)
+    )
+    tools_text = PlanDecompositionService._get_available_tools()
+    task_context['injected_skills'] = skills_text
+    task_context['available_tools'] = tools_text
+    task_context['client_context'] = 'Background worker execution (persistent task cycle)'
+
     # Build prompt with task context
     prompt_filled = act_prompt
     for key, value in task_context.items():
         prompt_filled = prompt_filled.replace(f'{{{{{key}}}}}', str(value))
 
-    # ACT loop — limited to 5 iterations per cycle
-    last_response = {}
-    while True:
-        can_continue, reason = act_loop.can_continue()
-        if not can_continue:
-            break
+    return _flat_loop_orchestrator(
+        task, cortex_config, cortex_service, prompt_filled, progress
+    )
 
-        response_data = cortex_service.generate_response(
-            system_prompt_template=prompt_filled,
-            original_prompt=task['goal'],
-            classification={'topic': f"task_{task['id']}", 'confidence': 10},
-            chat_history=[],
-            act_history=act_loop.get_history_context(),
-        )
 
-        last_response = response_data
-        actions = response_data.get('actions', [])
+def _flat_loop_orchestrator(task, cortex_config, cortex_service, prompt_filled, progress):
+    """Unified ACT orchestrator path for persistent task flat loop."""
+    from services.act_orchestrator_service import ACTOrchestrator
 
-        if not actions:
-            break
+    orchestrator = ACTOrchestrator(
+        config={**cortex_config, 'fatigue_budget': task.get('fatigue_budget', 15.0)},
+        max_iterations=5,
+        cumulative_timeout=120.0,
+        per_action_timeout=15.0,
+        critic_enabled=True,
+        smart_repetition=True,
+        escalation_hints=False,
+        persistent_task_exit=False,
+        deferred_card_context=False,
+    )
 
-        results = act_loop.execute_actions(
-            topic=f"persistent_task_{task['id']}",
-            actions=actions,
-        )
-        act_loop.append_results(results)
-        act_loop.accumulate_fatigue(results, act_loop.iteration_number)
-        act_loop.iteration_number += 1
+    result = orchestrator.run(
+        topic=f"persistent_task_{task['id']}",
+        text=task['goal'],
+        cortex_service=cortex_service,
+        act_prompt=prompt_filled,
+        classification={'topic': f"task_{task['id']}", 'confidence': 10},
+        chat_history=[],
+        session_id='persistent_task',
+    )
 
-    # Extract progress_update from last response
-    progress_update = last_response.get('progress_update', {})
-    if not progress_update:
-        progress_update = {
-            'last_summary': f"Cycle completed with {act_loop.iteration_number} iterations",
-            'coverage_estimate': progress.get('coverage_estimate', 0.0),
-        }
+    # The orchestrator stores all responses internally. We need the last
+    # LLM response for progress_update/task_complete. Since the orchestrator
+    # doesn't expose individual LLM responses (they're iteration-internal),
+    # we construct progress from the result.
+    progress_update = {
+        'last_summary': (
+            f"Cycle completed with {result.iterations_used} iterations "
+            f"(termination: {result.termination_reason})"
+        ),
+        'coverage_estimate': progress.get('coverage_estimate', 0.0),
+    }
 
     return {
         'progress_update': progress_update,
-        'task_complete': last_response.get('task_complete', False),
+        'task_complete': False,  # Flat loop can't determine completion without LLM signal
         'result_fragment': None,
         'artifact': None,
     }
@@ -573,9 +582,14 @@ def _execute_single_step(task: dict, plan: dict, step: dict,
     prompt_filled = prompt_filled.replace('{{step_description}}', step['description'])
     prompt_filled = prompt_filled.replace('{{step_dependencies_results}}', dep_results or 'No prior results (this is a root step).')
     prompt_filled = prompt_filled.replace('{{remaining_steps}}', '\n'.join(remaining) or 'This is the last step.')
-    prompt_filled = prompt_filled.replace('{{available_skills}}', cortex_service._get_available_skills())
-    prompt_filled = prompt_filled.replace('{{available_tools}}', cortex_service._get_available_tools())
-    prompt_filled = prompt_filled.replace('{{client_context}}', 'Background worker execution')
+    from services.innate_skills.registry import PLANNING_SKILLS, SKILL_DESCRIPTIONS
+    skills_text = '\n'.join(
+        f'- **{name}**: {SKILL_DESCRIPTIONS.get(name, "")}'
+        for name in sorted(PLANNING_SKILLS)
+    )
+    prompt_filled = prompt_filled.replace('{{available_skills}}', skills_text)
+    prompt_filled = prompt_filled.replace('{{available_tools}}', PlanDecompositionService._get_available_tools())
+    prompt_filled = prompt_filled.replace('{{client_context}}', 'Background worker execution (persistent task step)')
 
     # Run step ACT loop
     last_response = {}

@@ -1,7 +1,6 @@
 import logging
 from typing import Dict, Any
 
-from services.act_queue_schema import ActQueueMessage, OutputType
 from services.output_service import OutputService
 
 

@@ -83,6 +83,13 @@ export class ApiClient {
     return fetch(this._buildUrl('/health'), { credentials: 'same-origin' }).then(r => r.json()).catch(() => null);
   }
 
+  /** @returns {Promise<{ready: boolean}>} — never rejects */
+  readyCheck() {
+    return fetch(this._buildUrl('/ready'), { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : { ready: false })
+      .catch(() => ({ ready: false }));
+  }
+
   /** @returns {Promise<{thread_id: string, exchanges: Array}>} */
   getRecentConversation() {
     return this._get('/conversation/recent');
