@@ -33,7 +33,7 @@ def handle_introspect(topic: str, params: dict) -> str:
     state["world_state"] = _get_world_state(topic)
     state["topic_age"] = _get_topic_age(topic)
 
-    # Gather signals from PostgreSQL
+    # Gather signals from SQLite
     state["recent_modes"] = _get_recent_modes(topic)
     state["skill_stats"] = _get_skill_stats(topic)
     state["recall_failure_rate"] = _get_recall_failure_rate(topic)

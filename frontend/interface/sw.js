@@ -9,7 +9,7 @@ const CDN_CACHE = `chalie-cdn-${CACHE_VERSION}`;
 
 const SHELL_ASSETS = [
   '/', '/index.html', '/manifest.json',
-  '/app.js', '/api.js', '/sse.js', '/renderer.js',
+  '/app.js', '/api.js', '/ws.js', '/renderer.js',
   '/presence.js', '/voice.js', '/tools.js', '/style.css',
   '/markdown.js', '/lib/marked.esm.js',
   '/ambient.js',
@@ -19,9 +19,9 @@ const SHELL_ASSETS = [
 ];
 
 const NETWORK_ONLY_PATHS = [
-  '/chat', '/conversation', '/memory', '/proactive',
+  '/conversation', '/memory', '/proactive',
   '/health', '/system', '/privacy', '/push',
-  '/tools/', '/events', '/metrics',
+  '/tools/', '/events', '/metrics', '/ws',
 ];
 // Note: '/tools/' (with slash) avoids matching '/tools.js'
 

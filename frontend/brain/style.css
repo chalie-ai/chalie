@@ -1143,6 +1143,18 @@ body::before {
     padding: 0;
 }
 
+/* Catalog grid inside the Add Tool modal */
+.tools-grid--modal {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+    margin-bottom: 0;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 2px 2px 8px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
 .tool-card--marketplace {
     opacity: 0.75;
     border-style: dashed;

@@ -13,6 +13,7 @@ Eligibility gates:
 """
 
 import logging
+import struct
 from typing import Optional, Tuple, Dict, Any
 
 from services.redis_client import RedisClientService
@@ -32,6 +33,20 @@ _BEHAVIORAL_KEYWORDS = frozenset({
 
 SEED_COOLDOWN_KEY = "curiosity:seed_cooldown"
 SEED_COOLDOWN_TTL = 86400  # 24 hours
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    if hasattr(embedding, 'tolist'):
+        flat = embedding.tolist()
+        return struct.pack(f'{len(flat)}f', *flat)
+    return embedding
 
 
 class SeedThreadAction(AutonomousAction):
@@ -148,8 +163,8 @@ class SeedThreadAction(AutonomousAction):
         """
         Classify thread type by heuristic.
 
-        Concrete/technical/proper-noun terms → learning.
-        Abstract/behavioral/meta concepts → behavioral.
+        Concrete/technical/proper-noun terms -> learning.
+        Abstract/behavioral/meta concepts -> behavioral.
         """
         topic_lower = thought.seed_topic.lower()
         words = set(topic_lower.split())
@@ -204,13 +219,13 @@ class SeedThreadAction(AutonomousAction):
 
                 # Get user-generated episodes from last 72h with embeddings
                 cursor.execute("""
-                    SELECT embedding FROM episodes
-                    WHERE created_at > NOW() - INTERVAL '72 hours'
+                    SELECT id FROM episodes
+                    WHERE created_at > datetime('now', '-72 hours')
                       AND deleted_at IS NULL
                       AND embedding IS NOT NULL
                       AND (
-                          salience_factors->>'source' IS NULL
-                          OR salience_factors->>'source' NOT IN (
+                          json_extract(salience_factors, '$.source') IS NULL
+                          OR json_extract(salience_factors, '$.source') NOT IN (
                               'tool_reflection', 'pursuit', 'drift', 'curiosity_thread'
                           )
                       )
@@ -224,14 +239,30 @@ class SeedThreadAction(AutonomousAction):
                 if len(rows) < self.episodic_min_matches:
                     return False
 
-                # Compute similarities
+                # Retrieve embeddings from vec table via cosine similarity
+                episode_ids = [row[0] for row in rows]
+
+                # Compute similarities by querying vec table for each episode
                 similarities = []
-                for row in rows:
-                    ep_embedding = row[0]
-                    if ep_embedding:
+                query_blob = _pack_embedding(thought.thought_embedding)
+                if query_blob is None:
+                    return False
+
+                cursor2 = conn.cursor()
+                for ep_id in episode_ids:
+                    cursor2.execute(
+                        "SELECT embedding FROM episodes_vec WHERE rowid = ?",
+                        (ep_id,)
+                    )
+                    vec_row = cursor2.fetchone()
+                    if vec_row and vec_row[0]:
+                        ep_embedding_blob = vec_row[0]
+                        dim = len(ep_embedding_blob) // 4
+                        ep_embedding = list(struct.unpack(f'{dim}f', ep_embedding_blob))
                         sim = self._cosine_similarity(thought.thought_embedding, ep_embedding)
                         if sim >= self.episodic_similarity_threshold:
                             similarities.append(sim)
+                cursor2.close()
 
                 if len(similarities) < self.episodic_min_matches:
                     return False
@@ -257,8 +288,8 @@ class SeedThreadAction(AutonomousAction):
 
                 cursor.execute("""
                     SELECT COUNT(*) FROM semantic_concepts
-                    WHERE LOWER(concept_name) LIKE %s
-                      AND strength >= %s
+                    WHERE LOWER(concept_name) LIKE ?
+                      AND strength >= ?
                       AND deleted_at IS NULL
                 """, (f'%{thought.seed_topic.lower()}%', self.semantic_min_strength))
 
@@ -301,7 +332,7 @@ class SeedThreadAction(AutonomousAction):
         if not a or not b:
             return 0.0
 
-        # Handle pgvector string format
+        # Handle string format (serialised lists)
         if isinstance(a, str):
             a = [float(x) for x in a.strip('[]').split(',')]
         if isinstance(b, str):

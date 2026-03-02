@@ -1,278 +1,331 @@
 """
-Database Service - PostgreSQL connection pooling and connection management.
-Responsibility: Connection management only (SRP).
+Database Service — SQLite connection management with thread-local connections.
+
+Replaces the PostgreSQL/SQLAlchemy implementation with sqlite3 + sqlite-vec + FTS5.
+Each thread gets its own connection via threading.local(). WAL mode enables
+concurrent reads during writes.
 """
 
 import logging
+import os
+import sqlite3
+import threading
+import uuid
 from contextlib import contextmanager
-from sqlalchemy import create_engine
-from sqlalchemy.engine import URL
-from sqlalchemy.orm import sessionmaker
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
-def get_merged_db_config():
-    """
-    Merge database config from connections.json and episodic-memory.json.
-
-    Connection details (host, port, database, username, password) come from connections.json.
-    Pool settings (pool_size, max_overflow, pool_timeout) come from episodic-memory.json.
-    episodic-memory.json can override the database name if needed.
-
-    Returns:
-        dict: Merged database configuration
-    """
-    from services.config_service import ConfigService
-
-    episodic_config = ConfigService.get_agent_config("episodic-memory")
-    connections_config = ConfigService.connections()
-
-    # Get pool settings from episodic-memory.json
-    episodic_db_config = episodic_config.get('database', {})
-
-    # Get connection details from connections.json
-    postgresql_config = connections_config.get('postgresql', {})
-
-    if not postgresql_config:
-        raise ValueError("PostgreSQL connection details not found in connections.json")
-
-    # Build merged config
-    db_config = {
-        'host': postgresql_config['host'],
-        'port': postgresql_config.get('port', 5432),
-        'database': episodic_db_config.get('database') or postgresql_config['database'],
-        'username': postgresql_config.get('username'),
-        'password': postgresql_config.get('password'),
-        'pool_size': episodic_db_config.get('pool_size', 10),
-        'max_overflow': episodic_db_config.get('max_overflow', 20),
-        'pool_timeout': episodic_db_config.get('pool_timeout', 30)
-    }
-
-    return db_config
+class _TextClause:
+    """Lightweight replacement for sqlalchemy.text().
+    Just wraps a SQL string so SessionProxy.execute(str(obj)) works."""
+    __slots__ = ('_sql',)
+    def __init__(self, sql: str):
+        self._sql = sql
+    def __str__(self):
+        return self._sql
+    def __repr__(self):
+        return f"text({self._sql!r})"
 
 
-# ── Shared singleton pool (per-worker) ──────────────────────────
+def text(sql: str) -> _TextClause:
+    """Drop-in replacement for sqlalchemy.text()."""
+    return _TextClause(sql)
+
+# Default database path
+_DEFAULT_DB_PATH = str(Path(__file__).resolve().parent.parent / "data" / "chalie.db")
+
+# ── Thread-local storage for connections ────────────────────────
+_local = threading.local()
+
+# ── Singleton DatabaseService ───────────────────────────────────
 _shared_db_service = None
+_shared_lock = threading.Lock()
+
+
+def get_db_path() -> str:
+    """Get database file path from env or default."""
+    return os.environ.get("CHALIE_DB_PATH", _DEFAULT_DB_PATH)
 
 
 def get_shared_db_service() -> 'DatabaseService':
-    """
-    Get or create a shared DatabaseService singleton.
-
-    Reuses a single connection pool across all callers within a worker process,
-    eliminating the 8-12 pool open/close cycles per request.
-    """
+    """Get or create the shared DatabaseService singleton."""
     global _shared_db_service
-    if _shared_db_service is None or _shared_db_service.engine is None:
-        db_config = get_merged_db_config()
-        _shared_db_service = DatabaseService(db_config)
-        logging.info("[DB] Created shared DatabaseService singleton")
+    if _shared_db_service is None:
+        with _shared_lock:
+            if _shared_db_service is None:
+                _shared_db_service = DatabaseService(get_db_path())
+                logger.info("[DB] Created shared DatabaseService singleton")
     return _shared_db_service
 
 
-def get_lightweight_db_service() -> 'DatabaseService':
-    """Create a DatabaseService with minimal pool for single-threaded background workers."""
-    db_config = get_merged_db_config()
-    db_config['pool_size'] = 1
-    db_config['max_overflow'] = 1
-    return DatabaseService(db_config)
+# Kept for compatibility — SQLite needs no lightweight variant
+get_lightweight_db_service = get_shared_db_service
+
+
+class SessionProxy:
+    """
+    Lightweight shim that mimics SQLAlchemy session.execute(text("SQL"), params).
+    Allows code that used get_session() to work with raw SQLite connections.
+
+    Usage:
+        with db.get_session() as session:
+            result = session.execute(text("SELECT * FROM t WHERE id = :id"), {"id": 1})
+            rows = result.fetchall()
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def execute(self, sql_or_text, params=None):
+        """Execute SQL. Accepts sqlalchemy.text() or plain strings.
+        Named params (:name) are converted to positional (?) for SQLite."""
+        # Extract the string from sqlalchemy text() objects
+        sql = str(sql_or_text)
+
+        if params and isinstance(params, dict):
+            # Convert :name params to ? positional params
+            import re
+            ordered_params = []
+            def _replace(match):
+                key = match.group(1)
+                ordered_params.append(params[key])
+                return '?'
+            sql = re.sub(r':(\w+)', _replace, sql)
+            cursor = self._conn.cursor()
+            cursor.execute(sql, ordered_params)
+        else:
+            cursor = self._conn.cursor()
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+
+        return ResultProxy(cursor)
+
+    def commit(self):
+        """Explicit commit (also happens automatically on context-manager exit)."""
+        self._conn.commit()
+
+    def rollback(self):
+        """Explicit rollback."""
+        self._conn.rollback()
+
+
+class ResultProxy:
+    """Wraps sqlite3.Cursor to mimic SQLAlchemy result set."""
+
+    def __init__(self, cursor: sqlite3.Cursor):
+        self._cursor = cursor
+
+    def fetchone(self):
+        """Return row as sqlite3.Row (supports both row[0] and row['col'] access)."""
+        row = self._cursor.fetchone()
+        return row  # sqlite3.Row already supports int and key indexing
+
+    def fetchall(self):
+        """Return rows as sqlite3.Row objects."""
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+
+    def scalar(self):
+        row = self.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
+    def close(self):
+        self._cursor.close()
+
+
+class DictCursor:
+    """Wraps sqlite3.Cursor to return list[dict] from fetchall()."""
+
+    def __init__(self, cursor: sqlite3.Cursor):
+        self._cursor = cursor
+
+    def execute(self, sql, params=None):
+        if params is None:
+            self._cursor.execute(sql)
+        else:
+            self._cursor.execute(sql, params)
+        return self
+
+    def executemany(self, sql, params_list):
+        self._cursor.executemany(sql, params_list)
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def fetchall(self):
+        return [dict(row) for row in self._cursor.fetchall()]
+
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+    def close(self):
+        self._cursor.close()
+
+    def __iter__(self):
+        return (dict(row) for row in self._cursor)
 
 
 class DatabaseService:
-    """Manages PostgreSQL connection pooling via SQLAlchemy engine."""
+    """Manages SQLite connections with thread-local isolation and WAL mode."""
 
-    def __init__(self, config: dict):
-        """
-        Initialize connection pool.
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or get_db_path()
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
-        Args:
-            config: Database configuration dict with keys:
-                    host, port, database, user, password,
-                    pool_size, max_overflow, pool_timeout
-        """
-        self.config = config
-        self.engine = None
-        self.session_factory = None
-        self._initialize_pool()
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get or create a thread-local connection."""
+        conn = getattr(_local, 'conn', None)
+        db_path = getattr(_local, 'db_path', None)
 
-    def _initialize_pool(self):
-        """Create SQLAlchemy engine with connection pool."""
-        try:
-            username = self.config.get('username') or self.config.get('user')
-            if not username:
-                raise ValueError("Database username not provided (use 'username' or 'user' field)")
+        if conn is None or db_path != self.db_path:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-            url = URL.create(
-                drivername="postgresql+psycopg2",
-                username=username,
-                password=self.config.get('password'),
-                host=self.config['host'],
-                port=self.config.get('port', 5432),
-                database=self.config['database']
-            )
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA temp_store=MEMORY")
 
-            pool_size = self.config.get('pool_size', 10)
-            max_overflow = self.config.get('max_overflow', 20)
-            pool_timeout = self.config.get('pool_timeout', 30)
+            # Load sqlite-vec extension
+            try:
+                conn.enable_load_extension(True)
+                import sqlite_vec
+                sqlite_vec.load(conn)
+            except Exception as e:
+                logger.warning(f"[DB] sqlite-vec not available: {e}")
 
-            self.engine = create_engine(
-                url,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_timeout=pool_timeout,
-                pool_pre_ping=True,
-                pool_recycle=3600
-            )
+            _local.conn = conn
+            _local.db_path = self.db_path
+            logger.debug(f"[DB] New connection for thread {threading.current_thread().name}")
 
-            self.session_factory = sessionmaker(bind=self.engine)
-
-            logging.info(
-                f"Database pool initialized: pool_size={pool_size}, "
-                f"max_overflow={max_overflow} to {self.config['host']}/{self.config['database']}"
-            )
-        except Exception as e:
-            logging.error(f"Failed to initialize database pool: {e}")
-            raise
+        return conn
 
     def get_connection(self):
-        """
-        Get a connection from the pool.
-
-        Returns:
-            psycopg2 connection object (pool-managed)
-
-        Raises:
-            Exception if pool is exhausted or connection fails
-        """
-        if not self.engine:
-            raise RuntimeError("Connection pool not initialized")
-
-        try:
-            conn = self.engine.raw_connection()
-            conn.autocommit = False
-            return conn
-        except Exception as e:
-            logging.error(f"Failed to get connection from pool: {e}")
-            raise
+        """Get a connection (thread-local). Compatible with old API."""
+        return self._get_connection()
 
     def release_connection(self, conn):
-        """
-        Return a connection to the pool.
-
-        Args:
-            conn: psycopg2 connection object
-        """
-        if conn:
-            try:
-                conn.close()
-            except Exception as e:
-                logging.error(f"Failed to release connection: {e}")
-
-    def execute(self, sql, params=None):
-        """Execute a write statement (INSERT/UPDATE/DELETE) with auto-commit."""
-        with self.connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, params)
-            finally:
-                cursor.close()
-
-    def fetch_all(self, sql, params=None):
-        """Execute a SELECT and return all rows as a list of dicts."""
-        import psycopg2.extras
-        with self.connection() as conn:
-            cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            try:
-                cursor.execute(sql, params)
-                return [dict(row) for row in cursor.fetchall()]
-            finally:
-                cursor.close()
+        """No-op for SQLite — connections are thread-local and reused."""
+        pass
 
     @contextmanager
     def connection(self):
         """
-        Context manager for database connections.
-
-        Auto-commits on success, auto-rolls-back on exception,
-        auto-releases in finally.
-
-        Usage:
-            with db_service.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SQL", (params,))
-                cursor.close()
+        Context manager for database operations.
+        Auto-commits on success, auto-rolls-back on exception.
         """
-        conn = self.get_connection()
+        conn = self._get_connection()
         try:
             yield conn
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-        finally:
-            self.release_connection(conn)
+
+    def execute(self, sql, params=None):
+        """Execute a write statement (INSERT/UPDATE/DELETE) with auto-commit."""
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                if params is None:
+                    cursor.execute(sql)
+                else:
+                    cursor.execute(sql, params)
+            finally:
+                cursor.close()
+
+    def fetch_all(self, sql, params=None):
+        """Execute a SELECT and return all rows as list[dict]."""
+        with self.connection() as conn:
+            cursor = DictCursor(conn.cursor())
+            try:
+                cursor.execute(sql, params)
+                return cursor.fetchall()
+            finally:
+                cursor.close()
 
     @contextmanager
     def get_session(self):
         """
-        Context manager for SQLAlchemy sessions.
-
-        Auto-commits on success, auto-rolls-back on exception,
-        auto-closes in finally.
-
-        Usage:
-            with db_service.get_session() as session:
-                result = session.execute(text("SELECT ..."))
+        Compatibility shim for code that used SQLAlchemy sessions.
+        Yields a SessionProxy that mimics session.execute(text("SQL"), params).
+        Auto-commits on success, auto-rolls-back on exception.
         """
-        if not self.session_factory:
-            raise RuntimeError("Session factory not initialized")
-
-        session = self.session_factory()
+        conn = self._get_connection()
+        proxy = SessionProxy(conn)
         try:
-            yield session
-            session.commit()
+            yield proxy
+            conn.commit()
         except Exception:
-            session.rollback()
+            conn.rollback()
             raise
-        finally:
-            session.close()
 
     def close_pool(self):
-        """Close all connections in the pool."""
-        if self.engine:
+        """Close the thread-local connection if it exists."""
+        conn = getattr(_local, 'conn', None)
+        if conn:
             try:
-                self.engine.dispose()
-                logging.info("Database pool closed")
-            except Exception as e:
-                logging.error(f"Failed to close pool: {e}")
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+            _local.db_path = None
 
     def run_pending_migrations(self):
         """
         Run any pending database migrations from migrations/ directory.
         Creates migrations tracking table if needed.
         """
-        import os
-        from pathlib import Path
-
         migrations_dir = Path(__file__).resolve().parent.parent / "migrations"
 
         if not migrations_dir.exists():
-            logging.info("No migrations directory found, skipping migrations")
+            logger.info("No migrations directory found, skipping migrations")
             return
 
-        conn = None
-        try:
-            conn = self.get_connection()
+        with self.connection() as conn:
             cursor = conn.cursor()
 
             # Create migrations tracking table if not exists
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
-                    id SERIAL PRIMARY KEY,
-                    filename VARCHAR(255) UNIQUE NOT NULL,
-                    applied_at TIMESTAMP DEFAULT NOW()
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT UNIQUE NOT NULL,
+                    applied_at TEXT DEFAULT (datetime('now'))
                 )
             """)
-            conn.commit()
 
             # Get list of applied migrations
             cursor.execute("SELECT filename FROM schema_migrations")
@@ -288,34 +341,22 @@ class DatabaseService:
                 if filename in applied:
                     continue
 
-                # Apply migration
-                logging.info(f"Applying migration: {filename}")
+                logger.info(f"Applying migration: {filename}")
                 with open(migration_file, 'r') as f:
                     sql = f.read()
 
-                cursor.execute(sql)
+                cursor.executescript(sql)
 
-                # Record migration as applied
                 cursor.execute(
-                    "INSERT INTO schema_migrations (filename) VALUES (%s)",
+                    "INSERT INTO schema_migrations (filename) VALUES (?)",
                     (filename,)
                 )
-                conn.commit()
                 pending_count += 1
-                logging.info(f"Migration applied: {filename}")
+                logger.info(f"Migration applied: {filename}")
 
             if pending_count == 0:
-                logging.info("No pending migrations")
+                logger.info("No pending migrations")
             else:
-                logging.info(f"Applied {pending_count} migrations")
+                logger.info(f"Applied {pending_count} migrations")
 
             cursor.close()
-
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logging.error(f"Migration failed: {e}")
-            raise
-        finally:
-            if conn:
-                self.release_connection(conn)

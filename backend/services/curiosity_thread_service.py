@@ -13,12 +13,20 @@ Two types:
 import json
 import logging
 import os
+import struct
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[CURIOSITY THREAD]"
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    return struct.pack(f'{len(embedding)}f', *embedding)
 
 
 class CuriosityThreadService:
@@ -69,7 +77,7 @@ class CuriosityThreadService:
 
                 # Dedup check
                 cursor.execute(
-                    "SELECT id FROM curiosity_threads WHERE seed_topic = %s AND status = 'active'",
+                    "SELECT id FROM curiosity_threads WHERE seed_topic = ? AND status = 'active'",
                     (seed_topic,)
                 )
                 if cursor.fetchone():
@@ -81,7 +89,7 @@ class CuriosityThreadService:
 
                 cursor.execute("""
                     INSERT INTO curiosity_threads (id, title, rationale, thread_type, seed_topic)
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?)
                 """, (thread_id, title, rationale, thread_type, seed_topic))
 
                 cursor.close()
@@ -113,7 +121,10 @@ class CuriosityThreadService:
                            last_surfaced_at, engagement_score, created_at
                     FROM curiosity_threads
                     WHERE status = 'active'
-                    ORDER BY last_explored_at NULLS FIRST, created_at ASC
+                    ORDER BY
+                        CASE WHEN last_explored_at IS NULL THEN 0 ELSE 1 END,
+                        last_explored_at ASC,
+                        created_at ASC
                 """)
 
                 candidates = []
@@ -167,7 +178,7 @@ class CuriosityThreadService:
         source: str = 'pursuit',
     ) -> bool:
         """
-        Append a learning note to the thread's learning_notes JSONB array.
+        Append a learning note to the thread's learning_notes JSON array.
 
         Args:
             thread_id: Thread identifier
@@ -178,22 +189,36 @@ class CuriosityThreadService:
             True if successful
         """
         try:
-            entry = json.dumps({
+            entry = {
                 "note": note,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "source": source,
-            })
+            }
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+
+                # Read current notes, append, write back
+                cursor.execute(
+                    "SELECT learning_notes FROM curiosity_threads WHERE id = ?",
+                    (thread_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    cursor.close()
+                    return False
+
+                current_notes = row[0] if isinstance(row[0], list) else json.loads(row[0] or '[]')
+                current_notes.append(entry)
+
                 cursor.execute("""
                     UPDATE curiosity_threads
-                    SET learning_notes = learning_notes || %s::jsonb,
+                    SET learning_notes = ?,
                         exploration_count = exploration_count + 1,
-                        last_explored_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = %s
-                """, (f'[{entry}]', thread_id))
+                        last_explored_at = datetime('now'),
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                """, (json.dumps(current_notes), thread_id))
                 updated = cursor.rowcount > 0
                 cursor.close()
 
@@ -215,7 +240,7 @@ class CuriosityThreadService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT learning_notes FROM curiosity_threads WHERE id = %s",
+                    "SELECT learning_notes FROM curiosity_threads WHERE id = ?",
                     (thread_id,)
                 )
                 row = cursor.fetchone()
@@ -253,7 +278,7 @@ class CuriosityThreadService:
                 cursor = conn.cursor()
 
                 cursor.execute(
-                    "SELECT engagement_score FROM curiosity_threads WHERE id = %s",
+                    "SELECT engagement_score FROM curiosity_threads WHERE id = ?",
                     (thread_id,)
                 )
                 row = cursor.fetchone()
@@ -269,10 +294,10 @@ class CuriosityThreadService:
 
                 cursor.execute("""
                     UPDATE curiosity_threads
-                    SET engagement_score = %s,
-                        status = %s,
-                        updated_at = NOW()
-                    WHERE id = %s
+                    SET engagement_score = ?,
+                        status = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
                 """, (new_score, new_status, thread_id))
 
                 cursor.close()
@@ -304,7 +329,7 @@ class CuriosityThreadService:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT id, engagement_score FROM curiosity_threads "
-                    "WHERE seed_topic = %s AND status = 'active'",
+                    "WHERE seed_topic = ? AND status = 'active'",
                     (seed_topic,)
                 )
                 row = cursor.fetchone()
@@ -330,7 +355,7 @@ class CuriosityThreadService:
                 new_score = min(1.0, current_score + boost)
 
                 cursor.execute(
-                    "UPDATE curiosity_threads SET engagement_score = %s, updated_at = NOW() WHERE id = %s",
+                    "UPDATE curiosity_threads SET engagement_score = ?, updated_at = datetime('now') WHERE id = ?",
                     (new_score, thread_id)
                 )
                 cursor.close()
@@ -368,21 +393,21 @@ class CuriosityThreadService:
                 # Active → dormant (not explored in 45 days)
                 cursor.execute("""
                     UPDATE curiosity_threads
-                    SET status = 'dormant', updated_at = NOW()
+                    SET status = 'dormant', updated_at = datetime('now')
                     WHERE status = 'active'
                       AND last_explored_at IS NOT NULL
-                      AND last_explored_at < NOW() - INTERVAL '%s days'
-                """ % self.DORMANCY_DAYS)
+                      AND last_explored_at < datetime('now', ? || ' days')
+                """, (str(-self.DORMANCY_DAYS),))
                 count += cursor.rowcount
 
                 # Dormant → abandoned (engagement < 0.2 AND dormant > 60 days)
                 cursor.execute("""
                     UPDATE curiosity_threads
-                    SET status = 'abandoned', updated_at = NOW()
+                    SET status = 'abandoned', updated_at = datetime('now')
                     WHERE status = 'dormant'
-                      AND engagement_score < %s
-                      AND updated_at < NOW() - INTERVAL '%s days'
-                """ % (self.ABANDON_ENGAGEMENT, self.ABANDON_DAYS))
+                      AND engagement_score < ?
+                      AND updated_at < datetime('now', ? || ' days')
+                """, (self.ABANDON_ENGAGEMENT, str(-self.ABANDON_DAYS)))
                 count += cursor.rowcount
 
                 cursor.close()
@@ -470,12 +495,12 @@ class CuriosityThreadService:
         return 5.0
 
     def mark_explored(self, thread_id: str) -> bool:
-        """Set last_explored_at = NOW() immediately (prevent double-pickup)."""
+        """Set last_explored_at = datetime('now') immediately (prevent double-pickup)."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE curiosity_threads SET last_explored_at = NOW() WHERE id = %s",
+                    "UPDATE curiosity_threads SET last_explored_at = datetime('now') WHERE id = ?",
                     (thread_id,)
                 )
                 updated = cursor.rowcount > 0
@@ -486,12 +511,12 @@ class CuriosityThreadService:
             return False
 
     def mark_surfaced(self, thread_id: str) -> bool:
-        """Set last_surfaced_at = NOW()."""
+        """Set last_surfaced_at = datetime('now')."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE curiosity_threads SET last_surfaced_at = NOW() WHERE id = %s",
+                    "UPDATE curiosity_threads SET last_surfaced_at = datetime('now') WHERE id = ?",
                     (thread_id,)
                 )
                 updated = cursor.rowcount > 0
@@ -519,23 +544,28 @@ class CuriosityThreadService:
             if topic_embedding is None:
                 return 0
 
+            packed = _pack_embedding(topic_embedding)
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+                # Use episodes_vec virtual table for similarity search
+                # First get candidate episode rowids from vec search
                 cursor.execute("""
-                    SELECT COUNT(*) FROM episodes
-                    WHERE created_at > NOW() - INTERVAL '%s hours'
-                      AND deleted_at IS NULL
+                    SELECT e.rowid FROM episodes e
+                    JOIN episodes_vec v ON v.rowid = e.rowid
+                    WHERE v.embedding MATCH ? AND k = 50
+                      AND e.created_at > datetime('now', ? || ' hours')
+                      AND e.deleted_at IS NULL
                       AND (
-                          salience_factors->>'source' IS NULL
-                          OR salience_factors->>'source' NOT IN (
+                          json_extract(e.salience_factors, '$.source') IS NULL
+                          OR json_extract(e.salience_factors, '$.source') NOT IN (
                               'tool_reflection', 'pursuit', 'drift', 'curiosity_thread'
                           )
                       )
-                      AND embedding IS NOT NULL
-                      AND (1 - (embedding <=> %s::vector)) >= 0.5
-                """ % hours, (topic_embedding,))
+                      AND v.distance < 0.5
+                """, (packed, str(-hours)))
 
-                count = cursor.fetchone()[0]
+                count = len(cursor.fetchall())
                 cursor.close()
                 return count
 

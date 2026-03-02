@@ -91,7 +91,7 @@ def document_purge_worker(shared_state):
     """
     Background service that purges expired documents every 6 hours.
 
-    Runs as a registered service in consumer.py.
+    Runs as a registered service in run.py.
     """
     import time
 

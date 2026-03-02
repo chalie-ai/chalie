@@ -2,7 +2,8 @@
 Tests for backend/services/config_service.py
 
 ConfigService is a static utility class (no instances) providing layered
-configuration: environment variables > JSON files > hardcoded defaults.
+configuration: JSON files > hardcoded defaults. Runtime config (port, host)
+is managed by runtime_config module, not ConfigService.
 """
 
 import json
@@ -15,124 +16,38 @@ from services.config_service import ConfigService
 
 
 @pytest.mark.unit
-class TestGetEnvOrJson:
-    """Tests for ConfigService._get_env_or_json precedence logic."""
-
-    def test_returns_env_var_when_set(self, monkeypatch):
-        """Environment variable takes highest precedence."""
-        monkeypatch.setenv("TEST_CFG_KEY", "from_env")
-        result = ConfigService._get_env_or_json(
-            "TEST_CFG_KEY", "from_json", "from_default"
-        )
-        assert result == "from_env"
-
-    def test_returns_json_value_when_no_env_var(self, monkeypatch):
-        """JSON value is used when no environment variable is set."""
-        monkeypatch.delenv("TEST_CFG_KEY", raising=False)
-        result = ConfigService._get_env_or_json(
-            "TEST_CFG_KEY", "from_json", "from_default"
-        )
-        assert result == "from_json"
-
-    def test_returns_default_when_both_none(self, monkeypatch):
-        """Default is the final fallback when env and JSON are both absent."""
-        monkeypatch.delenv("TEST_CFG_KEY", raising=False)
-        result = ConfigService._get_env_or_json(
-            "TEST_CFG_KEY", None, "from_default"
-        )
-        assert result == "from_default"
-
-    def test_type_conversion_failure_falls_back_to_json(self, monkeypatch):
-        """When env value cannot be converted to requested type, fall back to JSON."""
-        monkeypatch.setenv("TEST_CFG_INT", "not_a_number")
-        result = ConfigService._get_env_or_json(
-            "TEST_CFG_INT", 9999, default=0, value_type=int
-        )
-        assert result == 9999
-
-    def test_type_conversion_failure_falls_back_to_default_when_json_none(self, monkeypatch):
-        """When env conversion fails and JSON is None, fall back to default."""
-        monkeypatch.setenv("TEST_CFG_INT", "not_a_number")
-        result = ConfigService._get_env_or_json(
-            "TEST_CFG_INT", None, default=42, value_type=int
-        )
-        assert result == 42
-
-    def test_int_type_conversion_succeeds(self, monkeypatch):
-        """Environment variable is converted to the requested int type."""
-        monkeypatch.setenv("TEST_CFG_PORT", "5433")
-        result = ConfigService._get_env_or_json(
-            "TEST_CFG_PORT", 5432, default=5432, value_type=int
-        )
-        assert result == 5433
-        assert isinstance(result, int)
-
-
-@pytest.mark.unit
 class TestConnections:
-    """Tests for ConfigService.connections() merging logic."""
+    """Tests for ConfigService.connections() — loads redis topic/queue names."""
 
-    def test_env_vars_override_json_values(self, monkeypatch):
-        """Environment variables must override corresponding JSON fields."""
-        json_config = {
-            "postgresql": {"host": "json-host", "port": 5432},
-            "redis": {"host": "json-redis", "port": 6379},
-            "rest_api": {"host": "0.0.0.0", "port": 8080},
-        }
-        monkeypatch.setenv("POSTGRES_HOST", "env-pg-host")
-        monkeypatch.setenv("REDIS_PORT", "7777")
-
-        with patch.object(ConfigService, 'load_json', return_value=json_config):
-            result = ConfigService.connections()
-
-        assert result["postgresql"]["host"] == "env-pg-host"
-        assert result["redis"]["port"] == 7777
-        # Non-overridden values remain from JSON
-        assert result["redis"]["host"] == "json-redis"
-        assert result["postgresql"]["port"] == 5432
-
-    def test_defaults_when_no_env_or_json(self, monkeypatch):
-        """When JSON has no values and no env vars are set, defaults apply."""
-        # Remove any env vars that could interfere
-        for var in ("POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DATABASE",
-                     "POSTGRES_USERNAME", "POSTGRES_PASSWORD",
-                     "REDIS_HOST", "REDIS_PORT",
-                     "REST_API_HOST", "REST_API_PORT", "API_KEY"):
-            monkeypatch.delenv(var, raising=False)
-
-        empty_json = {}
-        with patch.object(ConfigService, 'load_json', return_value=empty_json):
-            result = ConfigService.connections()
-
-        assert result["postgresql"]["host"] == "localhost"
-        assert result["postgresql"]["port"] == 5432
-        assert result["postgresql"]["database"] == "chalie"
-        assert result["postgresql"]["username"] == "postgres"
-        assert result["redis"]["host"] == "localhost"
-        assert result["redis"]["port"] == 6379
-        assert result["rest_api"]["host"] == "0.0.0.0"
-        assert result["rest_api"]["port"] == 8080
-
-    def test_preserves_nested_redis_config(self, monkeypatch):
-        """Topics and queues from JSON are preserved alongside host/port."""
-        for var in ("REDIS_HOST", "REDIS_PORT"):
-            monkeypatch.delenv(var, raising=False)
-
+    def test_returns_redis_block_from_json(self):
+        """Redis topics and queues are loaded from connections.json."""
         json_config = {
             "redis": {
-                "host": "redis-server",
-                "port": 6379,
                 "topics": {"chat_history": "llm-chat"},
                 "queues": {"prompt_queue": {"name": "prompt-queue"}},
             },
-            "postgresql": {},
-            "rest_api": {},
         }
         with patch.object(ConfigService, 'load_json', return_value=json_config):
             result = ConfigService.connections()
 
         assert result["redis"]["topics"] == {"chat_history": "llm-chat"}
         assert result["redis"]["queues"]["prompt_queue"]["name"] == "prompt-queue"
+
+    def test_returns_empty_redis_when_json_missing(self):
+        """When connections.json is missing, returns empty redis dict."""
+        with patch.object(ConfigService, 'load_json', side_effect=FileNotFoundError):
+            result = ConfigService.connections()
+
+        assert result["redis"] == {}
+
+    def test_no_rest_api_or_voice_keys(self):
+        """connections() no longer returns rest_api or voice sections."""
+        json_config = {"redis": {"topics": {}}}
+        with patch.object(ConfigService, 'load_json', return_value=json_config):
+            result = ConfigService.connections()
+
+        assert "rest_api" not in result
+        assert "voice" not in result
 
 
 @pytest.mark.unit

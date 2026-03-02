@@ -1,4 +1,4 @@
-"""Tests for WorkingMemoryService — FIFO buffer with fakeredis."""
+"""Tests for WorkingMemoryService — FIFO buffer with MemoryStore."""
 
 import pytest
 from services.working_memory_service import WorkingMemoryService

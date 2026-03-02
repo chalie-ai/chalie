@@ -161,7 +161,7 @@ def list_scheduler():
         if status_filter != "all":
             if status_filter not in _VALID_STATUSES:
                 return jsonify({"error": f"status must be one of: all, {', '.join(sorted(_VALID_STATUSES))}"}), 400
-            where_clause = "WHERE status = %s"
+            where_clause = "WHERE status = ?"
             params.append(status_filter)
 
         with db.connection() as conn:
@@ -183,7 +183,7 @@ def list_scheduler():
                 ORDER BY
                     CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
                     due_at DESC
-                LIMIT %s OFFSET %s
+                LIMIT ? OFFSET ?
                 """,
                 params + [limit, offset]
             )
@@ -225,25 +225,28 @@ def create_scheduler():
                   (id, item_type, message, due_at, recurrence,
                    window_start, window_end, status, topic,
                    created_by_session, created_at, group_id, is_prompt)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
-                RETURNING id, item_type, message, due_at, recurrence,
-                          window_start, window_end, status, topic,
-                          created_by_session, created_at, last_fired_at, group_id, is_prompt
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
                     clean["item_type"],
                     clean["message"],
-                    clean["due_at"],
+                    clean["due_at"].isoformat(),
                     clean["recurrence"],
                     clean["window_start"],
                     clean["window_end"],
                     data.get("topic", "general"),
                     None,  # created_by_session — not available in dashboard context
-                    now,
+                    now.isoformat(),
                     item_id,  # group_id = own id (root of a new series)
                     clean["is_prompt"],
                 )
+            )
+
+            # SELECT back the inserted row (SQLite has no RETURNING)
+            cursor.execute(
+                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
+                (item_id,)
             )
             row = cursor.fetchone()
             conn.commit()
@@ -275,9 +278,9 @@ def prune_history():
                 """
                 DELETE FROM scheduled_items
                 WHERE status IN ('fired', 'failed', 'cancelled')
-                  AND created_at < NOW() - INTERVAL '%s days'
+                  AND created_at < datetime('now', ? || ' days')
                 """,
-                (older_than_days,)
+                (str(-older_than_days),)
             )
             deleted = cursor.rowcount
             conn.commit()
@@ -312,9 +315,9 @@ def get_scheduler_group(group_id):
                 f"""
                 SELECT {', '.join(cols)}
                 FROM scheduled_items
-                WHERE group_id = %s
+                WHERE group_id = ?
                 ORDER BY due_at DESC
-                LIMIT %s
+                LIMIT ?
                 """,
                 (group_id, limit)
             )
@@ -343,7 +346,7 @@ def get_scheduler_item(item_id):
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = %s",
+                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
                 (item_id,)
             )
             row = cursor.fetchone()
@@ -380,28 +383,35 @@ def update_scheduler_item(item_id):
             cursor.execute(
                 """
                 UPDATE scheduled_items
-                SET item_type = %s,
-                    message = %s,
-                    due_at = %s,
-                    recurrence = %s,
-                    window_start = %s,
-                    window_end = %s,
-                    is_prompt = %s
-                WHERE id = %s AND status = 'pending'
-                RETURNING id, item_type, message, due_at, recurrence,
-                          window_start, window_end, status, topic,
-                          created_by_session, created_at, last_fired_at, group_id, is_prompt
+                SET item_type = ?,
+                    message = ?,
+                    due_at = ?,
+                    recurrence = ?,
+                    window_start = ?,
+                    window_end = ?,
+                    is_prompt = ?
+                WHERE id = ? AND status = 'pending'
                 """,
                 (
                     clean["item_type"],
                     clean["message"],
-                    clean["due_at"],
+                    clean["due_at"].isoformat(),
                     clean["recurrence"],
                     clean["window_start"],
                     clean["window_end"],
                     clean["is_prompt"],
                     item_id,
                 )
+            )
+
+            if cursor.rowcount == 0:
+                conn.commit()
+                return jsonify({"error": "Not found or item is not pending"}), 404
+
+            # SELECT back the updated row (SQLite has no RETURNING)
+            cursor.execute(
+                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
+                (item_id,)
             )
             row = cursor.fetchone()
             conn.commit()
@@ -430,7 +440,7 @@ def cancel_scheduler_item(item_id):
                 """
                 UPDATE scheduled_items
                 SET status = 'cancelled'
-                WHERE id = %s AND status = 'pending'
+                WHERE id = ? AND status = 'pending'
                 """,
                 (item_id,)
             )

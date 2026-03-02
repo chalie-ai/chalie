@@ -7,7 +7,7 @@ Polls every 5 minutes for moments with status='enriching'. For each:
 3. Generates LLM summary when >= 2 gists collected
 4. Seals the moment when pinned_at + 4hrs has passed
 
-Entry point: moment_enrichment_worker(shared_state=None) registered in consumer.py.
+Entry point: moment_enrichment_worker(shared_state=None) registered in run.py.
 """
 
 import logging
@@ -21,7 +21,7 @@ _POLL_INTERVAL = 300  # 5 minutes
 
 
 def moment_enrichment_worker(shared_state=None):
-    """Module-level entry point for consumer.py."""
+    """Module-level entry point for run.py."""
     logging.basicConfig(level=logging.INFO)
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 

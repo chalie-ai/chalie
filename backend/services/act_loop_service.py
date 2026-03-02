@@ -76,7 +76,7 @@ class ActLoopService:
 
         # History tracking
         self.act_history = []  # Action results for context injection
-        self.iteration_logs = []  # Iteration data for batch PostgreSQL write
+        self.iteration_logs = []  # Iteration data for batch SQLite write
         self.context_extras = {}  # Extra params merged into every action dispatch
 
     def can_continue(self, mode: str = 'ACT', max_history_tokens: int = 4000, **kwargs) -> Tuple[bool, Optional[str]]:

@@ -6,10 +6,10 @@ This document is the single authoritative visual map of how a user message trave
 ```
 ⚡ DET   — Deterministic (no LLM, <10ms)
 🧠 LLM   — LLM inference call
-📥 R     — Redis READ
-📤 R     — Redis WRITE
-📥 DB    — PostgreSQL READ
-📤 DB    — PostgreSQL WRITE
+📥 M     — MemoryStore READ
+📤 M     — MemoryStore WRITE
+📥 DB    — SQLite READ
+📤 DB    — SQLite WRITE
 ⏱ ~Xms  — Typical latency
 ```
 
@@ -24,9 +24,9 @@ This document is the single authoritative visual map of how a user message trave
                             └──────────┬───────────┘
                                        │
                             ┌──────────▼───────────┐
-                            │  SSE Channel opened  │
-                            │  sse:{request_id}    │
-                            │  📤 R  sse_pending   │
+                            │  WebSocket channel   │
+                            │  ws:{request_id}     │
+                            │  📤 M  ws_pending    │
                             └──────────┬───────────┘
                                        │ daemon thread
                             ┌──────────▼───────────┐
@@ -56,13 +56,13 @@ This document is the single authoritative visual map of how a user message trave
                │  PATH A         │  │  PATH B       │  │  PATH C          │
                │  Social Exit    │  │  ACT →        │  │  RESPOND /       │
                │  CANCEL/IGNORE/ │  │  Tool Worker  │  │  CLARIFY /       │
-               │  ACKNOWLEDGE    │  │  (RQ Queue)   │  │  ACKNOWLEDGE     │
+               │  ACKNOWLEDGE    │  │  (PromptQueue) │  │  ACKNOWLEDGE     │
                └──────┬──────────┘  └──────┬────────┘  └──────┬───────────┘
                       │                    │                    │
                ┌──────▼──────────┐  ┌──────▼────────┐  ┌──────▼───────────┐
                │  Empty response │  │  Background   │  │  Mode Router     │
                │  + WM append    │  │  execution    │  │  (Deterministic) │
-               │  📤 R   📤 DB   │  │  (see §5)     │  │  → Generation    │
+               │  📤 M   📤 DB   │  │  (see §5)     │  │  → Generation    │
                └─────────────────┘  └───────────────┘  │  (see §4)        │
                                                         └──────┬───────────┘
                                                                │
@@ -73,9 +73,9 @@ This document is the single authoritative visual map of how a user message trave
                                                         └──────┬───────────┘
                                                                │
                                                         ┌──────▼───────────┐
-                                                        │  📤 R  pub/sub   │
+                                                        │  📤 M  pub/sub   │
                                                         │  output:{id}     │
-                                                        │  SSE → Client    │
+                                                        │  WS → Client     │
                                                         └──────────────────┘
 
 BACKGROUND (always running, independent of user messages):
@@ -95,22 +95,22 @@ Runs immediately for every message, before any routing decision.
 │                                                                     │
 │  Step 1  IIP Hook (Identity Promotion)            ⚡ DET  <5ms     │
 │          Regex: "call me X", "my name is X", …                     │
-│          Match → 📤 R  📤 DB  (trait + identity)                   │
+│          Match → 📤 M  📤 DB  (trait + identity)                   │
 │          No match → continue                                        │
 │                           │                                         │
-│  Step 2  Working Memory                           📥 R              │
+│  Step 2  Working Memory                           📥 M              │
 │          key: wm:{thread_id}  (list, 4 turns, 24h TTL)             │
 │          ─────────────────────────────────────────────────          │
-│  Step 3  Gists                                    📥 R              │
+│  Step 3  Gists                                    📥 M              │
 │          key: gist:{topic}  (sorted set, 30min TTL)                │
 │          ─────────────────────────────────────────────────          │
-│  Step 4  Facts                                    📥 R              │
+│  Step 4  Facts                                    📥 M              │
 │          key: fact:{topic}:{key}  (24h TTL)                        │
 │          ─────────────────────────────────────────────────          │
-│  Step 5  World State                              📥 R              │
+│  Step 5  World State                              📥 M              │
 │          key: world_state:{topic}                                   │
 │          ─────────────────────────────────────────────────          │
-│  Step 6  FOK (Feeling-of-Knowing) score           📥 R              │
+│  Step 6  FOK (Feeling-of-Knowing) score           📥 M              │
 │          key: fok:{topic}  (float 0.0–5.0)                         │
 │          ─────────────────────────────────────────────────          │
 │  Step 7  Context Warmth                           ⚡ DET            │
@@ -120,7 +120,7 @@ Runs immediately for every message, before any routing decision.
 │          conf = 0.4×fok + 0.4×warmth + 0.2×density                │
 │          is_new_topic → conf *= 0.7                                 │
 │          ─────────────────────────────────────────────────          │
-│  Step 9  Session / Focus Tracking                 📥📤 R            │
+│  Step 9  Session / Focus Tracking                 📥📤 M            │
 │          topic_streak:{thread_id}  (2h TTL)                        │
 │          focus:{thread_id}  (auto-infer after N exchanges)         │
 │          Silence gap > 2700s → trigger episodic memory             │
@@ -302,7 +302,7 @@ Triggered when triage `branch=respond` but mode router selects ACT, **or** direc
 │  │     Action types:                                            │  │
 │  │       recall, memorize, introspect, associate               │  │
 │  │       schedule, list, focus, persistent_task                │  │
-│  │       (+ external tools via tool_worker RQ)                 │  │
+│  │       (+ external tools via tool_worker thread)             │  │
 │  │                                                              │  │
 │  │  4. Accumulate fatigue               ⚡ DET                 │  │
 │  │     cost *= (1.0 + fatigue_growth_rate × iteration)         │  │
@@ -328,7 +328,7 @@ Triggered when triage `branch=respond` but mode router selects ACT, **or** direc
 
 ---
 
-## 5. Path B — ACT → Tool Worker (RQ Queue)
+## 5. Path B — ACT → Tool Worker (PromptQueue)
 
 Triggered when `CognitiveTriageService` selects `branch=act` and specific tools are named.
 
@@ -340,25 +340,25 @@ Triggered when `CognitiveTriageService` selects `branch=act` and specific tools 
 │     Table: cortex_iterations                                        │
 │     Type: 'user_input', source: 'user'                             │
 │                                                                     │
-│  2. Enqueue tool work                           📤 R  (RQ)         │
+│  2. Enqueue tool work                           📤 M  (Queue)      │
 │     Queue: tool-queue                                               │
 │     Payload:                                                        │
 │       cycle_id, topic, text, intent                                │
 │       context_snapshot: { warmth, tool_hints, exchange_id }        │
 │                                                                     │
-│  3. Set SSE pending flag                        📤 R               │
-│     key: sse_pending:{request_id}  TTL=600s                        │
+│  3. Set WS pending flag                         📤 M               │
+│     key: ws_pending:{request_id}  TTL=600s                         │
 │     Tells /chat endpoint: tool_worker will deliver response         │
 │                                                                     │
 │  4. Return empty response (digest_worker done)                     │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
-                   SSE endpoint holds open (polling sse_pending)
+                   WebSocket holds open (polling ws_pending)
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
-│  tool_worker  (RQ background process)                               │
+│  tool_worker  (daemon thread)                                       │
 │                                                                     │
-│  1. Dequeue from tool-queue                     📥 R  (RQ)         │
+│  1. Dequeue from tool-queue                     📥 M  (Queue)      │
 │                                                                     │
 │  2. Get relevant tools                          📥 DB              │
 │     From triage_selected_tools, or compute via relevance           │
@@ -375,12 +375,12 @@ Triggered when `CognitiveTriageService` selects `branch=act` and specific tools 
 │                                                                     │
 │  5. Log results                                 📤 DB              │
 │                                                                     │
-│  6. Publish response                            📤 R  (pub/sub)    │
+│  6. Publish response                            📤 M  (pub/sub)    │
 │     key: output:{request_id}                                        │
 │     Payload: { metadata: { response, mode, cards, … } }           │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
-                        SSE receives pub/sub
+                        WebSocket receives pub/sub
                         → streams cards + text to client
 ```
 
@@ -394,8 +394,8 @@ Runs after every response is generated (Paths A, B, C).
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE D: Post-Response Commit                                      │
 │                                                                     │
-│  Step 1  Append to Working Memory               📤 R               │
-│          key: wm:{thread_id}  (RPUSH)                               │
+│  Step 1  Append to Working Memory               📤 M               │
+│          key: wm:{thread_id}  (append)                              │
 │          { role: 'assistant', content, timestamp }                 │
 │          Max 4 turns maintained                                     │
 │                         │                                           │
@@ -408,25 +408,25 @@ Runs after every response is generated (Paths A, B, C).
 │          SparkStateService — increment exchange count               │
 │          Table: spark_state                                         │
 │                         │                                           │
-│  Step 4  Encode response event                  📤 R  (async)      │
+│  Step 4  Encode response event                  📤 M  (async)      │
 │          EventBusService → ENCODE_EVENT                             │
 │          Triggers downstream memory consolidation:                  │
 │                                                                     │
 │          ┌──────────────────────────────────────────────────────┐  │
-│          │  memory-chunker-queue (RQ)                           │  │
+│          │  memory-chunker-queue (PromptQueue)                  │  │
 │          │    → memory_chunker_worker: gist generation 🧠 LLM  │  │
-│          │    → 📤 R  gist:{topic}  (sorted set)                │  │
+│          │    → 📤 M  gist:{topic}  (sorted set)                │  │
 │          │                                                      │  │
-│          │  episodic-memory-queue (RQ)                          │  │
+│          │  episodic-memory-queue (PromptQueue)                 │  │
 │          │    → episodic_memory_worker: episode build  🧠 LLM  │  │
-│          │    → 📤 DB  episodes  (with pgvector embedding)      │  │
+│          │    → 📤 DB  episodes  (with sqlite-vec embedding)    │  │
 │          │                                                      │  │
-│          │  semantic_consolidation_queue (RQ)                   │  │
+│          │  semantic_consolidation_queue (PromptQueue)          │  │
 │          │    → semantic consolidation: concept extract 🧠 LLM │  │
 │          │    → 📤 DB  concepts, semantic_relationships         │  │
 │          └──────────────────────────────────────────────────────┘  │
 │                         │                                           │
-│  Step 5  Publish to SSE                         📤 R  (pub/sub)    │
+│  Step 5  Publish to WebSocket                   📤 M  (pub/sub)    │
 │          key: output:{request_id}                                   │
 │          /chat endpoint receives, streams to client                 │
 └─────────────────────────────────────────────────────────────────────┘
@@ -450,7 +450,7 @@ Operates completely independently of user messages.
 │     State machine: PENDING → RUNNING → COMPLETED                    │
 │                                                                     │
 │  3. Load task + progress                        📥 DB              │
-│     persistent_tasks.progress (JSONB)                               │
+│     persistent_tasks.progress (JSON as TEXT)                               │
 │     Contains: plan DAG, coverage, step statuses                    │
 │                                                                     │
 │  4. Execution branch:                                               │
@@ -470,7 +470,7 @@ Operates completely independently of user messages.
 │     Same fatigue model as interactive ACT loop                     │
 │                                                                     │
 │  6. Atomic checkpoint                           📤 DB              │
-│     persistent_tasks.progress (JSONB, atomic UPDATE)               │
+│     persistent_tasks.progress (JSON as TEXT, atomic UPDATE)        │
 │     Saves: plan, coverage %, step statuses, last results           │
 │                                                                     │
 │  7. Coverage check                              ⚡ DET             │
@@ -479,7 +479,7 @@ Operates completely independently of user messages.
 │  8. Adaptive surfacing (optional)                                   │
 │     After cycle 2, or coverage jumped > 15%                        │
 │     → Proactive message to user                                    │
-│     → 📤 R  pub/sub proactive channel                              │
+│     → 📤 M  pub/sub proactive channel                              │
 │                                                                     │
 │  PLAN DECOMPOSITION (called on task creation):  🧠 LLM  ~300ms    │
 │  PlanDecompositionService                                           │
@@ -487,7 +487,7 @@ Operates completely independently of user messages.
 │  Output: { steps: [{ id, description, depends_on: [] }] }          │
 │  Validates: Kahn's cycle detection, quality gates (Jaccard <0.7),  │
 │             confidence > 0.5, step word count 4-30                 │
-│  Stores: persistent_tasks.progress.plan (JSONB)                    │
+│  Stores: persistent_tasks.progress.plan (JSON as TEXT)              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -495,16 +495,16 @@ Operates completely independently of user messages.
 
 ## 8. Path E — Cognitive Drift Engine (Background, 300s Idle-Only)
 
-Runs only when all RQ queues are idle. Mimics the brain's Default Mode Network.
+Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Network.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  cognitive_drift_engine  (300s cycles, idle-gated)                 │
 │                                                                     │
 │  Preconditions:                               ⚡ DET               │
-│    All queues idle?   📥 R  (RQ queue lengths = 0)                 │
+│    All queues idle?   📥 M  (queue lengths = 0)                    │
 │    Recent episodes exist? (lookback 168h)  📥 DB                   │
-│    Bail if user is in deep focus           📥 R  focus:{thread_id} │
+│    Bail if user is in deep focus           📥 M  focus:{thread_id} │
 │                                                                     │
 │  1. Seed Selection (weighted random)          ⚡ DET               │
 │     Decaying  0.35 │ Recent   0.25 │ Salient 0.15                  │
@@ -513,8 +513,8 @@ Runs only when all RQ queues are idle. Mimics the brain's Default Mode Network.
 │                                                                     │
 │  2. Spreading Activation (depth ≤ 2)          ⚡ DET               │
 │     📥 DB  semantic_concepts, semantic_relationships               │
-│     📥📤 R  cognitive_drift_activations  (sorted set)              │
-│     📥📤 R  cognitive_drift_concept_cooldowns  (hash)              │
+│     📥📤 M  cognitive_drift_activations  (sorted set)              │
+│     📥📤 M  cognitive_drift_concept_cooldowns  (hash)              │
 │     Collect top 5 activated concepts                               │
 │                                                                     │
 │  3. Thought Synthesis                         🧠 LLM  ~100ms       │
@@ -522,7 +522,7 @@ Runs only when all RQ queues are idle. Mimics the brain's Default Mode Network.
 │     Input:  activated concepts + soul axioms                       │
 │     Output: thought text                                            │
 │                                                                     │
-│  4. Store drift gist                          📤 R               │
+│  4. Store drift gist                          📤 M               │
 │     key: gist:{topic}  (30min TTL)                                  │
 │     Will surface in frontal cortex context on next user message    │
 │                                                                     │
@@ -545,7 +545,7 @@ Runs only when all RQ queues are idle. Mimics the brain's Default Mode Network.
 │     PLAN action → calls PlanDecompositionService  🧠 LLM          │
 │                → stores in persistent_tasks  📤 DB                 │
 │                                                                     │
-│  6. Deferred queue                             📤 R               │
+│  6. Deferred queue                             📤 M               │
 │     COMMUNICATE → stores thought for quiet-hours delivery          │
 │     Async: flushes when user returns from absence                  │
 └─────────────────────────────────────────────────────────────────────┘
@@ -555,7 +555,7 @@ Runs only when all RQ queues are idle. Mimics the brain's Default Mode Network.
 
 ## 9. Complete Storage Access Map
 
-### Redis Keys Reference
+### MemoryStore Keys Reference
 
 ```
 Key Pattern                        TTL        Read    Written by
@@ -570,18 +570,18 @@ focus:{thread_id}                  variable   A,E     FocusSessionService
 cognitive_drift_activations        —          E       Drift engine
 cognitive_drift_concept_cooldowns  —          E       Drift engine
 cognitive_drift_state              —          E       Drift engine
-sse_pending:{request_id}           600s       /chat   _handle_act_triage
+ws_pending:{request_id}            600s       /chat   _handle_act_triage
 output:{request_id}                short      /chat   digest_worker, tool_worker
 
-RQ Queues (Redis-backed):
-prompt-queue                       —          —       consumer.py → digest_worker
+PromptQueues (in-memory, thread-safe):
+prompt-queue                       —          —       run.py → digest_worker
 tool-queue                         —          B       _handle_act_triage
 memory-chunker-queue               —          D       Encode event handler
 episodic-memory-queue              —          D       memory_chunker_worker
 semantic_consolidation_queue       —          D       episodic_memory_worker
 ```
 
-### PostgreSQL Tables Reference
+### SQLite Tables Reference
 
 ```
 Table                      When Written                    When Read
@@ -656,15 +656,15 @@ D — Task Worker   30min cycle    Background, no user wait
 E — Drift         300s cycle     Background, no user wait
 
 Component latency breakdown (Path C RESPOND, typical):
-  Context assembly     <10ms   ── Redis reads (all cached)
+  Context assembly     <10ms   ── MemoryStore reads (all cached)
   Intent classify      ~5ms    ── Deterministic
   Triage LLM           ~200ms  ── qwen3:4b
   Social filter        ~1ms    ── Regex
   Mode router          ~5ms    ── Math, no LLM
   Frontal cortex LLM   ~800ms  ── Primary model (varies by provider)
-  Working memory write <5ms    ── Redis RPUSH
-  DB event log         ~10ms   ── PostgreSQL async-ish
-  SSE publish          ~1ms    ── Redis pub/sub
+  Working memory write <5ms    ── MemoryStore append
+  DB event log         ~10ms   ── SQLite WAL write
+  WS publish           ~1ms    ── MemoryStore pub/sub
   ─────────────────────────────────────────────────────────
   Total (typical)      ~1.1s
 ```

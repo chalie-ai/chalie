@@ -153,7 +153,7 @@ class GrowthPatternService:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_value FROM user_traits "
-                    "WHERE user_id = %s AND trait_key = 'style_baseline' LIMIT 1",
+                    "WHERE user_id = ? AND trait_key = 'style_baseline' LIMIT 1",
                     (user_id,)
                 )
                 row = cursor.fetchone()
@@ -225,7 +225,7 @@ class GrowthPatternService:
                     cursor = conn.cursor()
                     cursor.execute(
                         "SELECT trait_value FROM user_traits "
-                        "WHERE user_id = %s AND trait_key = %s LIMIT 1",
+                        "WHERE user_id = ? AND trait_key = ? LIMIT 1",
                         (user_id, trait_key)
                     )
                     row = cursor.fetchone()
@@ -296,7 +296,7 @@ class GrowthPatternService:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_key FROM user_traits "
-                    "WHERE user_id = %s AND trait_key LIKE 'growth_signal:%%' AND category = 'core'",
+                    "WHERE user_id = ? AND trait_key LIKE 'growth_signal:%' AND category = 'core'",
                     (user_id,)
                 )
                 rows = cursor.fetchall()
@@ -368,7 +368,7 @@ class GrowthPatternService:
 
 def growth_pattern_worker(shared_state: Optional[dict] = None) -> None:
     """
-    Module-level entry point for multiprocessing (consumer.py pattern).
+    Module-level entry point for threading (run.py pattern).
     Instantiates the service inside the child process.
     """
     service = GrowthPatternService(interval=DEFAULT_INTERVAL)

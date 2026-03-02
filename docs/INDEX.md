@@ -17,24 +17,22 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 **Setting up Chalie for the first time?** Follow these guides in order:
 1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini)
 
-**Running multiple instances on the same host?**
-- **[11-MULTI-INSTANCE-SETUP.md](11-MULTI-INSTANCE-SETUP.md)** — Configure PORT and COMPOSE_PROJECT_NAME for parallel stacks
-
 ## Understanding the System
 
 **Want to understand how Chalie works?** Read these in order:
 1. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — Complete system architecture, services, workers, data flow
-2. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual flow diagrams: every path, every Redis/DB hit, every LLM call
+2. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual flow diagrams: every path, every MemoryStore/DB hit, every LLM call
 3. **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed step-by-step flow of prompt processing
 4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Deterministic mode router and decision flow
 5. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
-6. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for Redis and PostgreSQL
+6. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for MemoryStore and SQLite
 
 ## If You're a Developer Exploring the Codebase
 
 Recommended reading order for engineers:
 0. **[00-VISION.md](00-VISION.md)** — Start with why: product vision, design principles, and feature decision filter
 1. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual map of every path, storage hit, and LLM call; fastest way to build a mental model
+
 2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; narrative explanation
 3. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
 4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
@@ -73,16 +71,15 @@ docs/
 ├── 08-DATA-SCHEMAS.md                ← Data structures
 ├── 09-TOOLS.md                       ← Tools system & creation guide
 ├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
-├── 11-MULTI-INSTANCE-SETUP.md        ← Running multiple instances on one host
 ├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
-└── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, storage, LLM calls
+└── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
 ```
 
 ### Important Project Files (Not in docs/)
 - **`CLAUDE.md`** — Project instructions for Claude Code (development guidance)
-- **`README.md`** — Root-level project overview (mirrors 01-QUICK-START.md)
-- **`docker-compose.yml`** — Service definitions and port mappings (supports PORT variable for multi-instance)
-- **`.env.example`** — Configuration template with defaults (PORT, POSTGRES_PASSWORD, SESSION_SECRET_KEY, COOKIE_SECURE)
+- **`README.md`** — Root-level project overview
+- **`installer/install.sh`** — One-line installer (published at https://chalie.ai/install)
+- **`.env.example`** — Configuration template (PORT — all secrets auto-generate)
 
 ### Key Directories
 - **`backend/`** — Python backend (services, workers, API, configs, migrations)
@@ -96,11 +93,9 @@ docs/
 ## Common Tasks
 
 ### Deploying Chalie
-1. Clone repository
-2. Copy `.env.example` to `.env`
-3. Run `docker-compose build && docker-compose up -d`
-4. Configure providers via REST API (see 02-PROVIDERS-SETUP.md)
-5. Open http://localhost:8081/ in browser
+1. `curl -fsSL https://chalie.ai/install | bash`
+2. `chalie` — opens at http://localhost:8081
+3. Complete onboarding to configure your LLM provider (see 02-PROVIDERS-SETUP.md)
 
 ### Understanding a Specific Component
 - **Product philosophy?** → See 00-VISION.md — core principles, delegation boundary, behavioral guidelines
@@ -123,7 +118,7 @@ docs/
 
 ### Adding New Services or Workers
 1. Create file in `backend/services/` or `backend/workers/`
-2. Register in `backend/consumer.py`
+2. Register in `backend/run.py`
 3. Document in 06-WORKERS.md
 4. Add tests in `backend/tests/`
 
@@ -138,12 +133,12 @@ docs/
 ## Architecture Quick Facts
 
 - **Language**: Python 3.9+
-- **Databases**: PostgreSQL (+ pgvector extension), Redis
+- **Databases**: SQLite (WAL mode + sqlite-vec + FTS5), MemoryStore (in-memory)
 - **Frontend**: Vanilla JavaScript (Radiant design system)
 - **LLM Support**: Ollama, Anthropic, OpenAI, Google Gemini
-- **Port**: Backend API on 8080, Frontend on 8081
+- **Port**: 8081 (configurable via `--port=N`)
 - **Configuration**: env vars > .env file > JSON files > hardcoded defaults
-- **Worker Pattern**: Queue-based (Redis) with multiple worker types
+- **Worker Pattern**: Thread-based (PromptQueue) with daemon worker threads
 - **Safety**: Deterministic routing, single authority for learning, bounded parameter updates
 
 ## Key Concepts

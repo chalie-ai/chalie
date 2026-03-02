@@ -10,9 +10,11 @@ over-influencing ranking). Applies preference decay for stale tools and
 checks for usage-triggered full profile rebuilds.
 """
 
+import struct
 import time
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,20 @@ LOG_PREFIX = "[PROFILE ENRICHMENT]"
 
 CYCLE_INTERVAL_SECONDS = 6 * 3600  # 6 hours
 RELIABILITY_DECAY_DAYS = 30  # Decay reliability if no new data in 30 days
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    if hasattr(embedding, 'tolist'):
+        flat = embedding.tolist()
+        return struct.pack(f'{len(flat)}f', *flat)
+    return embedding
 
 
 class ProfileEnrichmentService:
@@ -51,7 +67,7 @@ class ProfileEnrichmentService:
             # 1. Find profiles with oldest last_enriched_at (up to 3 per cycle)
             rows = db.fetch_all(
                 """
-                SELECT tool_name, tool_type, full_profile, embedding IS NOT NULL AS has_embedding,
+                SELECT tool_name, tool_type, full_profile,
                        last_enriched_at, enrichment_count
                 FROM tool_capability_profiles
                 ORDER BY last_enriched_at NULLS FIRST
@@ -92,21 +108,49 @@ class ProfileEnrichmentService:
         from services.embedding_service import get_embedding_service
         emb_service = get_embedding_service()
         profile_embedding = emb_service.generate_embedding(profile_row.get('full_profile', tool_name))
-        embedding_str = f"[{','.join(str(x) for x in profile_embedding)}]"
+        embedding_blob = _pack_embedding(profile_embedding)
 
-        episode_rows = db.fetch_all(
-            """
-            SELECT id::text AS id, outcome, gist,
-                   1 - (embedding <=> %s::vector) AS similarity
-            FROM episodes
-            WHERE embedding IS NOT NULL
-            AND created_at > %s
-            AND 1 - (embedding <=> %s::vector) > 0.5
-            ORDER BY similarity DESC
-            LIMIT 20
-            """,
-            (embedding_str, since, embedding_str)
-        )
+        if embedding_blob is None:
+            # Still update last_enriched_at to avoid being selected next cycle
+            db.execute(
+                "UPDATE tool_capability_profiles SET last_enriched_at = datetime('now') WHERE tool_name = ?",
+                (tool_name,)
+            )
+            logger.debug(f"{LOG_PREFIX} {tool_name}: no embedding generated, skipping episode search")
+            return
+
+        # Use sqlite-vec virtual table to find similar episodes
+        from services.database_service import DictCursor
+        episode_rows = []
+        try:
+            with db.connection() as conn:
+                cursor = DictCursor(conn.cursor())
+                # Find similar episodes via vec table JOIN
+                cursor.execute("""
+                    SELECT CAST(e.id AS TEXT) AS id, e.outcome, e.gist,
+                           v.distance AS vec_distance
+                    FROM episodes_vec v
+                    JOIN episodes e ON e.id = v.rowid
+                    WHERE v.embedding MATCH ?
+                      AND k = 20
+                      AND e.created_at > ?
+                """, (embedding_blob, since))
+                candidate_rows = cursor.fetchall()
+
+                # Filter by similarity threshold (distance < 0.5 means similarity > 0.5)
+                for row in candidate_rows:
+                    similarity = 1.0 - (row['vec_distance'] or 1.0)
+                    if similarity > 0.5:
+                        episode_rows.append({
+                            'id': row['id'],
+                            'outcome': row['outcome'],
+                            'gist': row['gist'],
+                            'similarity': similarity,
+                        })
+                # Sort by similarity descending
+                episode_rows.sort(key=lambda r: r.get('similarity', 0), reverse=True)
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} {tool_name}: vec search failed: {e}")
 
         if episode_rows:
             episode_ids = [r['id'] for r in episode_rows]
@@ -116,7 +160,7 @@ class ProfileEnrichmentService:
         else:
             # Still update last_enriched_at to avoid being selected next cycle
             db.execute(
-                "UPDATE tool_capability_profiles SET last_enriched_at = NOW() WHERE tool_name = %s",
+                "UPDATE tool_capability_profiles SET last_enriched_at = datetime('now') WHERE tool_name = ?",
                 (tool_name,)
             )
             logger.debug(f"{LOG_PREFIX} {tool_name}: no new relevant episodes found")
@@ -142,8 +186,8 @@ class ProfileEnrichmentService:
                     AVG(latency_ms) AS avg_latency,
                     MAX(created_at) AS last_used
                 FROM tool_performance_metrics
-                WHERE tool_name = %s
-                AND created_at > NOW() - INTERVAL '30 days'
+                WHERE tool_name = ?
+                AND created_at > datetime('now', '-30 days')
                 """,
                 (tool_name,)
             )
@@ -153,9 +197,9 @@ class ProfileEnrichmentService:
                 db.execute(
                     """
                     UPDATE tool_capability_profiles
-                    SET reliability_score = GREATEST(0.5, reliability_score * 0.9),
-                        last_enriched_at = NOW()
-                    WHERE tool_name = %s
+                    SET reliability_score = MAX(0.5, reliability_score * 0.9),
+                        last_enriched_at = datetime('now')
+                    WHERE tool_name = ?
                     """,
                     (tool_name,)
                 )
@@ -169,10 +213,10 @@ class ProfileEnrichmentService:
             db.execute(
                 """
                 UPDATE tool_capability_profiles
-                SET reliability_score = %s,
-                    avg_latency_ms = %s,
-                    last_enriched_at = NOW()
-                WHERE tool_name = %s
+                SET reliability_score = ?,
+                    avg_latency_ms = ?,
+                    last_enriched_at = datetime('now')
+                WHERE tool_name = ?
                 """,
                 (round(success_rate, 4), round(avg_latency, 2), tool_name)
             )
@@ -190,11 +234,11 @@ class ProfileEnrichmentService:
             rows = db.fetch_all(
                 """SELECT enrichment_count,
                           (SELECT COUNT(*) FROM tool_performance_metrics
-                           WHERE tool_name = %s) AS total_uses,
+                           WHERE tool_name = ?) AS total_uses,
                           (SELECT COUNT(*) FILTER (WHERE invocation_success)
                            FROM tool_performance_metrics
-                           WHERE tool_name = %s) AS successful_uses
-                   FROM tool_capability_profiles WHERE tool_name = %s""",
+                           WHERE tool_name = ?) AS successful_uses
+                   FROM tool_capability_profiles WHERE tool_name = ?""",
                 (tool_name, tool_name, tool_name)
             )
             if not rows:
@@ -231,6 +275,6 @@ class ProfileEnrichmentService:
 
 
 def profile_enrichment_worker(shared_state=None):
-    """Entry point for consumer.py service registration."""
+    """Entry point for run.py service registration."""
     service = ProfileEnrichmentService()
     service.run(shared_state)

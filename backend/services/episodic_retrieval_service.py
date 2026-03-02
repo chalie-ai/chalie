@@ -12,9 +12,10 @@ Responsibility: Retrieval layer only (SRP).
 """
 
 import math
+import struct
 from datetime import datetime
 from typing import Optional, List, Dict
-from services.database_service import DatabaseService
+from services.database_service import DatabaseService, DictCursor
 from services.episodic_storage_service import EpisodicStorageService
 import logging
 
@@ -45,6 +46,11 @@ class EpisodicRetrievalService:
         self.decay_rate = self.config.get('freshness_decay_rate', 0.05)
         # Reconsolidation boost
         self.reconsolidation_boost = self.config.get('reconsolidation_boost', 0.2)
+
+    @staticmethod
+    def _pack_embedding(embedding: List[float]) -> bytes:
+        """Convert a list of floats to a binary blob for sqlite-vec MATCH queries."""
+        return struct.pack(f'{len(embedding)}f', *embedding)
 
     def retrieve_episodes(self, query_text: str, topic: str = None,
                          intent: str = None, limit: int = 3,
@@ -216,58 +222,53 @@ class EpisodicRetrievalService:
         """
         try:
             with self.db_service.connection() as conn:
-                cursor = conn.cursor()
+                cursor = DictCursor(conn.cursor())
 
-                # Set HNSW ef_search parameter for query
-                ef_search = self.config.get('hnsw_ef_search', 100)
-                cursor.execute(f"SET hnsw.ef_search = {ef_search}")
-
-                # Vector similarity search (include last_accessed_at for freshness calculation)
+                # Vector similarity search via sqlite-vec virtual table JOIN
+                # (include last_accessed_at for freshness calculation)
                 vector_query = """
-                    SELECT id, intent, context, action, emotion, outcome, gist,
-                           salience, freshness, topic, created_at, activation_score,
-                           last_accessed_at, salience_factors, open_loops,
-                           (embedding <=> %s::vector) AS vector_distance
-                    FROM episodes
-                    WHERE deleted_at IS NULL
+                    SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
+                           e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
+                           e.last_accessed_at, e.salience_factors, e.open_loops,
+                           v.distance AS vector_distance
+                    FROM episodes e
+                    JOIN episodes_vec v ON v.rowid = e.rowid
+                    WHERE v.embedding MATCH ? AND k = ?
+                      AND e.deleted_at IS NULL
                 """
-                vector_params = [query_embedding]
+                vector_params = [self._pack_embedding(query_embedding), limit]
 
                 if topic:
-                    vector_query += " AND topic = %s"
+                    vector_query += " AND e.topic = ?"
                     vector_params.append(topic)
 
-                vector_query += " ORDER BY embedding <=> %s::vector LIMIT %s"
-                vector_params.extend([query_embedding, limit])
+                vector_query += " ORDER BY v.distance"
 
                 cursor.execute(vector_query, vector_params)
                 vector_results = cursor.fetchall()
 
-                # Full-text search on gist and action (intent is now JSONB)
+                # Full-text search on gist and action via FTS5 (intent is now JSONB)
                 fts_query = """
-                    SELECT id, intent, context, action, emotion, outcome, gist,
-                           salience, freshness, topic, created_at, activation_score,
-                           last_accessed_at, salience_factors, open_loops,
-                           ts_rank(to_tsvector('english', gist || ' ' || action),
-                                   plainto_tsquery('english', %s)) AS text_rank
-                    FROM episodes
-                    WHERE deleted_at IS NULL
-                      AND (to_tsvector('english', gist || ' ' || action) @@
-                           plainto_tsquery('english', %s))
+                    SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
+                           e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
+                           e.last_accessed_at, e.salience_factors, e.open_loops,
+                           f.rank AS text_rank
+                    FROM episodes_fts f
+                    JOIN episodes e ON e.rowid = f.rowid
+                    WHERE episodes_fts MATCH ?
+                      AND e.deleted_at IS NULL
                 """
-                fts_params = [query_text, query_text]
+                fts_params = [query_text]
 
                 if topic:
-                    fts_query += " AND topic = %s"
+                    fts_query += " AND e.topic = ?"
                     fts_params.append(topic)
 
-                fts_query += " ORDER BY text_rank DESC LIMIT %s"
+                fts_query += " ORDER BY f.rank LIMIT ?"
                 fts_params.append(limit)
 
                 cursor.execute(fts_query, fts_params)
                 fts_results = cursor.fetchall()
-
-                cursor.close()
 
                 # Merge results using Reciprocal Rank Fusion (RRF)
                 candidates = self._merge_with_rrf(vector_results, fts_results)
@@ -296,25 +297,25 @@ class EpisodicRetrievalService:
 
         # Process vector results
         for rank, row in enumerate(vector_results, 1):
-            episode_id = str(row[0])
+            episode_id = str(row['id'])
             if episode_id not in episodes:
                 episodes[episode_id] = {
                     'id': episode_id,
-                    'intent': row[1],
-                    'context': row[2],
-                    'action': row[3],
-                    'emotion': row[4],
-                    'outcome': row[5],
-                    'gist': row[6],
-                    'salience': row[7],
-                    'freshness': row[8],
-                    'topic': row[9],
-                    'created_at': row[10],
-                    'activation_score': row[11],
-                    'last_accessed_at': row[12],
-                    'salience_factors': row[13] if len(row) > 13 else {},
-                    'open_loops': row[14] if len(row) > 14 else [],
-                    'vector_distance': row[15] if len(row) > 15 else None,
+                    'intent': row['intent'],
+                    'context': row['context'],
+                    'action': row['action'],
+                    'emotion': row['emotion'],
+                    'outcome': row['outcome'],
+                    'gist': row['gist'],
+                    'salience': row['salience'],
+                    'freshness': row['freshness'],
+                    'topic': row['topic'],
+                    'created_at': row['created_at'],
+                    'activation_score': row['activation_score'],
+                    'last_accessed_at': row['last_accessed_at'],
+                    'salience_factors': row.get('salience_factors', {}),
+                    'open_loops': row.get('open_loops', []),
+                    'vector_distance': row.get('vector_distance'),
                     'text_rank': None,
                     'rrf_score': 0
                 }
@@ -322,30 +323,30 @@ class EpisodicRetrievalService:
 
         # Process FTS results
         for rank, row in enumerate(fts_results, 1):
-            episode_id = str(row[0])
+            episode_id = str(row['id'])
             if episode_id not in episodes:
                 episodes[episode_id] = {
                     'id': episode_id,
-                    'intent': row[1],
-                    'context': row[2],
-                    'action': row[3],
-                    'emotion': row[4],
-                    'outcome': row[5],
-                    'gist': row[6],
-                    'salience': row[7],
-                    'freshness': row[8],
-                    'topic': row[9],
-                    'created_at': row[10],
-                    'activation_score': row[11],
-                    'last_accessed_at': row[12],
-                    'salience_factors': row[13] if len(row) > 13 else {},
-                    'open_loops': row[14] if len(row) > 14 else [],
+                    'intent': row['intent'],
+                    'context': row['context'],
+                    'action': row['action'],
+                    'emotion': row['emotion'],
+                    'outcome': row['outcome'],
+                    'gist': row['gist'],
+                    'salience': row['salience'],
+                    'freshness': row['freshness'],
+                    'topic': row['topic'],
+                    'created_at': row['created_at'],
+                    'activation_score': row['activation_score'],
+                    'last_accessed_at': row['last_accessed_at'],
+                    'salience_factors': row.get('salience_factors', {}),
+                    'open_loops': row.get('open_loops', []),
                     'vector_distance': None,
-                    'text_rank': row[15] if len(row) > 15 else None,
+                    'text_rank': row.get('text_rank'),
                     'rrf_score': 0
                 }
             else:
-                episodes[episode_id]['text_rank'] = row[15] if len(row) > 15 else None
+                episodes[episode_id]['text_rank'] = row.get('text_rank')
 
             episodes[episode_id]['rrf_score'] += 1.0 / (k + rank)
 

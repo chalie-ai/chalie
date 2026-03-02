@@ -49,7 +49,7 @@ def data_summary():
 
         result = {}
 
-        # PostgreSQL table counts — all user-data tables
+        # SQLite table counts — all user-data tables
         with db.connection() as conn:
             for table in [
                 "episodes", "semantic_concepts", "user_traits", "threads",
@@ -102,7 +102,7 @@ def export_data():
         redis_conn = RedisClientService.create_connection()
         export = {"exported_at": datetime.now(timezone.utc).isoformat(), "tables": {}, "redis": {}}
 
-        # ── PostgreSQL tables ──
+        # ── SQLite tables ──
         user_data_tables = [
             "episodes", "semantic_concepts", "semantic_relationships",
             "user_traits", "threads", "autobiography", "moments",
@@ -255,7 +255,7 @@ def delete_all():
             if keys:
                 redis.delete(*keys)
 
-        # Truncate PostgreSQL — all user-data tables
+        # Truncate SQLite — all user-data tables
         # NOTE: lists CASCADE handles list_items and list_events via FK relationships
         # NOTE: interaction_log is truncated here; the audit entry below is written after
         db = get_shared_db_service()

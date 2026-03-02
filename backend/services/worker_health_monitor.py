@@ -16,7 +16,7 @@ class WorkerHealthMonitor:
     Enhanced worker health monitoring that checks both process status and Redis activity.
 
     Features:
-    - Process liveness check (multiprocessing.Process.is_alive())
+    - Process liveness check (thread.is_alive())
     - Redis heartbeat check (last_heartbeat timestamp)
     - Job processing activity check (detects hung workers)
     - Queue consumption check (detects growing-but-unconsumed queues)
@@ -52,7 +52,7 @@ class WorkerHealthMonitor:
 
     def check_process_health(self, worker_id: str, process) -> tuple[bool, str]:
         """
-        Check if multiprocessing.Process is alive and responsive.
+        Check if thread is alive and responsive.
 
         Returns:
             (is_healthy, reason) tuple

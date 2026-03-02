@@ -57,7 +57,7 @@ class ListService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO lists (id, user_id, name, list_type, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, NOW(), NOW())
+                    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
                 """, (list_id, user_id, name, list_type))
                 cursor.close()
 
@@ -95,8 +95,8 @@ class ListService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE lists SET deleted_at = NOW(), updated_at = NOW()
-                    WHERE id = %s AND user_id = %s AND deleted_at IS NULL
+                    UPDATE lists SET deleted_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
                 """, (list_id, user_id))
                 updated = cursor.rowcount > 0
                 cursor.close()
@@ -134,8 +134,8 @@ class ListService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE list_items SET removed_at = NOW(), updated_at = NOW()
-                    WHERE list_id = %s AND removed_at IS NULL
+                    UPDATE list_items SET removed_at = datetime('now'), updated_at = datetime('now')
+                    WHERE list_id = ? AND removed_at IS NULL
                 """, (list_id,))
                 count = cursor.rowcount
                 cursor.close()
@@ -183,15 +183,15 @@ class ListService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE lists SET name = %s, updated_at = NOW()
-                    WHERE id = %s AND user_id = %s AND deleted_at IS NULL
+                    UPDATE lists SET name = ?, updated_at = datetime('now')
+                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
                 """, (new_name, list_id, user_id))
                 updated = cursor.rowcount > 0
                 cursor.close()
 
             if updated:
                 self._log_event(list_id, 'list_renamed', details={'old_name': old_name, 'new_name': new_name})
-                logger.info(f"[LISTS] Renamed list '{old_name}' → '{new_name}'")
+                logger.info(f"[LISTS] Renamed list '{old_name}' -> '{new_name}'")
             return updated
 
         except Exception as e:
@@ -223,7 +223,7 @@ class ListService:
                 cursor.execute("""
                     SELECT id, content, checked, position, added_at, updated_at
                     FROM list_items
-                    WHERE list_id = %s AND removed_at IS NULL
+                    WHERE list_id = ? AND removed_at IS NULL
                     ORDER BY position ASC, added_at ASC
                 """, (list_row['id'],))
                 rows = cursor.fetchall()
@@ -269,11 +269,11 @@ class ListService:
                         l.name,
                         l.list_type,
                         l.updated_at,
-                        COUNT(li.id) FILTER (WHERE li.removed_at IS NULL)        AS item_count,
-                        COUNT(li.id) FILTER (WHERE li.removed_at IS NULL AND li.checked) AS checked_count
+                        SUM(CASE WHEN li.removed_at IS NULL AND li.id IS NOT NULL THEN 1 ELSE 0 END) AS item_count,
+                        SUM(CASE WHEN li.removed_at IS NULL AND li.checked THEN 1 ELSE 0 END)        AS checked_count
                     FROM lists l
                     LEFT JOIN list_items li ON li.list_id = l.id
-                    WHERE l.user_id = %s AND l.deleted_at IS NULL
+                    WHERE l.user_id = ? AND l.deleted_at IS NULL
                     GROUP BY l.id, l.name, l.list_type, l.updated_at
                     ORDER BY l.updated_at DESC
                 """, (user_id,))
@@ -286,8 +286,8 @@ class ListService:
                     'name': row[1],
                     'list_type': row[2],
                     'updated_at': row[3],
-                    'item_count': row[4],
-                    'checked_count': row[5],
+                    'item_count': row[4] or 0,
+                    'checked_count': row[5] or 0,
                 }
                 for row in rows
             ]
@@ -342,7 +342,7 @@ class ListService:
                 cursor.execute("""
                     SELECT COALESCE(MAX(position), -1)
                     FROM list_items
-                    WHERE list_id = %s AND removed_at IS NULL
+                    WHERE list_id = ? AND removed_at IS NULL
                 """, (list_id,))
                 max_pos = cursor.fetchone()[0]
 
@@ -352,7 +352,7 @@ class ListService:
                     cursor.execute("""
                         SELECT LOWER(TRIM(content))
                         FROM list_items
-                        WHERE list_id = %s AND removed_at IS NULL
+                        WHERE list_id = ? AND removed_at IS NULL
                     """, (list_id,))
                     existing_normalized = {row[0] for row in cursor.fetchall()}
 
@@ -370,8 +370,8 @@ class ListService:
                     # Check if this item was previously removed (restore instead of insert)
                     cursor.execute("""
                         SELECT id FROM list_items
-                        WHERE list_id = %s
-                          AND LOWER(TRIM(content)) = %s
+                        WHERE list_id = ?
+                          AND LOWER(TRIM(content)) = ?
                           AND removed_at IS NOT NULL
                         ORDER BY removed_at DESC
                         LIMIT 1
@@ -383,9 +383,9 @@ class ListService:
                         max_pos += 1
                         cursor.execute("""
                             UPDATE list_items
-                            SET removed_at = NULL, checked = FALSE,
-                                position = %s, updated_at = NOW()
-                            WHERE id = %s
+                            SET removed_at = NULL, checked = 0,
+                                position = ?, updated_at = datetime('now')
+                            WHERE id = ?
                         """, (max_pos, removed_row[0]))
                     else:
                         # Insert new row
@@ -393,7 +393,7 @@ class ListService:
                         item_id = secrets.token_hex(4)
                         cursor.execute("""
                             INSERT INTO list_items (id, list_id, content, position, added_at, updated_at)
-                            VALUES (%s, %s, %s, %s, NOW(), NOW())
+                            VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
                         """, (item_id, list_id, item_content.strip(), max_pos))
 
                     existing_normalized.add(normalized)
@@ -448,9 +448,9 @@ class ListService:
                     normalized = item_content.strip().lower()
                     cursor.execute("""
                         UPDATE list_items
-                        SET removed_at = NOW(), updated_at = NOW()
-                        WHERE list_id = %s
-                          AND LOWER(TRIM(content)) = %s
+                        SET removed_at = datetime('now'), updated_at = datetime('now')
+                        WHERE list_id = ?
+                          AND LOWER(TRIM(content)) = ?
                           AND removed_at IS NULL
                     """, (list_id, normalized))
                     if cursor.rowcount > 0:
@@ -531,11 +531,11 @@ class ListService:
                     normalized = item_content.strip().lower()
                     cursor.execute("""
                         UPDATE list_items
-                        SET checked = %s, updated_at = NOW()
-                        WHERE list_id = %s
-                          AND LOWER(TRIM(content)) = %s
+                        SET checked = ?, updated_at = datetime('now')
+                        WHERE list_id = ?
+                          AND LOWER(TRIM(content)) = ?
                           AND removed_at IS NULL
-                    """, (checked, list_id, normalized))
+                    """, (1 if checked else 0, list_id, normalized))
                     if cursor.rowcount > 0:
                         count += cursor.rowcount
                         self._log_event(
@@ -590,17 +590,17 @@ class ListService:
                         cursor.execute("""
                             SELECT id, list_id, event_type, item_content, details, created_at
                             FROM list_events
-                            WHERE list_id = %s AND created_at >= %s
+                            WHERE list_id = ? AND created_at >= ?
                             ORDER BY created_at DESC
-                            LIMIT %s
+                            LIMIT ?
                         """, (list_id, since, limit))
                     else:
                         cursor.execute("""
                             SELECT id, list_id, event_type, item_content, details, created_at
                             FROM list_events
-                            WHERE list_id = %s
+                            WHERE list_id = ?
                             ORDER BY created_at DESC
-                            LIMIT %s
+                            LIMIT ?
                         """, (list_id, limit))
                 else:
                     # All lists for this user
@@ -610,9 +610,9 @@ class ListService:
                                    le.details, le.created_at
                             FROM list_events le
                             JOIN lists l ON l.id = le.list_id
-                            WHERE l.user_id = %s AND le.created_at >= %s
+                            WHERE l.user_id = ? AND le.created_at >= ?
                             ORDER BY le.created_at DESC
-                            LIMIT %s
+                            LIMIT ?
                         """, (user_id, since, limit))
                     else:
                         cursor.execute("""
@@ -620,9 +620,9 @@ class ListService:
                                    le.details, le.created_at
                             FROM list_events le
                             JOIN lists l ON l.id = le.list_id
-                            WHERE l.user_id = %s
+                            WHERE l.user_id = ?
                             ORDER BY le.created_at DESC
-                            LIMIT %s
+                            LIMIT ?
                         """, (user_id, limit))
 
                 rows = cursor.fetchall()
@@ -727,7 +727,7 @@ class ListService:
                 cursor.execute("""
                     SELECT id, name, list_type, updated_at
                     FROM lists
-                    WHERE id = %s AND user_id = %s AND deleted_at IS NULL
+                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
                 """, (name_or_id, user_id))
                 row = cursor.fetchone()
 
@@ -736,7 +736,7 @@ class ListService:
                     cursor.execute("""
                         SELECT id, name, list_type, updated_at
                         FROM lists
-                        WHERE user_id = %s AND LOWER(name) = LOWER(%s) AND deleted_at IS NULL
+                        WHERE user_id = ? AND LOWER(name) = LOWER(?) AND deleted_at IS NULL
                         LIMIT 1
                     """, (user_id, name_or_id))
                     row = cursor.fetchone()
@@ -770,7 +770,7 @@ class ListService:
                 cursor.execute("""
                     SELECT id, name, list_type, updated_at
                     FROM lists
-                    WHERE user_id = %s AND deleted_at IS NULL
+                    WHERE user_id = ? AND deleted_at IS NULL
                     ORDER BY updated_at DESC
                     LIMIT 1
                 """, (user_id,))
@@ -810,7 +810,7 @@ class ListService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO list_events (id, list_id, event_type, item_content, details, created_at)
-                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    VALUES (?, ?, ?, ?, ?, datetime('now'))
                 """, (event_id, list_id, event_type, item_content, details_json))
                 cursor.close()
         except Exception as e:
@@ -827,7 +827,7 @@ class ListService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE lists SET updated_at = NOW() WHERE id = %s
+                    UPDATE lists SET updated_at = datetime('now') WHERE id = ?
                 """, (list_id,))
                 cursor.close()
         except Exception as e:

@@ -86,7 +86,7 @@ def _get_sleep_interval(redis) -> float:
 
 def background_llm_worker(shared_state=None):
     """
-    Entry point registered with consumer.py via manager.register_service().
+    Entry point registered with run.py via manager.register_service().
 
     Runs indefinitely, consuming from bg_llm:queue one job at a time.
     """

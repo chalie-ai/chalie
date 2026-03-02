@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def event_bus(mock_redis):
-    """EventBusService wired to fakeredis."""
+    """EventBusService wired to MemoryStore."""
     with patch('services.event_bus_service.RedisClientService') as mock_cls:
         mock_cls.create_connection.return_value = mock_redis
         bus = EventBusService()

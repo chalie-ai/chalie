@@ -10,6 +10,8 @@ Traits decay unless reinforced, and uncertain knowledge fades naturally.
 
 import logging
 import math
+import struct
+import uuid
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -38,11 +40,51 @@ MAX_TRAITS_IN_PROMPT = 8
 INJECTION_THRESHOLD = 0.3
 
 
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    # numpy arrays
+    if hasattr(embedding, 'tolist'):
+        flat = embedding.tolist()
+        return struct.pack(f'{len(flat)}f', *flat)
+    return embedding
+
+
 class UserTraitService:
     """Manages user trait storage, retrieval, decay, and prompt injection."""
 
     def __init__(self, database_service):
         self.db = database_service
+
+    def _store_embedding(self, conn, trait_rowid: int, embedding_blob: Optional[bytes]):
+        """Store embedding in the user_traits_vec companion virtual table."""
+        if embedding_blob is None:
+            return
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO user_traits_vec(rowid, embedding) VALUES (?, ?)",
+                (trait_rowid, embedding_blob)
+            )
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"[USER_TRAITS] Failed to store trait embedding: {e}")
+
+    def _get_rowid(self, conn, user_id: str, trait_key: str) -> Optional[int]:
+        """Get the rowid for a trait by user_id and trait_key."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT rowid FROM user_traits WHERE user_id = ? AND trait_key = ?",
+            (user_id, trait_key)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return row[0] if row else None
 
     def store_trait(
         self,
@@ -100,7 +142,7 @@ class UserTraitService:
                 cursor.execute("""
                     SELECT trait_value, confidence, reinforcement_count
                     FROM user_traits
-                    WHERE user_id = %s AND trait_key = %s
+                    WHERE user_id = ? AND trait_key = ?
                 """, (user_id, trait_key))
                 existing = cursor.fetchone()
 
@@ -116,11 +158,11 @@ class UserTraitService:
 
                         cursor.execute("""
                             UPDATE user_traits
-                            SET confidence = %s,
-                                reinforcement_count = %s,
-                                last_reinforced_at = NOW(),
-                                updated_at = NOW()
-                            WHERE user_id = %s AND trait_key = %s
+                            SET confidence = ?,
+                                reinforcement_count = ?,
+                                last_reinforced_at = datetime('now'),
+                                updated_at = datetime('now')
+                            WHERE user_id = ? AND trait_key = ?
                         """, (new_confidence, new_count, user_id, trait_key))
 
                         logger.info(
@@ -130,19 +172,23 @@ class UserTraitService:
                         )
                     elif confidence > old_confidence * 2:
                         # Conflict with significantly higher confidence → overwrite
-                        embedding = self._generate_embedding(trait_key, trait_value)
+                        embedding_blob = self._generate_embedding_blob(trait_key, trait_value)
                         cursor.execute("""
                             UPDATE user_traits
-                            SET trait_value = %s, confidence = %s,
-                                category = %s, source = %s, is_literal = %s,
+                            SET trait_value = ?, confidence = ?,
+                                category = ?, source = ?, is_literal = ?,
                                 reinforcement_count = 1,
-                                last_reinforced_at = NOW(),
-                                last_conflict_at = NOW(),
-                                embedding = %s,
-                                updated_at = NOW()
-                            WHERE user_id = %s AND trait_key = %s
+                                last_reinforced_at = datetime('now'),
+                                last_conflict_at = datetime('now'),
+                                updated_at = datetime('now')
+                            WHERE user_id = ? AND trait_key = ?
                         """, (trait_value, confidence, category, source,
-                              is_literal, embedding, user_id, trait_key))
+                              1 if is_literal else 0, user_id, trait_key))
+
+                        # Update embedding in companion vec table
+                        trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                        if trait_rowid is not None:
+                            self._store_embedding(conn, trait_rowid, embedding_blob)
 
                         logger.info(
                             f"[USER_TRAITS] Overwritten '{trait_key}': "
@@ -153,8 +199,8 @@ class UserTraitService:
                         # Conflict but not strong enough to overwrite — record conflict
                         cursor.execute("""
                             UPDATE user_traits
-                            SET last_conflict_at = NOW(), updated_at = NOW()
-                            WHERE user_id = %s AND trait_key = %s
+                            SET last_conflict_at = datetime('now'), updated_at = datetime('now')
+                            WHERE user_id = ? AND trait_key = ?
                         """, (user_id, trait_key))
 
                         logger.debug(
@@ -164,14 +210,20 @@ class UserTraitService:
                         )
                 else:
                     # New trait
-                    embedding = self._generate_embedding(trait_key, trait_value)
+                    trait_id = str(uuid.uuid4())
+                    embedding_blob = self._generate_embedding_blob(trait_key, trait_value)
                     cursor.execute("""
                         INSERT INTO user_traits
-                            (user_id, trait_key, trait_value, category, confidence,
-                             source, is_literal, embedding)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (user_id, trait_key, trait_value, category, confidence,
-                          source, is_literal, embedding))
+                            (id, user_id, trait_key, trait_value, category, confidence,
+                             source, is_literal)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (trait_id, user_id, trait_key, trait_value, category, confidence,
+                          source, 1 if is_literal else 0))
+
+                    # Store embedding in companion vec table
+                    trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                    if trait_rowid is not None:
+                        self._store_embedding(conn, trait_rowid, embedding_blob)
 
                     logger.info(
                         f"[USER_TRAITS] Stored new trait '{trait_key}': "
@@ -221,10 +273,10 @@ class UserTraitService:
                 cursor.execute("""
                     SELECT trait_key, trait_value, confidence, category
                     FROM user_traits
-                    WHERE user_id = %s
+                    WHERE user_id = ?
                       AND category = 'core'
-                      AND confidence > %s
-                      AND is_literal = true
+                      AND confidence > ?
+                      AND is_literal = 1
                     ORDER BY confidence DESC
                 """, (user_id, injection_threshold))
                 core_traits = cursor.fetchall()
@@ -233,33 +285,40 @@ class UserTraitService:
                 contextual_traits = []
 
                 if remaining_slots > 0 and prompt:
-                    # Contextual retrieval by embedding similarity
+                    # Contextual retrieval by embedding similarity via user_traits_vec
                     prompt_embedding = self._generate_embedding_raw(prompt)
                     if prompt_embedding:
-                        cursor.execute("""
-                            SELECT trait_key, trait_value, confidence, category
-                            FROM user_traits
-                            WHERE user_id = %s
-                              AND category != 'core'
-                              AND confidence > %s
-                              AND is_literal = true
-                              AND embedding IS NOT NULL
-                            ORDER BY embedding <=> %s::vector
-                            LIMIT %s
-                        """, (user_id, injection_threshold, prompt_embedding, remaining_slots))
-                        contextual_traits = cursor.fetchall()
+                        packed = _pack_embedding(prompt_embedding)
+                        if packed:
+                            cursor.execute("""
+                                SELECT t.trait_key, t.trait_value, t.confidence, t.category
+                                FROM user_traits_vec v
+                                JOIN user_traits t ON t.rowid = v.rowid
+                                WHERE v.embedding MATCH ? AND k = ?
+                                ORDER BY v.distance
+                            """, (packed, remaining_slots + len(core_traits)))
+                            all_vec_results = cursor.fetchall()
+
+                            # Filter: exclude core traits already included, apply thresholds
+                            core_keys = {r[0] for r in core_traits}
+                            contextual_traits = [
+                                r for r in all_vec_results
+                                if r[3] != 'core'
+                                   and r[0] not in core_keys
+                                   and r[2] > injection_threshold
+                            ][:remaining_slots]
 
                 elif remaining_slots > 0:
                     # No prompt for context — get highest confidence non-core traits
                     cursor.execute("""
                         SELECT trait_key, trait_value, confidence, category
                         FROM user_traits
-                        WHERE user_id = %s
+                        WHERE user_id = ?
                           AND category != 'core'
-                          AND confidence > %s
-                          AND is_literal = true
+                          AND confidence > ?
+                          AND is_literal = 1
                         ORDER BY confidence DESC
-                        LIMIT %s
+                        LIMIT ?
                     """, (user_id, injection_threshold, remaining_slots))
                     contextual_traits = cursor.fetchall()
 
@@ -315,10 +374,10 @@ class UserTraitService:
                 cursor.execute("""
                     SELECT trait_value, confidence
                     FROM user_traits
-                    WHERE user_id = %s
+                    WHERE user_id = ?
                       AND trait_key = 'communication_style'
                       AND category = 'communication_style'
-                      AND confidence > %s
+                      AND confidence > ?
                     ORDER BY updated_at DESC
                     LIMIT 1
                 """, (user_id, threshold))
@@ -388,8 +447,8 @@ class UserTraitService:
                     if abs(new_confidence - confidence) > 0.001:
                         cursor.execute("""
                             UPDATE user_traits
-                            SET confidence = %s, updated_at = NOW()
-                            WHERE id = %s
+                            SET confidence = ?, updated_at = datetime('now')
+                            WHERE id = ?
                         """, (new_confidence, trait_id))
                         stats['decayed'] += 1
 
@@ -397,9 +456,9 @@ class UserTraitService:
                     if new_confidence <= floor:
                         cursor.execute("""
                             DELETE FROM user_traits
-                            WHERE id = %s
-                              AND confidence <= %s
-                              AND updated_at < NOW() - INTERVAL '7 days'
+                            WHERE id = ?
+                              AND confidence <= ?
+                              AND updated_at < datetime('now', '-7 days')
                         """, (trait_id, floor + 0.01))
                         if cursor.rowcount > 0:
                             stats['deleted'] += 1
@@ -430,12 +489,12 @@ class UserTraitService:
         Sets confidence to 0.95 and source to 'explicit_correction' for audit trail.
         """
         try:
-            embedding = self._generate_embedding_raw(f"{trait_key}: {new_value}")
+            embedding_blob = self._generate_embedding_blob(trait_key, new_value)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT id, category FROM user_traits WHERE user_id = %s AND trait_key = %s",
+                    "SELECT id, category FROM user_traits WHERE user_id = ? AND trait_key = ?",
                     (user_id, trait_key)
                 )
                 existing = cursor.fetchone()
@@ -444,22 +503,35 @@ class UserTraitService:
                     # Overwrite with high confidence, reset reinforcement, preserve category
                     update_category = category or existing[1]
                     cursor.execute(
-                        "UPDATE user_traits SET trait_value = %s, confidence = %s, "
+                        "UPDATE user_traits SET trait_value = ?, confidence = ?, "
                         "source = 'explicit_correction', reinforcement_count = 1, "
-                        "category = %s, is_literal = TRUE, embedding = %s, "
-                        "last_conflict_at = NOW(), updated_at = NOW() "
-                        "WHERE user_id = %s AND trait_key = %s",
-                        (new_value, 0.95, update_category, embedding, user_id, trait_key)
+                        "category = ?, is_literal = 1, "
+                        "last_conflict_at = datetime('now'), updated_at = datetime('now') "
+                        "WHERE user_id = ? AND trait_key = ?",
+                        (new_value, 0.95, update_category, user_id, trait_key)
                     )
+
+                    # Update embedding in companion vec table
+                    trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                    if trait_rowid is not None:
+                        self._store_embedding(conn, trait_rowid, embedding_blob)
+
                     logger.info(f"[USER_TRAITS] Corrected trait '{trait_key}' → '{new_value}' (explicit_correction)")
                 else:
                     # New trait from explicit correction
+                    trait_id = str(uuid.uuid4())
                     cursor.execute(
-                        "INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, "
-                        "category, source, is_literal, reinforcement_count, embedding) "
-                        "VALUES (%s, %s, %s, %s, %s, 'explicit_correction', TRUE, 1, %s)",
-                        (user_id, trait_key, new_value, 0.95, category or 'general', embedding)
+                        "INSERT INTO user_traits (id, user_id, trait_key, trait_value, confidence, "
+                        "category, source, is_literal, reinforcement_count) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 'explicit_correction', 1, 1)",
+                        (trait_id, user_id, trait_key, new_value, 0.95, category or 'general')
                     )
+
+                    # Store embedding in companion vec table
+                    trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                    if trait_rowid is not None:
+                        self._store_embedding(conn, trait_rowid, embedding_blob)
+
                     logger.info(f"[USER_TRAITS] Inserted corrected trait '{trait_key}' = '{new_value}'")
             return True
         except Exception as e:
@@ -472,7 +544,7 @@ class UserTraitService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM user_traits WHERE user_id = %s AND trait_key = %s",
+                    "DELETE FROM user_traits WHERE user_id = ? AND trait_key = ?",
                     (user_id, trait_key)
                 )
                 deleted = cursor.rowcount
@@ -490,7 +562,7 @@ class UserTraitService:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_key, trait_value, confidence, category "
-                    "FROM user_traits WHERE user_id = %s",
+                    "FROM user_traits WHERE user_id = ?",
                     (user_id,)
                 )
                 rows = cursor.fetchall()
@@ -521,17 +593,27 @@ class UserTraitService:
             return CONFIDENCE_LABELS['low']
 
     def _generate_embedding(self, trait_key: str, trait_value: str) -> Optional[str]:
-        """Generate embedding for a trait (key + value combined)."""
+        """Generate embedding for a trait (key + value combined). Returns JSON-serialized vector string."""
         raw = self._generate_embedding_raw(f"{trait_key}: {trait_value}")
         return raw
 
-    def _generate_embedding_raw(self, text: str) -> Optional[str]:
-        """Generate embedding vector as pgvector-compatible string."""
+    def _generate_embedding_blob(self, trait_key: str, trait_value: str) -> Optional[bytes]:
+        """Generate embedding as packed binary blob for sqlite-vec storage."""
+        raw = self._generate_embedding_raw(f"{trait_key}: {trait_value}")
+        if raw is None:
+            return None
+        return _pack_embedding(raw)
+
+    def _generate_embedding_raw(self, text: str) -> Optional[list]:
+        """Generate embedding vector as a list of floats."""
         try:
             from services.embedding_service import get_embedding_service
             emb_service = get_embedding_service()
             embedding = emb_service.generate_embedding(text)
-            return '[' + ','.join(str(float(x)) for x in embedding) + ']'
+            # Return as list of floats (not string)
+            if hasattr(embedding, 'tolist'):
+                return embedding.tolist()
+            return list(embedding)
         except Exception as e:
             logger.debug(f"[USER_TRAITS] Embedding generation failed: {e}")
             return None

@@ -6,12 +6,17 @@ Pipeline: extract text → detect language → extract metadata → generate sum
 
 All metadata extraction is deterministic (regex, no LLM). Confidence scores
 reflect pattern specificity × surrounding context quality.
+
+Text extraction is delegated to services.text_extractor (shared with the `read` innate skill).
 """
 
 import hashlib
 import logging
 import re
 from typing import Optional, List, Dict, Any, Tuple
+
+from services.text_extractor import extract_text as _extract_text_from_file
+from services.text_extractor import normalize_text as _normalize_text_fn
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +78,14 @@ class DocumentProcessingService:
             file_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
 
             # Step 2: Extract text
-            text = self._extract_text(file_path, doc['mime_type'])
+            text = _extract_text_from_file(file_path, doc['mime_type'])
 
             if not text or not text.strip():
                 doc_service.update_status(doc_id, 'failed', 'No text could be extracted from this document.')
                 return False
 
             # Step 3: Clean text and detect language
-            clean_text = self._normalize_text(text)
+            clean_text = _normalize_text_fn(text)
             language = self._detect_language(text)
 
             if not clean_text or not clean_text.strip():
@@ -178,161 +183,6 @@ class DocumentProcessingService:
             logger.error(f"[DOC PROC] Processing failed for {doc_id}: {e}", exc_info=True)
             doc_service.update_status(doc_id, 'failed', str(e)[:500])
             return False
-
-    # ─────────────────────────────────────────────
-    # Text extraction by format
-    # ─────────────────────────────────────────────
-
-    def _extract_text(self, file_path: str, mime_type: str) -> str:
-        """Dispatch to format-specific text extractor."""
-        extractors = {
-            'application/pdf': self._extract_pdf,
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': self._extract_docx,
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation': self._extract_pptx,
-            'text/html': self._extract_html,
-            'text/plain': self._extract_plain,
-            'text/markdown': self._extract_plain,
-        }
-
-        extractor = extractors.get(mime_type)
-        if extractor:
-            return extractor(file_path)
-
-        # Fallback: try plain text for code files and unknown types
-        if mime_type and mime_type.startswith('text/'):
-            return self._extract_plain(file_path)
-
-        logger.warning(f"[DOC PROC] Unsupported mime type: {mime_type}")
-        return self._extract_plain(file_path)
-
-    def _extract_pdf(self, path: str) -> str:
-        """Extract text from PDF using pdfplumber with table detection."""
-        try:
-            import pdfplumber
-            pages = []
-            with pdfplumber.open(path) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    page_text = page.extract_text() or ''
-
-                    # Try extracting tables
-                    tables = page.extract_tables()
-                    if tables:
-                        for table in tables:
-                            rows = []
-                            for row in table:
-                                cells = [str(cell or '').strip() for cell in row]
-                                rows.append(' | '.join(cells))
-                            page_text += '\n' + '\n'.join(rows)
-
-                    if page_text.strip():
-                        pages.append(f"[Page {i + 1}]\n{page_text.strip()}")
-
-            return '\n\n'.join(pages)
-
-        except Exception as e:
-            logger.error(f"[DOC PROC] PDF extraction failed: {e}")
-            return ''
-
-    def _extract_docx(self, path: str) -> str:
-        """Extract text from DOCX with paragraph and table support."""
-        try:
-            from docx import Document
-            doc = Document(path)
-            parts = []
-
-            for element in doc.element.body:
-                tag = element.tag.split('}')[-1] if '}' in element.tag else element.tag
-                if tag == 'p':
-                    # Paragraph
-                    for para in doc.paragraphs:
-                        if para._element == element:
-                            text = para.text.strip()
-                            if text:
-                                # Mark headings
-                                if para.style and para.style.name.startswith('Heading'):
-                                    level = para.style.name.replace('Heading ', '').replace('Heading', '1')
-                                    try:
-                                        level = int(level)
-                                    except ValueError:
-                                        level = 1
-                                    parts.append(f"{'#' * level} {text}")
-                                else:
-                                    parts.append(text)
-                            break
-                elif tag == 'tbl':
-                    # Table
-                    for table in doc.tables:
-                        if table._element == element:
-                            rows = []
-                            for row in table.rows:
-                                cells = [cell.text.strip() for cell in row.cells]
-                                rows.append(' | '.join(cells))
-                            parts.append('\n'.join(rows))
-                            break
-
-            return '\n\n'.join(parts)
-
-        except Exception as e:
-            logger.error(f"[DOC PROC] DOCX extraction failed: {e}")
-            return ''
-
-    def _extract_pptx(self, path: str) -> str:
-        """Extract text from PowerPoint slides as sections."""
-        try:
-            from pptx import Presentation
-            prs = Presentation(path)
-            slides = []
-
-            for i, slide in enumerate(prs.slides):
-                texts = []
-                for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        for para in shape.text_frame.paragraphs:
-                            text = para.text.strip()
-                            if text:
-                                texts.append(text)
-                if texts:
-                    slides.append(f"[Slide {i + 1}]\n" + '\n'.join(texts))
-
-            return '\n\n'.join(slides)
-
-        except Exception as e:
-            logger.error(f"[DOC PROC] PPTX extraction failed: {e}")
-            return ''
-
-    def _extract_html(self, path: str) -> str:
-        """Extract content from HTML using trafilatura, BS4 fallback."""
-        try:
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                raw = f.read()
-
-            try:
-                import trafilatura
-                text = trafilatura.extract(raw)
-                if text and text.strip():
-                    return text
-            except Exception:
-                pass
-
-            # Fallback: BeautifulSoup
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(raw, 'html.parser')
-            for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
-                tag.decompose()
-            return soup.get_text(separator='\n', strip=True)
-
-        except Exception as e:
-            logger.error(f"[DOC PROC] HTML extraction failed: {e}")
-            return ''
-
-    def _extract_plain(self, path: str) -> str:
-        """Read plain text file."""
-        try:
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                return f.read()
-        except Exception as e:
-            logger.error(f"[DOC PROC] Plain text extraction failed: {e}")
-            return ''
 
     # ─────────────────────────────────────────────
     # Metadata extraction (deterministic, no LLM)
@@ -774,16 +624,6 @@ class DocumentProcessingService:
         if last_period > SUMMARY_MAX_CHARS // 2:
             return truncated[:last_period + 1]
         return truncated.strip()
-
-    def _normalize_text(self, text: str) -> str:
-        """Normalize text for search: collapse whitespace, strip control chars."""
-        # Remove control characters except newlines
-        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-        # Collapse multiple spaces
-        text = re.sub(r'[ \t]+', ' ', text)
-        # Collapse multiple newlines (keep at most 2)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
 
     def _detect_language(self, text: str) -> str:
         """Detect document language from first 1000 chars."""

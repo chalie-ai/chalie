@@ -14,7 +14,7 @@ class TestToolRegistryTieredRewards:
 
     def _make_service(self):
         """Return a ToolRegistryService with tools disabled (skips Docker setup)."""
-        with patch("services.tool_registry_service.ToolRegistryService._load_tools"):
+        with patch("services.tool_registry_service.ToolRegistryService._discover_and_load"):
             from services.tool_registry_service import ToolRegistryService
             svc = ToolRegistryService.__new__(ToolRegistryService)
             svc._enabled = True
@@ -29,8 +29,8 @@ class TestToolRegistryTieredRewards:
         svc = self._make_service()
         mock_proc = MagicMock()
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", True, "test_topic", 500)
 
         mock_proc.record_action_outcome.assert_called_once()
@@ -44,8 +44,8 @@ class TestToolRegistryTieredRewards:
         svc = self._make_service()
         mock_proc = MagicMock()
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", False, "test_topic", 500, failure_class="internal")
 
         mock_proc.record_action_outcome.assert_called_once()
@@ -59,8 +59,8 @@ class TestToolRegistryTieredRewards:
         svc = self._make_service()
         mock_proc = MagicMock()
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", False, "test_topic", 500, failure_class="external")
 
         mock_proc.record_action_outcome.assert_called_once()
@@ -80,13 +80,13 @@ class TestToolRegistryTieredRewards:
         mock_proc = MagicMock()
         mock_proc.record_action_outcome.side_effect = capture
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", False, "test_topic", 500, failure_class="external")
         external_reward = recorded["reward"]
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", False, "test_topic", 500, failure_class="internal")
         internal_reward = recorded["reward"]
 
@@ -100,8 +100,8 @@ class TestToolRegistryTieredRewards:
         svc = self._make_service()
         mock_proc = MagicMock()
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", False, "test_topic", 500)
 
         mock_proc.record_action_outcome.assert_called_once()
@@ -115,8 +115,8 @@ class TestToolRegistryTieredRewards:
         svc = self._make_service()
         mock_proc = MagicMock()
 
-        with patch("services.tool_registry_service.ProceduralMemoryService", return_value=mock_proc), \
-             patch("services.tool_registry_service.get_shared_db_service"):
+        with patch("services.procedural_memory_service.ProceduralMemoryService", return_value=mock_proc), \
+             patch("services.database_service.get_shared_db_service"):
             svc._log_outcome("my_tool", False, "test_topic", 500, failure_class="external")
 
         call_kwargs = mock_proc.record_action_outcome.call_args.kwargs

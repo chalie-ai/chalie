@@ -8,12 +8,18 @@ Documents are reference material — retrieved via the document skill (ACT loop)
 NOT injected into context assembly.
 """
 
+import hashlib
+import json
 import logging
 import os
 import secrets
 import shutil
+import struct
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
+
+from services.database_service import DictCursor
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +33,11 @@ PURGE_WINDOW_DAYS = 30
 
 # Document storage root (inside Docker volume)
 DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', '/app/data/documents')
+
+
+def _pack_embedding(embedding):
+    """Pack a list of floats into a binary blob for sqlite-vec."""
+    return struct.pack(f'{len(embedding)}f', *embedding)
 
 
 class DocumentService:
@@ -58,7 +69,7 @@ class DocumentService:
                     INSERT INTO documents
                         (id, original_name, mime_type, file_size_bytes, file_path,
                          file_hash, source_type, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """, (doc_id, original_name, mime_type, file_size, file_path,
                       file_hash, source_type))
                 cursor.close()
@@ -81,7 +92,7 @@ class DocumentService:
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
                            created_at, updated_at, deleted_at, purge_after
-                    FROM documents WHERE id = %s
+                    FROM documents WHERE id = ?
                 """, (doc_id,))
                 row = cursor.fetchone()
                 cursor.close()
@@ -143,8 +154,8 @@ class DocumentService:
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
                     WHERE deleted_at IS NULL
-                      AND (LOWER(original_name) LIKE LOWER(%s)
-                           OR %s = ANY(tags))
+                      AND (LOWER(original_name) LIKE LOWER(?)
+                           OR EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?))
                     ORDER BY created_at DESC
                 """, (like_query, query))
                 rows = cursor.fetchall()
@@ -155,6 +166,41 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] search_documents_metadata failed: {e}")
             return []
+
+    def create_document_from_text(
+        self,
+        original_name: str,
+        text_content: str,
+        source_type: str = 'conversation',
+    ) -> str:
+        """
+        Create a document from raw text (no file upload).
+        Writes text to disk as markdown, computes hash, creates DB record.
+        Returns doc_id.
+        """
+        doc_id = secrets.token_hex(4)
+
+        # Write markdown to disk
+        doc_dir = os.path.join(DOCUMENTS_ROOT, doc_id)
+        os.makedirs(doc_dir, exist_ok=True)
+        file_path = os.path.join(doc_dir, original_name)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(text_content)
+
+        file_hash = hashlib.sha256(text_content.encode()).hexdigest()
+        file_size = len(text_content.encode('utf-8'))
+
+        self.create_document(
+            original_name=original_name,
+            mime_type='text/markdown',
+            file_size=file_size,
+            file_path=f"{doc_id}/{original_name}",
+            file_hash=file_hash,
+            source_type=source_type,
+        )
+
+        logger.info(f"[DOCS] Created text document '{original_name}' (id={doc_id})")
+        return doc_id
 
     # ─────────────────────────────────────────────
     # Status & metadata updates
@@ -173,9 +219,9 @@ class DocumentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE documents
-                    SET status = %s, error_message = %s, chunk_count = %s,
-                        updated_at = NOW()
-                    WHERE id = %s
+                    SET status = ?, error_message = ?, chunk_count = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
                 """, (status, error_message, chunk_count, doc_id))
                 cursor.close()
             logger.info(f"[DOCS] Updated status for {doc_id}: {status}")
@@ -197,29 +243,26 @@ class DocumentService:
         """Store extracted metadata, summary, embedding, and text signals.
 
         Builds a dynamic SET clause — only updates columns whose values are
-        provided (non-None).  This avoids COALESCE casting issues with the
-        pgvector ``vector`` type, which rejects ``numeric[]::vector``.
+        provided (non-None).  This keeps the query minimal and avoids issues
+        with the sqlite-vec virtual table (embeddings are stored separately
+        in documents_vec).
 
         Raises on failure so the caller (process_document) can mark status='failed'.
         """
-        import json
-        set_parts = ["extracted_metadata = %s", "summary = %s", "updated_at = NOW()"]
+        set_parts = ["extracted_metadata = ?", "summary = ?", "updated_at = datetime('now')"]
         params = [json.dumps(metadata), summary]
 
-        if summary_embedding is not None:
-            set_parts.append("summary_embedding = %s")
-            params.append(summary_embedding)
         if clean_text is not None:
-            set_parts.append("clean_text = %s")
+            set_parts.append("clean_text = ?")
             params.append(clean_text)
         if language is not None:
-            set_parts.append("language = %s")
+            set_parts.append("language = ?")
             params.append(language)
         if fingerprint is not None:
-            set_parts.append("fingerprint = %s")
+            set_parts.append("fingerprint = ?")
             params.append(fingerprint)
         if page_count is not None:
-            set_parts.append("page_count = %s")
+            set_parts.append("page_count = ?")
             params.append(page_count)
 
         params.append(doc_id)
@@ -227,9 +270,25 @@ class DocumentService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"UPDATE documents SET {', '.join(set_parts)} WHERE id = %s",
+                f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
                 params,
             )
+
+            # Store summary embedding in the documents_vec virtual table
+            if summary_embedding is not None:
+                packed = _pack_embedding(summary_embedding)
+                # Upsert: delete old row then insert new one
+                # We need the rowid — use the documents table integer rowid
+                cursor.execute("SELECT rowid FROM documents WHERE id = ?", (doc_id,))
+                row = cursor.fetchone()
+                if row:
+                    rowid = row[0]
+                    cursor.execute("DELETE FROM documents_vec WHERE rowid = ?", (rowid,))
+                    cursor.execute(
+                        "INSERT INTO documents_vec (rowid, embedding) VALUES (?, ?)",
+                        (rowid, packed),
+                    )
+
             cursor.close()
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
@@ -238,8 +297,8 @@ class DocumentService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE documents SET supersedes_id = %s, updated_at = NOW()
-                    WHERE id = %s
+                    UPDATE documents SET supersedes_id = ?, updated_at = datetime('now')
+                    WHERE id = ?
                 """, (supersedes_id, doc_id))
                 cursor.close()
             logger.info(f"[DOCS] Document {doc_id} supersedes {supersedes_id}")
@@ -279,8 +338,8 @@ class DocumentService:
                     cursor.execute("""
                         SELECT id, original_name, created_at
                         FROM documents
-                        WHERE file_hash = %s AND deleted_at IS NULL
-                          AND (%s IS NULL OR id != %s)
+                        WHERE file_hash = ? AND deleted_at IS NULL
+                          AND (? IS NULL OR id != ?)
                     """, (file_hash, exclude_id, exclude_id))
                     for row in cursor.fetchall():
                         results.append({
@@ -295,21 +354,25 @@ class DocumentService:
                 if (summary_embedding
                         and text_length >= DEDUP_MIN_TEXT_LENGTH
                         and not results):
+                    packed = _pack_embedding(summary_embedding)
                     cursor.execute("""
-                        SELECT id, original_name, created_at,
-                               summary_embedding <=> %s::vector AS distance
-                        FROM documents
-                        WHERE deleted_at IS NULL
-                          AND summary_embedding IS NOT NULL
-                          AND (%s IS NULL OR id != %s)
-                        ORDER BY distance ASC
-                        LIMIT 5
-                    """, (summary_embedding, exclude_id, exclude_id))
+                        SELECT d.id, d.original_name, d.created_at,
+                               v.distance
+                        FROM documents_vec v
+                        JOIN documents d ON d.rowid = v.rowid
+                        WHERE v.embedding MATCH ? AND k = 5
+                          AND d.deleted_at IS NULL
+                          AND d.summary_embedding IS NOT NULL
+                        ORDER BY v.distance
+                    """, (packed,))
                     for row in cursor.fetchall():
                         dist = float(row[3])
+                        doc_id = row[0]
+                        if exclude_id and doc_id == exclude_id:
+                            continue
                         if dist < DEDUP_EXACT_THRESHOLD:
                             results.append({
-                                'id': row[0],
+                                'id': doc_id,
                                 'original_name': row[1],
                                 'created_at': row[2],
                                 'match_type': 'semantic_exact',
@@ -317,7 +380,7 @@ class DocumentService:
                             })
                         elif dist < DEDUP_REVISION_THRESHOLD:
                             results.append({
-                                'id': row[0],
+                                'id': doc_id,
                                 'original_name': row[1],
                                 'created_at': row[2],
                                 'match_type': 'semantic_revision',
@@ -343,8 +406,8 @@ class DocumentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE documents
-                    SET deleted_at = NOW(), purge_after = %s, updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET deleted_at = datetime('now'), purge_after = ?, updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (purge_after, doc_id))
                 updated = cursor.rowcount > 0
                 cursor.close()
@@ -364,8 +427,8 @@ class DocumentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE documents
-                    SET deleted_at = NULL, purge_after = NULL, updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NOT NULL
+                    SET deleted_at = NULL, purge_after = NULL, updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NOT NULL
                 """, (doc_id,))
                 updated = cursor.rowcount > 0
                 cursor.close()
@@ -388,7 +451,7 @@ class DocumentService:
             # Delete from database (CASCADE removes chunks)
             with self.db.connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+                cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
                 deleted = cursor.rowcount > 0
                 cursor.close()
 
@@ -413,7 +476,7 @@ class DocumentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id FROM documents
-                    WHERE purge_after IS NOT NULL AND purge_after < NOW()
+                    WHERE purge_after IS NOT NULL AND purge_after < datetime('now')
                 """)
                 expired_ids = [row[0] for row in cursor.fetchall()]
                 cursor.close()
@@ -436,7 +499,7 @@ class DocumentService:
     # ─────────────────────────────────────────────
 
     def store_chunks(self, doc_id: str, chunks: List[Dict]) -> None:
-        """Bulk insert chunks into document_chunks."""
+        """Bulk insert chunks into document_chunks and their embeddings into document_chunks_vec."""
         if not chunks:
             return
 
@@ -444,20 +507,35 @@ class DocumentService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 for chunk in chunks:
+                    chunk_id = str(uuid.uuid4())
+                    embedding = chunk['embedding']
                     cursor.execute("""
                         INSERT INTO document_chunks
-                            (document_id, chunk_index, content, page_number,
+                            (id, document_id, chunk_index, content, page_number,
                              section_title, token_count, embedding)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
+                        chunk_id,
                         doc_id,
                         chunk['chunk_index'],
                         chunk['content'],
                         chunk.get('page_number'),
                         chunk.get('section_title'),
                         chunk.get('token_count'),
-                        chunk['embedding'],
+                        embedding,
                     ))
+
+                    # Store embedding in the sqlite-vec virtual table
+                    if embedding is not None:
+                        packed = _pack_embedding(embedding)
+                        cursor.execute("SELECT rowid FROM document_chunks WHERE id = ?", (chunk_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            cursor.execute(
+                                "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
+                                (row[0], packed),
+                            )
+
                 cursor.close()
 
             logger.info(f"[DOCS] Stored {len(chunks)} chunks for document {doc_id}")
@@ -475,7 +553,7 @@ class DocumentService:
                     SELECT id, document_id, chunk_index, content, page_number,
                            section_title, token_count
                     FROM document_chunks
-                    WHERE document_id = %s
+                    WHERE document_id = ?
                     ORDER BY chunk_index ASC
                 """, (doc_id,))
                 rows = cursor.fetchall()
@@ -511,8 +589,8 @@ class DocumentService:
     ) -> List[Dict[str, Any]]:
         """
         Hybrid 3-signal search across document chunks:
-        1. Semantic vector search (HNSW cosine)
-        2. Full-text search (tsvector/tsquery)
+        1. Semantic vector search (sqlite-vec)
+        2. Full-text search (FTS5)
         3. Exact keyword/numeric boosting
 
         Results merged via Reciprocal Rank Fusion (RRF, k=60).
@@ -522,17 +600,19 @@ class DocumentService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
 
-                # Stage 1: Coarse — find relevant documents via summary_embedding
+                packed_query = _pack_embedding(query_embedding)
+
+                # Stage 1: Coarse — find relevant documents via documents_vec
                 cursor.execute("""
-                    SELECT id, original_name, created_at,
-                           summary_embedding <=> %s::vector AS distance
-                    FROM documents
-                    WHERE deleted_at IS NULL
-                      AND status = 'ready'
-                      AND summary_embedding IS NOT NULL
-                    ORDER BY distance ASC
-                    LIMIT 10
-                """, (query_embedding,))
+                    SELECT d.id, d.original_name, d.created_at,
+                           v.distance
+                    FROM documents_vec v
+                    JOIN documents d ON d.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = 10
+                      AND d.deleted_at IS NULL
+                      AND d.status = 'ready'
+                    ORDER BY v.distance
+                """, (packed_query,))
                 candidate_docs = cursor.fetchall()
 
                 if not candidate_docs:
@@ -542,30 +622,33 @@ class DocumentService:
                 doc_ids = [row[0] for row in candidate_docs]
                 doc_map = {row[0]: {'name': row[1], 'created_at': row[2]} for row in candidate_docs}
 
-                # Stage 2: Fine — semantic search within candidate docs
-                cursor.execute("""
+                # Stage 2: Fine — semantic search within candidate docs via document_chunks_vec
+                placeholders = ', '.join('?' for _ in doc_ids)
+                cursor.execute(f"""
                     SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
                            dc.page_number, dc.section_title, dc.token_count,
-                           dc.embedding <=> %s::vector AS distance
-                    FROM document_chunks dc
-                    WHERE dc.document_id = ANY(%s)
-                    ORDER BY distance ASC
-                    LIMIT %s
-                """, (query_embedding, doc_ids, limit * 3))
+                           v.distance
+                    FROM document_chunks_vec v
+                    JOIN document_chunks dc ON dc.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = ?
+                      AND dc.document_id IN ({placeholders})
+                    ORDER BY v.distance
+                """, (packed_query, limit * 3, *doc_ids))
                 semantic_results = cursor.fetchall()
 
-                # Stage 2b: Full-text search within candidate docs
-                cursor.execute("""
+                # Stage 2b: Full-text search within candidate docs via FTS5
+                fts_query = query_text
+                cursor.execute(f"""
                     SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
                            dc.page_number, dc.section_title, dc.token_count,
-                           ts_rank(to_tsvector('english', dc.content),
-                                   plainto_tsquery('english', %s)) AS rank
-                    FROM document_chunks dc
-                    WHERE dc.document_id = ANY(%s)
-                      AND to_tsvector('english', dc.content) @@ plainto_tsquery('english', %s)
-                    ORDER BY rank DESC
-                    LIMIT %s
-                """, (query_text, doc_ids, query_text, limit * 3))
+                           fts.rank
+                    FROM document_chunks_fts fts
+                    JOIN document_chunks dc ON dc.rowid = fts.rowid
+                    WHERE document_chunks_fts MATCH ?
+                      AND dc.document_id IN ({placeholders})
+                    ORDER BY fts.rank
+                    LIMIT ?
+                """, (fts_query, *doc_ids, limit * 3))
                 text_results = cursor.fetchall()
 
                 cursor.close()
@@ -639,7 +722,7 @@ class DocumentService:
 
     def search_by_metadata(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Query documents by extracted_metadata JSONB fields.
+        Query documents by extracted_metadata JSON fields.
         Supported filters: document_type, company, has_expiration.
         """
         try:
@@ -647,18 +730,18 @@ class DocumentService:
             params = []
 
             if 'document_type' in filters:
-                conditions.append("extracted_metadata->'document_type'->>'value' = %s")
+                conditions.append("json_extract(extracted_metadata, '$.document_type.value') = ?")
                 params.append(filters['document_type'])
 
             if 'company' in filters:
                 conditions.append(
-                    "EXISTS (SELECT 1 FROM jsonb_array_elements(extracted_metadata->'companies') c "
-                    "WHERE c->>'name' ILIKE %s)"
+                    "EXISTS (SELECT 1 FROM json_each(json_extract(extracted_metadata, '$.companies')) c "
+                    "WHERE json_extract(c.value, '$.name') LIKE ?)"
                 )
                 params.append(f"%{filters['company']}%")
 
             if filters.get('has_expiration'):
-                conditions.append("jsonb_array_length(COALESCE(extracted_metadata->'expiration_dates', '[]'::jsonb)) > 0")
+                conditions.append("json_array_length(COALESCE(json_extract(extracted_metadata, '$.expiration_dates'), '[]')) > 0")
 
             where = " AND ".join(conditions)
 

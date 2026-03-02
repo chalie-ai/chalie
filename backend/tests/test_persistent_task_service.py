@@ -258,13 +258,10 @@ class TestPersistentTaskService:
         """create_task should INSERT and return a task dict with 'proposed' status."""
         _, cursor = mock_db
 
-        now = datetime.now(timezone.utc)
-        # First fetchone: the INSERT...RETURNING call
-        insert_row = (42, now)
-        # Second fetchone: the get_task call after insert
+        # create_task uses cursor.lastrowid (SQLite), then calls get_task(lastrowid)
+        cursor.lastrowid = 42
         full_row = make_task_row(task_id=42, account_id=1, goal="Learn Rust", status='proposed')
-
-        cursor.fetchone.side_effect = [insert_row, full_row]
+        cursor.fetchone.return_value = full_row
 
         result = service.create_task(account_id=1, goal="Learn Rust")
 
@@ -312,15 +309,16 @@ class TestPersistentTaskService:
     def test_expire_stale_tasks_returns_count(self, service, mock_db):
         """expire_stale_tasks should return the number of tasks that were expired."""
         _, cursor = mock_db
-        # Simulate 3 tasks being expired (RETURNING id gives 3 rows)
+        # Simulate 3 tasks found via SELECT, then UPDATE
         cursor.fetchall.return_value = [(10,), (11,), (12,)]
 
         count = service.expire_stale_tasks()
 
         assert count == 3
-        executed_sql = cursor.execute.call_args[0][0]
-        assert "status = 'expired'" in executed_sql
-        assert 'RETURNING id' in executed_sql
+        # Should have called execute twice: SELECT expired ids, then UPDATE
+        all_sqls = [c[0][0] for c in cursor.execute.call_args_list]
+        assert any("SELECT id FROM persistent_tasks" in sql for sql in all_sqls)
+        assert any("status = 'expired'" in sql for sql in all_sqls)
 
     # ── Completion ───────────────────────────────────────────────────
 

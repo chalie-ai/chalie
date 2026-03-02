@@ -119,7 +119,7 @@ class TemporalPatternService:
                 )
                 rows = cursor.fetchall()
                 cursor.close()
-                # PostgreSQL DOW: 0=Sunday, adjust to 0=Monday
+                # SQLite DOW: 0=Sunday, adjust to 0=Monday
                 return {(int(r[0]) - 1) % 7: int(r[1]) for r in rows}
         except Exception as e:
             logger.warning(f"[TEMPORAL] dow distribution query failed: {e}")

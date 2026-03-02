@@ -37,7 +37,7 @@ class TestNormalizeConfigSchema:
         assert result[0]['secret'] is False
 
 
-# ── Webhook rate limiting (fakeredis) ────────────────────────────────
+# ── Webhook rate limiting (MemoryStore) ──────────────────────────────
 
 class TestCheckWebhookRateLimit:
 

@@ -4,21 +4,21 @@ After deploying the application, you can configure LLM providers through the web
 
 ## Overview
 
-Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, etc.) are available to the system. All provider configuration is stored in the PostgreSQL database.
+Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, etc.) are available to the system. All provider configuration is stored in the SQLite database.
 
 ## Quick Start
 
 ### 1. Start the Application
 
 ```bash
-docker-compose up -d
+python backend/run.py
 ```
 
-The web interface will be available at `http://localhost:8081`.
+The web interface will be available at `http://localhost:8080`.
 
 ### 2. Access Provider Settings
 
-1. Open http://localhost:8081 in your browser
+1. Open http://localhost:8080 in your browser
 2. Navigate to the **Settings** or **Providers** section (usually in the dashboard)
 3. Click **Add Provider** or **Configure Provider**
 
@@ -143,7 +143,7 @@ curl -X PUT http://localhost:8080/providers/jobs/frontal-cortex \
 ### Network Security
 - Keep Ollama instances local or behind a firewall
 - Use HTTPS/TLS for remote API connections
-- Restrict database access with network policies
+- Restrict file access to the SQLite database
 - Enable CORS appropriately for your deployment
 
 ## Embedding Models

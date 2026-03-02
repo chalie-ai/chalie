@@ -8,6 +8,8 @@ tracing back to the original user message.
 Enforces throttling rules: max depth, max follow-ups per root, max active background cycles.
 """
 
+import json
+import uuid
 import logging
 import time
 from typing import Dict, Any, Optional, List
@@ -30,7 +32,7 @@ VALID_STATUSES = {'pending', 'processing', 'completed', 'failed', 'cancelled', '
 
 
 class CycleService:
-    """Manages message cycle lifecycle in PostgreSQL."""
+    """Manages message cycle lifecycle in SQLite."""
 
     def __init__(self, db_service: DatabaseService):
         self.db_service = db_service
@@ -74,43 +76,34 @@ class CycleService:
                     logger.warning(f"[CYCLE] Parent cycle {parent_cycle_id} not found")
                     return None
 
+            cycle_id = str(uuid.uuid4())
+
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
                 if root_cycle_id is None:
-                    # Root cycle — cycle_id will be set as root_cycle_id after insert
+                    # Root cycle — root_cycle_id = cycle_id
                     cursor.execute("""
                         INSERT INTO message_cycles
-                            (topic, cycle_type, source, content, intent, metadata, status, depth, root_cycle_id)
-                        VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, gen_random_uuid())
-                        RETURNING cycle_id
+                            (cycle_id, root_cycle_id, topic, cycle_type, source,
+                             content, intent, metadata, status, depth)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                     """, (
-                        topic, cycle_type, source, content,
+                        cycle_id, cycle_id, topic, cycle_type, source, content,
                         _json_or_none(intent),
                         _json_or_none(metadata or {}),
                         depth,
                     ))
-                    row = cursor.fetchone()
-                    cycle_id = str(row[0])
-
-                    # Set root_cycle_id = cycle_id for root cycles
-                    cursor.execute(
-                        "UPDATE message_cycles SET root_cycle_id = cycle_id WHERE cycle_id = %s",
-                        (cycle_id,)
-                    )
                 else:
                     cursor.execute("""
                         INSERT INTO message_cycles
-                            (parent_cycle_id, root_cycle_id, topic, cycle_type, source,
+                            (cycle_id, parent_cycle_id, root_cycle_id, topic, cycle_type, source,
                              content, intent, metadata, status, depth)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s)
-                        RETURNING cycle_id
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                     """, (
-                        parent_cycle_id, root_cycle_id, topic, cycle_type, source,
+                        cycle_id, parent_cycle_id, root_cycle_id, topic, cycle_type, source,
                         content, _json_or_none(intent), _json_or_none(metadata or {}), depth,
                     ))
-                    row = cursor.fetchone()
-                    cycle_id = str(row[0])
 
                 cursor.close()
 
@@ -128,11 +121,11 @@ class CycleService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE message_cycles
-                    SET status = %s, completed_at = NOW()
-                    WHERE cycle_id = %s
+                    SET status = ?, completed_at = datetime('now')
+                    WHERE cycle_id = ?
                 """, (status, cycle_id))
                 cursor.close()
-            logger.info(f"[CYCLE] Cycle {cycle_id[:8]} → {status}")
+            logger.info(f"[CYCLE] Cycle {cycle_id[:8]} -> {status}")
             return True
         except Exception as e:
             logger.error(f"[CYCLE] Failed to complete cycle {cycle_id[:8]}: {e}")
@@ -144,7 +137,7 @@ class CycleService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE message_cycles SET status = %s WHERE cycle_id = %s",
+                    "UPDATE message_cycles SET status = ? WHERE cycle_id = ?",
                     (status, cycle_id)
                 )
                 cursor.close()
@@ -162,7 +155,7 @@ class CycleService:
                     SELECT cycle_id, parent_cycle_id, root_cycle_id, topic, cycle_type,
                            source, content, intent, metadata, status, depth,
                            created_at, completed_at
-                    FROM message_cycles WHERE cycle_id = %s
+                    FROM message_cycles WHERE cycle_id = ?
                 """, (cycle_id,))
                 row = cursor.fetchone()
                 cursor.close()
@@ -181,7 +174,7 @@ class CycleService:
                            source, content, intent, metadata, status, depth,
                            created_at, completed_at
                     FROM message_cycles
-                    WHERE root_cycle_id = %s
+                    WHERE root_cycle_id = ?
                     ORDER BY created_at ASC
                 """, (root_cycle_id,))
                 rows = cursor.fetchall()
@@ -201,9 +194,9 @@ class CycleService:
                            source, content, intent, metadata, status, depth,
                            created_at, completed_at
                     FROM message_cycles
-                    WHERE topic = %s
+                    WHERE topic = ?
                     ORDER BY created_at DESC
-                    LIMIT %s
+                    LIMIT ?
                 """, (topic, limit))
                 rows = cursor.fetchall()
                 cursor.close()
@@ -220,14 +213,14 @@ class CycleService:
     ) -> List[Dict[str, Any]]:
         """Get active cycles, optionally filtered by topic and type."""
         try:
-            conditions = ["status = %s"]
+            conditions = ["status = ?"]
             params = [status]
 
             if topic:
-                conditions.append("topic = %s")
+                conditions.append("topic = ?")
                 params.append(topic)
             if cycle_type:
-                conditions.append("cycle_type = %s")
+                conditions.append("cycle_type = ?")
                 params.append(cycle_type)
 
             where = " AND ".join(conditions)
@@ -275,7 +268,7 @@ class CycleService:
 
                 cursor.execute("""
                     SELECT COUNT(*) FROM message_cycles
-                    WHERE root_cycle_id = %s
+                    WHERE root_cycle_id = ?
                     AND cycle_type IN ('tool_result', 'act_followup')
                 """, (root_id,))
                 followup_count = cursor.fetchone()[0]
@@ -316,15 +309,24 @@ class CycleService:
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE message_cycles
-                    SET metadata = jsonb_set(
-                        COALESCE(metadata, '{}'::jsonb),
-                        '{defer_count}',
-                        (COALESCE((metadata->>'defer_count')::int, 0) + 1)::text::jsonb
-                    )
-                    WHERE cycle_id = %s
-                """, (cycle_id,))
+
+                # Fetch current metadata, update in Python, write back
+                cursor.execute(
+                    "SELECT metadata FROM message_cycles WHERE cycle_id = ?",
+                    (cycle_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    cursor.close()
+                    return False
+
+                metadata = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if row[0] else {})
+                metadata['defer_count'] = metadata.get('defer_count', 0) + 1
+
+                cursor.execute(
+                    "UPDATE message_cycles SET metadata = ? WHERE cycle_id = ?",
+                    (json.dumps(metadata), cycle_id)
+                )
                 cursor.close()
             return True
         except Exception as e:
@@ -338,10 +340,9 @@ class CycleService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE message_cycles
-                    SET status = 'expired', completed_at = NOW()
+                    SET status = 'expired', completed_at = datetime('now')
                     WHERE status IN ('pending', 'processing')
-                    AND created_at < NOW() - INTERVAL '10 minutes'
-                    RETURNING cycle_id
+                    AND created_at < datetime('now', '-10 minutes')
                 """)
                 expired = cursor.rowcount
                 cursor.close()
@@ -355,8 +356,7 @@ class CycleService:
 
 
 def _json_or_none(obj):
-    """Convert dict to JSON string for PostgreSQL JSONB, or None."""
-    import json
+    """Convert dict to JSON string for SQLite TEXT, or None."""
     if obj is None:
         return None
     return json.dumps(obj)
@@ -372,8 +372,8 @@ def _row_to_dict(row) -> Dict[str, Any]:
         'cycle_type': row[4],
         'source': row[5],
         'content': row[6],
-        'intent': row[7],
-        'metadata': row[8] or {},
+        'intent': row[7] if isinstance(row[7], dict) else (json.loads(row[7]) if row[7] else None),
+        'metadata': row[8] if isinstance(row[8], dict) else (json.loads(row[8]) if row[8] else {}),
         'status': row[9],
         'depth': row[10],
         'created_at': row[11],

@@ -121,7 +121,7 @@ class TestGistStorage:
         gists = svc.get_latest_gists("topic-a")
         assert len(gists) == 1
 
-        # Verify the gist key has a TTL set (fakeredis supports ttl())
+        # Verify the gist key has a TTL set (MemoryStore supports ttl())
         index_key = svc._get_gist_index_key("topic-a")
         ttl = mock_redis.ttl(index_key)
         assert ttl > 0

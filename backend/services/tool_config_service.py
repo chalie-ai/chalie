@@ -1,5 +1,5 @@
 """
-Tool Config Service — PostgreSQL-backed per-tool configuration storage.
+Tool Config Service — SQLite-backed per-tool configuration storage.
 
 Provides get/set/delete for tool config keys (credentials, endpoints, etc.).
 Config values are injected into tool containers at invocation time.
@@ -35,7 +35,7 @@ class ToolConfigService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT config_key, config_value FROM tool_configs WHERE tool_name = %s",
+                    "SELECT config_key, config_value FROM tool_configs WHERE tool_name = ?",
                     (tool_name,)
                 )
                 rows = cursor.fetchall()
@@ -59,10 +59,10 @@ class ToolConfigService:
                 cursor.execute(
                     """
                     INSERT INTO tool_configs (tool_name, config_key, config_value)
-                    VALUES (%s, '_enabled', %s)
+                    VALUES (?, '_enabled', ?)
                     ON CONFLICT (tool_name, config_key)
                     DO UPDATE SET config_value = EXCLUDED.config_value,
-                                  updated_at = NOW()
+                                  updated_at = datetime('now')
                     """,
                     (tool_name, value)
                 )
@@ -85,10 +85,10 @@ class ToolConfigService:
                     cursor.execute(
                         """
                         INSERT INTO tool_configs (tool_name, config_key, config_value)
-                        VALUES (%s, %s, %s)
+                        VALUES (?, ?, ?)
                         ON CONFLICT (tool_name, config_key)
                         DO UPDATE SET config_value = EXCLUDED.config_value,
-                                      updated_at = NOW()
+                                      updated_at = datetime('now')
                         """,
                         (tool_name, key, value)
                     )
@@ -106,10 +106,10 @@ class ToolConfigService:
                 cursor.execute(
                     """
                     INSERT INTO tool_configs (tool_name, config_key, config_value)
-                    VALUES (%s, '_latest_tag', %s)
+                    VALUES (?, '_latest_tag', ?)
                     ON CONFLICT (tool_name, config_key)
                     DO UPDATE SET config_value = EXCLUDED.config_value,
-                                  updated_at = NOW()
+                                  updated_at = datetime('now')
                     """,
                     (tool_name, latest_tag)
                 )
@@ -152,10 +152,10 @@ class ToolConfigService:
                     cursor.execute(
                         """
                         INSERT INTO tool_configs (tool_name, config_key, config_value)
-                        VALUES (%s, %s, %s)
+                        VALUES (?, ?, ?)
                         ON CONFLICT (tool_name, config_key)
                         DO UPDATE SET config_value = EXCLUDED.config_value,
-                                      updated_at = NOW()
+                                      updated_at = datetime('now')
                         """,
                         (tool_name, key, str(value))
                     )
@@ -179,10 +179,10 @@ class ToolConfigService:
                 cursor.execute(
                     """
                     INSERT INTO tool_configs (tool_name, config_key, config_value)
-                    VALUES (%s, '_webhook_key', %s)
+                    VALUES (?, '_webhook_key', ?)
                     ON CONFLICT (tool_name, config_key)
                     DO UPDATE SET config_value = EXCLUDED.config_value,
-                                  updated_at = NOW()
+                                  updated_at = datetime('now')
                     """,
                     (tool_name, key)
                 )
@@ -247,7 +247,7 @@ class ToolConfigService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM tool_configs WHERE tool_name = %s AND config_key = %s",
+                    "DELETE FROM tool_configs WHERE tool_name = ? AND config_key = ?",
                     (tool_name, key)
                 )
                 rowcount = cursor.rowcount

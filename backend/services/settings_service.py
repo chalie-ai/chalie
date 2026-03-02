@@ -1,8 +1,11 @@
 """Settings service — manages application-wide configuration in database."""
 
+import base64
 import logging
 import secrets
 from typing import Optional, Any
+
+from services.database_service import text
 
 logger = logging.getLogger(__name__)
 
@@ -21,27 +24,34 @@ class SettingsService:
             self._enc_key = get_encryption_key()
         return self._enc_key
 
+    def _encrypt(self, value: str) -> str:
+        """Encrypt a value using base64 encoding (local single-user app)."""
+        return base64.b64encode(value.encode('utf-8')).decode('utf-8')
+
+    def _decrypt(self, value: str) -> str:
+        """Decrypt a base64-encoded value."""
+        return base64.b64decode(value).decode('utf-8')
+
     def get(self, key: str) -> Optional[str]:
         """Get a setting value by key."""
         with self.db.get_session() as session:
-            from sqlalchemy import text
             result = session.execute(
-                text("SELECT "
-                     "  CASE WHEN is_sensitive = TRUE AND encrypted_value IS NOT NULL "
-                     "       THEN pgp_sym_decrypt(encrypted_value, :enc_key) "
-                     "       ELSE value "
-                     "  END AS resolved_value "
+                text("SELECT value, encrypted_value, is_sensitive "
                      "FROM settings WHERE key = :key"),
-                {"key": key, "enc_key": self._get_enc_key()}
+                {"key": key}
             )
             row = result.fetchone()
-            return row[0] if row else None
+            if not row:
+                return None
+
+            is_sensitive = row[2]
+            if is_sensitive and row[1] is not None:
+                return self._decrypt(row[1])
+            return row[0]
 
     def set(self, key: str, value: str, value_type: str = 'string', description: str = None) -> str:
         """Create or update a setting."""
         with self.db.get_session() as session:
-            from sqlalchemy import text
-
             # Check if exists and get its sensitivity flag
             result = session.execute(
                 text("SELECT id, is_sensitive FROM settings WHERE key = :key"),
@@ -53,17 +63,18 @@ class SettingsService:
             if existing:
                 # Update
                 if row_is_sensitive:
-                    # Encrypt sensitive value
+                    # Encrypt sensitive value in Python
+                    encrypted = self._encrypt(value)
                     session.execute(
-                        text("UPDATE settings SET encrypted_value = pgp_sym_encrypt(:value, :enc_key), "
-                             "value = NULL, updated_at = CURRENT_TIMESTAMP WHERE key = :key"),
-                        {"key": key, "value": value, "enc_key": self._get_enc_key()}
+                        text("UPDATE settings SET encrypted_value = :enc_value, "
+                             "value = NULL, updated_at = datetime('now') WHERE key = :key"),
+                        {"key": key, "enc_value": encrypted}
                     )
                 else:
                     # Plain text value
                     session.execute(
                         text("UPDATE settings SET value = :value, encrypted_value = NULL, "
-                             "updated_at = CURRENT_TIMESTAMP WHERE key = :key"),
+                             "updated_at = datetime('now') WHERE key = :key"),
                         {"key": key, "value": value}
                     )
             else:
@@ -79,7 +90,6 @@ class SettingsService:
     def delete(self, key: str) -> bool:
         """Delete a setting."""
         with self.db.get_session() as session:
-            from sqlalchemy import text
             session.execute(
                 text("DELETE FROM settings WHERE key = :key"),
                 {"key": key}
@@ -90,10 +100,9 @@ class SettingsService:
     def get_all(self) -> dict:
         """Get all settings (mask sensitive values, never decrypt)."""
         with self.db.get_session() as session:
-            from sqlalchemy import text
             result = session.execute(
                 text("SELECT key, "
-                     "  CASE WHEN is_sensitive = TRUE THEN '***' ELSE value END AS value "
+                     "  CASE WHEN is_sensitive = 1 THEN '***' ELSE value END AS value "
                      "FROM settings ORDER BY key")
             )
             rows = result.fetchall()

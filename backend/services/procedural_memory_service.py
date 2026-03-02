@@ -60,7 +60,7 @@ class ProceduralMemoryService:
                 # Upsert action record
                 cursor.execute("""
                     INSERT INTO procedural_memory (action_name, total_attempts, total_successes, weight)
-                    VALUES (%s, 0, 0, %s)
+                    VALUES (?, 0, 0, ?)
                     ON CONFLICT (action_name) DO NOTHING
                 """, (action_name, self.default_action_weight))
 
@@ -68,83 +68,97 @@ class ProceduralMemoryService:
                 cursor.execute("""
                     UPDATE procedural_memory
                     SET total_attempts = total_attempts + 1,
-                        total_successes = total_successes + CASE WHEN %s THEN 1 ELSE 0 END,
-                        success_rate = (total_successes + CASE WHEN %s THEN 1 ELSE 0 END)::FLOAT
-                                       / (total_attempts + 1)::FLOAT,
-                        avg_reward = (avg_reward * total_attempts + %s) / (total_attempts + 1),
-                        updated_at = NOW()
-                    WHERE action_name = %s
+                        total_successes = total_successes + CASE WHEN ? THEN 1 ELSE 0 END,
+                        success_rate = CAST(
+                            (total_successes + CASE WHEN ? THEN 1 ELSE 0 END) AS REAL
+                        ) / CAST((total_attempts + 1) AS REAL),
+                        avg_reward = (avg_reward * total_attempts + ?) / (total_attempts + 1),
+                        updated_at = datetime('now')
+                    WHERE action_name = ?
                 """, (success, success, reward, action_name))
 
                 # Update reward history (append, trim to max)
+                # In SQLite, we read the current history, append in Python, trim, and write back
+                cursor.execute(
+                    "SELECT reward_history FROM procedural_memory WHERE action_name = ?",
+                    (action_name,)
+                )
+                row = cursor.fetchone()
+                current_history = []
+                if row:
+                    raw = row[0] if not isinstance(row, dict) else row['reward_history']
+                    if raw:
+                        if isinstance(raw, str):
+                            current_history = json.loads(raw)
+                        elif isinstance(raw, list):
+                            current_history = raw
+
+                new_entry = {
+                    'reward': reward,
+                    'success': success,
+                    'failure_class': failure_class,
+                    'timestamp': time.time()
+                }
+                current_history.append(new_entry)
+                # Sort by timestamp descending and trim to max
+                current_history.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+                current_history = current_history[:self.reward_history_max]
+
                 cursor.execute("""
                     UPDATE procedural_memory
-                    SET reward_history = (
-                        SELECT jsonb_agg(elem)
-                        FROM (
-                            SELECT elem
-                            FROM jsonb_array_elements(
-                                reward_history || %s::jsonb
-                            ) AS elem
-                            ORDER BY elem->>'timestamp' DESC
-                            LIMIT %s
-                        ) sub
-                    )
-                    WHERE action_name = %s
-                """, (
-                    json.dumps([{'reward': reward, 'success': success, 'failure_class': failure_class, 'timestamp': time.time()}]),
-                    self.reward_history_max,
-                    action_name
-                ))
+                    SET reward_history = ?
+                    WHERE action_name = ?
+                """, (json.dumps(current_history), action_name))
 
                 # Update context stats if topic provided
                 if topic:
+                    cursor.execute(
+                        "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                        (action_name,)
+                    )
+                    row = cursor.fetchone()
+                    context_stats = {}
+                    if row:
+                        raw = row[0] if not isinstance(row, dict) else row['context_stats']
+                        if raw:
+                            if isinstance(raw, str):
+                                context_stats = json.loads(raw)
+                            elif isinstance(raw, dict):
+                                context_stats = raw
+
+                    topic_data = context_stats.get(topic, {'attempts': 0, 'successes': 0})
+                    topic_data['attempts'] = topic_data.get('attempts', 0) + 1
+                    if success:
+                        topic_data['successes'] = topic_data.get('successes', 0) + 1
+                    context_stats[topic] = topic_data
+
                     cursor.execute("""
                         UPDATE procedural_memory
-                        SET context_stats = jsonb_set(
-                            COALESCE(context_stats, '{}'::jsonb),
-                            %s,
-                            COALESCE(context_stats->%s, '{"attempts": 0, "successes": 0}'::jsonb)
-                            || jsonb_build_object(
-                                'attempts',
-                                (COALESCE((context_stats->%s->>'attempts')::int, 0) + 1),
-                                'successes',
-                                (COALESCE((context_stats->%s->>'successes')::int, 0) + CASE WHEN %s THEN 1 ELSE 0 END)
-                            )
-                        )
-                        WHERE action_name = %s
-                    """, (
-                        '{' + topic + '}',
-                        topic, topic, topic,
-                        success,
-                        action_name
-                    ))
+                        SET context_stats = ?
+                        WHERE action_name = ?
+                    """, (json.dumps(context_stats), action_name))
 
                 # Recalculate weight using learning rate
-                cursor.execute("""
-                    UPDATE procedural_memory
-                    SET weight = GREATEST(0.1, LEAST(5.0,
-                        weight + %s * (%s - weight)
-                    ))
-                    WHERE action_name = %s
-                """, (
-                    self.learning_rate,
-                    # Target weight: success_rate * (1 + avg_reward)
-                    0.0,  # placeholder, calculated below
-                    action_name
-                ))
+                # Target weight: success_rate * (1 + clamp(avg_reward))
+                cursor.execute(
+                    "SELECT success_rate, avg_reward, weight FROM procedural_memory WHERE action_name = ?",
+                    (action_name,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    sr = (row[0] if not isinstance(row, dict) else row['success_rate']) or 0.0
+                    ar = (row[1] if not isinstance(row, dict) else row['avg_reward']) or 0.0
+                    w = (row[2] if not isinstance(row, dict) else row['weight']) or self.default_action_weight
+                    clamped_reward = max(-0.5, min(0.5, ar))
+                    target = sr * (1.0 + clamped_reward)
+                    new_weight = w + self.learning_rate * (target - w)
+                    new_weight = max(0.1, min(5.0, new_weight))
 
-                # Actually compute the target weight properly
-                cursor.execute("""
-                    UPDATE procedural_memory
-                    SET weight = GREATEST(0.1, LEAST(5.0,
-                        weight + %s * (
-                            (success_rate * (1.0 + GREATEST(-0.5, LEAST(0.5, avg_reward))))
-                            - weight
-                        )
-                    ))
-                    WHERE action_name = %s
-                """, (self.learning_rate, action_name))
+                    cursor.execute("""
+                        UPDATE procedural_memory
+                        SET weight = ?
+                        WHERE action_name = ?
+                    """, (new_weight, action_name))
 
                 cursor.close()
 
@@ -174,14 +188,14 @@ class ProceduralMemoryService:
                 cursor = conn.cursor()
 
                 cursor.execute(
-                    "SELECT weight FROM procedural_memory WHERE action_name = %s",
+                    "SELECT weight FROM procedural_memory WHERE action_name = ?",
                     (action_name,)
                 )
                 row = cursor.fetchone()
                 cursor.close()
 
                 if row:
-                    return row[0]
+                    return row[0] if not isinstance(row, dict) else row['weight']
                 return self.default_action_weight
 
         except Exception as e:
@@ -203,7 +217,11 @@ class ProceduralMemoryService:
                 rows = cursor.fetchall()
                 cursor.close()
 
-                return {row[0]: row[1] for row in rows}
+                return {
+                    (row[0] if not isinstance(row, dict) else row['action_name']):
+                    (row[1] if not isinstance(row, dict) else row['weight'])
+                    for row in rows
+                }
 
         except Exception as e:
             logging.error(f"[PROCEDURAL] Failed to get all weights: {e}")
@@ -239,12 +257,27 @@ class ProceduralMemoryService:
 
                 ranked = []
                 for row in rows:
-                    action_name = row[0]
-                    weight = row[1] or self.default_action_weight
-                    success_rate = row[2] or 0.0
-                    avg_reward = row[3] or 0.0
-                    total_attempts = row[4] or 0
-                    context_stats = row[5] or {}
+                    if isinstance(row, dict):
+                        action_name = row['action_name']
+                        weight = row['weight'] or self.default_action_weight
+                        success_rate = row['success_rate'] or 0.0
+                        avg_reward = row['avg_reward'] or 0.0
+                        total_attempts = row['total_attempts'] or 0
+                        context_stats = row['context_stats'] or {}
+                    else:
+                        action_name = row[0]
+                        weight = row[1] or self.default_action_weight
+                        success_rate = row[2] or 0.0
+                        avg_reward = row[3] or 0.0
+                        total_attempts = row[4] or 0
+                        context_stats = row[5] or {}
+
+                    # Parse context_stats if it is a JSON string
+                    if isinstance(context_stats, str):
+                        try:
+                            context_stats = json.loads(context_stats)
+                        except (json.JSONDecodeError, TypeError):
+                            context_stats = {}
 
                     # Calculate topic affinity
                     topic_affinity = 1.0
@@ -295,7 +328,7 @@ class ProceduralMemoryService:
                     SELECT action_name, total_attempts, total_successes, success_rate,
                            avg_reward, weight, context_stats, created_at, updated_at
                     FROM procedural_memory
-                    WHERE action_name = %s
+                    WHERE action_name = ?
                 """, (action_name,))
 
                 row = cursor.fetchone()
@@ -304,6 +337,31 @@ class ProceduralMemoryService:
                 if not row:
                     return None
 
+                if isinstance(row, dict):
+                    context_stats = row['context_stats']
+                    if isinstance(context_stats, str):
+                        try:
+                            context_stats = json.loads(context_stats)
+                        except (json.JSONDecodeError, TypeError):
+                            context_stats = {}
+                    return {
+                        'action_name': row['action_name'],
+                        'total_attempts': row['total_attempts'],
+                        'total_successes': row['total_successes'],
+                        'success_rate': row['success_rate'],
+                        'avg_reward': row['avg_reward'],
+                        'weight': row['weight'],
+                        'context_stats': context_stats,
+                        'created_at': row['created_at'],
+                        'updated_at': row['updated_at']
+                    }
+
+                context_stats = row[6]
+                if isinstance(context_stats, str):
+                    try:
+                        context_stats = json.loads(context_stats)
+                    except (json.JSONDecodeError, TypeError):
+                        context_stats = {}
                 return {
                     'action_name': row[0],
                     'total_attempts': row[1],
@@ -311,7 +369,7 @@ class ProceduralMemoryService:
                     'success_rate': row[3],
                     'avg_reward': row[4],
                     'weight': row[5],
-                    'context_stats': row[6],
+                    'context_stats': context_stats,
                     'created_at': row[7],
                     'updated_at': row[8]
                 }

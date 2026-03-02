@@ -142,7 +142,13 @@ class TestStoreChunks:
         ]
 
         service.store_chunks('abc123', chunks)
-        assert cursor.execute.call_count == 2
+        # 2 chunks → at least 2 main INSERTs (plus vec table ops per chunk)
+        insert_calls = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT INTO document_chunks' in str(c[0][0])
+               and '_vec' not in str(c[0][0])
+        ]
+        assert len(insert_calls) == 2
 
     def test_stores_nothing_when_empty(self, mock_db):
         db, cursor = mock_db

@@ -55,14 +55,16 @@ def create_provider():
 
         provider = service.create_provider(data)
 
-        # Auto-assign all 13 jobs if this is the first provider
+        # Auto-assign all cognitive jobs if this is the first provider
         if is_first_provider:
             all_jobs = [
-                'frontal-cortex', 'frontal-cortex-respond', 'frontal-cortex-clarify',
-                'frontal-cortex-acknowledge', 'frontal-cortex-act', 'frontal-cortex-proactive',
-                'memory-chunker', 'episodic-memory', 'semantic-memory',
-                'mode-tiebreaker', 'mode-reflection', 'cognitive-drift', 'experience-assimilation',
-                'plan-decomposition',
+                'autobiography', 'frontal-cortex', 'frontal-cortex-act',
+                'plan-decomposition', 'frontal-cortex-respond',
+                'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
+                'frontal-cortex-proactive', 'mode-reflection', 'semantic-memory',
+                'cognitive-triage', 'experience-assimilation', 'fact-store',
+                'frontal-cortex-acknowledge', 'memory-chunker', 'moment-enrichment',
+                'mode-tiebreaker', 'topic-namer',
             ]
             try:
                 for job in all_jobs:

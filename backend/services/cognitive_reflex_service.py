@@ -2,7 +2,7 @@
 Cognitive Reflex Service — learned fast path via semantic abstraction.
 
 Mirrors human automaticity: repeated simple queries build semantic clusters
-(rolling-average centroids in pgvector). Once a cluster has enough evidence,
+(rolling-average centroids in sqlite-vec). Once a cluster has enough evidence,
 future similar queries skip the full pipeline and respond via a lightweight LLM call.
 
 Learning cycle:
@@ -17,7 +17,9 @@ import json
 import logging
 import random
 import re
+import struct
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -88,6 +90,21 @@ _REPHRASE_PATTERNS = [
 ]
 
 
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    # numpy arrays
+    if hasattr(embedding, 'tolist'):
+        flat = embedding.tolist()
+        return struct.pack(f'{len(flat)}f', *flat)
+    return embedding
+
+
 @dataclass
 class ReflexResult:
     """Result of a reflex check."""
@@ -104,7 +121,7 @@ class CognitiveReflexService:
     """
     Learned fast-path service for self-contained queries.
 
-    Uses pgvector HNSW index for O(1) nearest-neighbor lookup against
+    Uses sqlite-vec virtual table for O(1) nearest-neighbor lookup against
     rolling-average centroids. Same proven pattern as TopicClassifierService.
     """
 
@@ -132,7 +149,7 @@ class CognitiveReflexService:
 
         1. Heuristic pre-screen (~1ms) — reject obvious non-candidates
         2. Compute embedding (~10-50ms) — for semantic similarity lookup
-        3. Semantic reflex lookup (~5-20ms, pgvector) — find nearest cluster
+        3. Semantic reflex lookup (~5-20ms, sqlite-vec) — find nearest cluster
         4. Check cluster confidence — enough evidence to trust fast path?
 
         Args:
@@ -179,6 +196,11 @@ class CognitiveReflexService:
         times_activated = match['times_activated'] or 0
         failure_rate = match['times_failed'] / max(times_activated, 1)
         last_seen = match['last_seen']
+        if last_seen and isinstance(last_seen, str):
+            try:
+                last_seen = datetime.fromisoformat(last_seen).replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                last_seen = None
         last_seen_days = (datetime.now(timezone.utc) - last_seen).days if last_seen else 999
 
         can_activate = (
@@ -246,8 +268,8 @@ class CognitiveReflexService:
                 cursor.execute("""
                     UPDATE cognitive_reflexes
                     SET times_activated = times_activated + 1,
-                        last_activated = NOW()
-                    WHERE id = %s
+                        last_activated = datetime('now')
+                    WHERE id = ?
                 """, (cluster_id,))
                 cursor.close()
         except Exception as e:
@@ -289,14 +311,14 @@ class CognitiveReflexService:
                     cursor.execute("""
                         UPDATE cognitive_reflexes
                         SET times_failed = times_failed + 1
-                        WHERE id = %s
+                        WHERE id = ?
                     """, (cluster_id,))
-                    logger.info(f"[REFLEX] Correction detected → cluster {cluster_id} times_failed++")
+                    logger.info(f"[REFLEX] Correction detected -> cluster {cluster_id} times_failed++")
                 else:
                     cursor.execute("""
                         UPDATE cognitive_reflexes
                         SET times_succeeded = times_succeeded + 1
-                        WHERE id = %s
+                        WHERE id = ?
                     """, (cluster_id,))
                 cursor.close()
 
@@ -310,7 +332,7 @@ class CognitiveReflexService:
         Pipeline was UNNECESSARY (returns False) if ALL of:
           - triage mode is RESPOND (not ACT, CLARIFY, etc.)
           - no tools or skills selected
-          - high internal confidence (≥ 0.8)
+          - high internal confidence (>= 0.8)
           - sparse/empty assembled context (< 100 tokens)
 
         Args:
@@ -411,7 +433,7 @@ class CognitiveReflexService:
                     cursor.execute("""
                         UPDATE cognitive_reflexes
                         SET times_failed = times_failed + 1
-                        WHERE id = %s
+                        WHERE id = ?
                     """, (cluster_id,))
                     logger.warning(
                         f"[REFLEX] Shadow DIVERGENT for cluster {cluster_id}: "
@@ -422,7 +444,7 @@ class CognitiveReflexService:
                     cursor.execute("""
                         UPDATE cognitive_reflexes
                         SET times_succeeded = times_succeeded + 1
-                        WHERE id = %s
+                        WHERE id = ?
                     """, (cluster_id,))
                     logger.info(
                         f"[REFLEX] Shadow AGREED for cluster {cluster_id}: "
@@ -446,12 +468,13 @@ class CognitiveReflexService:
                 # Active clusters (meet activation criteria)
                 cursor.execute("""
                     SELECT COUNT(*) FROM cognitive_reflexes
-                    WHERE times_seen >= %s
-                      AND times_succeeded >= %s
-                      AND last_seen >= NOW() - INTERVAL '%s days'
-                      AND (times_unnecessary::float / GREATEST(times_seen, 1)) >= %s
-                      AND (times_failed::float / GREATEST(times_activated, 1)) <= %s
-                """, (MIN_OBSERVATIONS, MIN_SUCCESSES, MAX_STALE_DAYS,
+                    WHERE times_seen >= ?
+                      AND times_succeeded >= ?
+                      AND last_seen >= datetime('now', ? || ' days')
+                      AND (CAST(times_unnecessary AS REAL) / MAX(times_seen, 1)) >= ?
+                      AND (CAST(times_failed AS REAL) / MAX(times_activated, 1)) <= ?
+                """, (MIN_OBSERVATIONS, MIN_SUCCESSES,
+                      str(-MAX_STALE_DAYS),
                       MIN_CONFIDENCE, MAX_FAILURE_RATE))
                 active_clusters = cursor.fetchone()[0]
 
@@ -471,7 +494,7 @@ class CognitiveReflexService:
                 # New clusters in last 24h
                 cursor.execute("""
                     SELECT COUNT(*) FROM cognitive_reflexes
-                    WHERE created_at >= NOW() - INTERVAL '24 hours'
+                    WHERE created_at >= datetime('now', '-24 hours')
                 """)
                 new_24h = cursor.fetchone()[0]
 
@@ -481,16 +504,25 @@ class CognitiveReflexService:
                            times_activated, times_succeeded, times_failed,
                            created_at, last_seen, last_activated
                     FROM cognitive_reflexes
-                    ORDER BY last_seen DESC NULLS LAST
+                    ORDER BY last_seen DESC
                     LIMIT 10
                 """)
                 recent = []
                 for r in cursor.fetchall():
                     confidence = r[3] / max(r[2], 1)
                     failure_rate = r[6] / max(r[4], 1)
+
+                    # Parse sample_queries from JSON text
+                    sample_queries = r[1]
+                    if isinstance(sample_queries, str):
+                        try:
+                            sample_queries = json.loads(sample_queries)
+                        except (json.JSONDecodeError, TypeError):
+                            sample_queries = []
+
                     recent.append({
                         'id': r[0],
-                        'sample_queries': r[1] or [],
+                        'sample_queries': sample_queries or [],
                         'times_seen': r[2],
                         'times_unnecessary': r[3],
                         'times_activated': r[4],
@@ -571,25 +603,49 @@ class CognitiveReflexService:
 
         return True
 
+    def _store_embedding(self, conn, cluster_id: int, embedding):
+        """Store embedding in the companion vec table."""
+        try:
+            blob = _pack_embedding(embedding)
+            if blob is None:
+                return
+
+            # Get the rowid of the cluster for vec table linking
+            # For INTEGER PRIMARY KEY AUTOINCREMENT tables, rowid == id
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO cognitive_reflexes_vec(rowid, embedding) VALUES (?, ?)",
+                (cluster_id, blob)
+            )
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"[REFLEX] Failed to store cluster embedding: {e}")
+
     def _find_matching_reflex(self, embedding: list) -> Optional[dict]:
         """
-        Find the nearest reflex cluster via pgvector cosine similarity.
+        Find the nearest reflex cluster via sqlite-vec cosine similarity.
 
         Returns the nearest cluster dict if within distance threshold, else None.
         """
         try:
+            blob = _pack_embedding(embedding)
+            if blob is None:
+                return None
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+
+                # Use sqlite-vec virtual table JOIN for nearest-neighbor search
                 cursor.execute("""
-                    SELECT id, embedding, times_seen, times_unnecessary,
-                           times_activated, times_succeeded, times_failed,
-                           sample_queries, last_seen, last_activated,
-                           (embedding <=> %s::vector) AS distance
-                    FROM cognitive_reflexes
-                    WHERE (embedding <=> %s::vector) < %s
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT 1
-                """, (embedding, embedding, CLUSTER_DISTANCE_THRESHOLD, embedding))
+                    SELECT cr.id, cr.times_seen, cr.times_unnecessary,
+                           cr.times_activated, cr.times_succeeded, cr.times_failed,
+                           cr.sample_queries, cr.last_seen, cr.last_activated,
+                           v.distance
+                    FROM cognitive_reflexes_vec v
+                    JOIN cognitive_reflexes cr ON cr.id = v.rowid
+                    WHERE v.embedding MATCH ? AND k = 1
+                    ORDER BY v.distance
+                """, (blob,))
 
                 row = cursor.fetchone()
                 cursor.close()
@@ -597,18 +653,32 @@ class CognitiveReflexService:
                 if not row:
                     return None
 
+                distance = row[9]
+
+                # Check distance threshold
+                if distance >= CLUSTER_DISTANCE_THRESHOLD:
+                    return None
+
+                # Parse sample_queries from JSON text
+                sample_queries = row[6]
+                if isinstance(sample_queries, str):
+                    try:
+                        sample_queries = json.loads(sample_queries)
+                    except (json.JSONDecodeError, TypeError):
+                        sample_queries = []
+
                 return {
                     'id': row[0],
-                    'embedding': row[1],
-                    'times_seen': row[2],
-                    'times_unnecessary': row[3],
-                    'times_activated': row[4],
-                    'times_succeeded': row[5],
-                    'times_failed': row[6],
-                    'sample_queries': row[7],
-                    'last_seen': row[8],
-                    'last_activated': row[9],
-                    'distance': row[10],
+                    'embedding': None,  # Embeddings live in vec table
+                    'times_seen': row[1],
+                    'times_unnecessary': row[2],
+                    'times_activated': row[3],
+                    'times_succeeded': row[4],
+                    'times_failed': row[5],
+                    'sample_queries': sample_queries,
+                    'last_seen': row[7],
+                    'last_activated': row[8],
+                    'distance': distance,
                 }
         except Exception as e:
             logger.warning(f"[REFLEX] Semantic lookup failed: {e}")
@@ -618,10 +688,25 @@ class CognitiveReflexService:
         """Merge a new observation into an existing reflex cluster."""
         try:
             # Rolling average centroid (same pattern as TopicClassifierService._update_topic)
-            old_embedding = match['embedding']
-            if isinstance(old_embedding, str):
-                old_embedding = json.loads(old_embedding)
-            old_embedding = np.array(old_embedding, dtype=np.float32)
+            # Read current centroid from vec table
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT embedding FROM cognitive_reflexes_vec WHERE rowid = ?",
+                    (match['id'],)
+                )
+                vec_row = cursor.fetchone()
+                cursor.close()
+
+            if vec_row and vec_row[0]:
+                old_blob = vec_row[0]
+                dim = len(old_blob) // 4  # 4 bytes per float32
+                old_embedding = np.array(
+                    struct.unpack(f'{dim}f', old_blob), dtype=np.float32
+                )
+            else:
+                old_embedding = np.zeros(len(embedding), dtype=np.float32)
+
             new_embedding = np.array(embedding, dtype=np.float32)
 
             n = min(match['times_seen'], ROLLING_AVG_CAP)
@@ -643,18 +728,20 @@ class CognitiveReflexService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE cognitive_reflexes
-                    SET embedding = %s::vector,
-                        times_seen = times_seen + 1,
-                        times_unnecessary = times_unnecessary + %s,
-                        sample_queries = %s,
-                        last_seen = NOW()
-                    WHERE id = %s
+                    SET times_seen = times_seen + 1,
+                        times_unnecessary = times_unnecessary + ?,
+                        sample_queries = ?,
+                        last_seen = datetime('now')
+                    WHERE id = ?
                 """, (
-                    updated_centroid.tolist(),
                     unnecessary_inc,
-                    sample_queries,
+                    json.dumps(sample_queries),
                     match['id'],
                 ))
+
+                # Update embedding in vec table
+                self._store_embedding(conn, match['id'], updated_centroid.tolist())
+
                 cursor.close()
 
             logger.info(
@@ -673,11 +760,14 @@ class CognitiveReflexService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO cognitive_reflexes
-                        (embedding, sample_queries, times_seen, times_unnecessary)
-                    VALUES (%s::vector, %s, 1, %s)
-                    RETURNING id
-                """, (embedding, [text], unnecessary))
-                new_id = cursor.fetchone()[0]
+                        (sample_queries, times_seen, times_unnecessary)
+                    VALUES (?, 1, ?)
+                """, (json.dumps([text]), unnecessary))
+                new_id = cursor.lastrowid
+
+                # Store embedding in vec table
+                self._store_embedding(conn, new_id, embedding)
+
                 cursor.close()
 
             logger.info(f"[REFLEX] Created cluster {new_id} (useful={was_useful})")

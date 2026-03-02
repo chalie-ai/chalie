@@ -183,7 +183,7 @@ def load_configs():
 
 
 def get_existing_topics_from_db() -> list:
-    """Retrieve existing topics from the topics PostgreSQL table."""
+    """Retrieve existing topics from the topics SQLite table."""
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -1799,7 +1799,7 @@ def _handle_act_triage(
             {'name': t, 'score': 1.0, 'type': 'tool'}
             for t in (triage_result.tools or [])
         ]
-        _rq_job = tool_queue.enqueue({
+        tool_queue.enqueue({
             'cycle_id': user_cycle_id,
             'parent_cycle_id': user_cycle_id,
             'root_cycle_id': user_cycle_id,
@@ -1817,20 +1817,18 @@ def _handle_act_triage(
             },
         })
 
-        # Signal the SSE loop to keep waiting — tool_worker will deliver the response.
-        # Store the RQ job ID so the SSE loop can monitor job health.
-        _sse_uuid = metadata.get('uuid')
-        if _sse_uuid:
+        # Signal the WebSocket chat handler to keep waiting — tool_worker will deliver the response.
+        _ws_uuid = metadata.get('uuid')
+        if _ws_uuid:
             try:
                 from services.redis_client import RedisClientService
                 _r = RedisClientService.create_connection()
-                _rq_job_id = getattr(_rq_job, 'id', None) or getattr(_rq_job, 'job_id', '1')
-                _r.setex(f"sse_pending:{_sse_uuid}", 600, str(_rq_job_id))
+                _r.setex(f"sse_pending:{_ws_uuid}", 600, "1")
             except Exception as _rf:
                 logging.warning(f"[DIGEST] Could not set sse_pending flag: {_rf}")
 
         logging.info(
-            f"[DIGEST] ACT triage: tool work spawned, SSE held open "
+            f"[DIGEST] ACT triage: tool work spawned, WS held open "
             f"(tools={triage_result.tools}, user_cycle={user_cycle_id})"
         )
     except Exception as _spawn_err:
@@ -2224,6 +2222,23 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             metadata=metadata,
             thread_id=thread_id,
         )
+
+    # Step 3b.1: Check for save trigger (completion/deferral signal)
+    try:
+        from services.save_suggestion_service import SaveSuggestionService
+        _save_svc = SaveSuggestionService()
+        _save_flag = _save_svc.get_saveable_flag(thread_id)
+        if _save_flag:
+            _trigger = _save_svc.detect_save_trigger(text)
+            if _trigger:
+                _save_svc.emit_save_card(
+                    thread_id,
+                    _save_flag.get('topic', context_topic or 'unknown'),
+                    _save_flag['content_type'],
+                )
+                _save_svc.clear_flag(thread_id)
+    except Exception as _save_e:
+        logging.debug(f"[DIGEST] Save trigger check skipped: {_save_e}")
 
     # Step 3c: Evaluate reward from previous exchange
     try:
@@ -2983,6 +2998,21 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'metadata': metadata,
             'thread_id': thread_id,
         })
+
+    # Step 11e: Detect saveable content in response
+    if not is_fast_path_ack:
+        try:
+            from services.save_suggestion_service import SaveSuggestionService
+            _save_svc = SaveSuggestionService()
+            _saveable = _save_svc.detect_saveable_content(
+                response_data['response'], topic, thread_id,
+            )
+            if _saveable:
+                _save_svc.flag_saveable(
+                    thread_id, topic, _saveable['content_type'], exchange_id,
+                )
+        except Exception as _save_e:
+            logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
 
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP

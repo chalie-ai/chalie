@@ -6,9 +6,12 @@ and feed stability signals back to trait reinforcement.
 """
 
 import hashlib
+import json
 import logging
 import re
 from typing import Optional, Dict, List, Any
+
+from services.database_service import text
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,18 @@ def _extract_sections(narrative: str) -> Dict[str, str]:
     return sections
 
 
+def _parse_section_hashes(raw) -> dict:
+    """Parse section_hashes from SQLite (stored as JSON TEXT)."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
 class AutobiographyDeltaService:
     """Detect and compute deltas between autobiography versions."""
 
@@ -75,8 +90,6 @@ class AutobiographyDeltaService:
             or None if fewer than 2 versions exist.
         """
         try:
-            from sqlalchemy import text
-
             with self.db.get_session() as session:
                 result = session.execute(
                     text("""
@@ -94,8 +107,8 @@ class AutobiographyDeltaService:
                     return None
 
                 new_row, old_row = rows[0], rows[1]
-                new_hashes = new_row[2] or {}
-                old_hashes = old_row[2] or {}
+                new_hashes = _parse_section_hashes(new_row[2])
+                old_hashes = _parse_section_hashes(old_row[2])
 
                 all_sections = set(list(new_hashes.keys()) + list(old_hashes.keys()))
                 changed = []
@@ -135,8 +148,6 @@ class AutobiographyDeltaService:
             or None on failure.
         """
         try:
-            from sqlalchemy import text
-
             with self.db.get_session() as session:
                 # Get latest two versions with narrative
                 result = session.execute(
@@ -154,16 +165,16 @@ class AutobiographyDeltaService:
                 if len(rows) < 2:
                     return None
 
-                new_version, new_narrative, new_hashes = rows[0]
-                old_version, old_narrative, old_hashes = rows[1]
+                new_version, new_narrative, new_hashes_raw = rows[0]
+                old_version, old_narrative, old_hashes_raw = rows[1]
 
                 if not new_narrative or not old_narrative:
                     return None
 
                 new_sections = _extract_sections(new_narrative)
                 old_sections = _extract_sections(old_narrative)
-                new_hashes = new_hashes or {}
-                old_hashes = old_hashes or {}
+                new_hashes = _parse_section_hashes(new_hashes_raw)
+                old_hashes = _parse_section_hashes(old_hashes_raw)
 
                 # Find changed sections
                 changed = [
@@ -212,8 +223,6 @@ class AutobiographyDeltaService:
             Number of traits reinforced
         """
         try:
-            from sqlalchemy import text
-
             with self.db.get_session() as session:
                 # Count consecutive stable versions
                 result = session.execute(
@@ -238,8 +247,8 @@ class AutobiographyDeltaService:
                 # Compare consecutive pairs
                 consecutive_stable = {}
                 for i in range(len(rows) - 1):
-                    newer_hashes = rows[i][1] or {}
-                    older_hashes = rows[i + 1][1] or {}
+                    newer_hashes = _parse_section_hashes(rows[i][1])
+                    older_hashes = _parse_section_hashes(rows[i + 1][1])
 
                     for section in target_sections:
                         if (newer_hashes.get(section) and
@@ -278,21 +287,25 @@ class AutobiographyDeltaService:
                     return 0
 
             # Reinforce traits whose key/value appears in stable text
-            from services.user_trait_service import UserTraitService
-            trait_service = UserTraitService(self.db)
-
             reinforced = 0
             try:
-                with self.db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
+                with self.db.get_session() as session:
+                    result = session.execute(
+                        text("""
                         SELECT id, trait_key, trait_value, confidence
                         FROM user_traits
-                        WHERE user_id = %s
-                    """, (user_id,))
-                    traits = cursor.fetchall()
+                        WHERE user_id = :user_id
+                        """),
+                        {"user_id": user_id}
+                    )
+                    traits = result.fetchall()
 
-                    for trait_id, trait_key, trait_value, confidence in traits:
+                    for trait in traits:
+                        trait_id = trait[0]
+                        trait_key = trait[1]
+                        trait_value = trait[2]
+                        confidence = trait[3]
+
                         # Check if this trait is mentioned in stable sections
                         key_mentioned = trait_key.replace('_', ' ') in stable_text.lower()
                         val_mentioned = str(trait_value).lower() in stable_text.lower()
@@ -302,14 +315,17 @@ class AutobiographyDeltaService:
                             new_confidence = confidence + (1.0 - confidence) * 0.05
                             new_confidence = min(1.0, new_confidence)
 
-                            cursor.execute("""
+                            session.execute(
+                                text("""
                                 UPDATE user_traits
-                                SET confidence = %s, last_reinforced_at = NOW(), updated_at = NOW()
-                                WHERE id = %s
-                            """, (new_confidence, trait_id))
+                                SET confidence = :confidence,
+                                    last_reinforced_at = datetime('now'),
+                                    updated_at = datetime('now')
+                                WHERE id = :id
+                                """),
+                                {"confidence": new_confidence, "id": trait_id}
+                            )
                             reinforced += 1
-
-                    cursor.close()
 
             except Exception as e:
                 logger.warning(f"[AUTOBIOGRAPHY DELTA] Trait reinforcement failed: {e}")

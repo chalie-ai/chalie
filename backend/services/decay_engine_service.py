@@ -93,6 +93,9 @@ class DecayEngineService:
 
         Formula: activation_score = activation_score * exp(-decay_rate * hours_since_access)
 
+        SQLite lacks EXP(), so we fetch eligible rows, compute decay in Python,
+        then batch-UPDATE.
+
         Returns:
             Number of episodes updated
         """
@@ -105,69 +108,60 @@ class DecayEngineService:
                 with db_service.connection() as conn:
                     cursor = conn.cursor()
 
-                    # Batch update: decay activation scores based on time since last access
+                    # Fetch episodes eligible for decay (activation > floor, older than 1 hour)
                     cursor.execute("""
-                        UPDATE episodes
-                        SET activation_score = GREATEST(
-                            0.1,
-                            activation_score * EXP(
-                                -%s * EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed_at, created_at))) / 3600.0
-                            )
-                        )
+                        SELECT id, activation_score,
+                               (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', COALESCE(last_accessed_at, created_at)) AS REAL)) / 3600.0 AS hours_since,
+                               json_extract(salience_factors, '$.source') AS sf_source,
+                               json_extract(salience_factors, '$.durability') AS sf_durability
+                        FROM episodes
                         WHERE deleted_at IS NULL
                           AND activation_score > 0.1
-                          AND COALESCE(last_accessed_at, created_at) < NOW() - INTERVAL '1 hour'
-                    """, (self.episodic_decay_rate,))
+                          AND COALESCE(last_accessed_at, created_at) < datetime('now', '-1 hour')
+                    """)
+                    rows = cursor.fetchall()
 
-                    updated = cursor.rowcount
+                    updated = 0
+                    durability_updated = 0
+                    cron_tool_updated = 0
 
-                    # Durability-based accelerated decay for tool_reflection episodes
-                    # transient → 2x rate, evolving → 1.5x rate, stable → normal rate
-                    cursor.execute("""
-                        UPDATE episodes
-                        SET activation_score = GREATEST(
-                            0.1,
-                            activation_score * EXP(
-                                -(
-                                    CASE
-                                        WHEN salience_factors->>'durability' = 'transient' THEN %s * 2.0
-                                        WHEN salience_factors->>'durability' = 'evolving'  THEN %s * 1.5
-                                        ELSE 0
-                                    END
-                                ) * EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed_at, created_at))) / 3600.0
-                            )
-                        )
-                        WHERE deleted_at IS NULL
-                          AND activation_score > 0.1
-                          AND salience_factors->>'source' = 'tool_reflection'
-                          AND salience_factors->>'durability' IN ('transient', 'evolving')
-                          AND COALESCE(last_accessed_at, created_at) < NOW() - INTERVAL '1 hour'
-                    """, (self.episodic_decay_rate, self.episodic_decay_rate))
+                    for row in rows:
+                        episode_id, activation_score, hours_since, sf_source, sf_durability = row
 
-                    durability_updated = cursor.rowcount
+                        # Determine effective decay rate
+                        rate = self.episodic_decay_rate
+
+                        # Durability-based accelerated decay for tool_reflection episodes
+                        if sf_source == 'tool_reflection':
+                            if sf_durability == 'transient':
+                                rate = self.episodic_decay_rate * 2.0
+                                durability_updated += 1
+                            elif sf_durability == 'evolving':
+                                rate = self.episodic_decay_rate * 1.5
+                                durability_updated += 1
+
+                        # 3x accelerated decay for cron_tool episodes
+                        if sf_durability == 'cron_tool':
+                            rate = self.episodic_decay_rate * 3.0
+                            cron_tool_updated += 1
+
+                        # Compute new activation: activation * exp(-rate * hours)
+                        new_activation = max(0.1, activation_score * math.exp(-rate * hours_since))
+
+                        if abs(new_activation - activation_score) > 0.0001:
+                            cursor.execute("""
+                                UPDATE episodes
+                                SET activation_score = ?
+                                WHERE id = ?
+                            """, (new_activation, episode_id))
+                            updated += 1
+
                     if durability_updated > 0:
                         logger.info(
                             f"[DECAY ENGINE] Applied durability-based decay to "
                             f"{durability_updated} tool_reflection episodes"
                         )
 
-                    # 3x accelerated decay for memories from scheduled (cron) tool outputs
-                    cursor.execute("""
-                        UPDATE episodes
-                        SET activation_score = GREATEST(
-                            0.1,
-                            activation_score * EXP(
-                                -%s * 3.0
-                                * EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed_at, created_at))) / 3600.0
-                            )
-                        )
-                        WHERE deleted_at IS NULL
-                          AND activation_score > 0.1
-                          AND salience_factors->>'durability' = 'cron_tool'
-                          AND COALESCE(last_accessed_at, created_at) < NOW() - INTERVAL '1 hour'
-                    """, (self.episodic_decay_rate,))
-
-                    cron_tool_updated = cursor.rowcount
                     if cron_tool_updated > 0:
                         logger.info(
                             f"[DECAY ENGINE] Applied 3x decay to "
@@ -211,14 +205,14 @@ class DecayEngineService:
                     # Batch update: decay strength respecting decay_resistance, floor at 0.2
                     cursor.execute("""
                         UPDATE semantic_concepts
-                        SET strength = GREATEST(
+                        SET strength = MAX(
                             0.2,
-                            strength - (%s * (1.0 - COALESCE(decay_resistance, 0.5)))
+                            strength - (? * (1.0 - COALESCE(decay_resistance, 0.5)))
                         ),
-                        updated_at = NOW()
+                        updated_at = datetime('now')
                         WHERE deleted_at IS NULL
                           AND strength > 0.2
-                          AND last_accessed_at < NOW() - INTERVAL '1 hour'
+                          AND last_accessed_at < datetime('now', '-1 hour')
                     """, (self.semantic_decay_rate,))
 
                     updated = cursor.rowcount
@@ -363,7 +357,7 @@ class DecayEngineService:
 
 def decay_engine_worker(shared_state=None):
     """
-    Module-level wrapper for multiprocessing.
+    Module-level wrapper for threading.
     Instantiates the service inside the child process.
     """
     # Read config inside child process

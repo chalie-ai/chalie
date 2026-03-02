@@ -1,0 +1,31 @@
+name: Publish Installer
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Chalie
+        uses: actions/checkout@v4
+
+      - name: Checkout chalie-web
+        uses: actions/checkout@v4
+        with:
+          repository: chalie-ai/chalie-web
+          path: chalie-web
+          token: ${{ secrets.CHALIE_WEB_DEPLOY_TOKEN }}
+
+      - name: Update installer
+        run: cp installer/install.sh chalie-web/public/install
+
+      - name: Push to chalie-web
+        working-directory: chalie-web
+        run: |
+          git config user.email "bot@chalie.ai"
+          git config user.name "Chalie Release Bot"
+          git add public/install
+          git commit -m "chore: installer updated for ${{ github.ref_name }}"
+          git push

@@ -9,12 +9,20 @@ and an LLM-generated summary. Pinning boosts related episode salience.
 import json
 import logging
 import secrets
+import struct
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[MOMENTS]"
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    return struct.pack(f'{len(embedding)}f', *embedding)
 
 
 class MomentService:
@@ -67,15 +75,23 @@ class MomentService:
                 cursor.execute("""
                     INSERT INTO moments
                         (id, user_id, title, message_text, exchange_id, topic,
-                         thread_id, embedding, status, pinned_at,
+                         thread_id, status, pinned_at,
                          metadata, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
-                            'enriching', NOW(), '{}'::jsonb, NOW(), NOW())
+                    VALUES (?, ?, ?, ?, ?, ?, ?,
+                            'enriching', datetime('now'), '{}', datetime('now'), datetime('now'))
                 """, (
                     moment_id, user_id, title, message_text,
                     exchange_id, topic, thread_id,
-                    embedding,
                 ))
+
+                # Store embedding in moments_vec companion table
+                if embedding is not None:
+                    packed = _pack_embedding(embedding)
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO moments_vec(rowid, embedding) VALUES (?, ?)",
+                        (cursor.lastrowid, packed)
+                    )
+
                 cursor.close()
 
             logger.info(f"{LOG_PREFIX} Created moment '{title}' (id={moment_id})")
@@ -106,7 +122,7 @@ class MomentService:
                            thread_id, gists, summary, status, pinned_at, sealed_at,
                            last_enriched_at, metadata, created_at, updated_at
                     FROM moments
-                    WHERE id = %s AND deleted_at IS NULL
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (moment_id,))
                 row = cursor.fetchone()
                 cursor.close()
@@ -129,7 +145,7 @@ class MomentService:
                            thread_id, gists, summary, status, pinned_at, sealed_at,
                            last_enriched_at, metadata, created_at, updated_at
                     FROM moments
-                    WHERE user_id = %s AND status != 'forgotten' AND deleted_at IS NULL
+                    WHERE user_id = ? AND status != 'forgotten' AND deleted_at IS NULL
                     ORDER BY pinned_at DESC
                 """, (user_id,))
                 rows = cursor.fetchall()
@@ -184,8 +200,8 @@ class MomentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE moments
-                    SET status = 'forgotten', updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET status = 'forgotten', updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (moment_id,))
                 updated = cursor.rowcount > 0
                 cursor.close()
@@ -205,8 +221,8 @@ class MomentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE moments
-                    SET deleted_at = NOW(), updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET deleted_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (moment_id,))
                 updated = cursor.rowcount > 0
                 cursor.close()
@@ -229,26 +245,27 @@ class MomentService:
         limit: int = 3,
         user_id: str = "primary",
     ) -> List[Dict[str, Any]]:
-        """Semantic search via pgvector cosine similarity."""
+        """Semantic search via sqlite-vec cosine similarity."""
         try:
             from services.embedding_service import get_embedding_service
             query_embedding = get_embedding_service().generate_embedding(query)
+            packed_query = _pack_embedding(query_embedding)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, user_id, title, message_text, exchange_id, topic,
-                           thread_id, gists, summary, status, pinned_at, sealed_at,
-                           last_enriched_at, metadata, created_at, updated_at,
-                           embedding <=> %s::vector AS distance
-                    FROM moments
-                    WHERE user_id = %s
-                      AND status != 'forgotten'
-                      AND deleted_at IS NULL
-                      AND embedding IS NOT NULL
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT %s
-                """, (query_embedding, user_id, query_embedding, limit))
+                    SELECT m.id, m.user_id, m.title, m.message_text, m.exchange_id, m.topic,
+                           m.thread_id, m.gists, m.summary, m.status, m.pinned_at, m.sealed_at,
+                           m.last_enriched_at, m.metadata, m.created_at, m.updated_at,
+                           v.distance
+                    FROM moments m
+                    JOIN moments_vec v ON v.rowid = m.rowid
+                    WHERE v.embedding MATCH ? AND k = ?
+                      AND m.user_id = ?
+                      AND m.status != 'forgotten'
+                      AND m.deleted_at IS NULL
+                    ORDER BY v.distance
+                """, (packed_query, limit, user_id))
                 rows = cursor.fetchall()
                 cursor.close()
 
@@ -288,8 +305,8 @@ class MomentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE moments
-                    SET gists = %s, last_enriched_at = NOW(), updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET gists = ?, last_enriched_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (json.dumps(merged), moment_id))
                 cursor.close()
 
@@ -343,9 +360,22 @@ class MomentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE moments
-                    SET summary = %s, embedding = %s, updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
-                """, (summary, embedding, moment_id))
+                    SET summary = ?, updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
+                """, (summary, moment_id))
+
+                # Update embedding in moments_vec companion table
+                if embedding is not None:
+                    packed = _pack_embedding(embedding)
+                    # Get the rowid of this moment for the vec table
+                    cursor.execute("SELECT rowid FROM moments WHERE id = ?", (moment_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO moments_vec(rowid, embedding) VALUES (?, ?)",
+                            (row[0], packed)
+                        )
+
                 cursor.close()
 
             logger.info(f"{LOG_PREFIX} Generated summary for moment {moment_id}")
@@ -372,8 +402,8 @@ class MomentService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE moments
-                    SET status = 'sealed', sealed_at = NOW(), updated_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET status = 'sealed', sealed_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (moment_id,))
                 updated = cursor.rowcount > 0
                 cursor.close()
@@ -421,8 +451,8 @@ class MomentService:
                 # Find matching episodes
                 cursor.execute("""
                     SELECT id, salience FROM episodes
-                    WHERE topic = %s
-                      AND created_at BETWEEN %s AND %s
+                    WHERE topic = ?
+                      AND created_at BETWEEN ? AND ?
                       AND deleted_at IS NULL
                 """, (topic, window_start, window_end))
                 episodes = cursor.fetchall()
@@ -433,32 +463,31 @@ class MomentService:
 
                 # Record pre-boost salience
                 boosted_episodes = []
-                for ep_id, salience in episodes:
+                for ep in episodes:
                     boosted_episodes.append({
-                        "episode_id": ep_id,
-                        "pre_boost_salience": float(salience) if salience else 0,
+                        "episode_id": ep[0],
+                        "pre_boost_salience": float(ep[1]) if ep[1] else 0,
                     })
 
-                # Boost salience (capped at 10)
-                ep_ids = [ep[0] for ep in episodes]
-                cursor.execute("""
-                    UPDATE episodes
-                    SET salience = LEAST(10, salience + 1.0)
-                    WHERE id = ANY(%s)
-                """, (ep_ids,))
-                boosted_count = cursor.rowcount
+                # Boost salience (capped at 10) — update each individually
+                for ep in episodes:
+                    cursor.execute("""
+                        UPDATE episodes
+                        SET salience = MIN(10, salience + 1.0)
+                        WHERE id = ?
+                    """, (ep[0],))
+                boosted_count = len(episodes)
 
                 # Store boost records in moment metadata
+                current_metadata = moment.get("metadata") or {}
+                current_metadata["boosted_episodes"] = boosted_episodes
+
                 cursor.execute("""
                     UPDATE moments
-                    SET metadata = jsonb_set(
-                        COALESCE(metadata, '{}'::jsonb),
-                        '{boosted_episodes}',
-                        %s::jsonb
-                    ),
-                    updated_at = NOW()
-                    WHERE id = %s
-                """, (json.dumps(boosted_episodes), moment_id))
+                    SET metadata = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                """, (json.dumps(current_metadata), moment_id))
 
                 cursor.close()
 
@@ -479,23 +508,25 @@ class MomentService:
         user_id: str,
         threshold: float = 0.15,
     ) -> Optional[Dict[str, Any]]:
-        """Check for near-duplicate moments via cosine distance."""
+        """Check for near-duplicate moments via cosine distance using moments_vec."""
         try:
+            packed = _pack_embedding(embedding)
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, user_id, title, message_text, exchange_id, topic,
-                           thread_id, gists, summary, status, pinned_at, sealed_at,
-                           last_enriched_at, metadata, created_at, updated_at,
-                           embedding <=> %s::vector AS distance
-                    FROM moments
-                    WHERE user_id = %s
-                      AND status != 'forgotten'
-                      AND deleted_at IS NULL
-                      AND embedding IS NOT NULL
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT 1
-                """, (embedding, user_id, embedding))
+                    SELECT m.id, m.user_id, m.title, m.message_text, m.exchange_id, m.topic,
+                           m.thread_id, m.gists, m.summary, m.status, m.pinned_at, m.sealed_at,
+                           m.last_enriched_at, m.metadata, m.created_at, m.updated_at,
+                           v.distance
+                    FROM moments m
+                    JOIN moments_vec v ON v.rowid = m.rowid
+                    WHERE v.embedding MATCH ? AND k = 1
+                      AND m.user_id = ?
+                      AND m.status != 'forgotten'
+                      AND m.deleted_at IS NULL
+                    ORDER BY v.distance
+                """, (packed, user_id))
                 row = cursor.fetchone()
                 cursor.close()
 
@@ -545,8 +576,8 @@ class MomentService:
                         # Decrease by 1.0 but never below pre-boost value
                         cursor.execute("""
                             UPDATE episodes
-                            SET salience = GREATEST(%s, salience - 1.0)
-                            WHERE id = %s AND deleted_at IS NULL
+                            SET salience = MAX(?, salience - 1.0)
+                            WHERE id = ? AND deleted_at IS NULL
                         """, (pre_boost, ep_id))
                 cursor.close()
 
@@ -567,17 +598,29 @@ class MomentService:
             summary = moment.get("summary") or ""
             combined = f"{text} {summary}".strip()
             embedding = get_embedding_service().generate_embedding(combined)
+            packed = _pack_embedding(embedding)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+                # Find semantically similar episodes via episodes_vec, then boost
                 cursor.execute("""
-                    UPDATE episodes
-                    SET salience = LEAST(10, salience + 0.5)
-                    WHERE deleted_at IS NULL
-                      AND embedding IS NOT NULL
-                      AND embedding <=> %s::vector < 0.5
-                """, (embedding,))
-                count = cursor.rowcount
+                    SELECT e.id FROM episodes e
+                    JOIN episodes_vec v ON v.rowid = e.rowid
+                    WHERE v.embedding MATCH ? AND k = 50
+                      AND e.deleted_at IS NULL
+                      AND v.distance < 0.5
+                """, (packed,))
+                matching_ids = [row[0] for row in cursor.fetchall()]
+
+                count = 0
+                for ep_id in matching_ids:
+                    cursor.execute("""
+                        UPDATE episodes
+                        SET salience = MIN(10, salience + 0.5)
+                        WHERE id = ? AND deleted_at IS NULL
+                    """, (ep_id,))
+                    count += cursor.rowcount
+
                 cursor.close()
 
             if count > 0:

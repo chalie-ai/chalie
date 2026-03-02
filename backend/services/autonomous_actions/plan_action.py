@@ -62,7 +62,7 @@ class PlanAction(AutonomousAction):
         self.cooldown_seconds = config.get('cooldown_seconds', COOLDOWN_TTL)
         self.actionable_verbs = config.get('actionable_verbs', DEFAULT_ACTIONABLE_VERBS)
 
-    # ── Gate checks ───────────────────────────────────────────────
+    # -- Gate checks -----------------------------------------------------------
 
     def _thought_type_gate(self, thought: ThoughtContext) -> bool:
         """Gate 1: Only hypothesis or question thoughts trigger plans."""
@@ -160,7 +160,7 @@ class PlanAction(AutonomousAction):
         """Gate 7: 48h cooldown between plan proposals."""
         return self.redis.get(COOLDOWN_KEY) is None
 
-    # ── Main interface ────────────────────────────────────────────
+    # -- Main interface --------------------------------------------------------
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
         """Evaluate all 7 gates. Returns (score, eligible)."""
@@ -273,7 +273,7 @@ class PlanAction(AutonomousAction):
                 details={'reason': str(e)},
             )
 
-    # ── Helpers ────────────────────────────────────────────────────
+    # -- Helpers ---------------------------------------------------------------
 
     def _check_conversation_references(self, topic: str) -> int:
         """Count how many distinct conversations mention this topic (last 7 days)."""
@@ -284,8 +284,8 @@ class PlanAction(AutonomousAction):
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT COUNT(DISTINCT thread_id) FROM interaction_log
-                    WHERE topic = %s
-                      AND created_at > NOW() - INTERVAL '7 days'
+                    WHERE topic = ?
+                      AND created_at > datetime('now', '-7 days')
                       AND thread_id IS NOT NULL
                 """, (topic,))
                 count = cursor.fetchone()[0]

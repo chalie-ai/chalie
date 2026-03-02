@@ -100,7 +100,7 @@ class IdentityService:
                 cursor.execute("""
                     SELECT current_activation, plasticity_rate, min_cap, max_cap,
                            reinforcement_count, signal_history
-                    FROM identity_vectors WHERE vector_name = %s
+                    FROM identity_vectors WHERE vector_name = ?
                 """, (vector_name,))
                 row = cursor.fetchone()
                 if not row:
@@ -128,11 +128,11 @@ class IdentityService:
                 # Write back
                 cursor.execute("""
                     UPDATE identity_vectors
-                    SET current_activation = %s,
-                        reinforcement_count = %s,
-                        signal_history = %s,
-                        last_updated_at = NOW()
-                    WHERE vector_name = %s
+                    SET current_activation = ?,
+                        reinforcement_count = ?,
+                        signal_history = ?,
+                        last_updated_at = datetime('now')
+                    WHERE vector_name = ?
                 """, (new_activation, reinforcement_count + 1, json.dumps(signal_history), vector_name))
 
                 # Log event
@@ -181,8 +181,8 @@ class IdentityService:
                     if abs(new_activation - activation) > 0.001:
                         cursor.execute("""
                             UPDATE identity_vectors
-                            SET current_activation = %s, last_updated_at = NOW()
-                            WHERE vector_name = %s
+                            SET current_activation = ?, last_updated_at = datetime('now')
+                            WHERE vector_name = ?
                         """, (new_activation, name))
                         self._log_event(cursor, name, activation, new_activation, 'inertia', diff * inertia_rate)
                         count += 1
@@ -209,7 +209,7 @@ class IdentityService:
                 cursor.execute("""
                     SELECT baseline_weight, signal_history, reinforcement_count,
                            baseline_drift_today, drift_window_start, min_cap, max_cap
-                    FROM identity_vectors WHERE vector_name = %s
+                    FROM identity_vectors WHERE vector_name = ?
                 """, (vector_name,))
                 row = cursor.fetchone()
                 if not row:
@@ -273,19 +273,19 @@ class IdentityService:
 
                 cursor.execute("""
                     UPDATE identity_vectors
-                    SET baseline_weight = %s,
-                        baseline_drift_today = %s,
-                        drift_window_start = %s,
+                    SET baseline_weight = ?,
+                        baseline_drift_today = ?,
+                        drift_window_start = ?,
                         reinforcement_count = 0,
                         signal_history = '[]',
-                        last_updated_at = NOW()
-                    WHERE vector_name = %s
+                        last_updated_at = datetime('now')
+                    WHERE vector_name = ?
                 """, (new_baseline, new_drift_today, drift_window_start or now, vector_name))
 
                 self._log_event(cursor, vector_name, old_baseline, new_baseline,
                                 'drift', drift_sign * self.drift_rate)
 
-                logger.info(f"[IDENTITY] Baseline drift: {vector_name} {old_baseline:.3f} → {new_baseline:.3f}")
+                logger.info(f"[IDENTITY] Baseline drift: {vector_name} {old_baseline:.3f} -> {new_baseline:.3f}")
                 cursor.close()
 
         except Exception as e:
@@ -325,13 +325,13 @@ class IdentityService:
                         old = v['current_activation']
                         cursor.execute("""
                             UPDATE identity_vectors
-                            SET current_activation = %s, last_updated_at = NOW()
-                            WHERE vector_name = %s
+                            SET current_activation = ?, last_updated_at = datetime('now')
+                            WHERE vector_name = ?
                         """, (clamped, name))
                         self._log_event(cursor, name, old, clamped, 'coherence', None)
                         v['current_activation'] = clamped
                         coherent = False
-                        logger.warning(f"[IDENTITY] Cap enforcement: {name} {old:.3f} → {clamped:.3f}")
+                        logger.warning(f"[IDENTITY] Cap enforcement: {name} {old:.3f} -> {clamped:.3f}")
 
                 # Level 2: Relational constraints
                 for constraint in self.relational_constraints:
@@ -353,15 +353,15 @@ class IdentityService:
                             new_b = min(b_val + nudge, vectors[b_name]['max_cap'])
                             cursor.execute("""
                                 UPDATE identity_vectors
-                                SET current_activation = %s, last_updated_at = NOW()
-                                WHERE vector_name = %s
+                                SET current_activation = ?, last_updated_at = datetime('now')
+                                WHERE vector_name = ?
                             """, (new_b, b_name))
                             self._log_event(cursor, b_name, old_b, new_b, 'coherence', None)
                             vectors[b_name]['current_activation'] = new_b
                             coherent = False
                             logger.warning(
                                 f"[IDENTITY] Floor ratio: {a_name}={a_val:.2f} > {a_threshold}, "
-                                f"nudging {b_name} {old_b:.3f} → {new_b:.3f}"
+                                f"nudging {b_name} {old_b:.3f} -> {new_b:.3f}"
                             )
 
                     elif constraint['type'] == 'ceiling_pair':
@@ -374,8 +374,8 @@ class IdentityService:
                                 new_val = old_val + (target - old_val) * 0.3
                                 cursor.execute("""
                                     UPDATE identity_vectors
-                                    SET current_activation = %s, last_updated_at = NOW()
-                                    WHERE vector_name = %s
+                                    SET current_activation = ?, last_updated_at = datetime('now')
+                                    WHERE vector_name = ?
                                 """, (new_val, vec_name))
                                 self._log_event(cursor, vec_name, old_val, new_val, 'coherence', None)
                                 vectors[vec_name]['current_activation'] = new_val
@@ -399,7 +399,7 @@ class IdentityService:
             cursor.execute("""
                 INSERT INTO identity_events
                     (vector_name, old_activation, new_activation, signal_source, signal_value, topic)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (vector_name, old_activation, new_activation, signal_source, signal_value, topic))
         except Exception as e:
             logger.debug(f"[IDENTITY] Event logging failed: {e}")

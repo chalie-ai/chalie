@@ -1,145 +1,62 @@
-import multiprocessing
-from rq import Queue, SimpleWorker
+"""
+Prompt Queue — Lightweight thread dispatcher.
+
+Same API as the RQ-based implementation, but spawns background threads
+instead of enqueueing to Redis/RQ. Serialization per queue name ensures
+one job at a time per queue (matching RQ max_workers=1 behavior).
+"""
 
 import logging
-from .config_service import ConfigService
-from .redis_client import RedisClientService
-from .worker_base import WorkerBase
+import threading
+
+logger = logging.getLogger(__name__)
+
 
 class PromptQueue:
+    """Lightweight thread dispatcher. Same API as before, no RQ dependency."""
 
-    def __init__(self, queue_name=None, worker_func=None):
-        self._config = ConfigService.connections().get("redis", {})
+    # Class-level registry: shared locks per queue name for serialization
+    _locks: dict = {}
+    _lock_guard = threading.Lock()
 
-        # Use RedisClientService as single source of truth for Redis connections
-        self._redis = RedisClientService.create_connection(decode_responses=False)
-
-        self._queue_name = queue_name or self._config.get("topics", {}).get("prompt_queue", "prompt-queue")
+    def __init__(self, queue_name: str = None, worker_func=None):
+        self._queue_name = queue_name or "prompt-queue"
         self._worker_func = worker_func
 
-        # Get timeout from queue config, default to 600s (10 minutes)
-        queue_configs = self._config.get("queues", {})
-        queue_config = queue_configs.get(self._queue_name.replace("-", "_") + "_queue", {})
-        timeout = queue_config.get("timeout", 600)
-
-        self._queue = Queue(
-            name=self._queue_name,
-            connection=self._redis,
-            default_timeout=timeout
-        )
+        # Ensure one lock per queue name (so all PromptQueue instances
+        # for "prompt-queue" share the same serialization lock)
+        with self._lock_guard:
+            if self._queue_name not in self._locks:
+                self._locks[self._queue_name] = threading.Lock()
+        self._lock = self._locks[self._queue_name]
 
     @property
     def queue_name(self):
         return self._queue_name
 
     def enqueue(self, *args, **kwargs):
+        """Run worker_func in a background thread, serialized per queue name."""
         if not self._worker_func:
             raise ValueError("No worker function configured for this queue")
-        return self._queue.enqueue(self._worker_func, *args, **kwargs)
+
+        def _run():
+            with self._lock:  # ensures one job at a time per queue
+                try:
+                    self._worker_func(*args, **kwargs)
+                except Exception:
+                    logger.exception(f"[{self._queue_name}] Job failed")
+
+        t = threading.Thread(target=_run, daemon=True, name=f"{self._queue_name}-job")
+        t.start()
+        return t  # callers that need the job reference get the thread
 
     def consume(self, burst=False):
-        worker = SimpleWorker([self._queue], connection=self._redis)
-        print(f"Starting worker for queue '{self._queue_name}'")
-        worker.work(burst=burst)
-
-    @staticmethod
-    def _worker_process(config, queue_name, worker_id, worker_type, shared_state):
-        """Static method to run in child process - creates its own Redis connection
-        Runs continuously for idle-busy workers, processes one job at a time"""
-
-        logging.basicConfig(level=logging.INFO)
-
-        # Pre-resolve hostnames in this worker process (spawn doesn't inherit globals)
-        from .config_service import ConfigService
-        ConfigService.resolve_hostnames()
-
-        # Initialize worker base for state management
-        worker_base = WorkerBase(worker_id, worker_type, shared_state)
-        worker_base.register()
-        worker_base.update_state("idle")
-
-        # Use RedisClientService as single source of truth for Redis connections
-        redis_conn = RedisClientService.create_connection(decode_responses=False)
-
-        # Get timeout from queue config
-        queue_configs = config.get("queues", {})
-        queue_config = queue_configs.get(queue_name.replace("-", "_") + "_queue", {})
-        timeout = queue_config.get("timeout", 600)
-
-        queue = Queue(name=queue_name, connection=redis_conn, default_timeout=timeout)
-
-    # removed nested StatefulWorker definition
-        class StatefulWorker(SimpleWorker):
-            def perform_job(self, job, queue):
-                """Override to add state management around job execution"""
-                worker_base.update_state("busy", {"current_job": job.id})
-                try:
-                    result = super().perform_job(job, queue)
-                    worker_base.increment_job_count()
-                    return result
-                finally:
-                    worker_base.update_state("idle")
-
-        worker = StatefulWorker([queue], connection=redis_conn)
-        logging.info(f"[{worker_id}] Starting worker for queue '{queue_name}' (PID: {multiprocessing.current_process().pid})")
-
-        # CRITICAL: Re-enqueue jobs abandoned from previous crashes before starting work.
-        # Jobs in StartedJobRegistry have no heartbeat after a container death — we try
-        # to put them back on the queue so they're retried rather than silently lost.
-        try:
-            from rq.registry import StartedJobRegistry
-            from rq.job import Job
-            started_registry = StartedJobRegistry(queue_name, connection=redis_conn)
-            abandoned_count = len(started_registry)
-            if abandoned_count > 0:
-                logging.warning(f"[{worker_id}] Found {abandoned_count} abandoned jobs in StartedJobRegistry, re-enqueueing...")
-                for job_id in started_registry.get_job_ids():
-                    try:
-                        job = Job.fetch(job_id, connection=redis_conn)
-                        queue.enqueue_job(job)
-                        started_registry.remove(job, pipeline=None)
-                        logging.info(f"[{worker_id}] Re-enqueued abandoned job {job_id[:8]}")
-                    except Exception as e:
-                        logging.warning(f"[{worker_id}] Could not re-enqueue {job_id[:8]}, will cleanup: {e}")
-                        # Always evict from the registry regardless of failure reason —
-                        # leaving it here causes the count to grow on each restart cycle.
-                        try:
-                            started_registry.remove(job_id, pipeline=None)
-                        except Exception:
-                            try:
-                                redis_conn.zrem(started_registry.key, job_id)
-                            except Exception:
-                                pass
-                started_registry.cleanup()
-                logging.info(f"[{worker_id}] Abandoned jobs processed")
-        except Exception as e:
-            logging.error(f"[{worker_id}] Failed to process abandoned jobs: {e}")
-
-        try:
-            # Run continuously (burst=False) for idle-busy workers
-            # This blocks and waits for jobs, processing one at a time
-            worker.work(burst=False)
-        except Exception as e:
-            logging.error(f"[{worker_id}] Worker error: {e}")
-        finally:
-            worker_base.mark_off()
+        """No-op — threads are dispatched on enqueue(), no separate consumer needed."""
+        pass
 
     def consume_multiprocess(self, worker_id: str, worker_type: str, shared_state):
-        """Spawn a worker process with state management
-
-        Args:
-            worker_id: Unique identifier for this worker
-            worker_type: Type of worker ("idle-busy" or "busy-off")
-            shared_state: Shared dictionary for state communication
-        """
-        process = multiprocessing.Process(
-            target=self._worker_process,
-            args=(self._config, self._queue_name, worker_id, worker_type, shared_state),
-            daemon=False,
-            name=worker_id
-        )
-        process.start()
-        return process
+        """No-op — PromptQueue dispatches threads on enqueue(). Returns None."""
+        return None
 
 
 def enqueue_episodic_memory(topic_data: dict):
@@ -147,17 +64,9 @@ def enqueue_episodic_memory(topic_data: dict):
     Enqueue episodic memory generation job.
 
     Args:
-        topic_data: Dict with 'topic' key. Worker will load exchanges from conversation file.
+        topic_data: Dict with 'topic' key.
     """
-    config = ConfigService.connections().get("redis", {})
-    queue_name = config.get("topics", {}).get("episodic_memory", "episodic-memory-queue")
-
-    # Get timeout from config
-    queue_configs = config.get("queues", {})
-    queue_config = queue_configs.get("episodic_memory_queue", {})
-    timeout = queue_config.get("timeout", 600)
-
-    queue = Queue(queue_name, connection=RedisClientService.create_connection(decode_responses=False), default_timeout=timeout)
+    from workers.episodic_memory_worker import episodic_memory_worker
 
     job_data = {
         'topic': topic_data['topic']
@@ -165,5 +74,6 @@ def enqueue_episodic_memory(topic_data: dict):
     if topic_data.get('thread_id'):
         job_data['thread_id'] = topic_data['thread_id']
 
-    queue.enqueue('workers.episodic_memory_worker.episodic_memory_worker', job_data)
-    logging.info(f"Enqueued episodic memory job for topic '{topic_data['topic']}'")
+    queue = PromptQueue(queue_name="episodic-memory-queue", worker_func=episodic_memory_worker)
+    queue.enqueue(job_data)
+    logger.info(f"Enqueued episodic memory job for topic '{topic_data['topic']}'")

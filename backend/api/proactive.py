@@ -1,84 +1,43 @@
 """
-Proactive blueprint — /events/stream endpoint.
+Proactive blueprint — REST endpoint for recent notifications.
+
+Real-time push is handled by the WebSocket (/ws). This endpoint provides
+a REST fallback for fetching buffered notifications (e.g., catch-up on
+page load before WebSocket connects).
 """
 
 import json
 import logging
-from flask import Blueprint, request, Response, jsonify
+from flask import Blueprint, request, jsonify
 
 logger = logging.getLogger(__name__)
 
 proactive_bp = Blueprint('proactive', __name__)
 
-OUTPUT_CHANNEL = 'output:events'
 
+@proactive_bp.route('/events/recent', methods=['GET'])
+def recent_events():
+    """Return buffered notifications as JSON array.
 
-@proactive_bp.route('/events/stream', methods=['GET'])
-def events_stream():
-    """SSE stream for all async output: tool follow-ups, delegate results, drift.
-
-    Uses session cookies for authentication. EventSource automatically sends
-    cookies for same-origin requests.
+    Drains the notifications:recent list so events aren't delivered twice.
+    The WebSocket handler also drains this list on connect.
     """
     from services.auth_session_service import validate_session
 
     if not validate_session(request):
-        return Response("Unauthorized", status=401)
+        return jsonify({"error": "Unauthorized"}), 401
 
-    def generate():
-        from services.redis_client import RedisClientService
+    from services.redis_client import RedisClientService
+    redis = RedisClientService.create_connection()
 
-        redis = RedisClientService.create_connection()
-
-        # Drain any buffered notifications missed during a reconnect gap.
-        # Events published to output:events while the stream was down are lost
-        # from pub/sub; the notifications:recent list catches them up.
-        while True:
-            item = redis.lpop('notifications:recent')
-            if not item:
-                break
-            try:
-                data = json.loads(item)
-                event_type = data.get('type', 'message')
-                yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-            except Exception:
-                pass
-
-        pubsub = redis.pubsub()
-        pubsub.subscribe(OUTPUT_CHANNEL)
-
-        # Spark: send first-contact welcome if needed (non-blocking)
+    events = []
+    while True:
+        item = redis.lpop('notifications:recent')
+        if not item:
+            break
         try:
-            from services.spark_welcome_service import SparkWelcomeService
-            SparkWelcomeService().maybe_send_welcome()
-        except Exception as e:
-            logger.debug(f"Spark welcome check failed (non-fatal): {e}")
+            events.append(json.loads(item))
+        except (json.JSONDecodeError, TypeError):
+            pass
 
-        # Initial retry directive
-        yield f"retry: 15000\n\n"
-
-        try:
-            while True:
-                message = pubsub.get_message(timeout=15)
-                if message and message['type'] == 'message':
-                    try:
-                        data = json.loads(message['data'])
-                        event_type = data.get('type', 'message')
-                        yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                else:
-                    # Keepalive
-                    yield ": keepalive\n\n"
-        except GeneratorExit:
-            pubsub.unsubscribe(OUTPUT_CHANNEL)
-            pubsub.close()
-
-    return Response(
-        generate(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-        },
-    )
+    return jsonify(events)

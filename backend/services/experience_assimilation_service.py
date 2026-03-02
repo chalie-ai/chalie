@@ -284,6 +284,6 @@ class ExperienceAssimilationService:
 
 
 def experience_assimilation_worker(shared_state: Optional[dict] = None):
-    """Entry point for consumer.py service registration."""
+    """Entry point for run.py service registration."""
     service = ExperienceAssimilationService()
     service.run(shared_state)

@@ -139,5 +139,8 @@ class TestNoveltyGating:
 class TestInnateSkills:
 
     def test_contains_expected_skills(self):
-        expected = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'persistent_task'}
+        expected = {
+            'recall', 'memorize', 'introspect', 'associate', 'schedule',
+            'persistent_task', 'list', 'autobiography', 'focus', 'moment', 'emit_card',
+        }
         assert INNATE_SKILLS == expected

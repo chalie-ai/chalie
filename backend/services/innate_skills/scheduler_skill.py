@@ -1,7 +1,7 @@
 """
 Scheduler Skill — Native innate skill for reminders and scheduled tasks.
 
-Backed by PostgreSQL (scheduled_items table). Provides create, list, and cancel actions.
+Backed by SQLite (scheduled_items table). Provides create, list, and cancel actions.
 All DB access via get_shared_db_service() (lazy import inside function).
 """
 
@@ -133,8 +133,8 @@ def _create(topic: str, params: dict) -> str:
             cursor.execute("""
                 SELECT id FROM scheduled_items
                 WHERE status = 'pending'
-                  AND message = %s
-                  AND created_at > NOW() - INTERVAL '60 seconds'
+                  AND message = ?
+                  AND created_at > datetime('now', '-60 seconds')
                 LIMIT 1
             """, (message,))
             existing = cursor.fetchone()
@@ -158,7 +158,7 @@ def _create(topic: str, params: dict) -> str:
                 INSERT INTO scheduled_items
                   (id, item_type, message, due_at, recurrence, window_start, window_end,
                    status, topic, created_by_session, created_at, group_id, is_prompt)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, NOW(), %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?, ?)
             """, (
                 item_id, item_type, message, due_at,
                 recurrence, window_start, window_end,
@@ -208,7 +208,7 @@ def _list(topic: str, params: dict) -> str:
                 cursor.execute("""
                     SELECT id, item_type, message, due_at, recurrence, status
                     FROM scheduled_items
-                    WHERE status IN ('pending', 'fired') AND due_at BETWEEN %s AND %s
+                    WHERE status IN ('pending', 'fired') AND due_at BETWEEN ? AND ?
                     ORDER BY due_at ASC
                 """, (start_dt, end_dt))
             else:
@@ -232,9 +232,9 @@ def _list(topic: str, params: dict) -> str:
                 "recurrence": recurrence,
                 "status": status,
             })
-            due_str = due_at.strftime("%Y-%m-%d %H:%M:%S")
+            due_str = due_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(due_at, 'strftime') else str(due_at)
             recur_str = f" ({recurrence})" if recurrence else ""
-            lines.append(f"  • [{item_id}] {message} — {due_str}{recur_str}")
+            lines.append(f"  * [{item_id}] {message} -- {due_str}{recur_str}")
 
         # Emit query card (non-fatal if it fails)
         try:
@@ -324,7 +324,7 @@ def _cancel(topic: str, params: dict) -> str:
             if item_id:
                 # Exact lookup by ID
                 cursor.execute(
-                    "SELECT id, item_type, message, due_at, recurrence FROM scheduled_items WHERE id=%s",
+                    "SELECT id, item_type, message, due_at, recurrence FROM scheduled_items WHERE id=?",
                     (item_id,)
                 )
                 row = cursor.fetchone()
@@ -334,7 +334,7 @@ def _cancel(topic: str, params: dict) -> str:
                         "due_at": row[3], "recurrence": row[4], "status": "cancelled",
                     }
                 cursor.execute(
-                    "UPDATE scheduled_items SET status='cancelled' WHERE id=%s AND status='pending'",
+                    "UPDATE scheduled_items SET status='cancelled' WHERE id=? AND status='pending'",
                     (item_id,)
                 )
                 affected = cursor.rowcount
@@ -344,7 +344,7 @@ def _cancel(topic: str, params: dict) -> str:
                 cursor.execute(
                     """SELECT id, item_type, message, due_at, recurrence
                        FROM scheduled_items
-                       WHERE status='pending' AND message ILIKE %s
+                       WHERE status='pending' AND message LIKE ?
                        ORDER BY due_at ASC""",
                     (pattern,)
                 )
@@ -371,7 +371,7 @@ def _cancel(topic: str, params: dict) -> str:
                     "due_at": row[3], "recurrence": row[4], "status": "cancelled",
                 }
                 cursor.execute(
-                    "UPDATE scheduled_items SET status='cancelled' WHERE id=%s AND status='pending'",
+                    "UPDATE scheduled_items SET status='cancelled' WHERE id=? AND status='pending'",
                     (item_id,)
                 )
                 affected = cursor.rowcount

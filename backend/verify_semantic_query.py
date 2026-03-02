@@ -17,13 +17,12 @@ def test_graph_service():
     """Test GraphService methods."""
     print("\n=== Testing GraphService ===")
 
-    from services.database_service import DatabaseService, get_merged_db_config
+    from services.database_service import get_shared_db_service
     from services.graph_service import GraphService
 
     try:
         # Initialize services
-        db_config = get_merged_db_config()
-        db_service = DatabaseService(db_config)
+        db_service = get_shared_db_service()
         graph_service = GraphService(db_service)
 
         # Test get_all_concepts

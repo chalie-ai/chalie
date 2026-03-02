@@ -7,7 +7,9 @@ Classification is structural cognition, not stochastic generation.
 
 import json
 import logging
+import struct
 import time
+import uuid
 import numpy as np
 from datetime import datetime, timezone
 from typing import List, Dict, Tuple, Optional
@@ -32,6 +34,20 @@ def _get_embed_service():
         _EMBED_SERVICE = EmbeddingService()
         logger.info("[TOPIC CLASSIFIER] EmbeddingService initialized")
     return _EMBED_SERVICE
+
+
+def _pack_embedding(embedding) -> Optional[bytes]:
+    """Pack a list/ndarray of floats into a binary blob for sqlite-vec."""
+    if embedding is None:
+        return None
+    if isinstance(embedding, bytes):
+        return embedding
+    if hasattr(embedding, 'tolist'):
+        flat = embedding.tolist()
+        return struct.pack(f'{len(flat)}f', *flat)
+    if isinstance(embedding, (list, tuple)):
+        return struct.pack(f'{len(embedding)}f', *embedding)
+    return embedding
 
 
 def generate_embedding(text: str) -> np.ndarray:
@@ -282,7 +298,10 @@ class TopicClassifierService:
 
         for topic, similarity in top_k:
             # Freshness penalty: how long since last update?
-            time_delta = (now - topic['last_updated']).total_seconds()
+            last_updated = topic['last_updated']
+            if isinstance(last_updated, str):
+                last_updated = datetime.fromisoformat(last_updated).replace(tzinfo=timezone.utc)
+            time_delta = (now - last_updated).total_seconds()
             freshness_penalty = np.tanh(time_delta / self.DECAY_CONSTANT)
 
             # Salience difference: is message importance aligned?
@@ -372,13 +391,17 @@ class TopicClassifierService:
         """
         Fetch all topics from database.
 
+        Embeddings live in the topics_vec companion table; JOIN and unpack
+        the binary blob back into a Python list of floats.
+
         Returns:
             List of topic dicts with rolling_embedding as numpy array
         """
         query = """
-            SELECT name, rolling_embedding, avg_salience, last_updated, message_count
-            FROM topics
-            ORDER BY last_updated DESC
+            SELECT t.name, v.embedding, t.avg_salience, t.last_updated, t.message_count
+            FROM topics t
+            JOIN topics_vec v ON v.rowid = t.rowid
+            ORDER BY t.last_updated DESC
         """
 
         with self.db.connection() as conn:
@@ -388,11 +411,16 @@ class TopicClassifierService:
 
             topics = []
             for row in rows:
-                # pgvector may return as string or list depending on psycopg2 version
-                embedding = row[1]
-                if isinstance(embedding, str):
-                    # Parse string representation: '[1.0, 2.0, ...]'
-                    embedding = json.loads(embedding)
+                # Unpack binary blob from sqlite-vec into list of floats
+                embedding_blob = row[1]
+                if isinstance(embedding_blob, bytes):
+                    dim = len(embedding_blob) // 4  # 4 bytes per float32
+                    embedding = list(struct.unpack(f'{dim}f', embedding_blob))
+                elif isinstance(embedding_blob, str):
+                    # Fallback: parse string representation
+                    embedding = json.loads(embedding_blob)
+                else:
+                    embedding = embedding_blob
 
                 topics.append({
                     'name': row[0],
@@ -452,22 +480,39 @@ class TopicClassifierService:
         """
         Create new topic in database.
 
+        Inserts the topic row, then stores the embedding in the topics_vec
+        companion virtual table.
+
         Args:
             name: Topic name
             embedding: L2-normalized embedding (768-dim)
             salience: Initial salience score
         """
-        embedding_list = embedding.tolist()
+        topic_id = str(uuid.uuid4())
 
         query = """
-            INSERT INTO topics (name, rolling_embedding, avg_salience, message_count)
-            VALUES (%s, %s, %s, 1)
+            INSERT INTO topics (topic_id, name, avg_salience, message_count)
+            VALUES (?, ?, ?, 1)
             ON CONFLICT (name) DO NOTHING
         """
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, (name, embedding_list, salience))
+            cursor.execute(query, (topic_id, name, salience))
+
+            # Store embedding in companion vec table
+            cursor.execute("SELECT rowid FROM topics WHERE name = ?", (name,))
+            row = cursor.fetchone()
+            if row:
+                rowid = row[0]
+                blob = _pack_embedding(embedding)
+                if blob:
+                    cursor.execute("DELETE FROM topics_vec WHERE rowid = ?", (rowid,))
+                    cursor.execute(
+                        "INSERT INTO topics_vec(rowid, embedding) VALUES (?, ?)",
+                        (rowid, blob)
+                    )
+
             conn.commit()
 
         logger.info(f"[TOPIC CLASSIFIER] Created topic '{name}'")
@@ -486,8 +531,13 @@ class TopicClassifierService:
             new_salience: New message salience
             old_count: Previous message count
         """
-        # Fetch current rolling embedding
-        query_fetch = "SELECT rolling_embedding, avg_salience FROM topics WHERE name = %s"
+        # Fetch current rolling embedding from topics_vec
+        query_fetch = """
+            SELECT v.embedding, t.avg_salience, t.rowid
+            FROM topics t
+            JOIN topics_vec v ON v.rowid = t.rowid
+            WHERE t.name = ?
+        """
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -498,12 +548,20 @@ class TopicClassifierService:
                 logger.error(f"[TOPIC CLASSIFIER] Topic '{name}' not found for update")
                 return
 
-            # Handle string or list from pgvector
-            embedding_data = row[0]
-            if isinstance(embedding_data, str):
-                embedding_data = json.loads(embedding_data)
-            old_embedding = np.array(embedding_data)
+            # Unpack binary blob from sqlite-vec
+            embedding_blob = row[0]
+            if isinstance(embedding_blob, bytes):
+                dim = len(embedding_blob) // 4
+                old_embedding = np.array(
+                    struct.unpack(f'{dim}f', embedding_blob), dtype=np.float32
+                )
+            elif isinstance(embedding_blob, str):
+                old_embedding = np.array(json.loads(embedding_blob))
+            else:
+                old_embedding = np.array(embedding_blob)
+
             old_salience = row[1]
+            topic_rowid = row[2]
 
             # Running average for embedding (capped to prevent centroid dilution)
             n = min(old_count, self.ROLLING_AVG_CAP)
@@ -515,21 +573,29 @@ class TopicClassifierService:
             # Running average for salience (same cap)
             new_avg_salience = (old_salience * n + new_salience) / (n + 1)
 
-            # Update database
+            # Update topics row
             query_update = """
                 UPDATE topics
-                SET rolling_embedding = %s,
-                    avg_salience = %s,
-                    last_updated = NOW(),
+                SET avg_salience = ?,
+                    last_updated = datetime('now'),
                     message_count = message_count + 1
-                WHERE name = %s
+                WHERE name = ?
             """
 
             cursor.execute(query_update, (
-                new_avg_embedding.tolist(),
                 new_avg_salience,
                 name
             ))
+
+            # Update embedding in companion vec table
+            blob = _pack_embedding(new_avg_embedding)
+            if blob:
+                cursor.execute("DELETE FROM topics_vec WHERE rowid = ?", (topic_rowid,))
+                cursor.execute(
+                    "INSERT INTO topics_vec(rowid, embedding) VALUES (?, ?)",
+                    (topic_rowid, blob)
+                )
+
             conn.commit()
 
         logger.info(f"[TOPIC CLASSIFIER] Updated topic '{name}' (count: {old_count} -> {old_count + 1})")

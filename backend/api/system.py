@@ -73,7 +73,7 @@ def system_status():
             result["status"] = "degraded"
             result["redis_error"] = str(e)
 
-        # PostgreSQL counts
+        # SQLite counts
         try:
             db = get_shared_db_service()
             with db.connection() as conn:
@@ -181,7 +181,7 @@ def observability_memory():
             'queues': {},
         }
 
-        # PostgreSQL counts + averages
+        # SQLite counts + averages
         try:
             db = get_shared_db_service()
             with db.connection() as conn:

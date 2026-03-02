@@ -4,6 +4,7 @@ Responsibility: Storage layer only (SRP).
 """
 
 import json
+import uuid
 from datetime import datetime
 from typing import Optional
 from services.database_service import DatabaseService
@@ -14,29 +15,14 @@ class EpisodicStorageService:
     """Manages episode storage and retrieval operations."""
 
     def __init__(self, database_service: DatabaseService):
-        """
-        Initialize storage service.
-
-        Args:
-            database_service: DatabaseService instance for connection management
-        """
         self.db_service = database_service
 
     def store_episode(self, episode_data: dict) -> str:
         """
         Store a new episode in the database.
 
-        Args:
-            episode_data: Episode dict with fields:
-                         intent, context, action, emotion, outcome, gist,
-                         salience, freshness, topic, exchange_id, embedding
-
         Returns:
             UUID of the created episode
-
-        Raises:
-            ValueError if required fields are missing
-            Exception if storage fails
         """
         required_fields = ['intent', 'context', 'action', 'emotion', 'outcome',
                           'gist', 'salience', 'freshness', 'topic']
@@ -45,19 +31,22 @@ class EpisodicStorageService:
                 raise ValueError(f"Missing required field: {field}")
 
         try:
+            episode_id = str(uuid.uuid4())
+            embedding = episode_data.get('embedding')
+
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
                 cursor.execute("""
                     INSERT INTO episodes (
-                        intent, context, action, emotion, outcome, gist,
-                        salience, freshness, embedding, topic, exchange_id,
+                        id, intent, context, action, emotion, outcome, gist,
+                        salience, freshness, topic, exchange_id,
                         activation_score, salience_factors, open_loops
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    json.dumps(episode_data['intent']),  # Now JSONB
+                    episode_id,
+                    json.dumps(episode_data['intent']),
                     json.dumps(episode_data['context']),
                     episode_data['action'],
                     json.dumps(episode_data['emotion']),
@@ -65,15 +54,17 @@ class EpisodicStorageService:
                     episode_data['gist'],
                     episode_data['salience'],
                     episode_data['freshness'],
-                    episode_data.get('embedding'),
                     episode_data['topic'],
                     episode_data.get('exchange_id'),
-                    1.0,  # Initial activation score
+                    1.0,
                     json.dumps(episode_data.get('salience_factors', {})),
                     json.dumps(episode_data.get('open_loops', []))
                 ))
 
-                episode_id = cursor.fetchone()[0]
+                # Insert embedding into vec table if available
+                if embedding is not None:
+                    self._store_embedding(conn, episode_id, embedding)
+
                 cursor.close()
 
                 logging.info(f"Stored episode {episode_id} for topic '{episode_data['topic']}'")
@@ -83,25 +74,41 @@ class EpisodicStorageService:
                     from services.curiosity_pursuit_service import CuriosityPursuitService
                     CuriosityPursuitService().on_new_episode(episode_data)
                 except Exception:
-                    pass  # Non-fatal — reinforcement is opportunistic
+                    pass  # Non-fatal
 
-                return str(episode_id)
+                return episode_id
 
         except Exception as e:
             logging.error(f"Failed to store episode: {e}")
             raise
 
+    def _store_embedding(self, conn, episode_id: str, embedding):
+        """Store embedding in the companion vec table."""
+        try:
+            import struct
+            if isinstance(embedding, (list, tuple)):
+                blob = struct.pack(f'{len(embedding)}f', *embedding)
+            elif isinstance(embedding, bytes):
+                blob = embedding
+            else:
+                blob = embedding
+
+            # Get the rowid of the episode for vec table linking
+            cursor = conn.cursor()
+            cursor.execute("SELECT rowid FROM episodes WHERE id = ?", (episode_id,))
+            row = cursor.fetchone()
+            if row:
+                rowid = row[0]
+                cursor.execute(
+                    "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
+                    (rowid, blob)
+                )
+            cursor.close()
+        except Exception as e:
+            logging.warning(f"Failed to store episode embedding: {e}")
+
     def update_episode(self, episode_id: str, updates: dict) -> bool:
-        """
-        Update an existing episode.
-
-        Args:
-            episode_id: UUID of episode to update
-            updates: Dict of fields to update
-
-        Returns:
-            True if update succeeded, False otherwise
-        """
+        """Update an existing episode."""
         if not updates:
             return True
 
@@ -109,24 +116,33 @@ class EpisodicStorageService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
-                # Build dynamic UPDATE query
                 set_clauses = []
                 values = []
+                embedding = None
+
                 for key, value in updates.items():
+                    if key == 'embedding':
+                        embedding = value
+                        continue
                     if key in ['intent', 'context', 'emotion', 'salience_factors', 'open_loops']:
-                        set_clauses.append(f"{key} = %s")
+                        set_clauses.append(f"{key} = ?")
                         values.append(json.dumps(value))
                     else:
-                        set_clauses.append(f"{key} = %s")
+                        set_clauses.append(f"{key} = ?")
                         values.append(value)
 
-                set_clauses.append("updated_at = NOW()")
+                set_clauses.append("updated_at = datetime('now')")
                 values.append(episode_id)
 
-                query = f"UPDATE episodes SET {', '.join(set_clauses)} WHERE id = %s"
+                query = f"UPDATE episodes SET {', '.join(set_clauses)} WHERE id = ?"
                 cursor.execute(query, values)
 
                 rows_updated = cursor.rowcount
+
+                # Update embedding if provided
+                if embedding is not None:
+                    self._store_embedding(conn, episode_id, embedding)
+
                 cursor.close()
 
                 logging.info(f"Updated episode {episode_id}")
@@ -137,23 +153,15 @@ class EpisodicStorageService:
             return False
 
     def soft_delete_episode(self, episode_id: str) -> bool:
-        """
-        Soft delete an episode (set deleted_at timestamp).
-
-        Args:
-            episode_id: UUID of episode to delete
-
-        Returns:
-            True if deletion succeeded, False otherwise
-        """
+        """Soft delete an episode (set deleted_at timestamp)."""
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
                 cursor.execute("""
                     UPDATE episodes
-                    SET deleted_at = NOW()
-                    WHERE id = %s AND deleted_at IS NULL
+                    SET deleted_at = datetime('now')
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (episode_id,))
 
                 rows_deleted = cursor.rowcount
@@ -171,15 +179,7 @@ class EpisodicStorageService:
             return False
 
     def get_episode_by_id(self, episode_id: str) -> Optional[dict]:
-        """
-        Retrieve an episode by ID.
-
-        Args:
-            episode_id: UUID of episode to retrieve
-
-        Returns:
-            Episode dict or None if not found
-        """
+        """Retrieve an episode by ID."""
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -190,7 +190,7 @@ class EpisodicStorageService:
                            created_at, updated_at, last_accessed_at, access_count,
                            activation_score, salience_factors, open_loops
                     FROM episodes
-                    WHERE id = %s AND deleted_at IS NULL
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (episode_id,))
 
                 row = cursor.fetchone()
@@ -233,9 +233,6 @@ class EpisodicStorageService:
         """
         Update activation score based on access frequency and recency.
         Follows ACT-R memory activation model.
-
-        Args:
-            episode_id: UUID of episode to update
         """
         try:
             with self.db_service.connection() as conn:
@@ -245,22 +242,21 @@ class EpisodicStorageService:
                 cursor.execute("""
                     UPDATE episodes
                     SET access_count = access_count + 1,
-                        last_accessed_at = NOW()
-                    WHERE id = %s
+                        last_accessed_at = datetime('now')
+                    WHERE id = ?
                 """, (episode_id,))
 
                 # Recalculate activation score
-                # activation = base + frequency_boost + recency_boost
                 cursor.execute("""
                     UPDATE episodes
                     SET activation_score = 1.0
                         + (access_count * 0.1)
                         + CASE
                             WHEN last_accessed_at IS NOT NULL THEN
-                                (1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - last_accessed_at)) / 86400.0))
+                                (1.0 / (1.0 + (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', last_accessed_at) AS REAL)) / 86400.0))
                             ELSE 0
                           END
-                    WHERE id = %s
+                    WHERE id = ?
                 """, (episode_id,))
 
                 cursor.close()

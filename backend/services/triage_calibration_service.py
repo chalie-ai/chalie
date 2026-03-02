@@ -66,13 +66,18 @@ class TriageCalibrationService:
         """
         db = self._get_db()
         try:
+            # tool_selected is stored as JSON array string for SQLite
+            tool_selected = result.tools or []
+            if isinstance(tool_selected, list):
+                tool_selected = json.dumps(tool_selected)
+
             db.execute(
                 """
                 INSERT INTO triage_calibration_events
                     (exchange_id, topic, triage_branch, triage_mode, tool_selected,
                      confidence_internal, confidence_tool_need, reasoning,
                      freshness_risk, decision_entropy, self_eval_override, self_eval_reason)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
                 """,
                 (
@@ -80,13 +85,13 @@ class TriageCalibrationService:
                     topic or '',
                     result.branch,
                     result.mode,
-                    result.tools or [],
+                    tool_selected,
                     result.confidence_internal,
                     result.confidence_tool_need,
                     result.reasoning or '',
                     result.freshness_risk,
                     result.decision_entropy,
-                    result.self_eval_override,
+                    1 if result.self_eval_override else 0,
                     result.self_eval_reason or '',
                 )
             )
@@ -105,22 +110,27 @@ class TriageCalibrationService:
             return
         db = self._get_db()
         try:
+            # outcome_tools_used stored as JSON array string for SQLite
+            tools_used = outcome.get('tools_used', [])
+            if isinstance(tools_used, list):
+                tools_used = json.dumps(tools_used)
+
             db.execute(
                 """
                 UPDATE triage_calibration_events
-                SET outcome_mode = %s,
-                    outcome_tools_used = %s,
-                    outcome_tool_success = %s,
-                    outcome_latency_ms = %s,
-                    tool_abstention = %s
-                WHERE exchange_id = %s
+                SET outcome_mode = ?,
+                    outcome_tools_used = ?,
+                    outcome_tool_success = ?,
+                    outcome_latency_ms = ?,
+                    tool_abstention = ?
+                WHERE exchange_id = ?
                 """,
                 (
                     outcome.get('mode'),
-                    outcome.get('tools_used', []),
-                    outcome.get('tool_success'),
+                    tools_used,
+                    1 if outcome.get('tool_success') else 0,
                     outcome.get('latency_ms'),
-                    outcome.get('tool_abstention', False),
+                    1 if outcome.get('tool_abstention', False) else 0,
                     exchange_id,
                 )
             )
@@ -151,20 +161,22 @@ class TriageCalibrationService:
 
         db = self._get_db()
         try:
+            # SQLite does not support boolean OR in UPDATE SET like PostgreSQL.
+            # Use MAX to simulate OR: MAX(existing, new_value) where values are 0/1.
             db.execute(
                 """
                 UPDATE triage_calibration_events
-                SET signal_rephrase = signal_rephrase OR %s,
-                    signal_correction = signal_correction OR %s,
-                    signal_explicit_lookup = signal_explicit_lookup OR %s,
-                    signal_abandonment = signal_abandonment OR %s
-                WHERE exchange_id = %s
+                SET signal_rephrase = MAX(signal_rephrase, ?),
+                    signal_correction = MAX(signal_correction, ?),
+                    signal_explicit_lookup = MAX(signal_explicit_lookup, ?),
+                    signal_abandonment = MAX(signal_abandonment, ?)
+                WHERE exchange_id = ?
                 """,
                 (
-                    signal_rephrase,
-                    signal_correction,
-                    signal_explicit_lookup,
-                    signal_abandonment,
+                    1 if signal_rephrase else 0,
+                    1 if signal_correction else 0,
+                    1 if signal_explicit_lookup else 0,
+                    1 if signal_abandonment else 0,
                     previous_exchange_id,
                 )
             )
@@ -199,9 +211,9 @@ class TriageCalibrationService:
                        signal_rephrase, signal_correction, signal_explicit_lookup, signal_abandonment
                 FROM triage_calibration_events
                 WHERE correctness_label IS NULL
-                AND created_at > %s
+                AND created_at > ?
                 """,
-                (yesterday,)
+                (yesterday.isoformat(),)
             )
 
             if not rows or len(rows) < MIN_DAILY_DECISIONS:
@@ -210,6 +222,16 @@ class TriageCalibrationService:
                     f"logging only"
                 )
             else:
+                # Parse JSON array fields for each row
+                for row in rows:
+                    for field in ('tool_selected', 'outcome_tools_used'):
+                        val = row.get(field)
+                        if isinstance(val, str):
+                            try:
+                                row[field] = json.loads(val)
+                            except (json.JSONDecodeError, TypeError):
+                                row[field] = []
+
                 # 2. Compute correctness for each event
                 results = []
                 for row in rows:
@@ -222,8 +244,8 @@ class TriageCalibrationService:
                         db.execute(
                             """
                             UPDATE triage_calibration_events
-                            SET correctness_label = %s, correctness_score = %s
-                            WHERE id = %s::uuid
+                            SET correctness_label = ?, correctness_score = ?
+                            WHERE id = ?
                             """,
                             (label, score, event_id)
                         )
@@ -272,7 +294,7 @@ class TriageCalibrationService:
                 except Exception as _corr_err:
                     logger.debug(f"{LOG_PREFIX} User correction wiring failed: {_corr_err}")
 
-                # 4c. Learn from clarification → tool resolution chains
+                # 4c. Learn from clarification -> tool resolution chains
                 try:
                     from services.tool_profile_service import ToolProfileService
                     profile_svc = ToolProfileService()
@@ -294,9 +316,9 @@ class TriageCalibrationService:
 
                         # Get original prompt text from interaction_log
                         original_prompt = db.fetch_all(
-                            """SELECT payload->>'message' AS msg
+                            """SELECT json_extract(payload, '$.message') AS msg
                                FROM interaction_log
-                               WHERE exchange_id = %s AND event_type = 'user_input'
+                               WHERE exchange_id = ? AND event_type = 'user_input'
                                LIMIT 1""",
                             (row['exchange_id'],)
                         )
@@ -337,8 +359,8 @@ class TriageCalibrationService:
             cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
             try:
                 db.execute(
-                    "DELETE FROM triage_calibration_events WHERE created_at < %s",
-                    (cutoff,)
+                    "DELETE FROM triage_calibration_events WHERE created_at < ?",
+                    (cutoff.isoformat(),)
                 )
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} Cleanup failed: {e}")
@@ -359,6 +381,18 @@ class TriageCalibrationService:
         tool_abstention = row.get('tool_abstention', False)
         tool_selected = row.get('tool_selected', []) or []
         outcome_tools = row.get('outcome_tools_used', []) or []
+
+        # Parse JSON strings if needed
+        if isinstance(tool_selected, str):
+            try:
+                tool_selected = json.loads(tool_selected)
+            except (json.JSONDecodeError, TypeError):
+                tool_selected = []
+        if isinstance(outcome_tools, str):
+            try:
+                outcome_tools = json.loads(outcome_tools)
+            except (json.JSONDecodeError, TypeError):
+                outcome_tools = []
 
         # Count negative signals (>=2 required for incorrect label)
         neg_signals = sum([
@@ -390,10 +424,10 @@ class TriageCalibrationService:
             rows = db.fetch_all(
                 """
                 SELECT
-                    COUNT(*) FILTER (WHERE triage_branch = 'act') AS act_count,
-                    COUNT(*) FILTER (WHERE triage_branch = 'act' AND correctness_label = 'correct') AS act_correct
+                    SUM(CASE WHEN triage_branch = 'act' THEN 1 ELSE 0 END) AS act_count,
+                    SUM(CASE WHEN triage_branch = 'act' AND correctness_label = 'correct' THEN 1 ELSE 0 END) AS act_correct
                 FROM triage_calibration_events
-                WHERE created_at > NOW() - INTERVAL '7 days'
+                WHERE created_at > datetime('now', '-7 days')
                 """
             )
             if rows and rows[0]['act_count']:
@@ -419,7 +453,7 @@ class TriageCalibrationService:
 
 
 def triage_calibration_worker(shared_state=None):
-    """Entry point for consumer.py service registration. Runs 24h cycle."""
+    """Entry point for run.py service registration. Runs 24h cycle."""
     logger.info("[TRIAGE CALIBRATION WORKER] Starting 24h calibration cycle service...")
     while True:
         try:

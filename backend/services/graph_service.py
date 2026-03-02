@@ -108,7 +108,7 @@ class GraphService:
                         first_learned_at, last_accessed_at, last_reinforced_at,
                         utility_score, decay_resistance, created_at, updated_at
                     FROM semantic_concepts
-                    WHERE id = %s AND deleted_at IS NULL
+                    WHERE id = ? AND deleted_at IS NULL
                 """, (concept_id,))
 
                 row = cursor.fetchone()
@@ -171,7 +171,7 @@ class GraphService:
                             c.concept_name, c.concept_type, c.definition
                         FROM semantic_relationships r
                         JOIN semantic_concepts c ON r.target_concept_id = c.id
-                        WHERE r.source_concept_id = %s
+                        WHERE r.source_concept_id = ?
                           AND r.deleted_at IS NULL
                           AND c.deleted_at IS NULL
                     """, (concept_id,))
@@ -184,11 +184,13 @@ class GraphService:
                             c.concept_name, c.concept_type, c.definition
                         FROM semantic_relationships r
                         JOIN semantic_concepts c ON r.source_concept_id = c.id
-                        WHERE r.target_concept_id = %s
+                        WHERE r.target_concept_id = ?
                           AND r.deleted_at IS NULL
                           AND c.deleted_at IS NULL
                     """, (concept_id,))
                 else:  # both
+                    # SQLite does not support CASE inside ON clause the same way.
+                    # Use UNION of outgoing + incoming instead.
                     cursor.execute("""
                         SELECT
                             r.id, r.source_concept_id, r.target_concept_id,
@@ -196,15 +198,22 @@ class GraphService:
                             r.source_episodes, r.confidence,
                             c.concept_name, c.concept_type, c.definition
                         FROM semantic_relationships r
-                        LEFT JOIN semantic_concepts c ON
-                            CASE
-                                WHEN r.source_concept_id = %s THEN r.target_concept_id = c.id
-                                ELSE r.source_concept_id = c.id
-                            END
-                        WHERE (r.source_concept_id = %s OR r.target_concept_id = %s)
+                        JOIN semantic_concepts c ON r.target_concept_id = c.id
+                        WHERE r.source_concept_id = ?
                           AND r.deleted_at IS NULL
                           AND c.deleted_at IS NULL
-                    """, (concept_id, concept_id, concept_id))
+                        UNION ALL
+                        SELECT
+                            r.id, r.source_concept_id, r.target_concept_id,
+                            r.relationship_type, r.strength, r.bidirectional,
+                            r.source_episodes, r.confidence,
+                            c.concept_name, c.concept_type, c.definition
+                        FROM semantic_relationships r
+                        JOIN semantic_concepts c ON r.source_concept_id = c.id
+                        WHERE r.target_concept_id = ?
+                          AND r.deleted_at IS NULL
+                          AND c.deleted_at IS NULL
+                    """, (concept_id, concept_id))
 
                 rows = cursor.fetchall()
                 cursor.close()

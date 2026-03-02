@@ -6,9 +6,9 @@ Responsibility: Episode generation only (SRP).
 import json
 import time
 import re
-from datetime import datetime, timedelta
-from rq import Queue
-from services import ConfigService, DatabaseService, EpisodicStorageService, RedisClientService, SalienceService
+import threading
+from datetime import datetime
+from services import ConfigService, DatabaseService, EpisodicStorageService, SalienceService
 from services.llm_service import create_llm_service
 from services.thread_conversation_service import ThreadConversationService
 import logging
@@ -166,16 +166,13 @@ def requeue_episodic_memory(job_data: dict, delay_seconds: int = 2, reason: str 
     backoff = min(300, 2 ** retry_count)
     job_data['retry_count'] = retry_count + 1
 
-    redis_connection = RedisClientService.create_connection(decode_responses=False)
-    config = ConfigService.connections().get("redis", {})
-    queue_name = config.get("topics", {}).get("episodic_memory", "episodic-memory-queue")
+    def _delayed_enqueue():
+        from services.prompt_queue import enqueue_episodic_memory
+        enqueue_episodic_memory(job_data)
 
-    queue = Queue(queue_name, connection=redis_connection)
-    queue.enqueue_in(
-        timedelta(seconds=backoff),
-        'workers.episodic_memory_worker.episodic_memory_worker',
-        job_data
-    )
+    t = threading.Timer(backoff, _delayed_enqueue)
+    t.daemon = True
+    t.start()
     logging.info(
         f"Requeued episodic memory job after {backoff}s delay "
         f"(retry {retry_count + 1}/{MAX_REQUEUE_RETRIES}): {reason}"

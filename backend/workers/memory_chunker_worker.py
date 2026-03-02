@@ -476,15 +476,22 @@ def memory_chunker_worker(job_data: dict) -> str:
     Returns:
         str: Status message
     """
-    import signal
+    import ctypes
+    import threading
 
-    # Hard timeout to prevent infinite hangs
-    def timeout_handler(signum, frame):
-        raise TimeoutError("Memory chunker job exceeded hard timeout")
+    # Hard timeout to prevent infinite hangs (SIGALRM only works in the main thread;
+    # use a threading.Timer that raises into this thread instead)
+    _worker_thread = threading.current_thread()
 
-    # Set signal alarm for 300 seconds (5 minutes) - well under RQ 600s job timeout
-    signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(300)
+    def _raise_timeout():
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(_worker_thread.ident),
+            ctypes.py_object(TimeoutError),
+        )
+
+    _timer = threading.Timer(300, _raise_timeout)
+    _timer.daemon = True
+    _timer.start()
 
     try:
         topic = job_data['topic']
@@ -632,5 +639,4 @@ def memory_chunker_worker(job_data: dict) -> str:
         except Exception as e:
             return f"Topic '{topic}' | ERROR: {str(e)}"
     finally:
-        # Cancel alarm
-        signal.alarm(0)
+        _timer.cancel()
