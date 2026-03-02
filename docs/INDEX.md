@@ -43,6 +43,7 @@ Recommended reading order for engineers:
 
 **Building tools to extend Chalie's capabilities?**
 - **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, sandbox constraints, examples
+- **[14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md)** — First-party default tools installed on first startup, auto-install behavior, `--disable-default-tools`
 
 ## Performance & Optimization
 
@@ -72,7 +73,8 @@ docs/
 ├── 09-TOOLS.md                       ← Tools system & creation guide
 ├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
 ├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
-└── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
+├── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
+└── 14-DEFAULT-TOOLS.md               ← Default tools installed on first startup
 ```
 
 ### Important Project Files (Not in docs/)
