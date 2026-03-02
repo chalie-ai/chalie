@@ -22,6 +22,7 @@ import logging
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class ToolSubprocessService:
                 [sys.executable, runner_path, json_b64],
                 capture_output=True,
                 timeout=timeout,
+                cwd=str(Path(runner_path).parent),
             )
         except subprocess.TimeoutExpired:
             raise TimeoutError(f"Trusted tool timed out after {timeout}s")
@@ -111,6 +113,7 @@ class ToolSubprocessService:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                cwd=str(Path(runner_path).parent),
             )
         except Exception as e:
             raise RuntimeError(f"Failed to start interactive subprocess: {e}")

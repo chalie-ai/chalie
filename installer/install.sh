@@ -3,6 +3,7 @@
 # Usage: curl -fsSL https://chalie.ai/install | bash
 # Usage (update): curl -fsSL https://chalie.ai/install | CHALIE_UPDATE=1 bash
 # Usage (no voice): curl -fsSL https://chalie.ai/install | bash -s -- --disable-voice
+# Usage (no default tools): curl -fsSL https://chalie.ai/install | bash -s -- --disable-default-tools
 set -euo pipefail
 
 CHALIE_HOME="${CHALIE_HOME:-$HOME/.chalie}"
@@ -12,6 +13,7 @@ GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 
 # Installer flags (parsed from args)
 _DISABLE_VOICE=false
+_DISABLE_DEFAULT_TOOLS=false
 
 # ─── Colours ────────────────────────────────────────────────────────────────
 _reset="\033[0m"
@@ -40,7 +42,8 @@ _banner() {
 _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --disable-voice) _DISABLE_VOICE=true; shift ;;
+      --disable-voice)         _DISABLE_VOICE=true; shift ;;
+      --disable-default-tools) _DISABLE_DEFAULT_TOOLS=true; shift ;;
       *) shift ;;
     esac
   done
@@ -238,6 +241,35 @@ _install_voice_deps() {
     esac
   fi
   _ok "Voice system dependencies ready"
+}
+
+# ─── Default Tools ──────────────────────────────────────────────────────────
+_handle_default_tools() {
+  if [[ "$_DISABLE_DEFAULT_TOOLS" != "true" ]]; then
+    return
+  fi
+
+  _section "Default Tools (disabled)"
+  _info "Removing bundled default tools (--disable-default-tools was set)"
+
+  # Use Python to read embodiment_library.json and remove matching tool directories
+  "$CHALIE_HOME/venv/bin/python" - <<PYEOF
+import json, shutil
+from pathlib import Path
+lib_path = Path("$CHALIE_HOME/app/backend/configs/embodiment_library.json")
+if lib_path.exists():
+    for entry in json.load(open(lib_path)):
+        if entry.get("installs_by_default"):
+            p = Path("$CHALIE_HOME/app/backend/tools") / entry["name"]
+            if p.exists():
+                shutil.rmtree(p)
+                print(f"    Removed: {entry['name']}")
+PYEOF
+
+  # Write marker so run.py skips auto-install on startup
+  mkdir -p "$CHALIE_HOME/app/backend/data"
+  touch "$CHALIE_HOME/app/backend/data/.no-default-tools"
+  _ok "Default tools disabled — Chalie will not auto-install them on startup"
 }
 
 # ─── Download Latest Release ────────────────────────────────────────────────
@@ -443,6 +475,7 @@ main() {
     _install_voice_deps
     _download_release
     _setup_venv
+    _handle_default_tools
     _install_cli
     _print_success
 
