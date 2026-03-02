@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "name": "weather",
+    "title": "Weather",
+    "icon": "fa-cloud",
+    "repo": "chalie-ai/chalie-tool-weather",
+    "summary": "Current weather conditions and tomorrow's forecast via Open-Meteo and wttr.in. No API key required.",
+    "category": "context",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  }
+]
