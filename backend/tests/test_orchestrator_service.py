@@ -63,8 +63,7 @@ def _ignore_context(**overrides):
 @pytest.fixture
 def service():
     """Create an OrchestratorService with external dependencies mocked."""
-    with patch('services.orchestrator_service.ActQueueService'), \
-         patch('services.orchestrator_service.ActDispatcherService'), \
+    with patch('services.orchestrator_service.ActDispatcherService'), \
          patch('services.orchestrator_service.OutputService') as mock_output_cls:
         # OutputService.enqueue_text must return an output_id string
         mock_output = mock_output_cls.return_value

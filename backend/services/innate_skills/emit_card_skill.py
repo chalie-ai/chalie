@@ -160,13 +160,28 @@ def handle_emit_card(topic: str, params: dict) -> dict:
         logger.error(f"{LOG_PREFIX} Card enqueue failed: {e}")
         return f"Error: card delivery failed — {e}"
 
-    # ── 6. Clean up deferred state so subsequent emit_card calls don't recycle
+    # ── 6. Clean up deferred state so subsequent emit_card calls and
+    #    _enqueue_tool_cards don't recycle stale data (B7/B11 fix)
     try:
         redis.delete(f"deferred_cards:{topic}")
+        # B7: Also remove this tool from tool_raw_cache so _enqueue_tool_cards
+        # doesn't re-render the same data after the loop.
+        raw_items = redis.lrange(f"tool_raw_cache:{topic}", 0, -1)
+        for raw_item in raw_items:
+            try:
+                import json as _json
+                parsed = _json.loads(raw_item)
+                if parsed.get('tool') == tool_name:
+                    redis.lrem(f"tool_raw_cache:{topic}", 1, raw_item)
+            except Exception:
+                pass
+        # B11: Delete per-invocation cache to prevent re-render on second emit_card call
+        used_id = invocation_id or entry.get("invocation_id", "latest")
+        redis.delete(f"tool_card_cache:{topic}:{used_id}")
     except Exception:
         pass
 
     used_id = invocation_id or entry.get("invocation_id", "latest")
     logger.info(f"{LOG_PREFIX} Card emitted for {tool_name} (invocation: {used_id})")
 
-    return {"card_emitted": True, "tool": tool_name}
+    return {"card_emitted": True, "tool_name": tool_name}

@@ -17,7 +17,7 @@ Timeout fallback: if LLM exceeds 500ms, falls back to simple heuristics.
 import re
 import time
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,6 @@ LOG_PREFIX = "[TRIAGE]"
 _PRIMITIVES = ['recall', 'memorize', 'introspect']
 _VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task', 'document', 'read'}
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
-
-# Contextual skills — if the LLM selected any of these, it's an innate action (no external tool needed)
-_CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES)
 
 # Social filter regex patterns (reused from IntentClassifierService)
 _GREETING_PATTERNS = re.compile(

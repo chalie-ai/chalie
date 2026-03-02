@@ -1,10 +1,9 @@
 import logging
 from typing import Dict, Any, List
 
-from .act_queue_service import ActQueueService
 from .act_dispatcher_service import ActDispatcherService
 from .output_service import OutputService
-from .orchestrator.path_schemas import ORCHESTRATOR_PATHS, PathDefinition
+from .orchestrator.path_schemas import ORCHESTRATOR_PATHS
 from .orchestrator.handlers import (
     RespondHandler,
     ActHandler,
@@ -28,7 +27,6 @@ class OrchestratorService:
     def __init__(self):
         """Initialize orchestrator with path definitions and handlers."""
         # Initialize services
-        self.act_queue_service = ActQueueService()
         self.act_dispatcher_service = ActDispatcherService()
         self.output_service = OutputService()
 

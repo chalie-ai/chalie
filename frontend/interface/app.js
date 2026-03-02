@@ -40,6 +40,8 @@ class ChalieApp {
 
     // Scheduler trigger dedup: topic → timestamp of last card event (60s window)
     this._recentToolCardTopics = new Map();
+    // B10 fix: output_id-based dedup for card events (prevents SSE reconnect replays)
+    this._seenCardIds = new Set();
     // Web Audio context (unlocked on first user gesture)
     this._audioCtx = null;
 
@@ -111,6 +113,7 @@ class ChalieApp {
     await this._showPwaDialogIfNeeded();
 
     // Show the "Waking up" overlay while we wait for the backend
+    this._readyPollActive = true;
     this._showSparkOverlay();
 
     // Start the app
@@ -143,9 +146,23 @@ class ChalieApp {
     });
   }
 
+  async _pollUntilReady() {
+    const POLL_INTERVAL_MS = 2000;
+    const MAX_WAIT_MS = 120_000;
+    const deadline = Date.now() + MAX_WAIT_MS;
+
+    while (this._readyPollActive && Date.now() < deadline) {
+      const result = await this.api.readyCheck();
+      if (result?.ready) return;
+      if (!this._readyPollActive) return; // skip was clicked
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    }
+    // Timed out or skipped — proceed anyway so the UI is not permanently blocked
+  }
+
   async _start() {
     try {
-      await this.api.healthCheck();
+      await this._pollUntilReady();
       this._dismissSparkOverlay();
       this.presence.setState('resting');
       const voiceReady = await this.voice.init();
@@ -844,7 +861,10 @@ class ChalieApp {
     // Skip button
     const skipBtn = overlay.querySelector('.spark-overlay__skip');
     if (skipBtn) {
-      skipBtn.addEventListener('click', () => this._dismissSparkOverlay(), { once: true });
+      skipBtn.addEventListener('click', () => {
+        this._readyPollActive = false;
+        this._dismissSparkOverlay();
+      }, { once: true });
     }
   }
 
@@ -882,6 +902,17 @@ class ChalieApp {
 
     // Tool result card event
     if (data.type === 'card') {
+      // B10 fix: deduplicate card events on SSE reconnect
+      const cardId = data.output_id
+        || `${data.tool || 'unknown'}:${data.topic || ''}:${Math.floor(Date.now() / 5000)}`;
+      if (this._seenCardIds.has(cardId)) return;
+      this._seenCardIds.add(cardId);
+      // Periodic cleanup (keep set bounded)
+      if (this._seenCardIds.size > 200) {
+        const arr = [...this._seenCardIds];
+        this._seenCardIds = new Set(arr.slice(-100));
+      }
+
       if (this._pendingForm) {
         this._pendingForm.remove();
         this._pendingForm = null;

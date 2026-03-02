@@ -9,15 +9,11 @@ critic evaluation.
 """
 
 import time
-from typing import Dict, Any, Callable
+from typing import Dict, Any
 from threading import Thread
 import logging
 
-# Actions that are deterministic with no ambiguity — high default confidence
-_DETERMINISTIC_ACTIONS = {'memorize', 'introspect'}
-
-# Actions that are reads/lookups — moderate default confidence
-_READ_ACTIONS = {'recall', 'associate', 'autobiography'}
+from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINISTIC_ACTIONS, READ_ACTIONS as _READ_ACTIONS
 
 
 def _estimate_confidence(action_type: str, raw_result: Any) -> float:
