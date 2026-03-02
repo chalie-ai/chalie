@@ -16,7 +16,6 @@ Cost metadata is appended to every result.
 import hashlib
 import json
 import logging
-import re
 import threading
 import time
 import uuid
@@ -363,16 +362,9 @@ class ToolRegistryService:
     """
 
     REQUIRED_MANIFEST_FIELDS = {"name", "description", "trigger", "parameters", "returns"}
-    MAX_OUTPUT_CHARS = 3000
 
-    STRIP_PATTERNS = [
-        re.compile(r'\{[^}]*\}'),
-        re.compile(
-            r'\b(recall|memorize|associate|introspect)\s*\(',
-            re.IGNORECASE
-        ),
-        re.compile(r'ACTION\s*:', re.IGNORECASE),
-    ]
+    # Delegated to shared utilities (tool_output_utils.py)
+    from services.tool_output_utils import MAX_OUTPUT_CHARS
 
     def __new__(cls, *args, **kwargs):
         global _instance
@@ -657,34 +649,8 @@ class ToolRegistryService:
 
     def _build_telemetry(self, raw_telemetry: dict) -> dict:
         """Flatten telemetry from client context into contract format."""
-        loc = raw_telemetry.get("location") or {}
-        loc_name = raw_telemetry.get("location_name", "")
-        city, country = "", ""
-        if "," in loc_name:
-            city, country = [p.strip() for p in loc_name.split(",", 1)]
-
-        device = raw_telemetry.get("device") or {}
-
-        result = {
-            "lat": loc.get("lat"),
-            "lon": loc.get("lon"),
-            "location_name": raw_telemetry.get("location_name", ""),
-            "city": city,
-            "country": country,
-            "time": raw_telemetry.get("local_time", ""),
-            "locale": raw_telemetry.get("locale", ""),
-            "language": raw_telemetry.get("language", ""),
-        }
-
-        # Device context — so tools can tailor output to user's device
-        if device_class := device.get("class"):
-            result["device_class"] = device_class
-        if platform := device.get("platform"):
-            result["platform"] = platform
-        if "pwa" in device:
-            result["pwa"] = device["pwa"]
-
-        return result
+        from services.tool_output_utils import build_tool_telemetry
+        return build_tool_telemetry(raw_telemetry)
 
     def invoke(self, tool_name: str, topic: str, params: dict) -> str:
         """
@@ -940,63 +906,13 @@ class ToolRegistryService:
 
     def _format_result(self, result: Any) -> str:
         """Convert result dict to plain text (not JSON)."""
-        if isinstance(result, str):
-            return result
-
-        if not isinstance(result, dict):
-            return str(result)
-
-        lines = []
-
-        if "results" in result and isinstance(result["results"], list):
-            results = result["results"]
-            if not results:
-                msg = result.get("message", "No results found.")
-                lines.append(msg)
-            else:
-                for i, r in enumerate(results, 1):
-                    if isinstance(r, dict):
-                        title = r.get("title", "")
-                        snippet = r.get("snippet", "")
-                        url = r.get("url", "")
-                        lines.append(f"{i}. {title}")
-                        if snippet:
-                            lines.append(f"   {snippet}")
-                        if url:
-                            lines.append(f"   {url}")
-                    else:
-                        lines.append(f"{i}. {r}")
-            if result.get("count") is not None and result["count"] > 0:
-                lines.append(f"\n{result['count']} results returned.")
-            return "\n".join(lines)
-
-        if "content" in result and isinstance(result["content"], str):
-            content = result["content"]
-            if result.get("error"):
-                return f"Error: {result['error']}"
-            if not content:
-                return "No content extracted from page."
-            parts = [content]
-            if result.get("truncated"):
-                parts.append(f"(truncated to {result.get('char_count', '?')} chars)")
-            return "\n".join(parts)
-
-        for key, value in result.items():
-            if key in ("budget_remaining",):
-                continue
-            if isinstance(value, (list, dict)):
-                lines.append(f"{key}: {json.dumps(value, default=str)[:500]}")
-            else:
-                lines.append(f"{key}: {value}")
-
-        return "\n".join(lines)
+        from services.tool_output_utils import format_tool_result
+        return format_tool_result(result)
 
     def _sanitize_output(self, text: str) -> str:
         """Strip action-like patterns from tool output."""
-        for pattern in self.STRIP_PATTERNS:
-            text = pattern.sub("", text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
+        from services.tool_output_utils import sanitize_tool_output
+        return sanitize_tool_output(text)
 
     def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None):
         """Log tool invocation outcome to procedural memory.
