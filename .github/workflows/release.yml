@@ -16,7 +16,7 @@ jobs:
         with:
           repository: chalie-ai/chalie-web
           path: chalie-web
-          token: ${{ secrets.CHALIE_WEB_DEPLOY_TOKEN }}
+          token: ${{ secrets.CHALIE_WEB_TOKEN }}
 
       - name: Update installer
         run: cp installer/install.sh chalie-web/public/install
