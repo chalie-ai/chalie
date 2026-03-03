@@ -336,6 +336,10 @@ _setup_venv() {
     fi
   fi
 
+  # Prime run.sh stamp files so the first `chalie start` skips redundant pip sync
+  touch "$CHALIE_HOME/app/.deps-installed"
+  [[ "$_DISABLE_VOICE" != "true" ]] && touch "$CHALIE_HOME/app/.voice-deps-installed" || true
+
   _ok "Python environment ready"
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
@@ -348,7 +352,6 @@ _install_cli() {
   cat > "$CHALIE_BIN/chalie" <<'CHALIE_CLI'
 #!/usr/bin/env bash
 CHALIE_HOME="${CHALIE_HOME:-$HOME/.chalie}"
-VENV="$CHALIE_HOME/venv/bin/python"
 PID_FILE="$CHALIE_HOME/chalie.pid"
 LOG_FILE="$CHALIE_HOME/chalie.log"
 DATA_DIR="$CHALIE_HOME/data"
@@ -379,8 +382,8 @@ case "$_cmd" in
   start)
     _is_running && echo "Chalie is already running (PID $(cat "$PID_FILE"))" && exit 0
     mkdir -p "$DATA_DIR"
-    CHALIE_DATA_DIR="$DATA_DIR" "$VENV" "$CHALIE_HOME/app/backend/run.py" \
-      --port="$_port" --host="$_host" \
+    CHALIE_DATA_DIR="$DATA_DIR" CHALIE_VENV="$CHALIE_HOME/venv" \
+      bash "$CHALIE_HOME/app/run.sh" --port="$_port" --host="$_host" \
       >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     echo "Chalie started → http://localhost:$_port"

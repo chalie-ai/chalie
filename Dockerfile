@@ -42,6 +42,7 @@ RUN cd /tmp \
 # Copy source
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
+COPY run.sh ./
 
 # Data directory for SQLite DB and runtime files
 RUN mkdir -p /data
@@ -51,4 +52,4 @@ ENV CHALIE_DB_PATH=/data/chalie.db
 
 EXPOSE 8081
 
-CMD ["python", "backend/run.py", "--port=8081", "--host=0.0.0.0"]
+CMD ["bash", "run.sh", "--port=8081", "--host=0.0.0.0"]

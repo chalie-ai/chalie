@@ -402,7 +402,13 @@ class GeminiService:
         if stream:
             raise NotImplementedError("Streaming not yet supported")
 
-        from google import genai
+        try:
+            from google import genai
+        except ImportError:
+            raise RuntimeError(
+                "google-genai package is not installed. "
+                "Run: pip install google-genai"
+            )
 
         api_key = _resolve_api_key(self._config)
         client = genai.Client(api_key=api_key)

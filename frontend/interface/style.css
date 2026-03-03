@@ -1048,8 +1048,8 @@ body {
    11. Buttons
    -------------------------------------------------------------------------- */
 .btn-action {
-  width: 40px;
-  height: 40px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: none;
   display: flex;
@@ -1058,6 +1058,12 @@ body {
   cursor: pointer;
   transition: all var(--duration-fast);
   flex-shrink: 0;
+}
+
+.btn-action--mic svg,
+.btn-action--upload svg {
+  width: 16px;
+  height: 16px;
 }
 
 .btn-action--mic {
@@ -1106,12 +1112,11 @@ body {
 
 .btn-action--upload {
   background: transparent;
-  border: 1.5px solid rgba(255, 255, 255, 0.10);
   color: var(--text-secondary);
   transition: all 220ms ease;
+  margin-left: -4px;
 }
 .btn-action--upload:hover {
-  border-color: var(--accent-tertiary);
   color: var(--accent-tertiary);
   box-shadow: 0 0 12px rgba(0, 240, 255, 0.15);
 }
@@ -1762,8 +1767,8 @@ body {
   }
 
   .btn-action {
-    width: 44px;
-    height: 44px;
+    width: 32px;
+    height: 32px;
   }
 
   .api-key-dialog__content {

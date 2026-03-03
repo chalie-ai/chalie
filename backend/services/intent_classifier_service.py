@@ -42,6 +42,36 @@ GREETING_PATTERNS = re.compile(
     re.IGNORECASE
 )
 
+# ── Action / task intent ───────────────────────────────────────
+# High-signal single tokens that unambiguously mean "do this for me".
+# Using a frozenset (O(1) lookup) instead of regex to avoid brittle alternations.
+ACTION_TASK_KEYWORDS = frozenset({
+    # schedule / reminder
+    'remind', 'reminder', 'reminders', 'schedule', 'alarm', 'timer',
+    # list management
+    'checklist', 'todo',
+    # focus
+    'pomodoro',
+})
+
+# Multi-word phrases for cases where a single token is too ambiguous
+# (e.g. "save" alone could mean "save me time", but "save this" is a memorize request).
+ACTION_TASK_PHRASES = (
+    # schedule
+    'set a reminder', 'set reminder', 'notify me', 'alert me',
+    # list
+    'add to my list', 'add to the list', 'remove from my list',
+    'shopping list', 'to-do list', 'check off', 'cross off',
+    # focus
+    'start focus', 'focus session', 'deep work', 'end focus',
+    # memorize
+    'remember that', 'remember this', 'save this', 'store this', 'note that',
+    # persistent task
+    'background task', 'work on this',
+    # document
+    'search my documents', 'in my file', 'in the document',
+)
+
 CANCEL_PATTERNS = [
     re.compile(r'\bnever\s*mind\b', re.IGNORECASE),
     re.compile(r'\bignore\s+that\b', re.IGNORECASE),
@@ -164,6 +194,12 @@ class IntentClassifierService:
             return 'feedback'
         if any(p.search(text) for p in CANCEL_PATTERNS):
             return 'command'
+        # Action intent — user wants Chalie to DO something (skill-triggering imperative).
+        # Checked before command/question so "Can you remind me at 5pm?" → 'action', not 'question'.
+        _lower = text.lower()
+        _lower_tokens = {t.rstrip('.,!?:;') for t in _lower.split()}
+        if _lower_tokens & ACTION_TASK_KEYWORDS or any(p in _lower for p in ACTION_TASK_PHRASES):
+            return 'action'
         if COMMAND_PATTERNS.search(text) and not ('?' in text):
             return 'command'
         if '?' in text or INTERROGATIVE_PATTERNS.search(text):

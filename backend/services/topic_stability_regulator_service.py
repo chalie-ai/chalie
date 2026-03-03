@@ -351,7 +351,16 @@ class TopicStabilityRegulator:
             }
 
         total_messages = sum(t['message_count'] for t in topics)
-        new_topics = [t for t in topics if t['created_at'] >= cutoff_time]
+        def _parse_dt(s):
+            if isinstance(s, datetime):
+                return s if s.tzinfo else s.replace(tzinfo=timezone.utc)
+            try:
+                dt = datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        new_topics = [t for t in topics if _parse_dt(t['created_at']) >= cutoff_time]
         switch_frequency = len(new_topics) / total_messages if total_messages > 0 else 0
 
         active_topics = [t for t in topics if t['message_count'] > 1]

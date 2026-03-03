@@ -28,8 +28,21 @@ def memory_context():
         db = get_shared_db_service()
         result = {"traits": [], "facts": [], "significant_episodes": [], "concepts": []}
 
-        # User traits
+        # User traits — structured list from DB + text summary for prompt injection
         try:
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT trait_key, trait_value, confidence, category, source "
+                    "FROM user_traits WHERE user_id = 'primary' "
+                    "AND confidence >= 0.3 ORDER BY confidence DESC LIMIT 20"
+                )
+                rows = cursor.fetchall()
+                result["traits"] = [
+                    {"key": r[0], "value": r[1], "confidence": round(float(r[2] or 0), 3),
+                     "category": r[3], "source": r[4]}
+                    for r in rows
+                ]
             trait_service = UserTraitService(db)
             traits_text = trait_service.get_traits_for_prompt(user_id="primary")
             if traits_text:
@@ -149,7 +162,7 @@ def memory_forget():
             with db.connection() as conn:
                 for table in ["episodes", "semantic_concepts", "semantic_relationships", "user_traits"]:
                     try:
-                        conn.execute(f"TRUNCATE TABLE {table} CASCADE")
+                        conn.execute(f"DELETE FROM {table}")
                     except Exception:
                         pass
                 conn.commit()
