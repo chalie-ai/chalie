@@ -25,14 +25,14 @@ import logging
 import concurrent.futures
 from typing import Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.llm_service import create_refreshable_llm_service, RateLimitError
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[BG LLM]"
 
-# Redis keys
+# MemoryStore keys
 QUEUE_KEY = "bg_llm:queue"
 RESULT_KEY_PREFIX = "bg_llm:result:"
 HEARTBEAT_KEY = "bg_llm:last_heartbeat"
@@ -54,19 +54,19 @@ IDLE_SLEEP = 1
 METRICS_INTERVAL = 60    # seconds between metric log emissions
 
 
-def _get_sleep_interval(redis) -> float:
+def _get_sleep_interval(store) -> float:
     """
     Return adaptive sleep duration based on system activity signals.
 
-    Checks two O(1) Redis reads:
+    Checks two O(1) MemoryStore reads:
       1. prompt-queue length (message being processed right now)
       2. last user interaction timestamp (recently chatting?)
     """
     try:
-        if redis.llen(PROMPT_QUEUE_KEY) > 0:
+        if store.llen(PROMPT_QUEUE_KEY) > 0:
             base = BUSY_SLEEP
         else:
-            last_ts = redis.get(LAST_INTERACTION_KEY)
+            last_ts = store.get(LAST_INTERACTION_KEY)
             if not last_ts:
                 base = IDLE_SLEEP
             else:
@@ -78,7 +78,7 @@ def _get_sleep_interval(redis) -> float:
                 else:
                     base = IDLE_SLEEP
     except Exception:
-        base = NORMAL_SLEEP  # safe default on any Redis error
+        base = NORMAL_SLEEP  # safe default on any MemoryStore error
 
     # ±10% jitter to prevent rhythmic bursts across services
     return base * random.uniform(0.9, 1.1)
@@ -90,7 +90,7 @@ def background_llm_worker(shared_state=None):
 
     Runs indefinitely, consuming from bg_llm:queue one job at a time.
     """
-    redis = RedisClientService.create_connection()
+    store = MemoryClientService.create_connection()
 
     # Cache of agent_name → RefreshableLLMService
     # Each service auto-refreshes on provider config change.
@@ -113,13 +113,13 @@ def background_llm_worker(shared_state=None):
     while True:
         # Heartbeat — TTL 60s; any crash is detectable within 60s by the proxy
         try:
-            redis.set(HEARTBEAT_KEY, str(time.time()), ex=60)
+            store.set(HEARTBEAT_KEY, str(time.time()), ex=60)
         except Exception as e:
             logger.warning("%s Heartbeat write failed: %s", LOG_PREFIX, e)
 
         # Track max queue depth
         try:
-            depth = redis.llen(QUEUE_KEY)
+            depth = store.llen(QUEUE_KEY)
             if depth > metrics["max_queue_depth_seen"]:
                 metrics["max_queue_depth_seen"] = depth
         except Exception:
@@ -152,7 +152,7 @@ def background_llm_worker(shared_state=None):
 
         # Block until a job arrives; short timeout keeps the heartbeat loop alive
         try:
-            raw = redis.blpop(QUEUE_KEY, timeout=BLPOP_TIMEOUT)
+            raw = store.blpop(QUEUE_KEY, timeout=BLPOP_TIMEOUT)
         except Exception as e:
             logger.error("%s BLPOP failed: %s", LOG_PREFIX, e)
             time.sleep(2)
@@ -183,8 +183,8 @@ def background_llm_worker(shared_state=None):
             )
             metrics["stale_discarded"] += 1
             try:
-                redis.rpush(result_key, json.dumps({"error": "stale"}))
-                redis.expire(result_key, 60)
+                store.rpush(result_key, json.dumps({"error": "stale"}))
+                store.expire(result_key, 60)
             except Exception:
                 pass
             continue
@@ -202,8 +202,8 @@ def background_llm_worker(shared_state=None):
                     LOG_PREFIX, agent_name, e,
                 )
                 try:
-                    redis.rpush(result_key, json.dumps({"error": "llm_init_failed"}))
-                    redis.expire(result_key, 60)
+                    store.rpush(result_key, json.dumps({"error": "llm_init_failed"}))
+                    store.expire(result_key, 60)
                 except Exception:
                     pass
                 continue
@@ -237,12 +237,12 @@ def background_llm_worker(shared_state=None):
                 LOG_PREFIX, e.provider or 'provider', agent_name, job_id, wait,
             )
             try:
-                redis.rpush(QUEUE_KEY, json.dumps(job))
+                store.rpush(QUEUE_KEY, json.dumps(job))
             except Exception as rq_err:
                 logger.error("%s Rate-limit re-enqueue failed: %s", LOG_PREFIX, rq_err)
                 try:
-                    redis.rpush(result_key, json.dumps({"error": "rate_limit_reenqueue_failed"}))
-                    redis.expire(result_key, 60)
+                    store.rpush(result_key, json.dumps({"error": "rate_limit_reenqueue_failed"}))
+                    store.expire(result_key, 60)
                 except Exception:
                     pass
             time.sleep(wait)
@@ -266,8 +266,8 @@ def background_llm_worker(shared_state=None):
                 "latency_ms": response.latency_ms,
             }
             try:
-                redis.rpush(result_key, json.dumps(result_data))
-                redis.expire(result_key, 300)
+                store.rpush(result_key, json.dumps(result_data))
+                store.expire(result_key, 300)
             except Exception as e:
                 logger.error(
                     "%s Failed to push result (agent=%s, job=%s): %s",
@@ -284,7 +284,7 @@ def background_llm_worker(shared_state=None):
             if retry_count < MAX_RETRIES:
                 job["retry_count"] = retry_count + 1
                 try:
-                    redis.rpush(QUEUE_KEY, json.dumps(job))
+                    store.rpush(QUEUE_KEY, json.dumps(job))
                     metrics["retries"] += 1
                     logger.warning(
                         "%s retry #%d for agent=%s, job=%s — re-queued at back",
@@ -294,10 +294,10 @@ def background_llm_worker(shared_state=None):
                     logger.error("%s Re-enqueue failed: %s", LOG_PREFIX, e)
                     # Can't retry — unblock the caller with an error
                     try:
-                        redis.rpush(
+                        store.rpush(
                             result_key, json.dumps({"error": "reenqueue_failed"})
                         )
-                        redis.expire(result_key, 60)
+                        store.expire(result_key, 60)
                     except Exception:
                         pass
             else:
@@ -308,15 +308,15 @@ def background_llm_worker(shared_state=None):
                     LOG_PREFIX, MAX_RETRIES, agent_name, job_id,
                 )
                 try:
-                    redis.rpush(
+                    store.rpush(
                         result_key, json.dumps({"error": "max_retries_exceeded"})
                     )
-                    redis.expire(result_key, 60)
+                    store.expire(result_key, 60)
                 except Exception:
                     pass
 
         # Adaptive sleep with ±10% jitter before processing next job
-        sleep_duration = _get_sleep_interval(redis)
+        sleep_duration = _get_sleep_interval(store)
         logger.debug(
             "%s Sleeping %.1fs before next job (agent=%s)",
             LOG_PREFIX, sleep_duration, agent_name,

@@ -109,23 +109,23 @@ class TestGetFullProfile:
 
 
 class TestGetTriageSummaries:
-    @patch('services.tool_profile_service.ToolProfileService._get_redis')
-    def test_returns_cached_value(self, mock_get_redis):
+    @patch('services.tool_profile_service.ToolProfileService._get_store')
+    def test_returns_cached_value(self, mock_get_store):
         from services.tool_profile_service import ToolProfileService
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = "## Cached Summaries\n- tool: does stuff"
-        mock_get_redis.return_value = mock_redis
+        mock_store = MagicMock()
+        mock_store.get.return_value = "## Cached Summaries\n- tool: does stuff"
+        mock_get_store.return_value = mock_store
 
         svc = ToolProfileService()
         result = svc.get_triage_summaries()
         assert result == "## Cached Summaries\n- tool: does stuff"
 
-    @patch('services.tool_profile_service.ToolProfileService._get_redis')
-    def test_builds_from_db_when_cache_miss(self, mock_get_redis):
+    @patch('services.tool_profile_service.ToolProfileService._get_store')
+    def test_builds_from_db_when_cache_miss(self, mock_get_store):
         from services.tool_profile_service import ToolProfileService
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None  # Cache miss
-        mock_get_redis.return_value = mock_redis
+        mock_store = MagicMock()
+        mock_store.get.return_value = None  # Cache miss
+        mock_get_store.return_value = mock_store
 
         svc = ToolProfileService()
         mock_db = MagicMock()
@@ -140,13 +140,13 @@ class TestGetTriageSummaries:
         assert 'weather' in result
         assert '## Information Retrieval' in result or '## Environment' in result
 
-    @patch('services.tool_profile_service.ToolProfileService._get_redis')
-    def test_skills_not_in_triage_summaries(self, mock_get_redis):
+    @patch('services.tool_profile_service.ToolProfileService._get_store')
+    def test_skills_not_in_triage_summaries(self, mock_get_store):
         """Skills should not appear in triage summaries — they're always available."""
         from services.tool_profile_service import ToolProfileService
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None
-        mock_get_redis.return_value = mock_redis
+        mock_store = MagicMock()
+        mock_store.get.return_value = None
+        mock_get_store.return_value = mock_store
 
         svc = ToolProfileService()
         mock_db = MagicMock()
@@ -162,13 +162,13 @@ class TestGetTriageSummaries:
 class TestManifestFallback:
     """Test manifest-based triage fallback when DB has no tool profiles."""
 
-    @patch('services.tool_profile_service.ToolProfileService._get_redis')
-    def test_empty_db_falls_back_to_manifest(self, mock_get_redis):
+    @patch('services.tool_profile_service.ToolProfileService._get_store')
+    def test_empty_db_falls_back_to_manifest(self, mock_get_store):
         """When DB has no tool rows, triage summaries come from manifests."""
         from services.tool_profile_service import ToolProfileService
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None  # Cache miss
-        mock_get_redis.return_value = mock_redis
+        mock_store = MagicMock()
+        mock_store.get.return_value = None  # Cache miss
+        mock_get_store.return_value = mock_store
 
         svc = ToolProfileService()
         mock_db = MagicMock()
@@ -196,13 +196,13 @@ class TestManifestFallback:
         assert 'google_news' in result
         assert '## Research' in result
 
-    @patch('services.tool_profile_service.ToolProfileService._get_redis')
-    def test_db_exception_falls_back_to_manifest(self, mock_get_redis):
+    @patch('services.tool_profile_service.ToolProfileService._get_store')
+    def test_db_exception_falls_back_to_manifest(self, mock_get_store):
         """When DB fetch raises, triage summaries come from manifests."""
         from services.tool_profile_service import ToolProfileService
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None
-        mock_get_redis.return_value = mock_redis
+        mock_store = MagicMock()
+        mock_store.get.return_value = None
+        mock_get_store.return_value = mock_store
 
         svc = ToolProfileService()
         mock_db = MagicMock()
@@ -229,13 +229,13 @@ class TestManifestFallback:
         assert 'web_search' in result
         assert '## Information Retrieval' in result
 
-    @patch('services.tool_profile_service.ToolProfileService._get_redis')
-    def test_only_skills_in_db_falls_back_to_manifest(self, mock_get_redis):
+    @patch('services.tool_profile_service.ToolProfileService._get_store')
+    def test_only_skills_in_db_falls_back_to_manifest(self, mock_get_store):
         """When DB only has skill rows (no tools), manifest fallback triggers."""
         from services.tool_profile_service import ToolProfileService
-        mock_redis = MagicMock()
-        mock_redis.get.return_value = None
-        mock_get_redis.return_value = mock_redis
+        mock_store = MagicMock()
+        mock_store.get.return_value = None
+        mock_get_store.return_value = mock_store
 
         svc = ToolProfileService()
         mock_db = MagicMock()

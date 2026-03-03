@@ -13,6 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'moment', 'persistent_task', 'emit_card', 'document',
+    'read',
 })
 
 # ── LLM-visible for planning: excludes emit_card (internal trigger) and
@@ -61,4 +62,5 @@ SKILL_DESCRIPTIONS: dict = {
     'moment': 'Capture and read ambient context snapshots (time, place, energy, device)',
     'emit_card': 'Render deferred tool cards into the conversation stream (internal trigger)',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
+    'read': 'Fetch and read web page content for information gathering and research',
 }

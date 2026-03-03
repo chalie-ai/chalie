@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 class TestWorkingMemory:
 
-    def test_append_and_retrieve_turn(self, mock_redis):
+    def test_append_and_retrieve_turn(self, mock_store):
         svc = WorkingMemoryService(max_turns=4)
         svc.append_turn("topic-a", "user", "Hello")
         svc.append_turn("topic-a", "assistant", "Hi there")
@@ -21,7 +21,7 @@ class TestWorkingMemory:
         assert turns[1]['role'] == 'assistant'
         assert turns[1]['content'] == 'Hi there'
 
-    def test_fifo_eviction_at_max_turns(self, mock_redis):
+    def test_fifo_eviction_at_max_turns(self, mock_store):
         """5th turn pair evicts 1st (max_entries=8, 2 per turn)."""
         svc = WorkingMemoryService(max_turns=4)
         # Add 5 turn pairs (10 entries, but max is 8)
@@ -34,7 +34,7 @@ class TestWorkingMemory:
         # First turn should be evicted — oldest remaining is q1
         assert turns[0]['content'] == 'q1'
 
-    def test_formatted_context_output(self, mock_redis):
+    def test_formatted_context_output(self, mock_store):
         """get_formatted_context returns 'Human: ... / Assistant: ...' format."""
         svc = WorkingMemoryService(max_turns=4)
         svc.append_turn("topic-a", "user", "What is Python?")
@@ -45,7 +45,7 @@ class TestWorkingMemory:
         assert "User: What is Python?" in context
         assert "Assistant: A programming language." in context
 
-    def test_clear_removes_all(self, mock_redis):
+    def test_clear_removes_all(self, mock_store):
         svc = WorkingMemoryService(max_turns=4)
         svc.append_turn("topic-a", "user", "Hello")
         svc.clear("topic-a")
@@ -53,7 +53,7 @@ class TestWorkingMemory:
         turns = svc.get_recent_turns("topic-a")
         assert len(turns) == 0
 
-    def test_buffer_size_tracking(self, mock_redis):
+    def test_buffer_size_tracking(self, mock_store):
         svc = WorkingMemoryService(max_turns=4)
         assert svc.get_buffer_size("topic-a") == 0
 

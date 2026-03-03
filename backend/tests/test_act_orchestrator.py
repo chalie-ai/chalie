@@ -424,7 +424,7 @@ class TestDeferredCardContext:
             config={}, max_iterations=5, deferred_card_context=True,
         )
 
-        # Mock the Redis call inside _inject_deferred_card_context
+        # Mock the MemoryStore call inside _inject_deferred_card_context
         with patch('services.act_orchestrator_service.ACTOrchestrator._inject_deferred_card_context') as mock_inject:
             mock_inject.return_value = '(none)\n## Available Card Offers\n- web_search (id: abc, 3 sources, 2 domains)'
 

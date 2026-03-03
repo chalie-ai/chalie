@@ -1,7 +1,7 @@
 """
 Working Memory Service - Rolling buffer of raw conversation turns.
 
-Redis-based FIFO buffer of the last N raw turns for immediate context.
+MemoryStore-based FIFO buffer of the last N raw turns for immediate context.
 Unlike gists (compressed summaries), this stores verbatim user/assistant turns.
 """
 
@@ -9,11 +9,11 @@ import json
 import time
 import logging
 from typing import List, Dict
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 
 class WorkingMemoryService:
-    """Manages a rolling buffer of raw conversation turns in Redis."""
+    """Manages a rolling buffer of raw conversation turns in MemoryStore."""
 
     def __init__(self, max_turns: int = 4):
         """
@@ -23,12 +23,12 @@ class WorkingMemoryService:
             max_turns: Maximum number of turns to keep (default 4).
                        Stored as 2x entries (role + content per turn).
         """
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.max_turns = max_turns
         self.max_entries = max_turns * 2  # Each turn has role + content
 
     def _get_memory_key(self, identifier: str) -> str:
-        """Generate Redis key for working memory list.
+        """Generate MemoryStore key for working memory list.
 
         Args:
             identifier: thread_id (preferred) or topic name (legacy)
@@ -56,7 +56,7 @@ class WorkingMemoryService:
         })
 
         # RPUSH + LTRIM for FIFO eviction + safety TTL
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.rpush(memory_key, turn_data)
         pipe.ltrim(memory_key, -self.max_entries, -1)
         pipe.expire(memory_key, 86400)  # 24-hour safety TTL, refreshed each append
@@ -85,9 +85,9 @@ class WorkingMemoryService:
 
         if n is not None:
             entries = n * 2
-            raw_entries = self.redis.lrange(memory_key, -entries, -1)
+            raw_entries = self.store.lrange(memory_key, -entries, -1)
         else:
-            raw_entries = self.redis.lrange(memory_key, 0, -1)
+            raw_entries = self.store.lrange(memory_key, 0, -1)
 
         turns = []
         for entry in raw_entries:
@@ -130,7 +130,7 @@ class WorkingMemoryService:
             identifier: Thread ID or topic name
         """
         memory_key = self._get_memory_key(identifier)
-        self.redis.delete(memory_key)
+        self.store.delete(memory_key)
 
     def get_buffer_size(self, identifier: str) -> int:
         """
@@ -143,4 +143,4 @@ class WorkingMemoryService:
             Number of entries
         """
         memory_key = self._get_memory_key(identifier)
-        return self.redis.llen(memory_key)
+        return self.store.llen(memory_key)

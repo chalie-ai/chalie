@@ -2,14 +2,14 @@
 NothingAction — The default fallback action.
 
 Always eligible, score 0. Does nothing beyond what the drift engine
-already does (store the gist in Redis for reactive surfacing).
+already does (store the gist in MemoryStore for reactive surfacing).
 """
 
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
 
 class NothingAction(AutonomousAction):
-    """Default action: let the drift gist live in Redis as-is."""
+    """Default action: let the drift gist live in MemoryStore as-is."""
 
     def __init__(self):
         super().__init__(name='NOTHING', enabled=True, priority=-1)

@@ -1,7 +1,7 @@
 """
 Event Bus Service - Formal emit/subscribe pattern for async events.
 
-Thin coordination layer using Redis lists for durable delivery.
+Thin coordination layer using MemoryStore lists for durable delivery.
 Event handlers translate events into existing RQ queue enqueue operations.
 """
 
@@ -9,7 +9,7 @@ import json
 import time
 import logging
 from typing import Callable, Dict, Any, List, Optional
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 # Event type constants
 ENCODE_EVENT = 'encode_event'
@@ -19,15 +19,15 @@ INTERACTION_LOGGED = 'interaction_logged'
 
 
 class EventBusService:
-    """Manages event emission and subscription via Redis lists."""
+    """Manages event emission and subscription via MemoryStore lists."""
 
     def __init__(self):
-        """Initialize event bus with Redis connection."""
-        self.redis = RedisClientService.create_connection()
+        """Initialize event bus with MemoryStore connection."""
+        self.store = MemoryClientService.create_connection()
         self._handlers: Dict[str, List[Callable]] = {}
 
     def _get_event_queue_key(self, event_type: str) -> str:
-        """Generate Redis key for an event queue."""
+        """Generate MemoryStore key for an event queue."""
         return f"event_bus:{event_type}"
 
     def emit(self, event_type: str, payload: Dict[str, Any]) -> bool:
@@ -50,7 +50,7 @@ class EventBusService:
         queue_key = self._get_event_queue_key(event_type)
 
         try:
-            self.redis.rpush(queue_key, json.dumps(event))
+            self.store.rpush(queue_key, json.dumps(event))
             logging.debug(f"[EVENT BUS] Emitted {event_type}")
             return True
         except Exception as e:
@@ -89,7 +89,7 @@ class EventBusService:
         processed = 0
 
         for _ in range(batch_size):
-            event_json = self.redis.lpop(queue_key)
+            event_json = self.store.lpop(queue_key)
             if not event_json:
                 break
 
@@ -125,12 +125,12 @@ class EventBusService:
             Number of pending events
         """
         queue_key = self._get_event_queue_key(event_type)
-        return self.redis.llen(queue_key)
+        return self.store.llen(queue_key)
 
     def emit_and_handle(self, event_type: str, payload: Dict[str, Any]):
         """
         Emit an event and immediately process it with registered handlers.
-        Useful for synchronous event handling without going through Redis.
+        Useful for synchronous event handling without going through MemoryStore.
 
         Args:
             event_type: Type of event
@@ -138,7 +138,7 @@ class EventBusService:
         """
         handlers = self._handlers.get(event_type, [])
         if not handlers:
-            # No handlers registered, emit to Redis for later processing
+            # No handlers registered, emit to MemoryStore for later processing
             self.emit(event_type, payload)
             return
 

@@ -1,7 +1,7 @@
 """
-Centralized Redis key patterns for the ACT loop system.
+Centralized MemoryStore key patterns for the ACT loop system.
 
-All ACT-related Redis keys MUST be defined here to prevent scattered
+All ACT-related keys MUST be defined here to prevent scattered
 string construction across 5+ files.
 """
 

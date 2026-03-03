@@ -85,14 +85,14 @@ class TemporalPatternService:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*) AS cnt
+                    SELECT CAST(strftime('%H', created_at) AS INTEGER) AS hour, COUNT(*) AS cnt
                     FROM interaction_log
                     WHERE event_type = 'user_input'
-                      AND created_at >= %s
+                      AND created_at >= ?
                     GROUP BY hour
                     ORDER BY hour
                     """,
-                    (cutoff,)
+                    (cutoff.isoformat(),)
                 )
                 rows = cursor.fetchall()
                 cursor.close()
@@ -108,14 +108,14 @@ class TemporalPatternService:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT EXTRACT(DOW FROM created_at)::int AS dow, COUNT(*) AS cnt
+                    SELECT CAST(strftime('%w', created_at) AS INTEGER) AS dow, COUNT(*) AS cnt
                     FROM interaction_log
                     WHERE event_type = 'user_input'
-                      AND created_at >= %s
+                      AND created_at >= ?
                     GROUP BY dow
                     ORDER BY dow
                     """,
-                    (cutoff,)
+                    (cutoff.isoformat(),)
                 )
                 rows = cursor.fetchall()
                 cursor.close()
@@ -133,18 +133,18 @@ class TemporalPatternService:
                 cursor.execute(
                     """
                     SELECT topic,
-                           EXTRACT(HOUR FROM created_at)::int AS hour,
+                           CAST(strftime('%H', created_at) AS INTEGER) AS hour,
                            COUNT(*) AS cnt
                     FROM interaction_log
                     WHERE event_type = 'user_input'
-                      AND created_at >= %s
+                      AND created_at >= ?
                       AND topic IS NOT NULL
                     GROUP BY topic, hour
                     HAVING COUNT(*) >= 3
                     ORDER BY cnt DESC
                     LIMIT 50
                     """,
-                    (cutoff,)
+                    (cutoff.isoformat(),)
                 )
                 rows = cursor.fetchall()
                 cursor.close()

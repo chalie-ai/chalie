@@ -1146,12 +1146,12 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 thread_id, response_data['response'], response_data['generation_time']
             )
 
-        # Store proactive_id in Redis for engagement correlation
+        # Store proactive_id in MemoryStore for engagement correlation
         if proactive_id:
             try:
-                from services.redis_client import RedisClientService
-                redis_conn = RedisClientService.create_connection()
-                redis_conn.setex(
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
+                store.setex(
                     f"proactive_response_tag:{topic}",
                     14400,  # 4h TTL
                     proactive_id,
@@ -1432,12 +1432,12 @@ def _should_deliver_followup(user_id: str, cycle_id: str) -> str:
     since the follow-up anchoring makes it coherent.
     """
     try:
-        from services.redis_client import RedisClientService
-        redis_conn = RedisClientService.create_connection()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
 
         # Check defer count
         defer_key = f"followup_defer:{cycle_id}"
-        defer_count = int(redis_conn.get(defer_key) or 0)
+        defer_count = int(store.get(defer_key) or 0)
 
         if defer_count >= 3:
             return 'suppress'
@@ -1500,17 +1500,17 @@ def _cancel_active_tool_work(topic: str):
     try:
         from services.cycle_service import CycleService
         from services.database_service import get_shared_db_service
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
         db_service = get_shared_db_service()
-        redis_conn = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
         cycle_service = CycleService(db_service)
         active = cycle_service.get_active_cycles(
             topic=topic, cycle_type='tool_work', status='processing'
         )
         for cycle in active:
             cycle_service.complete_cycle(cycle['cycle_id'], status='cancelled')
-            redis_conn.set(f"cancel:{cycle['cycle_id']}", "1", ex=300)
+            store.set(f"cancel:{cycle['cycle_id']}", "1", ex=300)
         if active:
             logging.info(f"[DIGEST] Cancelled {len(active)} active tool-work cycles")
     except Exception as e:
@@ -1676,8 +1676,8 @@ def _handle_act_triage(
         _ws_uuid = metadata.get('uuid')
         if _ws_uuid:
             try:
-                from services.redis_client import RedisClientService
-                _r = RedisClientService.create_connection()
+                from services.memory_client import MemoryClientService
+                _r = MemoryClientService.create_connection()
                 _r.setex(f"sse_pending:{_ws_uuid}", 600, "1")
             except Exception as _rf:
                 logging.warning(f"[DIGEST] Could not set sse_pending flag: {_rf}")
@@ -1701,7 +1701,7 @@ def _handle_act_triage(
 # Immediate Identity Promotion (IIP)
 #
 # Deterministic regex patterns for detecting explicit name statements.
-# Written synchronously (before any LLM call) to Redis + Postgres so the name
+# Written synchronously (before any LLM call) to MemoryStore + SQLite so the name
 # is available within the same request cycle. Target: <5ms. No LLM, no embeddings.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1732,7 +1732,7 @@ _IIP_STOPWORDS = frozenset([
 
 def _run_iip_hook(text: str, database_service) -> None:
     """
-    Detect explicit name statements and write to Redis + Postgres synchronously.
+    Detect explicit name statements and write to MemoryStore + SQLite synchronously.
 
     Deterministic regex only — no LLM, no embedding. Target: <5ms. Never raises.
     Preserves user's mixed-case input (McDonald, O'Brien); only title-cases
@@ -1768,7 +1768,7 @@ def _run_iip_hook(text: str, database_service) -> None:
             user_id='primary',
             speaker_confidence=1.0,
         )
-        logging.info(f"[IIP] Promoted name='{matched_name}' → Redis + Postgres")
+        logging.info(f"[IIP] Promoted name='{matched_name}' → MemoryStore + SQLite")
 
     except Exception as e:
         logging.warning(f"[IIP] Hook failed (non-fatal): {e}")
@@ -1894,17 +1894,17 @@ def _detect_fork_response(text: str, thread_id: str):
     """
     Detect if the user's message is a response to a previously offered fork.
 
-    If a fork was pending (adaptive_fork_pending:{thread_id} Redis key exists),
+    If a fork was pending (adaptive_fork_pending:{thread_id} MemoryStore key exists),
     pattern-match the user's reply and store the corresponding micro-preference.
     """
     import re as _re
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
         from services.user_trait_service import UserTraitService
 
-        redis_conn = RedisClientService.create_connection()
-        fork_type = redis_conn.get(f"adaptive_fork_pending:{thread_id}")
+        store = MemoryClientService.create_connection()
+        fork_type = store.get(f"adaptive_fork_pending:{thread_id}")
         if not fork_type:
             return
 
@@ -1924,7 +1924,7 @@ def _detect_fork_response(text: str, thread_id: str):
                 )
                 logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")
                 # Clear the pending key
-                redis_conn.delete(f"adaptive_fork_pending:{thread_id}")
+                store.delete(f"adaptive_fork_pending:{thread_id}")
                 break
     except Exception as e:
         logging.debug(f"[DIGEST] Fork response detection failed: {e}")
@@ -1932,22 +1932,22 @@ def _detect_fork_response(text: str, thread_id: str):
 
 def _store_adaptive_signals(thread_id: str, text: str, signals: dict = None):
     """
-    Store a minimal snapshot of current exchange signals to Redis for use by
+    Store a minimal snapshot of current exchange signals to MemoryStore for use by
     AdaptiveLayerService (energy mirroring, cognitive load).
 
     Key: adaptive_signals:{thread_id}, TTL: 300s
     """
     import json as _json
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         import re as _re
 
-        redis_conn = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
         snapshot = {
             'prompt_token_count': len(text.split()) if text else 0,
             'explicit_feedback': signals.get('explicit_feedback') if signals else None,
         }
-        redis_conn.setex(
+        store.setex(
             f"adaptive_signals:{thread_id}",
             300,
             _json.dumps(snapshot),
@@ -2055,7 +2055,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     working_memory.append_turn(thread_id, 'user', text)
 
     # IIP: Immediate Identity Promotion — synchronous, before any LLM call
-    # Detects explicit name statements and writes to Redis + Postgres immediately.
+    # Detects explicit name statements and writes to MemoryStore + SQLite immediately.
     try:
         from services.database_service import get_shared_db_service
         _run_iip_hook(text, get_shared_db_service())
@@ -2115,11 +2115,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             )
             if behavior_reward != 0.0:
                 logging.debug(f"[DIGEST] Previous exchange reward: {behavior_reward:.2f}")
-                # Cache reward in Redis for identity reinforcement (read by memory chunker)
+                # Cache reward in MemoryStore for identity reinforcement (read by memory chunker)
                 try:
-                    from services.redis_client import RedisClientService
-                    reward_redis = RedisClientService.create_connection()
-                    reward_redis.setex(f"identity_reward:{context_topic}", 1800, str(behavior_reward))
+                    from services.memory_client import MemoryClientService
+                    reward_store = MemoryClientService.create_connection()
+                    reward_store.setex(f"identity_reward:{context_topic}", 1800, str(behavior_reward))
                 except Exception as re:
                     logging.debug(f"[DIGEST] Failed to cache identity reward: {re}")
 
@@ -2379,10 +2379,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
         # Count consecutive exchanges on current topic for auto-inference
         try:
-            from services.redis_client import RedisClientService
-            _redis = RedisClientService.create_connection()
+            from services.memory_client import MemoryClientService
+            _store = MemoryClientService.create_connection()
             _streak_key = f"topic_streak:{thread_id}"
-            _streak_raw = _redis.get(_streak_key)
+            _streak_raw = _store.get(_streak_key)
             _streak_data = json.loads(_streak_raw) if _streak_raw else {}
 
             if _streak_data.get('topic') == topic:
@@ -2390,7 +2390,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             else:
                 _streak_count = 1
 
-            _redis.setex(_streak_key, 7200, json.dumps({'topic': topic, 'count': _streak_count}))
+            _store.setex(_streak_key, 7200, json.dumps({'topic': topic, 'count': _streak_count}))
 
             # Auto-infer focus after consecutive exchanges on same topic
             focus_service.maybe_infer_focus(thread_id, topic, _streak_count)
@@ -2460,9 +2460,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Step 9c: Compute memory_confidence before intent classifier
     # Use same FOK formula as mode_router_service.py collect_routing_signals()
-    from services.redis_client import RedisClientService
-    redis_conn = RedisClientService.create_connection(decode_responses=True)
-    raw_fok = redis_conn.get(f"fok:{topic}") if topic else None
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection(decode_responses=True)
+    raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 
@@ -2706,7 +2706,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
         else:
             # RESPOND or CLARIFY branch — route_and_generate with forced mode
-            # Build signals from context_snapshot + NLP (avoids redundant Redis reads)
+            # Build signals from context_snapshot + NLP (avoids redundant MemoryStore reads)
             _nlp = compute_nlp_signals(text, intent)
             _forced_signals = {
                 # Context signals already available from Phase A/B
@@ -2748,7 +2748,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     except Exception as _triage_ex:
         logging.error(f"[DIGEST] Triage dispatch failed: {_triage_ex}", exc_info=True)
-        # Fallback: build signals from context_snapshot + NLP (avoids redundant Redis reads)
+        # Fallback: build signals from context_snapshot + NLP (avoids redundant MemoryStore reads)
         _fb_nlp = compute_nlp_signals(text, intent)
         _fallback_signals = {
             'context_warmth': context_warmth,

@@ -107,11 +107,11 @@ class TestIIPHook:
         mock_id, _ = _run_hook("I go by Chris")
         assert mock_id.set_field.called
 
-    def test_redis_failure_does_not_raise(self):
-        """Redis failure in set_field → store_trait still called; no raise."""
+    def test_store_failure_does_not_raise(self):
+        """MemoryStore failure in set_field → store_trait still called; no raise."""
         mock_db = MagicMock()
         mock_identity = MagicMock()
-        mock_identity.set_field.side_effect = ConnectionError("Redis down")
+        mock_identity.set_field.side_effect = ConnectionError("MemoryStore down")
         mock_trait = MagicMock()
         mock_trait.store_trait.return_value = True
 
@@ -121,8 +121,8 @@ class TestIIPHook:
             # Should not raise
             _run_iip_hook("call me Dylan", mock_db)
 
-    def test_postgres_failure_does_not_raise(self):
-        """Postgres failure in store_trait → no raise."""
+    def test_database_failure_does_not_raise(self):
+        """Database failure in store_trait → no raise."""
         mock_db = MagicMock()
         mock_identity = MagicMock()
         mock_identity.set_field.return_value = True

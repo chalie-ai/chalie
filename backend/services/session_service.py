@@ -1,7 +1,7 @@
 """
 Session Service - Track conversation sessions and detect episode generation triggers.
 
-When a thread_id is provided, session state is stored in the Redis thread hash
+When a thread_id is provided, session state is stored in the MemoryStore thread hash
 (survives restarts). Otherwise falls back to in-memory state (legacy behavior).
 """
 
@@ -32,23 +32,23 @@ class SessionService:
 
         # Thread-backed state
         self._thread_id: str = None
-        self._redis = None
+        self._store = None
 
     def set_thread(self, thread_id: str):
         """Bind this session to a thread for persistent state."""
         self._thread_id = thread_id
         if thread_id:
             try:
-                from services.redis_client import RedisClientService
-                self._redis = RedisClientService.create_connection()
+                from services.memory_client import MemoryClientService
+                self._store = MemoryClientService.create_connection()
             except Exception:
-                self._redis = None
+                self._store = None
 
     def _get_thread_field(self, field: str, default: str = "0") -> str:
         """Read a field from the thread hash."""
-        if self._thread_id and self._redis:
+        if self._thread_id and self._store:
             try:
-                val = self._redis.hget(f"thread:{self._thread_id}", field)
+                val = self._store.hget(f"thread:{self._thread_id}", field)
                 return val if val is not None else default
             except Exception:
                 pass
@@ -56,9 +56,9 @@ class SessionService:
 
     def _set_thread_field(self, field: str, value: str):
         """Write a field to the thread hash."""
-        if self._thread_id and self._redis:
+        if self._thread_id and self._store:
             try:
-                self._redis.hset(f"thread:{self._thread_id}", field, value)
+                self._store.hset(f"thread:{self._thread_id}", field, value)
             except Exception:
                 pass
 
@@ -85,7 +85,7 @@ class SessionService:
         topic_count = self.topic_exchange_count
         global_count = self.global_exchange_count
 
-        # If thread-backed, read from Redis
+        # If thread-backed, read from MemoryStore
         if self._thread_id:
             try:
                 topic_count = int(self._get_thread_field("topic_exchange_count", "0"))
@@ -159,7 +159,7 @@ class SessionService:
         Never raises.
         """
         try:
-            if self._thread_id and self._redis:
+            if self._thread_id and self._store:
                 raw = self._get_thread_field("last_activity", default="")
                 if raw:
                     gap = time.time() - float(raw)

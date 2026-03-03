@@ -44,37 +44,37 @@ class TestConstants:
 
 class TestGetSleepInterval:
 
-    def test_busy_when_prompt_queue_has_items(self, mock_redis):
-        mock_redis.rpush(PROMPT_QUEUE_KEY, "job1")
-        result = _get_sleep_interval(mock_redis)
+    def test_busy_when_prompt_queue_has_items(self, mock_store):
+        mock_store.rpush(PROMPT_QUEUE_KEY, "job1")
+        result = _get_sleep_interval(mock_store)
         # BUSY_SLEEP=10, ±10% jitter → [9.0, 11.0]
         assert 9.0 <= result <= 11.0
 
-    def test_busy_when_recent_interaction(self, mock_redis):
-        mock_redis.set(LAST_INTERACTION_KEY, str(time.time() - 30))  # 30s ago
-        result = _get_sleep_interval(mock_redis)
+    def test_busy_when_recent_interaction(self, mock_store):
+        mock_store.set(LAST_INTERACTION_KEY, str(time.time() - 30))  # 30s ago
+        result = _get_sleep_interval(mock_store)
         assert 9.0 <= result <= 11.0
 
-    def test_normal_when_gap_120_to_300(self, mock_redis):
-        mock_redis.set(LAST_INTERACTION_KEY, str(time.time() - 200))  # 200s gap
-        result = _get_sleep_interval(mock_redis)
+    def test_normal_when_gap_120_to_300(self, mock_store):
+        mock_store.set(LAST_INTERACTION_KEY, str(time.time() - 200))  # 200s gap
+        result = _get_sleep_interval(mock_store)
         # NORMAL_SLEEP=5, ±10% → [4.5, 5.5]
         assert 4.5 <= result <= 5.5
 
-    def test_idle_when_gap_over_300(self, mock_redis):
-        mock_redis.set(LAST_INTERACTION_KEY, str(time.time() - 600))  # 10min gap
-        result = _get_sleep_interval(mock_redis)
+    def test_idle_when_gap_over_300(self, mock_store):
+        mock_store.set(LAST_INTERACTION_KEY, str(time.time() - 600))  # 10min gap
+        result = _get_sleep_interval(mock_store)
         # IDLE_SLEEP=1, ±10% → [0.9, 1.1]
         assert 0.9 <= result <= 1.1
 
-    def test_idle_when_no_timestamp(self, mock_redis):
+    def test_idle_when_no_timestamp(self, mock_store):
         # No LAST_INTERACTION_KEY set
-        result = _get_sleep_interval(mock_redis)
+        result = _get_sleep_interval(mock_store)
         assert 0.9 <= result <= 1.1
 
-    def test_normal_on_redis_error(self):
-        broken_redis = MagicMock()
-        broken_redis.llen.side_effect = ConnectionError("dead")
-        result = _get_sleep_interval(broken_redis)
+    def test_normal_on_store_error(self):
+        broken_store = MagicMock()
+        broken_store.llen.side_effect = ConnectionError("dead")
+        result = _get_sleep_interval(broken_store)
         # Fallback: NORMAL_SLEEP=5, ±10% → [4.5, 5.5]
         assert 4.5 <= result <= 5.5

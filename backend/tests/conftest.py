@@ -15,11 +15,11 @@ import pytest
 
 
 @pytest.fixture
-def mock_redis():
+def mock_store():
     """Isolated MemoryStore — same implementation used in production."""
     from services.memory_store import MemoryStore
     store = MemoryStore()
-    with patch('services.redis_client.RedisClientService.create_connection', return_value=store):
+    with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
         yield store
 
 
@@ -93,7 +93,7 @@ def mock_config():
         'mode-tiebreaker': 'Test tiebreaker prompt',
     }
     connections = {
-        'redis': {},
+        'memory': {},
         'rest_api': {'host': '0.0.0.0', 'port': 8081},
         'voice': {'enabled': False},
     }
@@ -215,14 +215,14 @@ def authed_client():
 
     Usage:
         def test_endpoint(self, authed_client):
-            client, mock_db, mock_redis = authed_client
+            client, mock_db, mock_store = authed_client
             mock_db._test_session_result.fetchall.return_value = [...]
             response = client.get('/system/health')
     """
     from api import create_app
 
     mock_db = MagicMock()
-    mock_r = MagicMock()
+    mock_store = MagicMock()
 
     # Wire up db.connection() context manager
     cursor = MagicMock()
@@ -256,11 +256,11 @@ def authed_client():
 
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-         patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r):
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as client:
-            yield (client, mock_db, mock_r)
+            yield (client, mock_db, mock_store)
 
 
 @pytest.fixture
@@ -308,7 +308,7 @@ def tmp_sqlite_db(tmp_path):
 
 
 @pytest.fixture
-def flask_test_client(mock_redis):
+def flask_test_client(mock_store):
     """Flask test client with mocked session for API tests."""
     from flask import Flask
 

@@ -157,7 +157,7 @@ class TestModeRouter:
         assert result1['scores'] == result2['scores']
         assert result1['mode'] == result2['mode']
 
-    def test_collect_routing_signals_structure(self, mock_redis):
+    def test_collect_routing_signals_structure(self, mock_store):
         """collect_routing_signals returns expected keys."""
         wm = MagicMock()
         wm.get_recent_turns.return_value = [{'role': 'user', 'content': 'hi'}]
@@ -196,7 +196,7 @@ class TestModeRouter:
 class TestComputeNlpSignals:
     """Tests for the standalone compute_nlp_signals() function."""
 
-    def test_nlp_signals_match_collect_routing_signals_nlp_portion(self, mock_redis):
+    def test_nlp_signals_match_collect_routing_signals_nlp_portion(self, mock_store):
         """compute_nlp_signals() must produce the same NLP keys as collect_routing_signals()."""
         wm = MagicMock()
         wm.get_recent_turns.return_value = []

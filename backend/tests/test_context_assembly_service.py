@@ -147,7 +147,7 @@ class TestContextAssemblyService:
 
         with patch(
             'services.context_assembly_service.ContextAssemblyService._get_working_memory',
-            side_effect=Exception('Redis down'),
+            side_effect=Exception('MemoryStore down'),
         ):
             # Call the real _get_working_memory which catches exceptions
             result = svc._get_working_memory.__wrapped__(svc, 'topic') if hasattr(svc._get_working_memory, '__wrapped__') else ''

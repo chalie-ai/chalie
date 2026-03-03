@@ -26,13 +26,13 @@ class TestGistStorage:
 
     # ── Confidence filtering ──────────────────────────────────────
 
-    def test_store_gist_above_threshold(self, mock_redis):
+    def test_store_gist_above_threshold(self, mock_store):
         svc = self._make_service()
         gists = [self._make_gist(confidence=8)]
         stored = svc.store_gists("topic-a", gists, "hello", "hi there")
         assert stored == 1
 
-    def test_reject_gist_below_threshold(self, mock_redis):
+    def test_reject_gist_below_threshold(self, mock_store):
         """The amnesia bug — confidence < min_confidence must be rejected when gists exist."""
         svc = self._make_service()
         # First store a valid gist so has_existing_gists is True
@@ -42,14 +42,14 @@ class TestGistStorage:
         stored = svc.store_gists("topic-a", [self._make_gist(confidence=3)], "p2", "r2")
         assert stored == 0
 
-    def test_bypass_threshold_when_empty(self, mock_redis):
+    def test_bypass_threshold_when_empty(self, mock_store):
         """First gists stored regardless of confidence when topic has no gists."""
         svc = self._make_service()
         gists = [self._make_gist(confidence=2)]
         stored = svc.store_gists("empty-topic", gists, "p", "r")
         assert stored == 1
 
-    def test_cold_start_gists_filtered_from_bypass(self, mock_redis):
+    def test_cold_start_gists_filtered_from_bypass(self, mock_store):
         """Cold-start gists don't count as 'has gists' for confidence bypass."""
         svc = self._make_service()
         # Inject cold-start gists (type=cold_start, confidence=5)
@@ -65,7 +65,7 @@ class TestGistStorage:
 
     # ── Deduplication ─────────────────────────────────────────────
 
-    def test_dedup_jaccard_identical(self, mock_redis):
+    def test_dedup_jaccard_identical(self, mock_store):
         """Identical content should be deduplicated (Jaccard >= 0.7)."""
         svc = self._make_service()
         gist1 = self._make_gist(content="the quick brown fox jumps", confidence=8)
@@ -75,7 +75,7 @@ class TestGistStorage:
         stored = svc.store_gists("topic-a", [gist2], "p2", "r2")
         assert stored == 0
 
-    def test_dedup_replaces_higher_confidence(self, mock_redis):
+    def test_dedup_replaces_higher_confidence(self, mock_store):
         """Higher confidence duplicate replaces the existing one."""
         svc = self._make_service()
         gist_low = self._make_gist(content="the quick brown fox jumps over", confidence=7)
@@ -92,7 +92,7 @@ class TestGistStorage:
 
     # ── Type cap enforcement ──────────────────────────────────────
 
-    def test_type_cap_enforcement(self, mock_redis):
+    def test_type_cap_enforcement(self, mock_store):
         """Max 2 per type — lowest confidence removed."""
         svc = self._make_service(max_per_type=2)
 
@@ -112,7 +112,7 @@ class TestGistStorage:
 
     # ── Touch-on-read TTL ─────────────────────────────────────────
 
-    def test_touch_on_read_refreshes_ttl(self, mock_redis):
+    def test_touch_on_read_refreshes_ttl(self, mock_store):
         """get_latest_gists refreshes TTL via expire calls."""
         svc = self._make_service()
         svc.store_gists("topic-a", [self._make_gist()], "p", "r")
@@ -123,19 +123,19 @@ class TestGistStorage:
 
         # Verify the gist key has a TTL set (MemoryStore supports ttl())
         index_key = svc._get_gist_index_key("topic-a")
-        ttl = mock_redis.ttl(index_key)
+        ttl = mock_store.ttl(index_key)
         assert ttl > 0
 
     # ── Confidence coercion ───────────────────────────────────────
 
-    def test_confidence_coercion_string_to_int(self, mock_redis):
+    def test_confidence_coercion_string_to_int(self, mock_store):
         """String confidence should be coerced to int."""
         svc = self._make_service()
         gist = {"content": "test content here for coercion", "type": "observation", "confidence": "8"}
         stored = svc.store_gists("topic-a", [gist], "p", "r")
         assert stored == 1
 
-    def test_confidence_coercion_invalid_to_zero(self, mock_redis):
+    def test_confidence_coercion_invalid_to_zero(self, mock_store):
         """Invalid confidence should coerce to 0 and be rejected (when gists exist)."""
         svc = self._make_service()
         # First store a valid gist

@@ -42,9 +42,9 @@ def memory_context():
             ts = get_thread_service()
             thread_id = ts.get_active_thread_id("default", "default")
             if thread_id:
-                from services.redis_client import RedisClientService
-                redis = RedisClientService.create_connection()
-                topic_data = redis.hgetall(f"thread:{thread_id}")
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
+                topic_data = store.hgetall(f"thread:{thread_id}")
                 topic = topic_data.get("current_topic", "") if topic_data else ""
                 if topic:
                     fact_service = FactStoreService()
@@ -123,10 +123,10 @@ def memory_forget():
 
             fs = FactStoreService()
             # Delete specific fact key + remove from index
-            redis_key = fs._get_fact_key(topic, fact_key)
+            store_key = fs._get_fact_key(topic, fact_key)
             index_key = fs._get_fact_index_key(topic)
-            fs.redis.delete(redis_key)
-            fs.redis.zrem(index_key, fact_key)
+            fs.store.delete(store_key)
+            fs.store.zrem(index_key, fact_key)
 
             return jsonify({"deleted": True, "scope": "fact", "topic": topic, "fact_key": fact_key}), 200
 
@@ -135,13 +135,13 @@ def memory_forget():
             if confirm != "yes":
                 return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400
 
-            # Clear all Redis memory stores
-            from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
+            # Clear all MemoryStore memory stores
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
             for pattern in ["working_memory:*", "gist:*", "gist_index:*", "fact:*", "fact_index:*", "world_state:*"]:
-                keys = redis.keys(pattern)
+                keys = store.keys(pattern)
                 if keys:
-                    redis.delete(*keys)
+                    store.delete(*keys)
 
             # Truncate SQLite tables
             from services.database_service import get_shared_db_service

@@ -11,7 +11,7 @@ Previously, **every response generation** retrieved and injected ALL context nod
 ### Example Waste
 An ACKNOWLEDGE for "Hey!" would trigger:
 - sqlite-vec vector search for episodic memory
-- Redis reads for facts, gists, working memory
+- MemoryStore reads for facts, gists, working memory
 - Skill registry queries
 
 None of which the ACKNOWLEDGE template even uses.
@@ -19,7 +19,7 @@ None of which the ACKNOWLEDGE template even uses.
 ### Expected Savings
 | Mode | I/O Skipped | Token Savings |
 |------|-------------|---------------|
-| ACKNOWLEDGE | 5 Redis reads, 1 PG vector search, skill queries | ~1500-3000 |
+| ACKNOWLEDGE | 5 MemoryStore reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
 | CLARIFY (warm) | 1 PG vector search, skill queries | ~500-1500 |
 | RESPOND (greeting) | 1 PG vector search, focus queries | ~800-2000 |
 | ACT | Identity/trait lookups | ~300-800 |

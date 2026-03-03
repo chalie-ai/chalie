@@ -8,8 +8,8 @@ Sends prompts across multiple UUIDs (cold + warm contexts) and tracks:
 - Tie-breaker invocation rate and success
 
 Usage:
-    docker exec chalie python3 tests/smoke_test_50.py
-    python3 tests/smoke_test_50.py --host grck.lan
+    python3 tests/smoke_test_50.py
+    python3 tests/smoke_test_50.py --host myserver.local
 """
 
 import sys

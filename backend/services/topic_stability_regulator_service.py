@@ -60,7 +60,7 @@ class TopicStabilityRegulator:
     - Detects sustained deviations from stability bands
     - Makes minimal single-parameter adjustments
     - Enforces cooldowns to prevent oscillation
-    - Persists to disk (survives Redis flush)
+    - Persists to disk (survives MemoryStore flush)
     """
 
     # Default parameters

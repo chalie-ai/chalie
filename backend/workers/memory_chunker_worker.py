@@ -36,7 +36,7 @@ def load_config():
 
 
 def load_existing_gists(topic: str, min_confidence: int = 7) -> list:
-    """Load existing gists for context injection from Redis."""
+    """Load existing gists for context injection from MemoryStore."""
     config = ConfigService.resolve_agent_config("memory-chunker")
     gist_storage = GistStorageService(
         attention_span_minutes=config.get('attention_span_minutes', 30),
@@ -436,13 +436,13 @@ def _detect_challenge_reaction(prompt_message: str, response_message: str):
 
 def _apply_identity_reinforcement(topic: str, memory_chunk: dict):
     """Apply dual-channel identity reinforcement after chunk extraction."""
-    from services.redis_client import RedisClientService
+    from services.memory_client import MemoryClientService
 
     emotion_signals = _compute_emotion_signals(memory_chunk)
 
-    # Read last reward signal from Redis (1-exchange lag)
-    redis_conn = RedisClientService.create_connection()
-    reward_raw = redis_conn.get(f"identity_reward:{topic}")
+    # Read last reward signal from MemoryStore (1-exchange lag)
+    store = MemoryClientService.create_connection()
+    reward_raw = store.get(f"identity_reward:{topic}")
     last_reward = float(reward_raw) if reward_raw else 0.0
 
     # Need vectors for state-aware reward computation
@@ -530,7 +530,7 @@ def memory_chunker_worker(job_data: dict) -> str:
                     logging.error(f"[memory_chunker] Exchange {exchange_id[:8]} not found in thread {thread_id} — memory chunk lost")
                     raise RuntimeError(f"Exchange {exchange_id[:8]} not found in thread {thread_id}")
 
-            # Store gists in Redis with TTL and confidence filtering
+            # Store gists in MemoryStore with TTL and confidence filtering
             gists = memory_chunk.get('gists', [])
             if gists:
                 config = config_data['config']
@@ -553,7 +553,7 @@ def memory_chunker_worker(job_data: dict) -> str:
                     response=response_message
                 )
 
-                logging.info(f"log [memory_chunker]: Stored {stored_count}/{len(gists)} gists in Redis for topic '{topic}'")
+                logging.info(f"log [memory_chunker]: Stored {stored_count}/{len(gists)} gists in MemoryStore for topic '{topic}'")
 
             # Identity reinforcement: dual-channel (emotion + reward) → update vectors
             try:

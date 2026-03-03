@@ -53,8 +53,8 @@ def compute_nlp_signals(text: str, intent: dict = None) -> Dict[str, Any]:
     """
     Compute regex-only NLP signals from user text (<1ms).
 
-    Standalone function so callers that already have context signals from Redis
-    can merge NLP signals without re-reading Redis.
+    Standalone function so callers that already have context signals from MemoryStore
+    can merge NLP signals without re-reading MemoryStore.
 
     Args:
         text: User's raw prompt text
@@ -119,7 +119,7 @@ def collect_routing_signals(
     """
     Collect all routing signals from existing services and NLP analysis.
 
-    All Redis reads (~5ms total). NLP signals from regex (<1ms).
+    All MemoryStore reads (~5ms total). NLP signals from regex (<1ms).
 
     Args:
         text: User's raw prompt text
@@ -137,7 +137,7 @@ def collect_routing_signals(
     Returns:
         Dict of routing signals
     """
-    # Context signals (from existing services, all Redis reads)
+    # Context signals (from existing services, all MemoryStore reads)
     wm_turns = working_memory.get_recent_turns(topic) if topic else []
     working_memory_turns = len(wm_turns)
 
@@ -159,10 +159,10 @@ def collect_routing_signals(
     session_exchange_count = getattr(session_service, 'topic_exchange_count', 0) if session_service else 0
 
     # Memory confidence signal: FOK (Feeling-of-Knowing) per topic
-    # Read from Redis (set by recall skill), compute composite confidence score
-    from services.redis_client import RedisClientService
-    redis_conn = RedisClientService.create_connection(decode_responses=True)
-    raw_fok = redis_conn.get(f"fok:{topic}") if topic else None
+    # Read from MemoryStore (set by recall skill), compute composite confidence score
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection(decode_responses=True)
+    raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 

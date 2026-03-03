@@ -28,11 +28,11 @@ class FakeThought:
 
 
 @pytest.fixture
-def mock_redis():
-    """FakeRedis that stores values in a dict."""
+def mock_store():
+    """FakeStore that stores values in a dict."""
     store = {}
 
-    class FakeRedis:
+    class FakeStore:
         def get(self, key):
             return store.get(key)
 
@@ -59,21 +59,21 @@ def mock_redis():
             store[key] = str(val)
             return val
 
-    fake = FakeRedis()
+    fake = FakeStore()
     fake._store = store
     return fake
 
 
 @pytest.fixture
-def nurture(mock_redis):
-    """Create NurtureAction with mocked Redis."""
+def nurture(mock_store):
+    """Create NurtureAction with mocked MemoryStore."""
     with patch(
-        'services.autonomous_actions.nurture_action.RedisClientService'
+        'services.autonomous_actions.nurture_action.MemoryClientService'
     ) as mock_cls:
-        mock_cls.create_connection.return_value = mock_redis
+        mock_cls.create_connection.return_value = mock_store
         from services.autonomous_actions.nurture_action import NurtureAction
         action = NurtureAction(config={'user_id': 'test'})
-        action.redis = mock_redis
+        action.store = mock_store
         yield action
 
 
@@ -131,11 +131,11 @@ class TestPhaseGate:
 # ── Timing Gate ───────────────────────────────────────────────────────
 
 class TestTimingGate:
-    def _set_interaction(self, redis, seconds_ago):
-        redis.set('proactive:test:last_interaction_ts', str(time.time() - seconds_ago))
+    def _set_interaction(self, store, seconds_ago):
+        store.set('proactive:test:last_interaction_ts', str(time.time() - seconds_ago))
 
-    def test_blocks_during_quiet_hours(self, nurture, mock_redis):
-        self._set_interaction(mock_redis, 25000)
+    def test_blocks_during_quiet_hours(self, nurture, mock_store):
+        self._set_interaction(mock_store, 25000)
         with patch(
             'services.autonomous_actions.nurture_action.datetime'
         ) as mock_dt:
@@ -145,12 +145,16 @@ class TestTimingGate:
             assert details['rejected'] == 'quiet_hours'
 
     def test_blocks_no_interaction_history(self, nurture):
-        passes, details = nurture._timing_gate('surface')
-        assert passes is False
-        assert details['rejected'] == 'no_interaction_history'
+        with patch(
+            'services.autonomous_actions.nurture_action.datetime'
+        ) as mock_dt:
+            mock_dt.now.return_value.hour = 14  # 2 PM = not quiet
+            passes, details = nurture._timing_gate('surface')
+            assert passes is False
+            assert details['rejected'] == 'no_interaction_history'
 
-    def test_blocks_when_idle_below_surface_threshold(self, nurture, mock_redis):
-        self._set_interaction(mock_redis, 3600)  # 1h ago, need 6h
+    def test_blocks_when_idle_below_surface_threshold(self, nurture, mock_store):
+        self._set_interaction(mock_store, 3600)  # 1h ago, need 6h
         with patch(
             'services.autonomous_actions.nurture_action.datetime'
         ) as mock_dt:
@@ -159,8 +163,8 @@ class TestTimingGate:
             assert passes is False
             assert details['rejected'] == 'too_soon'
 
-    def test_surface_uses_6h_min_idle(self, nurture, mock_redis):
-        self._set_interaction(mock_redis, 22000)  # ~6.1h ago
+    def test_surface_uses_6h_min_idle(self, nurture, mock_store):
+        self._set_interaction(mock_store, 22000)  # ~6.1h ago
         with patch(
             'services.autonomous_actions.nurture_action.datetime'
         ) as mock_dt:
@@ -168,8 +172,8 @@ class TestTimingGate:
             passes, _ = nurture._timing_gate('surface')
             assert passes is True
 
-    def test_exploratory_uses_2h_min_idle(self, nurture, mock_redis):
-        self._set_interaction(mock_redis, 7500)  # ~2.1h ago
+    def test_exploratory_uses_2h_min_idle(self, nurture, mock_store):
+        self._set_interaction(mock_store, 7500)  # ~2.1h ago
         with patch(
             'services.autonomous_actions.nurture_action.datetime'
         ) as mock_dt:
@@ -177,9 +181,9 @@ class TestTimingGate:
             passes, _ = nurture._timing_gate('exploratory')
             assert passes is True
 
-    def test_blocks_within_daily_cooldown(self, nurture, mock_redis):
-        self._set_interaction(mock_redis, 25000)  # 7h ago
-        mock_redis.set('spark_nurture:test:last_sent_ts', str(time.time() - 3600))
+    def test_blocks_within_daily_cooldown(self, nurture, mock_store):
+        self._set_interaction(mock_store, 25000)  # 7h ago
+        mock_store.set('spark_nurture:test:last_sent_ts', str(time.time() - 3600))
         with patch(
             'services.autonomous_actions.nurture_action.datetime'
         ) as mock_dt:
@@ -188,14 +192,14 @@ class TestTimingGate:
             assert passes is False
             assert details['rejected'] == 'daily_cooldown'
 
-    def test_backoff_multiplies_daily_cooldown(self, nurture, mock_redis):
-        self._set_interaction(mock_redis, 25000)
+    def test_backoff_multiplies_daily_cooldown(self, nurture, mock_store):
+        self._set_interaction(mock_store, 25000)
         # Sent 25h ago — normally would pass 24h cooldown
-        mock_redis.set(
+        mock_store.set(
             'spark_nurture:test:last_sent_ts', str(time.time() - 90000)
         )
         # But backoff is 2x → effective cooldown is 48h
-        mock_redis.set('spark_nurture:test:backoff_multiplier', '2')
+        mock_store.set('spark_nurture:test:backoff_multiplier', '2')
         with patch(
             'services.autonomous_actions.nurture_action.datetime'
         ) as mock_dt:
@@ -213,25 +217,25 @@ class TestBackoffGate:
         passes, details = nurture._backoff_gate()
         assert passes is True
 
-    def test_passes_with_two_unanswered(self, nurture, mock_redis):
-        mock_redis.set('spark_nurture:test:unanswered_count', '2')
+    def test_passes_with_two_unanswered(self, nurture, mock_store):
+        mock_store.set('spark_nurture:test:unanswered_count', '2')
         passes, details = nurture._backoff_gate()
         assert passes is True
         assert details['unanswered'] == 2
 
-    def test_fails_at_three_unanswered(self, nurture, mock_redis):
-        mock_redis.set('spark_nurture:test:unanswered_count', '3')
+    def test_fails_at_three_unanswered(self, nurture, mock_store):
+        mock_store.set('spark_nurture:test:unanswered_count', '3')
         passes, details = nurture._backoff_gate()
         assert passes is False
         assert details['rejected'] == 'max_unanswered'
 
-    def test_pauses_at_max_unanswered(self, nurture, mock_redis):
-        mock_redis.set('spark_nurture:test:unanswered_count', '3')
+    def test_pauses_at_max_unanswered(self, nurture, mock_store):
+        mock_store.set('spark_nurture:test:unanswered_count', '3')
         nurture._backoff_gate()
-        assert mock_redis.get('spark_nurture:test:paused') == '1'
+        assert mock_store.get('spark_nurture:test:paused') == '1'
 
-    def test_fails_when_paused(self, nurture, mock_redis):
-        mock_redis.set('spark_nurture:test:paused', '1')
+    def test_fails_when_paused(self, nurture, mock_store):
+        mock_store.set('spark_nurture:test:paused', '1')
         passes, details = nurture._backoff_gate()
         assert passes is False
         assert details['rejected'] == 'paused'
@@ -311,7 +315,7 @@ class TestScoring:
 # ── Execute ───────────────────────────────────────────────────────────
 
 class TestExecute:
-    def test_updates_tracking_on_success(self, nurture, mock_redis, thought):
+    def test_updates_tracking_on_success(self, nurture, mock_store, thought):
         nurture._pending_phase = 'surface'
         nurture._gather_context = MagicMock(return_value={
             'phase': 'surface',
@@ -335,12 +339,12 @@ class TestExecute:
         nurture._deliver_nurture.assert_called_once()
 
         # Tracking should be updated
-        assert int(mock_redis.get('spark_nurture:test:unanswered_count')) == 1
-        assert int(mock_redis.get('spark_nurture:test:total_sent')) == 1
-        assert mock_redis.get('spark_nurture:test:last_sent_ts') is not None
+        assert int(mock_store.get('spark_nurture:test:unanswered_count')) == 1
+        assert int(mock_store.get('spark_nurture:test:total_sent')) == 1
+        assert mock_store.get('spark_nurture:test:last_sent_ts') is not None
 
-    def test_doubles_backoff_on_send(self, nurture, mock_redis, thought):
-        mock_redis.set('spark_nurture:test:backoff_multiplier', '1')
+    def test_doubles_backoff_on_send(self, nurture, mock_store, thought):
+        mock_store.set('spark_nurture:test:backoff_multiplier', '1')
         nurture._pending_phase = 'exploratory'
         nurture._gather_context = MagicMock(return_value={
             'phase': 'exploratory', 'thought_content': 'test',
@@ -353,10 +357,10 @@ class TestExecute:
         nurture._log_nurture_event = MagicMock()
 
         nurture.execute(thought)
-        assert int(mock_redis.get('spark_nurture:test:backoff_multiplier')) == 2
+        assert int(mock_store.get('spark_nurture:test:backoff_multiplier')) == 2
 
-    def test_caps_backoff_at_max(self, nurture, mock_redis, thought):
-        mock_redis.set('spark_nurture:test:backoff_multiplier', '4')
+    def test_caps_backoff_at_max(self, nurture, mock_store, thought):
+        mock_store.set('spark_nurture:test:backoff_multiplier', '4')
         nurture._pending_phase = 'surface'
         nurture._gather_context = MagicMock(return_value={
             'phase': 'surface', 'thought_content': 'test',
@@ -370,10 +374,10 @@ class TestExecute:
 
         result = nurture.execute(thought)
         # 4 * 2 = 8 but capped at 4
-        assert int(mock_redis.get('spark_nurture:test:backoff_multiplier')) == 4
+        assert int(mock_store.get('spark_nurture:test:backoff_multiplier')) == 4
         assert result.details['backoff'] == 4
 
-    def test_tracks_llm_failure(self, nurture, mock_redis, thought):
+    def test_tracks_llm_failure(self, nurture, mock_store, thought):
         nurture._pending_phase = 'surface'
         nurture._gather_context = MagicMock(return_value={
             'phase': 'surface', 'thought_content': 'test',
@@ -386,38 +390,38 @@ class TestExecute:
         result = nurture.execute(thought)
         assert result.success is False
         assert result.details['reason'] == 'generation_failed'
-        assert int(mock_redis.get('spark_nurture:test:llm_fail_count')) == 1
+        assert int(mock_store.get('spark_nurture:test:llm_fail_count')) == 1
 
 
 # ── User Activity Reset ──────────────────────────────────────────────
 
 class TestUserActivityReset:
-    def test_resets_unanswered_count(self, mock_redis):
-        mock_redis.set('spark_nurture:default:unanswered_count', '3')
+    def test_resets_unanswered_count(self, mock_store):
+        mock_store.set('spark_nurture:default:unanswered_count', '3')
         with patch(
-            'services.autonomous_actions.nurture_action.RedisClientService'
+            'services.autonomous_actions.nurture_action.MemoryClientService'
         ) as mock_cls:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             from services.autonomous_actions.nurture_action import NurtureAction
             NurtureAction.record_user_activity()
-        assert mock_redis.get('spark_nurture:default:unanswered_count') == '0'
+        assert mock_store.get('spark_nurture:default:unanswered_count') == '0'
 
-    def test_resets_backoff_multiplier(self, mock_redis):
-        mock_redis.set('spark_nurture:default:backoff_multiplier', '4')
+    def test_resets_backoff_multiplier(self, mock_store):
+        mock_store.set('spark_nurture:default:backoff_multiplier', '4')
         with patch(
-            'services.autonomous_actions.nurture_action.RedisClientService'
+            'services.autonomous_actions.nurture_action.MemoryClientService'
         ) as mock_cls:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             from services.autonomous_actions.nurture_action import NurtureAction
             NurtureAction.record_user_activity()
-        assert mock_redis.get('spark_nurture:default:backoff_multiplier') == '1'
+        assert mock_store.get('spark_nurture:default:backoff_multiplier') == '1'
 
-    def test_clears_pause(self, mock_redis):
-        mock_redis.set('spark_nurture:default:paused', '1')
+    def test_clears_pause(self, mock_store):
+        mock_store.set('spark_nurture:default:paused', '1')
         with patch(
-            'services.autonomous_actions.nurture_action.RedisClientService'
+            'services.autonomous_actions.nurture_action.MemoryClientService'
         ) as mock_cls:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             from services.autonomous_actions.nurture_action import NurtureAction
             NurtureAction.record_user_activity()
-        assert mock_redis.get('spark_nurture:default:paused') is None
+        assert mock_store.get('spark_nurture:default:paused') is None

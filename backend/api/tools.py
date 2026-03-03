@@ -42,15 +42,15 @@ def _normalize_config_schema(schema_dict: dict) -> list:
 def _check_webhook_rate_limit(tool_name: str) -> bool:
     """Return True if within rate limit (30 req/min per tool), False if exceeded."""
     try:
-        from services.redis_client import RedisClientService
-        redis = RedisClientService.create_connection()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
         key = f"webhook_rate:{tool_name}"
-        count = redis.incr(key)
+        count = store.incr(key)
         if count == 1:
-            redis.expire(key, 60)  # 1-minute sliding window
+            store.expire(key, 60)  # 1-minute sliding window
         return count <= 30
     except Exception:
-        return True  # Fail open on Redis errors
+        return True  # Fail open on MemoryStore errors
 
 
 @tools_bp.route("/tools/webhook/<tool_name>", methods=["POST"])
@@ -1129,7 +1129,7 @@ def oauth_callback(tool_name: str):
     """OAuth2 callback — exchanges authorization code for tokens.
 
     No @require_session: the user arrives from an external redirect.
-    CSRF protection via cryptographic state token validated against Redis.
+    CSRF protection via cryptographic state token validated against MemoryStore.
 
     On success, redirects to Brain admin with a success message.
     On error, redirects to Brain admin with an error message.

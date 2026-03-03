@@ -626,9 +626,9 @@ class ACTOrchestrator:
     ) -> str:
         """Append deferred card offers to act_history context string."""
         try:
-            from services.redis_client import RedisClientService as _RCS
-            _redis_dc = _RCS.create_connection()
-            _deferred_items = _redis_dc.lrange(
+            from services.memory_client import MemoryClientService as _RCS
+            _store_dc = _MCS.create_connection()
+            _deferred_items = _store_dc.lrange(
                 f"deferred_cards:{topic}", 0, -1
             )
             if _deferred_items:

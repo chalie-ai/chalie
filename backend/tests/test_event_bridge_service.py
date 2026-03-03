@@ -57,7 +57,7 @@ class TestBridgeEvent:
 class TestEventBridgeConfidenceGate:
     """Tests for confidence threshold gating."""
 
-    def test_low_confidence_event_rejected(self, mock_redis):
+    def test_low_confidence_event_rejected(self, mock_store):
         """Events below confidence threshold should be suppressed."""
         config = {'confidence_threshold': 0.6, 'cooldowns': {}}
         with patch('services.event_bridge_service._load_config', return_value=config):
@@ -67,7 +67,7 @@ class TestEventBridgeConfidenceGate:
         result = svc.submit_event(event)
         assert result is False
 
-    def test_high_confidence_event_passes_gate(self, mock_redis):
+    def test_high_confidence_event_passes_gate(self, mock_store):
         """Events above confidence threshold should pass the gate."""
         config = {
             'confidence_threshold': 0.6,
@@ -90,7 +90,7 @@ class TestEventBridgeConfidenceGate:
 class TestEventBridgeCooldown:
     """Tests for per-event cooldown enforcement."""
 
-    def test_cooldown_blocks_rapid_refire(self, mock_redis):
+    def test_cooldown_blocks_rapid_refire(self, mock_store):
         """Second event of same type within cooldown should be blocked."""
         config = {
             'confidence_threshold': 0.5,
@@ -115,7 +115,7 @@ class TestEventBridgeCooldown:
         second = svc.submit_event(event)
         assert second is False
 
-    def test_no_cooldown_allows_rapid_refire(self, mock_redis):
+    def test_no_cooldown_allows_rapid_refire(self, mock_store):
         """Events with no configured cooldown should always pass."""
         config = {
             'confidence_threshold': 0.5,
@@ -138,7 +138,7 @@ class TestEventBridgeCooldown:
 class TestEventBridgeFocusGate:
     """Tests for focus gate blocking during deep focus."""
 
-    def test_deep_focus_blocks_normal_priority(self, mock_redis):
+    def test_deep_focus_blocks_normal_priority(self, mock_store):
         """Normal-priority events should be blocked during deep focus."""
         config = {
             'confidence_threshold': 0.5,
@@ -157,7 +157,7 @@ class TestEventBridgeFocusGate:
             result = svc.submit_event(event)
             assert result is False
 
-    def test_deep_focus_allows_critical_priority(self, mock_redis):
+    def test_deep_focus_allows_critical_priority(self, mock_store):
         """Critical-priority events should bypass the focus gate."""
         config = {
             'confidence_threshold': 0.5,
@@ -176,7 +176,7 @@ class TestEventBridgeFocusGate:
             result = svc.submit_event(event)
             assert result is True
 
-    def test_focus_gate_bypass_event_passes(self, mock_redis):
+    def test_focus_gate_bypass_event_passes(self, mock_store):
         """Events listed in focus_gate_bypass should pass even during deep focus."""
         config = {
             'confidence_threshold': 0.5,
@@ -199,7 +199,7 @@ class TestEventBridgeFocusGate:
 class TestEventBridgeSilentEvents:
     """Tests for silent event handling."""
 
-    def test_silent_event_returns_true_without_routing(self, mock_redis):
+    def test_silent_event_returns_true_without_routing(self, mock_store):
         """Silent events should return True but not go through the routing pipeline."""
         config = {
             'confidence_threshold': 0.5,
@@ -221,7 +221,7 @@ class TestEventBridgeSilentEvents:
 class TestEventBridgePhrasing:
     """Tests for confidence-to-phrasing mapping."""
 
-    def test_high_confidence_phrasing(self, mock_redis):
+    def test_high_confidence_phrasing(self, mock_store):
         """Confidence >= 0.8 should map to 'high' phrasing."""
         config = {}
         with patch('services.event_bridge_service._load_config', return_value=config):
@@ -230,7 +230,7 @@ class TestEventBridgePhrasing:
         assert svc._get_phrasing(0.9) == 'high'
         assert svc._get_phrasing(0.8) == 'high'
 
-    def test_medium_confidence_phrasing(self, mock_redis):
+    def test_medium_confidence_phrasing(self, mock_store):
         """Confidence in [0.6, 0.8) should map to 'medium' phrasing."""
         config = {}
         with patch('services.event_bridge_service._load_config', return_value=config):
@@ -239,7 +239,7 @@ class TestEventBridgePhrasing:
         assert svc._get_phrasing(0.7) == 'medium'
         assert svc._get_phrasing(0.6) == 'medium'
 
-    def test_low_confidence_phrasing(self, mock_redis):
+    def test_low_confidence_phrasing(self, mock_store):
         """Confidence < 0.6 should map to 'low' (suppressed) phrasing."""
         config = {}
         with patch('services.event_bridge_service._load_config', return_value=config):

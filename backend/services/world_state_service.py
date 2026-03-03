@@ -1,7 +1,7 @@
 """
 World State Service - Generates world state context from active steps.
 
-Reads from ThreadConversationService (Redis).
+Reads from ThreadConversationService (MemoryStore).
 """
 
 import logging
@@ -19,7 +19,7 @@ class WorldStateService:
 
         Args:
             topic: Current topic (unused, kept for API compat)
-            thread_id: Thread ID for Redis-backed lookup
+            thread_id: Thread ID for MemoryStore-backed lookup
 
         Returns:
             str: Formatted world state with active steps (if any)

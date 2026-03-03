@@ -24,7 +24,7 @@ def handle_introspect(topic: str, params: dict) -> str:
     """
     state = {}
 
-    # Gather signals from Redis
+    # Gather signals from MemoryStore
     state["gist_count"] = _get_gist_count(topic)
     state["fact_count"] = _get_fact_count(topic)
     state["working_memory_depth"] = _get_working_memory_depth(topic)
@@ -83,11 +83,11 @@ def _get_fact_count(topic: str) -> int:
 def _get_working_memory_depth(topic: str) -> int:
     """Count turns in working memory buffer."""
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
-        redis = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
         key = f"working_memory:{topic}"
-        return redis.llen(key)
+        return store.llen(key)
     except Exception as e:
         logger.warning(f"[INTROSPECT] working memory depth failed: {e}")
         return 0
@@ -115,10 +115,10 @@ def _get_fok_signal(topic: str) -> int:
     Stored by recall skill as partial match count.
     """
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
-        redis = RedisClientService.create_connection()
-        value = redis.get(f"fok:{topic}")
+        store = MemoryClientService.create_connection()
+        value = store.get(f"fok:{topic}")
         return int(value) if value else 0
     except Exception:
         return 0
@@ -139,10 +139,10 @@ def _get_world_state(topic: str) -> str:
 def _get_topic_age(topic: str) -> str:
     """Get how long the current topic has been active."""
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
-        redis = RedisClientService.create_connection()
-        ttl = redis.ttl(f"recent_topic")
+        store = MemoryClientService.create_connection()
+        ttl = store.ttl(f"recent_topic")
         if ttl and ttl > 0:
             # recent_topic has 30min TTL, so age = 1800 - remaining TTL
             age_seconds = 1800 - ttl
@@ -343,7 +343,7 @@ def _get_recent_autonomous_actions(limit: int = 5) -> list:
         from services.database_service import get_shared_db_service
 
         db_service = get_shared_db_service()
-        placeholders = ','.join(['%s'] * len(RELEVANT_TYPES))
+        placeholders = ','.join(['?'] * len(RELEVANT_TYPES))
 
         with db_service.connection() as conn:
             cursor = conn.cursor()
@@ -351,7 +351,7 @@ def _get_recent_autonomous_actions(limit: int = 5) -> list:
                 f"SELECT event_type, payload, created_at "
                 f"FROM interaction_log "
                 f"WHERE event_type IN ({placeholders}) "
-                f"ORDER BY created_at DESC LIMIT %s",
+                f"ORDER BY created_at DESC LIMIT ?",
                 (*RELEVANT_TYPES, limit)
             )
             rows = cursor.fetchall()

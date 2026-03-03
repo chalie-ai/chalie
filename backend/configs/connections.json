@@ -1,5 +1,5 @@
 {
-  "redis": {
+  "memory": {
     "topics": {
       "prompt_queue": "prompt-queue",
       "memory_chunker": "memory-chunker-queue",

@@ -41,19 +41,19 @@ class TestNormalizeConfigSchema:
 
 class TestCheckWebhookRateLimit:
 
-    def test_allows_up_to_30(self, mock_redis):
+    def test_allows_up_to_30(self, mock_store):
         """First 30 requests within rate limit."""
         for i in range(30):
-            mock_redis.incr("webhook_rate:test_tool")
-        mock_redis.expire("webhook_rate:test_tool", 60)
-        count = int(mock_redis.get("webhook_rate:test_tool"))
+            mock_store.incr("webhook_rate:test_tool")
+        mock_store.expire("webhook_rate:test_tool", 60)
+        count = int(mock_store.get("webhook_rate:test_tool"))
         assert count <= 30
 
-    def test_blocks_31st_request(self, mock_redis):
+    def test_blocks_31st_request(self, mock_store):
         """31st request exceeds rate limit."""
         for i in range(31):
-            mock_redis.incr("webhook_rate:test_tool")
-        count = int(mock_redis.get("webhook_rate:test_tool"))
+            mock_store.incr("webhook_rate:test_tool")
+        count = int(mock_store.get("webhook_rate:test_tool"))
         assert count > 30
 
 

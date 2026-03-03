@@ -8,11 +8,11 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def mock_redis():
-    """Create a mock Redis that stores values in a dict."""
+def mock_store():
+    """Create a mock MemoryStore that stores values in a dict."""
     store = {}
 
-    class FakeRedis:
+    class FakeStore:
         def get(self, key):
             return store.get(key)
 
@@ -34,17 +34,17 @@ def mock_redis():
         def expire(self, key, ttl):
             pass
 
-    fake = FakeRedis()
+    fake = FakeStore()
     fake._store = store
     return fake
 
 
 class TestMaybeSendWelcome:
-    def test_skips_when_welcome_already_sent(self, mock_redis):
-        with patch('services.spark_welcome_service.RedisClientService') as mock_cls, \
-             patch('services.spark_state_service.RedisClientService') as mock_state_cls:
-            mock_cls.create_connection.return_value = mock_redis
-            mock_state_cls.create_connection.return_value = mock_redis
+    def test_skips_when_welcome_already_sent(self, mock_store):
+        with patch('services.spark_welcome_service.MemoryClientService') as mock_cls, \
+             patch('services.spark_state_service.MemoryClientService') as mock_state_cls:
+            mock_cls.create_connection.return_value = mock_store
+            mock_state_cls.create_connection.return_value = mock_store
 
             from services.spark_welcome_service import SparkWelcomeService
 
@@ -59,16 +59,16 @@ class TestMaybeSendWelcome:
                 'last_active_at': 1000.0, 'last_scored_at': 1000.0,
                 'first_suggestion_seeded': False, 'topics_discussed': [],
             }
-            mock_redis.setex('spark_state:test', 2592000, json.dumps(state))
+            mock_store.setex('spark_state:test', 2592000, json.dumps(state))
 
             result = svc.maybe_send_welcome()
             assert result is False
 
-    def test_acquires_lock_and_sends(self, mock_redis):
-        with patch('services.spark_welcome_service.RedisClientService') as mock_cls, \
-             patch('services.spark_state_service.RedisClientService') as mock_state_cls:
-            mock_cls.create_connection.return_value = mock_redis
-            mock_state_cls.create_connection.return_value = mock_redis
+    def test_acquires_lock_and_sends(self, mock_store):
+        with patch('services.spark_welcome_service.MemoryClientService') as mock_cls, \
+             patch('services.spark_state_service.MemoryClientService') as mock_state_cls:
+            mock_cls.create_connection.return_value = mock_store
+            mock_state_cls.create_connection.return_value = mock_store
 
             from services.spark_welcome_service import SparkWelcomeService
 
@@ -77,24 +77,25 @@ class TestMaybeSendWelcome:
             svc._generate_welcome = MagicMock(return_value=("Hello there", "A"))
             svc._deliver_welcome = MagicMock()
             svc._log_welcome_event = MagicMock()
-            # Patch _has_established_traits to avoid DB calls
+            # Patch DB-dependent methods to avoid hitting real database
             svc._spark_state._has_established_traits = MagicMock(return_value=False)
+            svc._spark_state._has_been_welcomed = MagicMock(return_value=False)
 
             result = svc.maybe_send_welcome()
             assert result is True
             svc._deliver_welcome.assert_called_once_with("Hello there")
             svc._log_welcome_event.assert_called_once_with("A")
 
-    def test_lock_prevents_duplicate(self, mock_redis):
-        with patch('services.spark_welcome_service.RedisClientService') as mock_cls, \
-             patch('services.spark_state_service.RedisClientService') as mock_state_cls:
-            mock_cls.create_connection.return_value = mock_redis
-            mock_state_cls.create_connection.return_value = mock_redis
+    def test_lock_prevents_duplicate(self, mock_store):
+        with patch('services.spark_welcome_service.MemoryClientService') as mock_cls, \
+             patch('services.spark_state_service.MemoryClientService') as mock_state_cls:
+            mock_cls.create_connection.return_value = mock_store
+            mock_state_cls.create_connection.return_value = mock_store
 
             from services.spark_welcome_service import SparkWelcomeService
 
             # Pre-set the lock
-            mock_redis.setnx('spark_welcome_lock:test', '1')
+            mock_store.setnx('spark_welcome_lock:test', '1')
 
             svc = SparkWelcomeService(user_id='test')
             svc._spark_state._has_established_traits = MagicMock(return_value=False)
@@ -107,11 +108,11 @@ class TestMaybeSendWelcome:
 
 
 class TestGenerateWelcome:
-    def test_fallback_when_llm_unavailable(self, mock_redis):
-        with patch('services.spark_welcome_service.RedisClientService') as mock_cls, \
-             patch('services.spark_state_service.RedisClientService') as mock_state_cls:
-            mock_cls.create_connection.return_value = mock_redis
-            mock_state_cls.create_connection.return_value = mock_redis
+    def test_fallback_when_llm_unavailable(self, mock_store):
+        with patch('services.spark_welcome_service.MemoryClientService') as mock_cls, \
+             patch('services.spark_state_service.MemoryClientService') as mock_state_cls:
+            mock_cls.create_connection.return_value = mock_store
+            mock_state_cls.create_connection.return_value = mock_store
 
             from services.spark_welcome_service import SparkWelcomeService, _FALLBACK_VARIANTS
 
@@ -134,11 +135,11 @@ class TestGenerateWelcome:
 
 
 class TestIdempotency:
-    def test_second_call_returns_false(self, mock_redis):
-        with patch('services.spark_welcome_service.RedisClientService') as mock_cls, \
-             patch('services.spark_state_service.RedisClientService') as mock_state_cls:
-            mock_cls.create_connection.return_value = mock_redis
-            mock_state_cls.create_connection.return_value = mock_redis
+    def test_second_call_returns_false(self, mock_store):
+        with patch('services.spark_welcome_service.MemoryClientService') as mock_cls, \
+             patch('services.spark_state_service.MemoryClientService') as mock_state_cls:
+            mock_cls.create_connection.return_value = mock_store
+            mock_state_cls.create_connection.return_value = mock_store
 
             from services.spark_welcome_service import SparkWelcomeService
 
@@ -147,9 +148,10 @@ class TestIdempotency:
             svc._deliver_welcome = MagicMock()
             svc._log_welcome_event = MagicMock()
             svc._spark_state._has_established_traits = MagicMock(return_value=False)
+            svc._spark_state._has_been_welcomed = MagicMock(return_value=False)
 
             # First call sends
             assert svc.maybe_send_welcome() is True
 
-            # Second call skips (welcome_sent is now True)
+            # Second call skips (welcome_sent is now True in MemoryStore)
             assert svc.maybe_send_welcome() is False

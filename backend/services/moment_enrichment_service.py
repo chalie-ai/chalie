@@ -125,9 +125,9 @@ def _collect_gists_from_interactions(db, topic, window_start, window_end):
                 cursor.execute("""
                     SELECT payload, event_type, created_at
                     FROM interaction_log
-                    WHERE topic = %s
+                    WHERE topic = ?
                       AND event_type IN ('system_response', 'user_input')
-                      AND created_at BETWEEN %s AND %s
+                      AND created_at BETWEEN ? AND ?
                     ORDER BY created_at ASC
                     LIMIT 20
                 """, (topic, window_start, window_end))
@@ -136,7 +136,7 @@ def _collect_gists_from_interactions(db, topic, window_start, window_end):
                     SELECT payload, event_type, created_at
                     FROM interaction_log
                     WHERE event_type IN ('system_response', 'user_input')
-                      AND created_at BETWEEN %s AND %s
+                      AND created_at BETWEEN ? AND ?
                     ORDER BY created_at ASC
                     LIMIT 20
                 """, (window_start, window_end))

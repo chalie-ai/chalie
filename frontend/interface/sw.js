@@ -25,7 +25,7 @@ const NETWORK_ONLY_PATHS = [
 ];
 // Note: '/tools/' (with slash) avoids matching '/tools.js'
 
-const NETWORK_ONLY_HOSTS = ['stt.grck.org', 'tts.grck.org'];
+const NETWORK_ONLY_HOSTS = [];
 
 const CDN_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com'];
 

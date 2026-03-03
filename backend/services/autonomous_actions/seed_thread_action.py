@@ -7,7 +7,7 @@ Eligibility gates:
   1. Drift thought type must be 'insight'
   2. No active thread for the same seed_topic
   3. Activation energy >= 0.6
-  4. Max 1 new thread per 24h window (Redis rate key)
+  4. Max 1 new thread per 24h window (MemoryStore rate key)
   5. Total active threads < 5
   6. Salience alignment: episodic + semantic gates must pass
 """
@@ -16,7 +16,7 @@ import logging
 import struct
 from typing import Optional, Tuple, Dict, Any
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
@@ -55,7 +55,7 @@ class SeedThreadAction(AutonomousAction):
     def __init__(self, config: dict = None):
         super().__init__(name='SEED_THREAD', enabled=True, priority=6)
         config = config or {}
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.min_activation = config.get('min_activation', 0.6)
         self.episodic_similarity_threshold = config.get('episodic_similarity_threshold', 0.55)
         self.episodic_min_matches = config.get('episodic_min_matches', 2)
@@ -87,7 +87,7 @@ class SeedThreadAction(AutonomousAction):
             return (0.0, False)
 
         # Gate 4: 24h seed cooldown
-        if self.redis.exists(SEED_COOLDOWN_KEY):
+        if self.store.exists(SEED_COOLDOWN_KEY):
             logger.debug(f"{LOG_PREFIX} Seed cooldown active, skipping")
             return (0.0, False)
 
@@ -138,7 +138,7 @@ class SeedThreadAction(AutonomousAction):
             )
 
         # Set 24h cooldown
-        self.redis.setex(SEED_COOLDOWN_KEY, SEED_COOLDOWN_TTL, '1')
+        self.store.setex(SEED_COOLDOWN_KEY, SEED_COOLDOWN_TTL, '1')
 
         # Log to interaction_log
         self._log_seeded(thought, thread_id, thread_type)

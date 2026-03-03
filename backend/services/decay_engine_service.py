@@ -10,7 +10,7 @@ import math
 import logging
 from typing import Optional
 
-from .redis_client import RedisClientService
+from .memory_client import MemoryClientService
 from .config_service import ConfigService
 
 logger = logging.getLogger(__name__)
@@ -240,7 +240,7 @@ class DecayEngineService:
         """
         Apply accelerated decay to knowledge tagged as from external sources.
 
-        External knowledge (specialist facts, web search results) in Redis get
+        External knowledge (specialist facts, web search results) in MemoryStore get
         their TTL reduced by the decay multiplier. This ensures external knowledge
         decays 1.5x faster until reinforced by direct experience.
 
@@ -248,9 +248,9 @@ class DecayEngineService:
             Number of facts with accelerated decay
         """
         try:
-            from .redis_client import RedisClientService
+            from .memory_client import MemoryClientService
 
-            redis = RedisClientService.create_connection()
+            store = MemoryClientService.create_connection()
 
             multiplier = 1.5
 
@@ -258,10 +258,10 @@ class DecayEngineService:
             count = 0
             cursor = 0
             while True:
-                cursor, keys = redis.scan(cursor, match="fact:*", count=100)
+                cursor, keys = store.scan(cursor, match="fact:*", count=100)
                 for key in keys:
                     try:
-                        fact_json = redis.get(key)
+                        fact_json = store.get(key)
                         if not fact_json:
                             continue
 
@@ -273,12 +273,12 @@ class DecayEngineService:
                             source.startswith(prefix)
                             for prefix in self.EXTERNAL_KNOWLEDGE_PREFIXES
                         ):
-                            ttl = redis.ttl(key)
+                            ttl = store.ttl(key)
                             if ttl > 0:
                                 # Reduce TTL by multiplier
                                 new_ttl = max(60, int(ttl / multiplier))
                                 if new_ttl < ttl:
-                                    redis.expire(key, new_ttl)
+                                    store.expire(key, new_ttl)
                                     count += 1
                     except Exception:
                         continue

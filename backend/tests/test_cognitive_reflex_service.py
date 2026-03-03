@@ -104,11 +104,11 @@ class TestCognitiveReflexService:
 
     @pytest.fixture
     def service(self, mock_db_rows):
-        """Create service with mocked DB and Redis."""
+        """Create service with mocked DB and MemoryStore."""
         db, cursor = mock_db_rows
-        redis = MagicMock()
-        redis.get.return_value = None
-        return CognitiveReflexService(db=db, redis=redis)
+        store = MagicMock()
+        store.get.return_value = None
+        return CognitiveReflexService(db=db, store=store)
 
     @pytest.fixture
     def cursor(self, mock_db_rows):
@@ -117,8 +117,8 @@ class TestCognitiveReflexService:
         return cursor
 
     @pytest.fixture
-    def redis(self, service):
-        return service.redis
+    def store(self, service):
+        return service.store
 
     # ── Heuristic pre-screen ──────────────────────────────────────────────
 
@@ -361,23 +361,23 @@ class TestCognitiveReflexService:
         assert service._is_correction("What about addition?") is False
         assert service._is_correction("Cool") is False
 
-    def test_pending_validation_correction(self, service, cursor, redis):
+    def test_pending_validation_correction(self, service, cursor, store):
         """Pending validation with correction → times_failed incremented."""
-        redis.get.return_value = "42"
+        store.get.return_value = "42"
 
         service.check_pending_validation("thread-1", "No, that's wrong")
 
         # Should have deleted the pending key
-        redis.delete.assert_called_once_with("reflex:pending:thread-1")
+        store.delete.assert_called_once_with("reflex:pending:thread-1")
 
         # Should have incremented times_failed
         calls = cursor.execute.call_args_list
         failed_update = [c for c in calls if 'times_failed' in str(c)]
         assert len(failed_update) >= 1
 
-    def test_pending_validation_no_correction(self, service, cursor, redis):
+    def test_pending_validation_no_correction(self, service, cursor, store):
         """Pending validation without correction → times_succeeded incremented."""
-        redis.get.return_value = "42"
+        store.get.return_value = "42"
 
         service.check_pending_validation("thread-1", "Thanks, got it!")
 
@@ -386,13 +386,13 @@ class TestCognitiveReflexService:
         succeeded_update = [c for c in calls if 'times_succeeded' in str(c)]
         assert len(succeeded_update) >= 1
 
-    def test_pending_validation_no_pending(self, service, redis):
+    def test_pending_validation_no_pending(self, service, store):
         """No pending validation → no-op."""
-        redis.get.return_value = None
+        store.get.return_value = None
 
         # Should not raise
         service.check_pending_validation("thread-1", "Hello")
-        redis.delete.assert_not_called()
+        store.delete.assert_not_called()
 
     # ── Pipeline utility evaluation ───────────────────────────────────────
 
@@ -495,8 +495,8 @@ class TestCognitiveReflexService:
 
     # ── Shadow validation ─────────────────────────────────────────────────
 
-    def test_shadow_validation_queued(self, service, redis):
-        """Shadow validation should store data in Redis."""
+    def test_shadow_validation_queued(self, service, store):
+        """Shadow validation should store data in MemoryStore."""
         with patch('services.cognitive_reflex_service.random') as mock_random:
             mock_random.random.return_value = 0.05  # < 0.10 threshold
 
@@ -508,11 +508,11 @@ class TestCognitiveReflexService:
                 cluster_id=1,
             )
 
-            redis.setex.assert_called_once()
-            call_args = redis.setex.call_args
+            store.setex.assert_called_once()
+            call_args = store.setex.call_args
             assert 'reflex:shadow:thread-1' in str(call_args)
 
-    def test_shadow_validation_skipped(self, service, redis):
+    def test_shadow_validation_skipped(self, service, store):
         """Shadow validation should be skipped ~90% of the time."""
         with patch('services.cognitive_reflex_service.random') as mock_random:
             mock_random.random.return_value = 0.5  # > 0.10 threshold
@@ -525,16 +525,16 @@ class TestCognitiveReflexService:
                 cluster_id=1,
             )
 
-            redis.setex.assert_not_called()
+            store.setex.assert_not_called()
 
     @patch('services.embedding_service.get_embedding_service')
-    def test_shadow_result_agreement(self, mock_emb, service, cursor, redis):
+    def test_shadow_result_agreement(self, mock_emb, service, cursor, store):
         """When shadow and reflex responses agree → times_succeeded++."""
         # Same embedding for both (distance ≈ 0)
         same_emb = _make_embedding()
         mock_emb.return_value.generate_embedding.return_value = same_emb
 
-        redis.get.return_value = json.dumps({
+        store.get.return_value = json.dumps({
             'text': 'What is 2+2?',
             'reflex_response': '4',
             'cluster_id': 1,
@@ -543,13 +543,13 @@ class TestCognitiveReflexService:
 
         service.process_shadow_result("thread-1", "4")
 
-        redis.delete.assert_called_with("reflex:shadow:thread-1")
+        store.delete.assert_called_with("reflex:shadow:thread-1")
         calls = cursor.execute.call_args_list
         succeeded = [c for c in calls if 'times_succeeded' in str(c)]
         assert len(succeeded) >= 1
 
     @patch('services.embedding_service.get_embedding_service')
-    def test_shadow_result_divergence(self, mock_emb, service, cursor, redis):
+    def test_shadow_result_divergence(self, mock_emb, service, cursor, store):
         """When shadow and reflex responses diverge → times_failed++."""
         emb1 = _make_embedding(seed=1)
         emb2 = _make_distant_embedding(emb1, seed=2)
@@ -560,7 +560,7 @@ class TestCognitiveReflexService:
             emb2,  # pipeline response embedding
         ]
 
-        redis.get.return_value = json.dumps({
+        store.get.return_value = json.dumps({
             'text': 'What is 2+2?',
             'reflex_response': '4',
             'cluster_id': 1,
@@ -585,11 +585,11 @@ class TestCognitiveReflexService:
 
     # ── Set pending validation ────────────────────────────────────────────
 
-    def test_set_pending_validation(self, service, redis):
+    def test_set_pending_validation(self, service, store):
         """set_pending_validation should store cluster_id with TTL."""
         service.set_pending_validation("thread-1", 42)
 
-        redis.setex.assert_called_once_with(
+        store.setex.assert_called_once_with(
             "reflex:pending:thread-1",
             300,  # PENDING_VALIDATION_TTL
             "42",

@@ -79,8 +79,8 @@ class TestDeleteAll:
                     # Simulate missing header
                     resp, code = delete_all.__wrapped__() if hasattr(delete_all, '__wrapped__') else (None, None)
 
-    def test_redis_patterns_cover_all_expected_namespaces(self):
-        """Verify the delete-all function references all critical Redis namespaces."""
+    def test_store_patterns_cover_all_expected_namespaces(self):
+        """Verify the delete-all function references all critical MemoryStore namespaces."""
         import inspect
         from api.privacy import delete_all
         src = inspect.getsource(delete_all)
@@ -92,9 +92,9 @@ class TestDeleteAll:
             'identity_state:*', 'cognitive_drift_state',
             'tool_state:*', 'metrics:timing:*',
         ]:
-            assert pattern in src, f"Expected Redis pattern '{pattern}' in delete_all"
+            assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in delete_all"
 
-    def test_postgres_tables_cover_all_user_data(self):
+    def test_database_tables_cover_all_user_data(self):
         """Verify delete-all truncates all documented user-data tables."""
         import inspect
         from api.privacy import delete_all
@@ -171,14 +171,14 @@ class TestExportData:
                 f"Sensitive table '{sensitive}' must not appear in export_data"
             )
 
-    def test_export_redis_patterns_are_meaningful(self):
+    def test_export_store_patterns_are_meaningful(self):
         """export_data() should export working_memory, facts, gists, identity."""
         import inspect
         from api.privacy import export_data
         src = inspect.getsource(export_data)
 
         for pattern in ['working_memory:*', 'gist:*', 'fact:*', 'identity_state:*']:
-            assert pattern in src, f"Expected Redis pattern '{pattern}' in export_data"
+            assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in export_data"
 
     def test_content_disposition_header_set(self):
         """Export response must set Content-Disposition to trigger browser download."""

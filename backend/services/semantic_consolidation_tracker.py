@@ -2,7 +2,7 @@ import time
 import logging
 from typing import Dict, Tuple, Optional
 
-from .redis_client import RedisClientService
+from .memory_client import MemoryClientService
 
 
 logger = logging.getLogger(__name__)
@@ -18,18 +18,18 @@ class SemanticConsolidationTracker:
     """
 
     def __init__(self):
-        """Initialize tracker with Redis connection."""
-        self.redis = RedisClientService.create_connection()
+        """Initialize tracker with MemoryStore connection."""
+        self.store = MemoryClientService.create_connection()
         self.state_key = "semantic_consolidation_state"
         self.salience_history_key = "semantic_consolidation_salience_history"
 
         # Initialize state if not exists
-        if not self.redis.exists(self.state_key):
+        if not self.store.exists(self.state_key):
             self._initialize_state()
 
     def _initialize_state(self) -> None:
-        """Initialize consolidation state in Redis."""
-        self.redis.hset(self.state_key, mapping={
+        """Initialize consolidation state in MemoryStore."""
+        self.store.hset(self.state_key, mapping={
             'episodes_since_last': 0,
             'last_consolidation_time': time.time()
         })
@@ -42,7 +42,7 @@ class SemanticConsolidationTracker:
         Returns:
             dict: {episodes_since_last, last_consolidation_time, average_salience}
         """
-        state = self.redis.hgetall(self.state_key)
+        state = self.store.hgetall(self.state_key)
 
         episodes_since_last = int(state.get('episodes_since_last', 0))
         last_consolidation_time = float(state.get('last_consolidation_time', 0))
@@ -56,7 +56,7 @@ class SemanticConsolidationTracker:
 
     def increment_episode_count(self) -> None:
         """Increment episodes_since_last counter."""
-        self.redis.hincrby(self.state_key, 'episodes_since_last', 1)
+        self.store.hincrby(self.state_key, 'episodes_since_last', 1)
 
     def record_episode_salience(self, salience: float) -> None:
         """
@@ -66,18 +66,18 @@ class SemanticConsolidationTracker:
             salience: Salience score of the episode
         """
         # Add to history
-        self.redis.rpush(self.salience_history_key, salience)
+        self.store.rpush(self.salience_history_key, salience)
 
         # Trim to 100 entries (FIFO)
-        history_length = self.redis.llen(self.salience_history_key)
+        history_length = self.store.llen(self.salience_history_key)
         if history_length > 100:
             trim_count = history_length - 100
             for _ in range(trim_count):
-                self.redis.lpop(self.salience_history_key)
+                self.store.lpop(self.salience_history_key)
 
     def reset_episode_count(self) -> None:
         """Reset episode counter and update last consolidation timestamp."""
-        self.redis.hset(self.state_key, mapping={
+        self.store.hset(self.state_key, mapping={
             'episodes_since_last': 0,
             'last_consolidation_time': time.time()
         })
@@ -90,7 +90,7 @@ class SemanticConsolidationTracker:
         Returns:
             float: Average salience score
         """
-        history = self.redis.lrange(self.salience_history_key, 0, -1)
+        history = self.store.lrange(self.salience_history_key, 0, -1)
 
         if not history:
             return 5.0  # Default average if no history

@@ -16,6 +16,7 @@ Cost metadata is appended to every result.
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -73,9 +74,9 @@ class _CronToolWorker:
                 time.sleep(interval)
 
                 try:
-                    from services.redis_client import RedisClientService
-                    redis = RedisClientService.create_connection()
-                    queue_depth = redis.llen("rq:queue:prompt-queue")
+                    from services.memory_client import MemoryClientService
+                    store = MemoryClientService.create_connection()
+                    queue_depth = store.llen("prompt-queue")
                     if queue_depth > 5:
                         _log.info(
                             f"[TOOL CRON] {self.tool_name} deferred: "
@@ -126,19 +127,19 @@ class _CronToolWorker:
                     "language": raw_telemetry.get("language", ""),
                 }
 
-                # Load persisted tool state from Redis (survives container restarts)
+                # Load persisted tool state from MemoryStore (survives container restarts)
                 tool_state = {}
                 state_key = f"tool_state:{self.tool_name}"
                 old_state_key = f"tool_cron_state:{self.tool_name}"
                 try:
-                    from services.redis_client import RedisClientService as _RCS
-                    _state_redis = _RCS.create_connection()
+                    from services.memory_client import MemoryClientService as _MCS
+                    _store = _MCS.create_connection()
                     # Migration: copy old key to new key on first access
-                    if not _state_redis.exists(state_key) and _state_redis.exists(old_state_key):
-                        old_val = _state_redis.get(old_state_key)
+                    if not _store.exists(state_key) and _store.exists(old_state_key):
+                        old_val = _store.get(old_state_key)
                         if old_val:
-                            _state_redis.setex(state_key, 7 * 24 * 3600, old_val)
-                    state_json = _state_redis.get(state_key)
+                            _store.setex(state_key, 7 * 24 * 3600, old_val)
+                    state_json = _store.get(state_key)
                     if state_json:
                         tool_state = json.loads(state_json)
                 except Exception:
@@ -174,12 +175,12 @@ class _CronToolWorker:
                         timeout=self.timeout, on_tool_output=_on_tool_output,
                     )
 
-                # Persist returned state back to Redis (7-day TTL)
+                # Persist returned state back to MemoryStore (7-day TTL)
                 if isinstance(result, dict) and "_state" in result:
                     try:
-                        from services.redis_client import RedisClientService as _RCS
-                        _state_redis = _RCS.create_connection()
-                        _state_redis.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
+                        from services.memory_client import MemoryClientService as _MCS
+                        _store = _MCS.create_connection()
+                        _store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
                     except Exception as e:
                         _log.warning(f"[TOOL CRON] {self.tool_name}: failed to persist state: {e}")
 
@@ -740,20 +741,20 @@ class ToolRegistryService:
         invocation_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
         if isinstance(result, dict):
             try:
-                from services.redis_client import RedisClientService
-                redis = RedisClientService.create_connection()
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
                 # Per-invocation cache entry
-                redis.set(
+                store.set(
                     f"tool_card_cache:{topic}:{invocation_id}",
                     json.dumps({"tool": tool_name, "data": result, "invocation_id": invocation_id}),
                     ex=300,
                 )
                 # Legacy flat list — kept for backwards compatibility with _enqueue_tool_cards
-                redis.rpush(
+                store.rpush(
                     f"tool_raw_cache:{topic}",
                     json.dumps({"tool": tool_name, "data": result})
                 )
-                redis.expire(f"tool_raw_cache:{topic}", 300)
+                store.expire(f"tool_raw_cache:{topic}", 300)
             except Exception as e:
                 logger.debug(f"[TOOL REGISTRY] Raw result cache failed for {tool_name}: {e}")
 
@@ -802,7 +803,7 @@ class ToolRegistryService:
         # The LLM then decides whether to call emit_card.
         if card_enabled and card_mode == "deferred" and isinstance(result, dict):
             try:
-                from services.redis_client import RedisClientService as _RC
+                from services.memory_client import MemoryClientService as _RC
                 _r = _RC.create_connection()
                 meta = result.get("_meta", {})
                 deferred_info = {
@@ -1195,7 +1196,7 @@ class ToolRegistryService:
         """
         Invoke a webhook-triggered tool.
 
-        Loads state from Redis, builds payload with _webhook key, runs container
+        Loads state from MemoryStore, builds payload with _webhook key, runs container
         interactively (so "tool" output dialogs work), persists returned state.
 
         Args:
@@ -1243,9 +1244,9 @@ class ToolRegistryService:
         tool_state = {}
         state_key = f"tool_state:{tool_name}"
         try:
-            from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
-            state_json = redis.get(state_key)
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            state_json = store.get(state_key)
             if state_json:
                 tool_state = json.loads(state_json)
         except Exception:
@@ -1277,9 +1278,9 @@ class ToolRegistryService:
         # Persist returned state
         if isinstance(result, dict) and "_state" in result:
             try:
-                from services.redis_client import RedisClientService
-                redis = RedisClientService.create_connection()
-                redis.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
+                store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
             except Exception as e:
                 logger.warning(f"[TOOL REGISTRY] {tool_name}: failed to persist webhook state: {e}")
 

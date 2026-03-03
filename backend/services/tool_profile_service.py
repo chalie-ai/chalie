@@ -30,7 +30,7 @@ LOG_PREFIX = "[TOOL PROFILE]"
 
 from services.innate_skills.registry import SKILL_DESCRIPTIONS
 
-# Redis cache key and TTL
+# MemoryStore cache key and TTL
 TRIAGE_SUMMARIES_CACHE_KEY = "tool_triage_summaries"
 TRIAGE_SUMMARIES_TTL = 300  # 5 minutes
 
@@ -130,9 +130,9 @@ class ToolProfileService:
         from services.embedding_service import EmbeddingService
         return EmbeddingService()
 
-    def _get_redis(self):
-        from services.redis_client import RedisClientService
-        return RedisClientService.create_connection(decode_responses=True)
+    def _get_store(self):
+        from services.memory_client import MemoryClientService
+        return MemoryClientService.create_connection(decode_responses=True)
 
     # -- Profile Building ------------------------------------------------------
 
@@ -534,11 +534,11 @@ class ToolProfileService:
     def get_triage_summaries(self) -> str:
         """
         Get pre-formatted tool summaries grouped by domain for triage prompt injection.
-        Cached in Redis for 5 minutes.
+        Cached in MemoryStore for 5 minutes.
         """
         try:
-            redis = self._get_redis()
-            cached = redis.get(TRIAGE_SUMMARIES_CACHE_KEY)
+            ms = self._get_store()
+            cached = ms.get(TRIAGE_SUMMARIES_CACHE_KEY)
             if cached:
                 return cached
         except Exception:
@@ -547,8 +547,8 @@ class ToolProfileService:
         summaries = self._build_triage_summaries()
 
         try:
-            redis = self._get_redis()
-            redis.setex(TRIAGE_SUMMARIES_CACHE_KEY, TRIAGE_SUMMARIES_TTL, summaries)
+            ms = self._get_store()
+            ms.setex(TRIAGE_SUMMARIES_CACHE_KEY, TRIAGE_SUMMARIES_TTL, summaries)
         except Exception:
             pass
 
@@ -927,9 +927,9 @@ class ToolProfileService:
         return False
 
     def _invalidate_cache(self):
-        """Invalidate the triage summaries Redis cache."""
+        """Invalidate the triage summaries MemoryStore cache."""
         try:
-            redis = self._get_redis()
-            redis.delete(TRIAGE_SUMMARIES_CACHE_KEY)
+            ms = self._get_store()
+            ms.delete(TRIAGE_SUMMARIES_CACHE_KEY)
         except Exception:
             pass

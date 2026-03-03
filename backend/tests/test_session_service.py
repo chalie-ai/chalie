@@ -148,16 +148,16 @@ class TestIsReturningFromSilence:
         gap_after = svc.is_returning_from_silence(threshold_seconds=2700)
         assert gap_after == 0.0
 
-    def test_thread_backed_reads_redis(self):
-        """When thread_id is set, reads last_activity from Redis thread hash."""
+    def test_thread_backed_reads_store(self):
+        """When thread_id is set, reads last_activity from MemoryStore thread hash."""
         from unittest.mock import MagicMock, patch
 
         svc = SessionService()
         svc._thread_id = "test-thread"
-        svc._redis = MagicMock()
+        svc._store = MagicMock()
 
-        # Simulate 3000s gap stored in Redis
-        svc._redis.hget.return_value = str(time.time() - 3000)
+        # Simulate 3000s gap stored in MemoryStore
+        svc._store.hget.return_value = str(time.time() - 3000)
 
         result = svc.is_returning_from_silence(threshold_seconds=2700)
         assert result > 0

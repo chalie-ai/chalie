@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
-from .redis_client import RedisClientService
+from .memory_client import MemoryClientService
 from .config_service import ConfigService
 
 
@@ -15,10 +15,10 @@ class OutputService:
     """Service for managing output queue and storage with type-based routing."""
 
     def __init__(self):
-        """Initialize the OutputService with Redis connection and config."""
-        self.redis = RedisClientService.create_connection()
+        """Initialize the OutputService with MemoryStore connection and config."""
+        self.store = MemoryClientService.create_connection()
         config = ConfigService.connections()
-        topics = config.get("redis", {}).get("topics", {})
+        topics = config.get("memory", {}).get("topics", {})
         self.queue_name = topics.get("output_queue", "output-queue")
 
         logger.info(f"OutputService initialized with queue: {self.queue_name}")
@@ -64,7 +64,7 @@ class OutputService:
         }
 
         # Store with 1-hour TTL
-        self.redis.setex(f"output:{output_id}", 3600, json.dumps(output))
+        self.store.setex(f"output:{output_id}", 3600, json.dumps(output))
 
         meta = original_metadata or {}
         source = meta.get('source', '')
@@ -103,11 +103,11 @@ class OutputService:
         # publishing to output:events as well causes the drift stream to render a
         # duplicate after _isSending resets to false.
         if not sse_channel:
-            self.redis.publish('output:events', event_payload)
+            self.store.publish('output:events', event_payload)
 
         # Deliver via per-request channel for sync /chat SSE connections
         if sse_channel:
-            self.redis.publish(f"sse:{sse_channel}", output_id)
+            self.store.publish(f"sse:{sse_channel}", output_id)
 
         # Web push + catch-up buffer for all background output (no sync SSE connection)
         if not sse_channel:
@@ -124,9 +124,9 @@ class OutputService:
             # reconnect gap are permanently lost from pub/sub. Push to a list so
             # the stream endpoint can drain missed events on next connect.
             try:
-                self.redis.rpush('notifications:recent', event_payload)
-                self.redis.ltrim('notifications:recent', -200, -1)
-                self.redis.expire('notifications:recent', 86400)  # 24h TTL
+                self.store.rpush('notifications:recent', event_payload)
+                self.store.ltrim('notifications:recent', -200, -1)
+                self.store.expire('notifications:recent', 86400)  # 24h TTL
             except Exception as e:
                 logger.warning(f"Notification buffer push failed: {e}")
 
@@ -199,13 +199,13 @@ class OutputService:
             **card_data,  # html, css, scope_id, title, accent_color, background_color, tool_name
         }
 
-        self.redis.publish("output:events", json.dumps(event_payload))
+        self.store.publish("output:events", json.dumps(event_payload))
 
         # Buffer for catch-up on drift stream reconnect (same pattern as enqueue_text)
         try:
-            self.redis.rpush('notifications:recent', json.dumps(event_payload))
-            self.redis.ltrim('notifications:recent', -200, -1)
-            self.redis.expire('notifications:recent', 86400)
+            self.store.rpush('notifications:recent', json.dumps(event_payload))
+            self.store.ltrim('notifications:recent', -200, -1)
+            self.store.expire('notifications:recent', 86400)
         except Exception as e:
             logger.warning(f"Card notification buffer push failed: {e}")
 
@@ -247,7 +247,7 @@ class OutputService:
         """
         if not sse_uuid:
             return
-        self.redis.publish(f"sse:{sse_uuid}", json.dumps({"type": "close"}))
+        self.store.publish(f"sse:{sse_uuid}", json.dumps({"type": "close"}))
         logger.debug(f"[OutputService] Published close signal for SSE channel '{sse_uuid}'")
 
     def enqueue_act(
@@ -289,10 +289,10 @@ class OutputService:
         }
 
         # Store with 1-hour TTL
-        self.redis.setex(f"output:{output_id}", 3600, json.dumps(output))
+        self.store.setex(f"output:{output_id}", 3600, json.dumps(output))
 
         # Add to queue
-        self.redis.lpush(self.queue_name, output_id)
+        self.store.lpush(self.queue_name, output_id)
 
         logger.info(
             f"Enqueued ACT output {output_id} for topic '{topic}' "
@@ -313,7 +313,7 @@ class OutputService:
             Dict containing the output data, or None if timeout
         """
         while True:
-            result = self.redis.brpop(self.queue_name, timeout)
+            result = self.store.brpop(self.queue_name, timeout)
 
             if not result:
                 return None
@@ -324,7 +324,7 @@ class OutputService:
             if isinstance(output_id, bytes):
                 output_id = output_id.decode()
 
-            output_data = self.redis.get(f"output:{output_id}")
+            output_data = self.store.get(f"output:{output_id}")
 
             if not output_data:
                 logger.warning(f"Output {output_id} expired or deleted, skipping")
@@ -335,7 +335,7 @@ class OutputService:
             # Filter by type if specified
             if output_type and output.get('type') != output_type:
                 logger.debug(f"Re-queuing output {output_id} (type={output.get('type')}, want={output_type})")
-                self.redis.lpush(self.queue_name, output_id)
+                self.store.lpush(self.queue_name, output_id)
                 continue
 
             logger.info(f"Dequeued {output.get('type')} output {output_id}")
@@ -348,7 +348,7 @@ class OutputService:
         Args:
             output_id: UUID of the output to delete
         """
-        deleted = self.redis.delete(f"output:{output_id}")
+        deleted = self.store.delete(f"output:{output_id}")
 
         if deleted:
             logger.info(f"Deleted output {output_id}")
@@ -365,5 +365,5 @@ class OutputService:
         heartbeat_key = f"consumer:{consumer_type}:heartbeat"
         timestamp = datetime.now(timezone.utc).isoformat()
 
-        self.redis.setex(heartbeat_key, 60, timestamp)
+        self.store.setex(heartbeat_key, 60, timestamp)
         logger.debug(f"Updated heartbeat for consumer:{consumer_type}")

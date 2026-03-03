@@ -123,11 +123,11 @@ class EpisodicRetrievalService:
         """
         debounce_minutes = self.config.get('reconsolidation_debounce_minutes', 10)
 
-        # Redis-based debounce check
-        redis_conn = None
+        # MemoryStore-based debounce check
+        store = None
         try:
-            from services.redis_client import RedisClientService
-            redis_conn = RedisClientService.create_connection()
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
         except Exception:
             pass
 
@@ -136,13 +136,13 @@ class EpisodicRetrievalService:
                 episode_id = episode.get('id')
 
                 # Debounce: skip if reconsolidated recently
-                if redis_conn:
+                if store:
                     debounce_key = f"reconsolidation:{episode_id}"
-                    if redis_conn.get(debounce_key):
+                    if store.get(debounce_key):
                         logging.debug(f"Skipping reconsolidation for episode {episode_id} (debounced)")
                         continue
                     # Set debounce flag
-                    redis_conn.set(debounce_key, "1", ex=debounce_minutes * 60)
+                    store.set(debounce_key, "1", ex=debounce_minutes * 60)
 
                 # Use storage service's internal activation score update
                 # This increments access_count and updates last_accessed_at

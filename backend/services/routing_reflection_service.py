@@ -17,7 +17,7 @@ import random
 import logging
 from typing import Dict, Any, Optional, List
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
 from services.background_llm_queue import create_background_llm_proxy
 from services.database_service import get_lightweight_db_service
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[ROUTING REFLECTION]"
 
-# Redis keys
+# MemoryStore keys
 LAST_BATCH_KEY = "routing_reflection_last_batch"
 
 
@@ -40,17 +40,17 @@ class RoutingReflectionService:
     """
 
     def __init__(self, check_interval: int = 300):
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.config = ConfigService.resolve_agent_config("mode-reflection")
         self.check_interval = check_interval
 
         # Load queue names for idle check
         conn_config = ConfigService.connections()
-        topics = conn_config.get("redis", {}).get("topics", {})
+        topics = conn_config.get("memory", {}).get("topics", {})
         self.prompt_queue = topics.get("prompt_queue", "prompt-queue")
         self.memory_queue = topics.get("memory_chunker", "memory-chunker-queue")
         self.episodic_queue = topics.get("episodic_memory", "episodic-memory-queue")
-        self.semantic_queue = conn_config.get("redis", {}).get("queues", {}).get(
+        self.semantic_queue = conn_config.get("memory", {}).get("queues", {}).get(
             "semantic_consolidation_queue", {}
         ).get("name", "semantic_consolidation_queue")
 
@@ -110,13 +110,13 @@ class RoutingReflectionService:
         """Check if all worker queues are empty."""
         for queue_name in [self.prompt_queue, self.memory_queue,
                            self.episodic_queue, self.semantic_queue]:
-            if self.redis.llen(queue_name) > 0:
+            if self.store.llen(queue_name) > 0:
                 return False
         return True
 
     def _can_run_batch(self) -> bool:
         """Check if enough time has passed since last batch."""
-        last_batch = self.redis.get(LAST_BATCH_KEY)
+        last_batch = self.store.get(LAST_BATCH_KEY)
         if last_batch:
             elapsed = time.time() - float(last_batch)
             if elapsed < self.min_interval_minutes * 60:
@@ -147,7 +147,7 @@ class RoutingReflectionService:
                 logger.warning(f"{LOG_PREFIX} Failed to reflect on {decision['id']}: {e}")
 
         # Record batch time
-        self.redis.set(LAST_BATCH_KEY, str(time.time()))
+        self.store.set(LAST_BATCH_KEY, str(time.time()))
 
         logger.info(f"{LOG_PREFIX} Batch complete: {reflected}/{len(decisions)} reflected")
 

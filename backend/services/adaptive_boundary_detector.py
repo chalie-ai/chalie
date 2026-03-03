@@ -19,7 +19,7 @@ from typing import Optional
 
 import numpy as np
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,8 @@ class AdaptiveBoundaryDetector:
     """
     Self-calibrating topic boundary detector.
 
-    State is persisted in Redis at ``adaptive_boundary:{thread_id}`` with a 24h TTL.
-    If Redis is unavailable the detector degrades gracefully to cold-start mode
+    State is persisted in MemoryStore at ``adaptive_boundary:{thread_id}`` with a 24h TTL.
+    If MemoryStore is unavailable the detector degrades gracefully to cold-start mode
     (conservative 0.55 threshold) for the current message.
     """
 
@@ -65,8 +65,8 @@ class AdaptiveBoundaryDetector:
     NEWMA_WEIGHT = 0.6
     SURPRISE_WEIGHT = 0.4
 
-    # Redis TTL (match thread lifetime)
-    _REDIS_TTL = 86400  # 24 hours
+    # MemoryStore TTL (match thread lifetime)
+    _STORE_TTL = 86400  # 24 hours
 
     def __init__(
         self,
@@ -75,7 +75,7 @@ class AdaptiveBoundaryDetector:
         focus_modifier: float = 0.0,
     ):
         self.thread_id = thread_id
-        self._redis_key = f"adaptive_boundary:{thread_id}"
+        self._store_key = f"adaptive_boundary:{thread_id}"
 
         params = regulator_params or {}
         self._fast_alpha = self._window_to_alpha(
@@ -227,10 +227,10 @@ class AdaptiveBoundaryDetector:
         )
 
     def save_state(self):
-        """Persist current state to Redis with 24h TTL."""
+        """Persist current state to MemoryStore with 24h TTL."""
         try:
-            r = RedisClientService.create_connection()
-            r.setex(self._redis_key, self._REDIS_TTL, json.dumps(self._state))
+            store = MemoryClientService.create_connection()
+            store.setex(self._store_key, self._STORE_TTL, json.dumps(self._state))
         except Exception as e:
             logger.warning(
                 f"[BOUNDARY DETECTOR] Failed to save state for thread "
@@ -247,10 +247,10 @@ class AdaptiveBoundaryDetector:
         return 2.0 / (max(1, int(window)) + 1)
 
     def _load_state(self) -> dict:
-        """Load persisted detector state from Redis; fall back to cold-start."""
+        """Load persisted detector state from MemoryStore; fall back to cold-start."""
         try:
-            r = RedisClientService.create_connection()
-            raw = r.get(self._redis_key)
+            store = MemoryClientService.create_connection()
+            raw = store.get(self._store_key)
             if raw:
                 state = json.loads(raw)
                 logger.debug(
@@ -260,7 +260,7 @@ class AdaptiveBoundaryDetector:
                 return state
         except Exception as e:
             logger.warning(
-                f"[BOUNDARY DETECTOR] Redis unavailable, cold-start mode: {e}"
+                f"[BOUNDARY DETECTOR] MemoryStore unavailable, cold-start mode: {e}"
             )
         return self._initial_state()
 

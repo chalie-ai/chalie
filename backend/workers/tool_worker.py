@@ -63,12 +63,12 @@ def tool_worker(job_data: dict) -> str:
         metadata = job_data.get('metadata', {})
 
         # Heartbeat tracking for SSE health monitoring (Phase 3)
-        _heartbeat_redis = None
+        _heartbeat_store = None
         _heartbeat_job_id = None
         _last_heartbeat = 0.0
         try:
-            from services.redis_client import RedisClientService
-            _heartbeat_redis = RedisClientService.create_connection()
+            from services.memory_client import MemoryClientService
+            _heartbeat_store = MemoryClientService.create_connection()
             _heartbeat_job_id = cycle_id
         except Exception:
             _heartbeat_job_id = cycle_id
@@ -144,7 +144,7 @@ def tool_worker(job_data: dict) -> str:
             parent_cycle_id=parent_cycle_id,
             root_cycle_id=root_cycle_id,
             cycle_service=cycle_service,
-            _heartbeat_redis=_heartbeat_redis,
+            _heartbeat_store=_heartbeat_store,
             _heartbeat_job_id=_heartbeat_job_id,
             _last_heartbeat=_last_heartbeat,
         )
@@ -172,7 +172,7 @@ def _tool_worker_orchestrator(
     chat_history, relevant_tools, selected_skills,
     topic, text, context_snapshot, metadata, job_data,
     cycle_id, parent_cycle_id, root_cycle_id, cycle_service,
-    _heartbeat_redis, _heartbeat_job_id, _last_heartbeat,
+    _heartbeat_store, _heartbeat_job_id, _last_heartbeat,
 ):
     """
     Unified ACT orchestrator path for tool_worker.
@@ -209,11 +209,11 @@ def _tool_worker_orchestrator(
             return 'cancelled'
 
         # Heartbeat
-        if _heartbeat_redis and _heartbeat_job_id:
+        if _heartbeat_store and _heartbeat_job_id:
             _now = time.time()
             if _now - heartbeat_state['last'] >= 10.0:
                 try:
-                    _heartbeat_redis.setex(f"heartbeat:{_heartbeat_job_id}", 30, "1")
+                    _heartbeat_store.setex(f"heartbeat:{_heartbeat_job_id}", 30, "1")
                     heartbeat_state['last'] = _now
                 except Exception:
                     pass
@@ -342,12 +342,12 @@ def _notify_sse_error(metadata: dict, error_message: str):
         ws_uuid = metadata.get('uuid')
         if not ws_uuid:
             return
-        from services.redis_client import RedisClientService
-        redis_conn = RedisClientService.create_connection()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
         # Publish error to per-request channel
-        redis_conn.publish(f"sse:{ws_uuid}", json.dumps({"error": error_message}))
+        store.publish(f"sse:{ws_uuid}", json.dumps({"error": error_message}))
         # Delete pending flag so WebSocket chat handler breaks immediately
-        redis_conn.delete(f"sse_pending:{ws_uuid}")
+        store.delete(f"sse_pending:{ws_uuid}")
     except Exception as e:
         logger.warning(f"[TOOL WORKER] Failed to notify WebSocket of error: {e}")
 
@@ -363,14 +363,14 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id:
     """
     any_synthesize_false = False
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         from services.tool_registry_service import ToolRegistryService
         from services.card_renderer_service import CardRendererService
         from services.output_service import OutputService
 
-        redis = RedisClientService.create_connection()
-        raw_items = redis.lrange(f"tool_raw_cache:{topic}", 0, -1)
-        redis.delete(f"tool_raw_cache:{topic}")
+        store = MemoryClientService.create_connection()
+        raw_items = store.lrange(f"tool_raw_cache:{topic}", 0, -1)
+        store.delete(f"tool_raw_cache:{topic}")
 
         # Build {tool_name: raw_result} map (last result per tool wins)
         raw_map = {}
@@ -465,13 +465,13 @@ def _get_cycle_service():
 
 
 def _is_cancelled(cycle_id: str) -> bool:
-    """Check if this cycle has been cancelled via Redis flag."""
+    """Check if this cycle has been cancelled via MemoryStore flag."""
     if not cycle_id:
         return False
     try:
-        from services.redis_client import RedisClientService
-        redis_conn = RedisClientService.create_connection()
-        return bool(redis_conn.get(f"cancel:{cycle_id}"))
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        return bool(store.get(f"cancel:{cycle_id}"))
     except Exception:
         return False
 

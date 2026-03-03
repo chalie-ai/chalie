@@ -11,10 +11,10 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def event_bus(mock_redis):
+def event_bus(mock_store):
     """EventBusService wired to MemoryStore."""
-    with patch('services.event_bus_service.RedisClientService') as mock_cls:
-        mock_cls.create_connection.return_value = mock_redis
+    with patch('services.event_bus_service.MemoryClientService') as mock_cls:
+        mock_cls.create_connection.return_value = mock_store
         bus = EventBusService()
     return bus
 
@@ -46,23 +46,23 @@ class TestSubscribe:
 
 class TestEmit:
 
-    def test_pushes_to_redis_list(self, event_bus, mock_redis):
+    def test_pushes_to_store_list(self, event_bus, mock_store):
         result = event_bus.emit(ENCODE_EVENT, {'data': 'test'})
         assert result is True
         queue_key = f"event_bus:{ENCODE_EVENT}"
-        assert mock_redis.llen(queue_key) == 1
+        assert mock_store.llen(queue_key) == 1
 
-    def test_event_is_json_serializable(self, event_bus, mock_redis):
+    def test_event_is_json_serializable(self, event_bus, mock_store):
         event_bus.emit(ENCODE_EVENT, {'key': 'value'})
         queue_key = f"event_bus:{ENCODE_EVENT}"
-        raw = mock_redis.lpop(queue_key)
+        raw = mock_store.lpop(queue_key)
         parsed = json.loads(raw)
         assert parsed['payload'] == {'key': 'value'}
 
-    def test_event_includes_timestamp(self, event_bus, mock_redis):
+    def test_event_includes_timestamp(self, event_bus, mock_store):
         event_bus.emit(ENCODE_EVENT, {})
         queue_key = f"event_bus:{ENCODE_EVENT}"
-        raw = mock_redis.lpop(queue_key)
+        raw = mock_store.lpop(queue_key)
         parsed = json.loads(raw)
         assert 'timestamp' in parsed
         assert isinstance(parsed['timestamp'], float)
@@ -72,7 +72,7 @@ class TestEmit:
 
 class TestProcessEvents:
 
-    def test_calls_handler_with_payload(self, event_bus, mock_redis):
+    def test_calls_handler_with_payload(self, event_bus, mock_store):
         handler = MagicMock()
         event_bus.subscribe(ENCODE_EVENT, handler)
         event_bus.emit(ENCODE_EVENT, {'msg': 'hello'})
@@ -85,7 +85,7 @@ class TestProcessEvents:
         assert args[0] == ENCODE_EVENT
         assert args[1] == {'msg': 'hello'}
 
-    def test_returns_count_of_processed(self, event_bus, mock_redis):
+    def test_returns_count_of_processed(self, event_bus, mock_store):
         handler = MagicMock()
         event_bus.subscribe(ENCODE_EVENT, handler)
         event_bus.emit(ENCODE_EVENT, {'n': 1})
@@ -95,7 +95,7 @@ class TestProcessEvents:
         count = event_bus.process_events(ENCODE_EVENT, batch_size=10)
         assert count == 3
 
-    def test_respects_batch_size(self, event_bus, mock_redis):
+    def test_respects_batch_size(self, event_bus, mock_store):
         handler = MagicMock()
         event_bus.subscribe(ENCODE_EVENT, handler)
         for i in range(5):
@@ -105,9 +105,9 @@ class TestProcessEvents:
         assert count == 2
         # 3 remain
         queue_key = f"event_bus:{ENCODE_EVENT}"
-        assert mock_redis.llen(queue_key) == 3
+        assert mock_store.llen(queue_key) == 3
 
-    def test_isolates_handler_errors(self, event_bus, mock_redis):
+    def test_isolates_handler_errors(self, event_bus, mock_store):
         """One handler error doesn't prevent other events from processing."""
         bad_handler = MagicMock(side_effect=ValueError("boom"))
         event_bus.subscribe(ENCODE_EVENT, bad_handler)
@@ -117,7 +117,7 @@ class TestProcessEvents:
         # Event is still consumed even though handler raised
         assert count == 1
 
-    def test_returns_zero_when_no_handlers(self, event_bus, mock_redis):
+    def test_returns_zero_when_no_handlers(self, event_bus, mock_store):
         event_bus.emit(ENCODE_EVENT, {'orphan': True})
         count = event_bus.process_events(ENCODE_EVENT)
         assert count == 0
@@ -127,7 +127,7 @@ class TestProcessEvents:
 
 class TestEmitAndHandle:
 
-    def test_synchronous_dispatch_to_handlers(self, event_bus, mock_redis):
+    def test_synchronous_dispatch_to_handlers(self, event_bus, mock_store):
         handler = MagicMock()
         event_bus.subscribe(ENCODE_EVENT, handler)
 
@@ -135,9 +135,9 @@ class TestEmitAndHandle:
 
         handler.assert_called_once_with(ENCODE_EVENT, {'sync': True})
 
-    def test_falls_back_to_redis_without_handlers(self, event_bus, mock_redis):
-        """No handlers registered → falls back to emit() into Redis."""
+    def test_falls_back_to_store_without_handlers(self, event_bus, mock_store):
+        """No handlers registered → falls back to emit() into MemoryStore."""
         event_bus.emit_and_handle(INTERACTION_LOGGED, {'fallback': True})
 
         queue_key = f"event_bus:{INTERACTION_LOGGED}"
-        assert mock_redis.llen(queue_key) == 1
+        assert mock_store.llen(queue_key) == 1

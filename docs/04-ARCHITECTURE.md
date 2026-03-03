@@ -102,7 +102,7 @@ frontend/
 #### Constants & Registries
 - **`services/innate_skills/registry.py`** — Authoritative frozenset definitions for all skill membership sets (`ALL_SKILL_NAMES`, `PLANNING_SKILLS`, `COGNITIVE_PRIMITIVES`, `CONTEXTUAL_SKILLS`, `TRIAGE_VALID_SKILLS`, etc.). Single source of truth — all consumers import from here.
 - **`services/act_action_categories.py`** — Authoritative frozenset definitions for action behavior categories (`READ_ACTIONS`, `DETERMINISTIC_ACTIONS`, `SAFE_ACTIONS`, `CRITIC_SKIP_READS`, `ACTION_FATIGUE_COSTS`).
-- **`services/act_redis_keys.py`** — Centralized Redis key patterns for the ACT system (deferred cards, tool caches, heartbeat, SSE, reflection queue).
+- **`services/act_memory_keys.py`** — Centralized MemoryStore key patterns for the ACT system (deferred cards, tool caches, heartbeat, reflection queue).
 
 #### Tool Integration
 - **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol); supports two trust levels: **trusted** (subprocess via `ToolSubprocessService`) and **sandboxed** (Docker via `ToolContainerService`); trust determined by Chalie's internal `embodiment_library.json`, not by tool authors

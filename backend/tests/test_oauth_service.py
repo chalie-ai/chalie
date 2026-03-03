@@ -14,7 +14,7 @@ from services.oauth_service import OAuthService, RESERVED_OAUTH_KEYS
 class TestOAuthServiceAuthUrl:
     """Test auth URL generation."""
 
-    def test_generates_auth_url_with_pkce(self, mock_redis):
+    def test_generates_auth_url_with_pkce(self, mock_store):
         svc = OAuthService()
 
         manifest_auth = {
@@ -38,7 +38,7 @@ class TestOAuthServiceAuthUrl:
         assert "access_type=offline" in result["auth_url"]
         assert "prompt=consent" in result["auth_url"]
 
-    def test_generates_auth_url_without_pkce(self, mock_redis):
+    def test_generates_auth_url_without_pkce(self, mock_store):
         svc = OAuthService()
 
         manifest_auth = {
@@ -55,7 +55,7 @@ class TestOAuthServiceAuthUrl:
         assert "auth_url" in result
         assert "code_challenge" not in result["auth_url"]
 
-    def test_raises_without_client_id(self, mock_redis):
+    def test_raises_without_client_id(self, mock_store):
         svc = OAuthService()
         manifest_auth = {
             "type": "oauth2",
@@ -68,7 +68,7 @@ class TestOAuthServiceAuthUrl:
             with pytest.raises(ValueError, match="client_id"):
                 svc.get_auth_url("test_tool", manifest_auth, "http://localhost/cb")
 
-    def test_stores_state_in_redis(self, mock_redis):
+    def test_stores_state_in_store(self, mock_store):
         svc = OAuthService()
         manifest_auth = {
             "type": "oauth2",
@@ -82,7 +82,7 @@ class TestOAuthServiceAuthUrl:
             result = svc.get_auth_url("my_tool", manifest_auth, "http://localhost/cb")
 
         state = result["state"]
-        stored = mock_redis.get(f"oauth_state:{state}")
+        stored = mock_store.get(f"oauth_state:{state}")
         assert stored is not None
         data = json.loads(stored)
         assert data["tool_name"] == "my_tool"
@@ -93,12 +93,12 @@ class TestOAuthServiceAuthUrl:
 class TestOAuthServiceExchangeCode:
     """Test code exchange."""
 
-    def test_exchanges_code_and_stores_tokens(self, mock_redis, mock_db):
+    def test_exchanges_code_and_stores_tokens(self, mock_store, mock_db):
         svc = OAuthService()
 
-        # Pre-seed state in Redis
+        # Pre-seed state in MemoryStore
         state = "test-state-token"
-        mock_redis.setex(f"oauth_state:{state}", 300, json.dumps({
+        mock_store.setex(f"oauth_state:{state}", 300, json.dumps({
             "tool_name": "test_tool",
             "code_verifier": "test-verifier",
             "redirect_uri": "http://localhost/callback",
@@ -129,15 +129,15 @@ class TestOAuthServiceExchangeCode:
         assert result["connected"] is True
         mock_store.assert_called_once()
 
-    def test_invalid_state_raises(self, mock_redis):
+    def test_invalid_state_raises(self, mock_store):
         svc = OAuthService()
         with pytest.raises(ValueError, match="Invalid or expired"):
             svc.exchange_code("bogus-state", "code")
 
-    def test_state_consumed_after_use(self, mock_redis):
+    def test_state_consumed_after_use(self, mock_store):
         svc = OAuthService()
         state = "consume-test"
-        mock_redis.setex(f"oauth_state:{state}", 300, json.dumps({
+        mock_store.setex(f"oauth_state:{state}", 300, json.dumps({
             "tool_name": "t", "code_verifier": None, "redirect_uri": "",
         }))
 

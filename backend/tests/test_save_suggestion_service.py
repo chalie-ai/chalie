@@ -19,12 +19,12 @@ def service():
 
 
 @pytest.fixture
-def mock_redis():
-    """Provide a mock Redis that default-returns no existing keys."""
-    redis = MagicMock()
-    redis.exists.return_value = False
-    redis.get.return_value = None
-    return redis
+def mock_store():
+    """Provide a mock MemoryStore that default-returns no existing keys."""
+    store = MagicMock()
+    store.exists.return_value = False
+    store.get.return_value = None
+    return store
 
 
 # ── Sample content ────────────────────────────────────────────
@@ -119,22 +119,22 @@ Great Buddha, Hase-dera temple, beach walk.
 
 class TestDetectPlan:
 
-    def test_detects_workout_plan(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_detects_workout_plan(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness', 'thread1')
 
         assert result is not None
         assert result['content_type'] == 'plan'
 
-    def test_detects_day_by_day_itinerary(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_detects_day_by_day_itinerary(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(DAY_BY_DAY_PLAN, 'travel', 'thread1')
 
         assert result is not None
         assert result['content_type'] == 'plan'
 
-    def test_rejects_short_response(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_rejects_short_response(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(SHORT_RESPONSE, 'chat', 'thread1')
 
         assert result is None
@@ -144,14 +144,14 @@ class TestDetectPlan:
 
 class TestDetectRecipe:
 
-    def test_detects_recipe(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_detects_recipe(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(RECIPE, 'cooking', 'thread1')
 
         assert result is not None
         assert result['content_type'] == 'recipe'
 
-    def test_recipe_needs_quantities(self, service, mock_redis):
+    def test_recipe_needs_quantities(self, service, mock_store):
         """Recipe detection requires quantity patterns, not just headers."""
         no_qty = """## My Recipe
 
@@ -164,7 +164,7 @@ class TestDetectRecipe:
 1. Mix everything
 2. Bake
 """
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(no_qty, 'cooking', 'thread1')
 
         # Should not match: too short (< 300 chars)
@@ -175,17 +175,17 @@ class TestDetectRecipe:
 
 class TestDetectStructuredList:
 
-    def test_detects_gear_list(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_detects_gear_list(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(STRUCTURED_LIST, 'camping', 'thread1')
 
         assert result is not None
         assert result['content_type'] == 'list'
 
-    def test_rejects_inline_list(self, service, mock_redis):
+    def test_rejects_inline_list(self, service, mock_store):
         """A short inline list without headers should not match."""
         short_list = "Here are some options:\n- Option A\n- Option B\n- Option C"
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(short_list, 'chat', 'thread1')
 
         assert result is None
@@ -195,17 +195,17 @@ class TestDetectStructuredList:
 
 class TestFalsePositiveGuards:
 
-    def test_conversational_short_response_rejected(self, service, mock_redis):
+    def test_conversational_short_response_rejected(self, service, mock_store):
         """Short conversational openers don't trigger save."""
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(CONVERSATIONAL, 'chat', 'thread1')
 
         assert result is None
 
-    def test_cooldown_prevents_detection(self, service, mock_redis):
+    def test_cooldown_prevents_detection(self, service, mock_store):
         """If cooldown key exists, detection returns None."""
-        mock_redis.exists.return_value = True  # cooldown exists
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+        mock_store.exists.return_value = True  # cooldown exists
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.detect_saveable_content(WORKOUT_PLAN, 'fitness', 'thread1')
 
         assert result is None
@@ -215,39 +215,39 @@ class TestFalsePositiveGuards:
 
 class TestFlagLifecycle:
 
-    def test_flag_set_and_get(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_flag_set_and_get(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             service.flag_saveable('thread1', 'fitness', 'plan', 'ex123')
 
-        mock_redis.setex.assert_called_once()
-        call_args = mock_redis.setex.call_args
+        mock_store.setex.assert_called_once()
+        call_args = mock_store.setex.call_args
         assert call_args[0][0] == 'saveable:thread1'
         assert call_args[0][1] == 1800  # 30min TTL
         data = json.loads(call_args[0][2])
         assert data['content_type'] == 'plan'
         assert data['exchange_id'] == 'ex123'
 
-    def test_get_flag_returns_data(self, service, mock_redis):
+    def test_get_flag_returns_data(self, service, mock_store):
         flag_data = json.dumps({'content_type': 'plan', 'topic': 'fitness', 'ts': 123})
-        mock_redis.get.return_value = flag_data
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+        mock_store.get.return_value = flag_data
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.get_saveable_flag('thread1')
 
         assert result is not None
         assert result['content_type'] == 'plan'
 
-    def test_get_flag_returns_none_when_missing(self, service, mock_redis):
-        mock_redis.get.return_value = None
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_get_flag_returns_none_when_missing(self, service, mock_store):
+        mock_store.get.return_value = None
+        with patch.object(service, '_get_store', return_value=mock_store):
             result = service.get_saveable_flag('thread1')
 
         assert result is None
 
-    def test_clear_flag(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_clear_flag(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             service.clear_flag('thread1')
 
-        mock_redis.delete.assert_called_once_with('saveable:thread1')
+        mock_store.delete.assert_called_once_with('saveable:thread1')
 
 
 # ── Trigger Signal Detection ─────────────────────────────────
@@ -291,20 +291,20 @@ class TestTriggerDetection:
 
 class TestRateLimiting:
 
-    def test_record_rejection_sets_cooldown_and_reject(self, service, mock_redis):
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+    def test_record_rejection_sets_cooldown_and_reject(self, service, mock_store):
+        with patch.object(service, '_get_store', return_value=mock_store):
             service.record_rejection('thread1', 'fitness')
 
         # Should set both cooldown and topic rejection keys
-        assert mock_redis.setex.call_count == 2
-        keys_set = [call[0][0] for call in mock_redis.setex.call_args_list]
+        assert mock_store.setex.call_count == 2
+        keys_set = [call[0][0] for call in mock_store.setex.call_args_list]
         assert 'save_suggest:cooldown:thread1' in keys_set
         assert 'save_suggest:reject:thread1:fitness' in keys_set
 
-    def test_duplicate_prevention(self, service, mock_redis):
+    def test_duplicate_prevention(self, service, mock_store):
         """First call returns False (not duplicate), second returns True."""
-        mock_redis.exists.side_effect = [False, True]
-        with patch.object(service, '_get_redis', return_value=mock_redis):
+        mock_store.exists.side_effect = [False, True]
+        with patch.object(service, '_get_store', return_value=mock_store):
             assert service._is_duplicate('hash123') is False
             assert service._is_duplicate('hash123') is True
 
@@ -313,9 +313,9 @@ class TestRateLimiting:
 
 class TestDocumentCreation:
 
-    def test_create_document_full_flow(self, service, mock_redis):
+    def test_create_document_full_flow(self, service, mock_store):
         """Test the full create flow: conversation → synthesis → document."""
-        mock_redis.exists.return_value = False  # no duplicate
+        mock_store.exists.return_value = False  # no duplicate
 
         turns = [
             {'role': 'user', 'content': 'Create a workout plan'},
@@ -333,7 +333,7 @@ class TestDocumentCreation:
         mock_llm = MagicMock()
         mock_llm.send_message.return_value = mock_llm_response
 
-        with patch.object(service, '_get_redis', return_value=mock_redis), \
+        with patch.object(service, '_get_store', return_value=mock_store), \
              patch.object(service, '_get_conversation_window', return_value="User: Create a workout plan\n\nAssistant: " + WORKOUT_PLAN), \
              patch.object(service, '_synthesize_document', return_value="# Workout Plan\n\nGenerated content..."):
 
@@ -344,19 +344,19 @@ class TestDocumentCreation:
         assert doc_id == 'abc12345'
         mock_doc_svc.create_document_from_text.assert_called_once()
 
-    def test_create_document_empty_conversation(self, service, mock_redis):
+    def test_create_document_empty_conversation(self, service, mock_store):
         """Returns None if no conversation content found."""
-        with patch.object(service, '_get_redis', return_value=mock_redis), \
+        with patch.object(service, '_get_store', return_value=mock_store), \
              patch.object(service, '_get_conversation_window', return_value=None):
             result = service.create_document_from_conversation('thread1', 'topic', 'plan')
 
         assert result is None
 
-    def test_create_document_duplicate_skipped(self, service, mock_redis):
+    def test_create_document_duplicate_skipped(self, service, mock_store):
         """Returns None if duplicate conversation hash detected."""
-        mock_redis.exists.return_value = True  # duplicate exists
+        mock_store.exists.return_value = True  # duplicate exists
 
-        with patch.object(service, '_get_redis', return_value=mock_redis), \
+        with patch.object(service, '_get_store', return_value=mock_store), \
              patch.object(service, '_get_conversation_window', return_value="User: test\n\nAssistant: test response"):
             result = service.create_document_from_conversation('thread1', 'topic', 'plan')
 

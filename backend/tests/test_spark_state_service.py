@@ -9,11 +9,11 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def mock_redis():
-    """Create a mock Redis that stores values in a dict."""
+def mock_store():
+    """Create a mock MemoryStore that stores values in a dict."""
     store = {}
 
-    class FakeRedis:
+    class FakeStore:
         def get(self, key):
             return store.get(key)
 
@@ -35,21 +35,22 @@ def mock_redis():
         def expire(self, key, ttl):
             pass
 
-    fake = FakeRedis()
+    fake = FakeStore()
     fake._store = store
     return fake
 
 
 @pytest.fixture
-def spark_service(mock_redis):
-    """Create SparkStateService with mocked Redis."""
-    with patch('services.spark_state_service.RedisClientService') as mock_cls:
-        mock_cls.create_connection.return_value = mock_redis
+def spark_service(mock_store):
+    """Create SparkStateService with mocked MemoryStore."""
+    with patch('services.spark_state_service.MemoryClientService') as mock_cls:
+        mock_cls.create_connection.return_value = mock_store
         from services.spark_state_service import SparkStateService
         svc = SparkStateService(user_id='test')
-        # Patch trait counting to return 0 by default
+        # Patch trait counting and welcome check to return 0/False by default
         svc._count_user_traits = MagicMock(return_value=0)
         svc._has_established_traits = MagicMock(return_value=False)
+        svc._has_been_welcomed = MagicMock(return_value=False)
         yield svc
 
 
@@ -71,6 +72,7 @@ class TestDefaultState:
 class TestGraduatedFallback:
     def test_initializes_graduated_when_traits_exist(self, spark_service):
         spark_service._has_established_traits = MagicMock(return_value=True)
+        spark_service._has_been_welcomed = MagicMock(return_value=True)
         state = spark_service.get_state()
         assert state['phase'] == 'graduated'
         assert state['welcome_sent'] is True

@@ -9,7 +9,7 @@
 """
 Unit tests for AdaptiveLayerService.
 
-All tests are pure-unit (no external DB/Redis calls).  External dependencies
+All tests are pure-unit (no external DB/MemoryStore calls).  External dependencies
 are patched at the method level so the rules-engine logic is exercised in
 complete isolation.
 
@@ -363,11 +363,11 @@ class TestForkDirective:
         # Set all three FORK_TRIGGERS dims to extreme values
         style = _make_style(depth_preference=2, challenge_appetite=2, abstraction_level=1)
 
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
 
-        with patch('services.redis_client.RedisClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_redis
+        with patch('services.memory_client.MemoryClientService') as mock_cls:
+            mock_cls.create_connection.return_value = mock_store
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result == ""
@@ -377,27 +377,27 @@ class TestForkDirective:
         svc = _service()
         style = _make_style(depth_preference=5.5)  # dead center, most ambiguous
 
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
-        mock_redis.set = MagicMock()
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
+        mock_store.set = MagicMock()
 
-        with patch('services.redis_client.RedisClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_redis
+        with patch('services.memory_client.MemoryClientService') as mock_cls:
+            mock_cls.create_connection.return_value = mock_store
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result != ""
         # Should have set the pending key
-        mock_redis.set.assert_called_once()
+        mock_store.set.assert_called_once()
 
     def test_cooldown_blocks_fork(self):
         svc = _service()
         style = _make_style(depth_preference=5.5)
 
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = True  # cooldown active
+        mock_store = MagicMock()
+        mock_store.exists.return_value = True  # cooldown active
 
-        with patch('services.redis_client.RedisClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_redis
+        with patch('services.memory_client.MemoryClientService') as mock_cls:
+            mock_cls.create_connection.return_value = mock_store
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result == ""
@@ -423,30 +423,30 @@ class TestGrowthReflection:
         return mock_db
 
     # Patch paths for lazy imports inside the methods:
-    # _get_growth_reflection imports from services.redis_client and services.database_service
-    _REDIS_PATCH = 'services.redis_client.RedisClientService'
+    # _get_growth_reflection imports from services.memory_client and services.database_service
+    _STORE_PATCH = 'services.memory_client.MemoryClientService'
     _DB_PATCH = 'services.database_service.get_shared_db_service'
 
     def test_cooldown_active_returns_empty(self):
         svc = _service()
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = True
+        mock_store = MagicMock()
+        mock_store.exists.return_value = True
 
-        with patch(self._REDIS_PATCH) as mock_cls, \
+        with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH):
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             result = svc._get_growth_reflection('primary')
 
         assert result == ""
 
     def test_no_signals_returns_empty(self):
         svc = _service()
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
 
-        with patch(self._REDIS_PATCH) as mock_cls, \
+        with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals([])
             result = svc._get_growth_reflection('primary')
 
@@ -454,16 +454,16 @@ class TestGrowthReflection:
 
     def test_signal_below_threshold_returns_empty(self):
         svc = _service()
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
 
         signals = [
             ('growth_signal:certainty_level', {'consecutive_cycles': 3, 'direction': 'increasing'}),
         ]
 
-        with patch(self._REDIS_PATCH) as mock_cls, \
+        with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
             result = svc._get_growth_reflection('primary')
 
@@ -471,37 +471,37 @@ class TestGrowthReflection:
 
     def test_signal_at_threshold_returns_reflection(self):
         svc = _service()
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
-        mock_redis.set = MagicMock()
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
+        mock_store.set = MagicMock()
 
         signals = [
             ('growth_signal:certainty_level', {'consecutive_cycles': 6, 'direction': 'increasing'}),
         ]
 
-        with patch(self._REDIS_PATCH) as mock_cls, \
+        with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
             result = svc._get_growth_reflection('primary')
 
         assert result in GROWTH_REFLECTIONS['certainty_level']
-        mock_redis.set.assert_called_once()
+        mock_store.set.assert_called_once()
 
     def test_picks_strongest_signal(self):
         svc = _service()
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
-        mock_redis.set = MagicMock()
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
+        mock_store.set = MagicMock()
 
         signals = [
             ('growth_signal:certainty_level', {'consecutive_cycles': 7}),
             ('growth_signal:depth_preference', {'consecutive_cycles': 10}),  # stronger
         ]
 
-        with patch(self._REDIS_PATCH) as mock_cls, \
+        with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
             result = svc._get_growth_reflection('primary')
 
@@ -509,16 +509,16 @@ class TestGrowthReflection:
 
     def test_unknown_dimension_returns_empty(self):
         svc = _service()
-        mock_redis = MagicMock()
-        mock_redis.exists.return_value = False
+        mock_store = MagicMock()
+        mock_store.exists.return_value = False
 
         signals = [
             ('growth_signal:unknown_dim', {'consecutive_cycles': 99}),
         ]
 
-        with patch(self._REDIS_PATCH) as mock_cls, \
+        with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_redis
+            mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
             result = svc._get_growth_reflection('primary')
 

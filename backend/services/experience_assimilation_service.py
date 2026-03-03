@@ -16,7 +16,7 @@ observations are stored as episodes and flow through the existing semantic
 consolidation pipeline into concepts/relationships.
 
 Flow:
-  tool_worker pushes tool outputs to Redis list (tool_reflection:pending)
+  tool_worker pushes tool outputs to MemoryStore list (tool_reflection:pending)
   → this service pops items every check_interval seconds
   → novelty gate layer 3: content hash dedup (layers 1+2 happen at enqueue time)
   → LLM reflection: "anything novel & conversationally useful?"
@@ -30,7 +30,7 @@ import logging
 import time
 from typing import Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class ExperienceAssimilationService:
     """
 
     def __init__(self, check_interval: int = 60):
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.config = ConfigService.resolve_agent_config("experience-assimilation")
         self.check_interval = self.config.get("check_interval", check_interval)
         self.max_sessions = self.config.get("max_sessions_per_day", 20)
@@ -91,12 +91,12 @@ class ExperienceAssimilationService:
 
     def _daily_sessions_exceeded(self) -> bool:
         """Check if we've hit the daily session cap."""
-        count = int(self.redis.hget(STATE_KEY, 'sessions_today') or 0)
-        day_key = self.redis.hget(STATE_KEY, 'session_day')
+        count = int(self.store.hget(STATE_KEY, 'sessions_today') or 0)
+        day_key = self.store.hget(STATE_KEY, 'session_day')
         today = time.strftime('%Y-%m-%d')
 
         if day_key != today:
-            self.redis.hset(STATE_KEY, mapping={
+            self.store.hset(STATE_KEY, mapping={
                 'sessions_today': 0,
                 'session_day': today,
             })
@@ -106,14 +106,14 @@ class ExperienceAssimilationService:
 
     def _is_topic_on_cooldown(self, topic: str) -> bool:
         """Check per-topic cooldown."""
-        last_time = self.redis.zscore(COOLDOWN_ZSET_KEY, topic)
+        last_time = self.store.zscore(COOLDOWN_ZSET_KEY, topic)
         if last_time and (time.time() - float(last_time)) < self.cooldown_per_topic:
             return True
         return False
 
     def _mark_topic_processed(self, topic: str):
         """Record topic cooldown."""
-        self.redis.zadd(COOLDOWN_ZSET_KEY, {topic: time.time()})
+        self.store.zadd(COOLDOWN_ZSET_KEY, {topic: time.time()})
 
     def _content_hash(self, tool_outputs: list) -> str:
         """Hash tool outputs for dedup (novelty gate layer 3)."""
@@ -123,24 +123,24 @@ class ExperienceAssimilationService:
     def _is_content_seen(self, content_hash: str) -> bool:
         """Check if identical content was processed in the last 24h."""
         key = f"tool_reflection:hash:{content_hash}"
-        if self.redis.exists(key):
+        if self.store.exists(key):
             return True
-        self.redis.setex(key, 86400, "1")
+        self.store.setex(key, 86400, "1")
         return False
 
     def _is_duplicate_observation(self, observation_text: str) -> bool:
         """Check if we've already stored a similar observation."""
         obs_hash = hashlib.md5(observation_text.lower().strip().encode()).hexdigest()[:12]
         key = f"tool_reflection:obs:{obs_hash}"
-        if self.redis.exists(key):
+        if self.store.exists(key):
             return True
-        self.redis.setex(key, self.dedup_ttl, "1")
+        self.store.setex(key, self.dedup_ttl, "1")
         return False
 
     def _run_cycle(self):
         """Pop and process up to 3 items from the pending list."""
         for _ in range(3):
-            raw = self.redis.lpop(PENDING_LIST_KEY)
+            raw = self.store.lpop(PENDING_LIST_KEY)
             if not raw:
                 break
 
@@ -206,7 +206,7 @@ class ExperienceAssimilationService:
 
         if stored > 0:
             self._mark_topic_processed(topic)
-            self.redis.hincrby(STATE_KEY, 'sessions_today', 1)
+            self.store.hincrby(STATE_KEY, 'sessions_today', 1)
             logger.info(f"{LOG_PREFIX} Stored {stored} episode(s) for topic '{topic}'")
 
     def _reflect(self, user_prompt: str, tool_outputs: list) -> dict:

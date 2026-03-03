@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
@@ -374,10 +374,10 @@ class CuriosityPursuitService:
             prompt_queue.enqueue(message, metadata)
 
             # Track pending response for engagement scoring
-            redis = RedisClientService.create_connection()
+            store = MemoryClientService.create_connection()
             user_id = 'default'
-            redis.set(f"proactive:{user_id}:pending_response", proactive_id)
-            redis.set(f"proactive:{user_id}:last_sent_ts", str(time.time()))
+            store.set(f"proactive:{user_id}:pending_response", proactive_id)
+            store.set(f"proactive:{user_id}:last_sent_ts", str(time.time()))
 
             # Store content for engagement scoring
             try:
@@ -387,8 +387,8 @@ class CuriosityPursuitService:
             except Exception:
                 pass
 
-            # Store thread_id in Redis for feedback routing
-            redis.setex(
+            # Store thread_id in MemoryStore for feedback routing
+            store.setex(
                 f"proactive:{user_id}:pending_thread_id",
                 14400,  # 4h TTL
                 thread['id'],

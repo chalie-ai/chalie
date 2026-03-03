@@ -9,7 +9,7 @@ import time
 import logging
 from typing import Optional
 
-from .redis_client import RedisClientService
+from .memory_client import MemoryClientService
 from .config_service import ConfigService
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,9 @@ class ThreadExpiryService:
     def _run_expiry_cycle(self):
         """Scan for and expire stale threads."""
         try:
-            redis = RedisClientService.create_connection()
+            store = MemoryClientService.create_connection()
         except Exception as e:
-            logger.debug(f"[THREAD EXPIRY] Redis unavailable: {e}")
+            logger.debug(f"[THREAD EXPIRY] MemoryStore unavailable: {e}")
             return
 
         expired_count = 0
@@ -63,18 +63,18 @@ class ThreadExpiryService:
         # Scan for active_thread:* pointer keys to find all active threads
         cursor = 0
         while True:
-            cursor, keys = redis.scan(cursor, match="active_thread:*", count=100)
+            cursor, keys = store.scan(cursor, match="active_thread:*", count=100)
 
             for pointer_key in keys:
                 try:
-                    thread_id = redis.get(pointer_key)
+                    thread_id = store.get(pointer_key)
                     if not thread_id:
                         continue
 
-                    thread_data = redis.hgetall(f"thread:{thread_id}")
+                    thread_data = store.hgetall(f"thread:{thread_id}")
                     if not thread_data:
                         # Orphan pointer — clean up
-                        redis.delete(pointer_key)
+                        store.delete(pointer_key)
                         continue
 
                     if thread_data.get("state") == "expired":
@@ -84,7 +84,7 @@ class ThreadExpiryService:
                     gap_seconds = now - last_activity
 
                     if gap_seconds >= self.hard_expiry_seconds:
-                        self._expire_thread(redis, thread_id, thread_data, pointer_key)
+                        self._expire_thread(store, thread_id, thread_data, pointer_key)
                         expired_count += 1
 
                 except Exception as e:
@@ -98,20 +98,20 @@ class ThreadExpiryService:
             logger.info(f"[THREAD EXPIRY] Cycle complete: expired {expired_count} thread(s)")
 
         # Check for idle save suggestions (saveable:* flags with 5min+ inactivity)
-        self._check_idle_save_suggestions(redis, now)
+        self._check_idle_save_suggestions(store, now)
 
-    def _expire_thread(self, redis, thread_id: str, thread_data: dict, pointer_key: str):
+    def _expire_thread(self, store, thread_id: str, thread_data: dict, pointer_key: str):
         """Expire a single thread and trigger episodic summarization."""
-        # Mark as expired in Redis
-        redis.hset(f"thread:{thread_id}", mapping={
+        # Mark as expired in MemoryStore
+        store.hset(f"thread:{thread_id}", mapping={
             "state": "expired",
             "expired_at": str(time.time()),
         })
 
         # Clear the active pointer
-        current_pointer = redis.get(pointer_key)
+        current_pointer = store.get(pointer_key)
         if current_pointer == thread_id:
-            redis.delete(pointer_key)
+            store.delete(pointer_key)
 
         # Persist to SQLite
         try:
@@ -148,17 +148,17 @@ class ThreadExpiryService:
             f"topic={thread_data.get('current_topic', '?')})"
         )
 
-    def _check_idle_save_suggestions(self, redis, now: float):
+    def _check_idle_save_suggestions(self, store, now: float):
         """Emit save suggestion cards for threads idle 5+ minutes with saveable flags."""
         try:
             cursor = 0
             while True:
-                cursor, keys = redis.scan(cursor, match="saveable:*", count=50)
+                cursor, keys = store.scan(cursor, match="saveable:*", count=50)
 
                 for flag_key in keys:
                     try:
                         import json
-                        raw = redis.get(flag_key)
+                        raw = store.get(flag_key)
                         if not raw:
                             continue
 

@@ -17,12 +17,12 @@ from services.config_service import ConfigService
 
 @pytest.mark.unit
 class TestConnections:
-    """Tests for ConfigService.connections() — loads redis topic/queue names."""
+    """Tests for ConfigService.connections() — loads MemoryStore topic/queue names."""
 
-    def test_returns_redis_block_from_json(self):
-        """Redis topics and queues are loaded from connections.json."""
+    def test_returns_memory_block_from_json(self):
+        """MemoryStore topics and queues are loaded from connections.json."""
         json_config = {
-            "redis": {
+            "memory": {
                 "topics": {"chat_history": "llm-chat"},
                 "queues": {"prompt_queue": {"name": "prompt-queue"}},
             },
@@ -30,19 +30,19 @@ class TestConnections:
         with patch.object(ConfigService, 'load_json', return_value=json_config):
             result = ConfigService.connections()
 
-        assert result["redis"]["topics"] == {"chat_history": "llm-chat"}
-        assert result["redis"]["queues"]["prompt_queue"]["name"] == "prompt-queue"
+        assert result["memory"]["topics"] == {"chat_history": "llm-chat"}
+        assert result["memory"]["queues"]["prompt_queue"]["name"] == "prompt-queue"
 
-    def test_returns_empty_redis_when_json_missing(self):
-        """When connections.json is missing, returns empty redis dict."""
+    def test_returns_empty_memory_when_json_missing(self):
+        """When connections.json is missing, returns empty memory dict."""
         with patch.object(ConfigService, 'load_json', side_effect=FileNotFoundError):
             result = ConfigService.connections()
 
-        assert result["redis"] == {}
+        assert result["memory"] == {}
 
     def test_no_rest_api_or_voice_keys(self):
         """connections() no longer returns rest_api or voice sections."""
-        json_config = {"redis": {"topics": {}}}
+        json_config = {"memory": {"topics": {}}}
         with patch.object(ConfigService, 'load_json', return_value=json_config):
             result = ConfigService.connections()
 

@@ -2,7 +2,7 @@ import time
 import logging
 from typing import Optional
 
-from .redis_client import RedisClientService
+from .memory_client import MemoryClientService
 from .config_service import ConfigService
 from .semantic_consolidation_tracker import SemanticConsolidationTracker
 
@@ -26,18 +26,18 @@ class IdleConsolidationService:
         Args:
             check_interval: Seconds between idle checks (default: 300 = 5 minutes)
         """
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.tracker = SemanticConsolidationTracker()
         self.check_interval = check_interval
 
         # Load queue names from config
         config = ConfigService.connections()
-        topics = config.get("redis", {}).get("topics", {})
+        topics = config.get("memory", {}).get("topics", {})
 
         self.prompt_queue = topics.get("prompt_queue", "prompt-queue")
         self.memory_queue = topics.get("memory_chunker", "memory-chunker-queue")
         self.episodic_queue = topics.get("episodic_memory", "episodic-memory-queue")
-        self.semantic_queue = config.get("redis", {}).get("queues", {}).get(
+        self.semantic_queue = config.get("memory", {}).get("queues", {}).get(
             "semantic_consolidation_queue", {}
         ).get("name", "semantic_consolidation_queue")
 
@@ -103,7 +103,7 @@ class IdleConsolidationService:
         ]
 
         for queue_name in queues:
-            queue_length = self.redis.llen(queue_name)
+            queue_length = self.store.llen(queue_name)
             if queue_length > 0:
                 logger.debug(
                     f"[IDLE CONSOLIDATION] Queue '{queue_name}' has {queue_length} items, "
@@ -144,7 +144,7 @@ def idle_consolidation_process(shared_state):
     """Top-level entry point for thread spawn.
 
     Creates the service instance inside the child process to avoid
-    pickling Redis connections (which contain _thread.lock objects).
+    pickling MemoryStore connections (which contain _thread.lock objects).
     """
     service = IdleConsolidationService()
     service.run(shared_state)
