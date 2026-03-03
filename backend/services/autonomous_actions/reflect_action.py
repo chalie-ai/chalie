@@ -21,7 +21,7 @@ import math
 import logging
 from typing import Optional, Dict, Any, Tuple, List
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[REFLECT]"
 
-# Redis key namespace — per-topic
+# MemoryStore key namespace — per-topic
 _NS = "reflection"
 
 # Shared fatigue key (same as cognitive_drift_engine.py)
@@ -54,7 +54,7 @@ class ReflectAction(AutonomousAction):
         config = config or {}
         services = services or {}
 
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
 
         # Injected services (from drift engine — no new connections)
         self._gist_storage = services.get('gist_storage')
@@ -111,7 +111,7 @@ class ReflectAction(AutonomousAction):
         details['type_bonus'] = type_bonus
 
         type_decay = 1.0
-        last_type = self.redis.get(_key(thought.seed_topic, 'last_type'))
+        last_type = self.store.get(_key(thought.seed_topic, 'last_type'))
         if last_type and last_type == thought.thought_type:
             type_decay = self.type_repeat_decay
             details['type_repeat_decay_applied'] = True
@@ -166,7 +166,7 @@ class ReflectAction(AutonomousAction):
             return (True, {'reason': 'no_embedding_available'})
 
         recent_key = _key(thought.seed_topic, 'recent_embeddings')
-        stored = self.redis.lrange(recent_key, 0, -1)
+        stored = self.store.lrange(recent_key, 0, -1)
 
         if not stored:
             return (True, {'reason': 'no_recent_reflections'})
@@ -210,7 +210,7 @@ class ReflectAction(AutonomousAction):
         details['reflect_budget'] = budget
 
         cutoff = time.time() - (self.fatigue_window_minutes * 60)
-        recent = self.redis.zrangebyscore(FATIGUE_KEY, cutoff, '+inf', withscores=True)
+        recent = self.store.zrangebyscore(FATIGUE_KEY, cutoff, '+inf', withscores=True)
 
         total_activation = 0.0
         for member, _ in recent:
@@ -299,12 +299,12 @@ class ReflectAction(AutonomousAction):
                 'seed_concept': thought.seed_concept,
                 'thought_type': thought.thought_type,
             })
-            self.redis.rpush(recent_key, entry)
-            self.redis.ltrim(recent_key, -self.max_recent_reflections, -1)
-            self.redis.expire(recent_key, 5400)  # 90min TTL
+            self.store.rpush(recent_key, entry)
+            self.store.ltrim(recent_key, -self.max_recent_reflections, -1)
+            self.store.expire(recent_key, 5400)  # 90min TTL
 
         # 4. Update last_type for repeat decay
-        self.redis.setex(
+        self.store.setex(
             _key(thought.seed_topic, 'last_type'),
             600,  # 10min TTL
             thought.thought_type,
@@ -370,8 +370,8 @@ class ReflectAction(AutonomousAction):
             'reflection_content_hash': content_hash,
         })
 
-        self.redis.rpush(outcomes_key, entry)
-        self.redis.ltrim(outcomes_key, -20, -1)
+        self.store.rpush(outcomes_key, entry)
+        self.store.ltrim(outcomes_key, -20, -1)
 
     # -- Helpers ---------------------------------------------------------------
 
@@ -526,5 +526,5 @@ class ReflectAction(AutonomousAction):
     def _increment_rejected(self, topic: str):
         """Track gate rejections for future adaptive threshold monitoring."""
         key = _key(topic, 'rejected_count')
-        self.redis.incr(key)
-        self.redis.expire(key, 3600)  # 1h TTL
+        self.store.incr(key)
+        self.store.expire(key, 3600)  # 1h TTL

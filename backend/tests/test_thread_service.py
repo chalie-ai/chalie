@@ -9,11 +9,11 @@ from services.thread_service import ThreadService, ThreadResolution
 
 
 @pytest.fixture
-def thread_service(mock_redis):
-    """ThreadService with fake Redis."""
-    with patch('services.thread_service.RedisClientService.create_connection', return_value=mock_redis):
+def thread_service(mock_store):
+    """ThreadService with fake MemoryStore."""
+    with patch('services.thread_service.MemoryClientService.create_connection', return_value=mock_store):
         svc = ThreadService(soft_expiry_minutes=30, hard_expiry_minutes=240)
-        # Patch out PostgreSQL persistence (non-critical)
+        # Patch out SQLite persistence (non-critical)
         with patch.object(svc, '_persist_thread_created'), \
              patch.object(svc, '_persist_thread_expired'):
             yield svc
@@ -39,11 +39,11 @@ class TestResolveThread:
         assert r2.is_resumed is False
         assert r2.thread_id == r1.thread_id
 
-    def test_soft_resume_after_soft_expiry(self, thread_service, mock_redis):
+    def test_soft_resume_after_soft_expiry(self, thread_service, mock_store):
         r1 = thread_service.resolve_thread("user1", "chan1", "telegram")
 
         # Simulate 35 minutes of inactivity (past soft, before hard)
-        mock_redis.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 35 * 60))
+        mock_store.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 35 * 60))
 
         r2 = thread_service.resolve_thread("user1", "chan1", "telegram")
         assert r2.is_new is False
@@ -51,11 +51,11 @@ class TestResolveThread:
         assert r2.thread_id == r1.thread_id
         assert r2.resume_gap_minutes > 30
 
-    def test_hard_expiry_creates_new_thread(self, thread_service, mock_redis):
+    def test_hard_expiry_creates_new_thread(self, thread_service, mock_store):
         r1 = thread_service.resolve_thread("user1", "chan1", "telegram")
 
         # Simulate 5 hours of inactivity (past hard expiry)
-        mock_redis.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 5 * 3600))
+        mock_store.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 5 * 3600))
 
         r2 = thread_service.resolve_thread("user1", "chan1", "telegram")
         assert r2.is_new is True
@@ -74,11 +74,11 @@ class TestResolveThread:
 
         assert r1.thread_id != r2.thread_id
 
-    def test_sequence_increments(self, thread_service, mock_redis):
+    def test_sequence_increments(self, thread_service, mock_store):
         r1 = thread_service.resolve_thread("user1", "chan1", "telegram")
 
         # Force hard expiry
-        mock_redis.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 5 * 3600))
+        mock_store.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 5 * 3600))
 
         r2 = thread_service.resolve_thread("user1", "chan1", "telegram")
         # Second thread should have sequence 2
@@ -86,18 +86,18 @@ class TestResolveThread:
 
 
 class TestExpireThread:
-    def test_expire_sets_state(self, thread_service, mock_redis):
+    def test_expire_sets_state(self, thread_service, mock_store):
         r = thread_service.resolve_thread("user1", "chan1", "telegram")
         thread_service.expire_thread(r.thread_id)
 
-        state = mock_redis.hget(f"thread:{r.thread_id}", "state")
+        state = mock_store.hget(f"thread:{r.thread_id}", "state")
         assert state == "expired"
 
-    def test_expire_clears_pointer(self, thread_service, mock_redis):
+    def test_expire_clears_pointer(self, thread_service, mock_store):
         r = thread_service.resolve_thread("user1", "chan1", "telegram")
         thread_service.expire_thread(r.thread_id)
 
-        pointer = mock_redis.get("active_thread:user1:chan1")
+        pointer = mock_store.get("active_thread:user1:chan1")
         assert pointer is None
 
     def test_double_expire_is_safe(self, thread_service):
@@ -107,33 +107,33 @@ class TestExpireThread:
 
 
 class TestUpdateTopic:
-    def test_update_topic_sets_current(self, thread_service, mock_redis):
+    def test_update_topic_sets_current(self, thread_service, mock_store):
         r = thread_service.resolve_thread("user1", "chan1", "telegram")
         thread_service.update_topic(r.thread_id, "daily-routine")
 
-        current = mock_redis.hget(f"thread:{r.thread_id}", "current_topic")
+        current = mock_store.hget(f"thread:{r.thread_id}", "current_topic")
         assert current == "daily-routine"
 
-    def test_update_topic_appends_history(self, thread_service, mock_redis):
+    def test_update_topic_appends_history(self, thread_service, mock_store):
         r = thread_service.resolve_thread("user1", "chan1", "telegram")
         thread_service.update_topic(r.thread_id, "topic-a")
         thread_service.update_topic(r.thread_id, "topic-b")
 
-        history = json.loads(mock_redis.hget(f"thread:{r.thread_id}", "topic_history"))
+        history = json.loads(mock_store.hget(f"thread:{r.thread_id}", "topic_history"))
         assert "topic-a" in history
         assert "topic-b" in history
 
-    def test_duplicate_topic_not_added_twice(self, thread_service, mock_redis):
+    def test_duplicate_topic_not_added_twice(self, thread_service, mock_store):
         r = thread_service.resolve_thread("user1", "chan1", "telegram")
         thread_service.update_topic(r.thread_id, "topic-a")
         thread_service.update_topic(r.thread_id, "topic-a")
 
-        history = json.loads(mock_redis.hget(f"thread:{r.thread_id}", "topic_history"))
+        history = json.loads(mock_store.hget(f"thread:{r.thread_id}", "topic_history"))
         assert history.count("topic-a") == 1
 
 
 class TestVisualContinuityBridge:
-    def test_recent_context_returned_on_hard_expiry(self, thread_service, mock_redis):
+    def test_recent_context_returned_on_hard_expiry(self, thread_service, mock_store):
         r1 = thread_service.resolve_thread("user1", "chan1", "telegram")
 
         # Store some conversation data in the old thread
@@ -142,10 +142,10 @@ class TestVisualContinuityBridge:
             "prompt": {"message": "What's the weather?"},
             "response": {"message": "It's sunny today."},
         }
-        mock_redis.rpush(f"thread_conv:{r1.thread_id}", json.dumps(exchange))
+        mock_store.rpush(f"thread_conv:{r1.thread_id}", json.dumps(exchange))
 
         # Force hard expiry
-        mock_redis.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 5 * 3600))
+        mock_store.hset(f"thread:{r1.thread_id}", "last_activity", str(time.time() - 5 * 3600))
 
         r2 = thread_service.resolve_thread("user1", "chan1", "telegram")
         assert r2.recent_visible_context is not None

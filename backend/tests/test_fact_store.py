@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 class TestFactStore:
 
-    def test_store_and_retrieve_fact(self, mock_redis):
+    def test_store_and_retrieve_fact(self, mock_store):
         svc = FactStoreService(ttl_minutes=1440, max_facts_per_topic=50)
         stored = svc.store_fact("topic-a", "name", "Dylan", confidence=0.9)
         assert stored is True
@@ -19,7 +19,7 @@ class TestFactStore:
         assert fact['value'] == 'Dylan'
         assert fact['confidence'] == 0.9
 
-    def test_higher_confidence_wins_conflict(self, mock_redis):
+    def test_higher_confidence_wins_conflict(self, mock_store):
         """Same key, higher confidence should overwrite."""
         svc = FactStoreService()
         svc.store_fact("topic-a", "name", "Alice", confidence=0.5)
@@ -29,7 +29,7 @@ class TestFactStore:
         assert fact['value'] == 'Bob'
         assert fact['confidence'] == 0.9
 
-    def test_lower_confidence_rejected(self, mock_redis):
+    def test_lower_confidence_rejected(self, mock_store):
         """Same key, lower confidence should keep existing."""
         svc = FactStoreService()
         svc.store_fact("topic-a", "name", "Alice", confidence=0.9)
@@ -39,7 +39,7 @@ class TestFactStore:
         fact = svc.get_fact("topic-a", "name")
         assert fact['value'] == 'Alice'
 
-    def test_max_facts_eviction(self, mock_redis):
+    def test_max_facts_eviction(self, mock_store):
         """51st fact evicts oldest."""
         svc = FactStoreService(max_facts_per_topic=3)
 
@@ -57,7 +57,7 @@ class TestFactStore:
         assert fact4 is not None
         assert fact4['value'] == 'v4'
 
-    def test_get_all_facts_ordered(self, mock_redis):
+    def test_get_all_facts_ordered(self, mock_store):
         """get_all_facts returns newest first."""
         svc = FactStoreService()
         svc.store_fact("topic-a", "first", "v1", confidence=0.5)
@@ -69,7 +69,7 @@ class TestFactStore:
         # Newest first (reverse order of insertion by timestamp)
         assert facts[0]['key'] == 'third'
 
-    def test_formatted_facts_output(self, mock_redis):
+    def test_formatted_facts_output(self, mock_store):
         """get_facts_formatted returns readable string."""
         svc = FactStoreService()
         svc.store_fact("topic-a", "language", "Python", confidence=0.9)

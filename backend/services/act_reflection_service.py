@@ -13,7 +13,7 @@ import time
 import logging
 
 from services.innate_skills.registry import REFLECTION_FILTER_SKILLS
-from services import act_redis_keys
+from services import act_memory_keys
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def _is_ephemeral_tool(tool_name: str) -> bool:
 
 
 def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
-    """Push tool outputs to Redis for background experience assimilation.
+    """Push tool outputs to MemoryStore for background experience assimilation.
 
     Applies novelty gate layers 1 (ephemeral tool type) and 2 (output size).
     Layer 3 (content hash dedup) runs in the assimilation service.
@@ -60,16 +60,16 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
         if not tool_outputs:
             return
 
-        from services.redis_client import RedisClientService
-        redis_conn = RedisClientService.create_connection()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
         payload = json.dumps({
             'topic': topic,
             'user_prompt': user_prompt,
             'tool_outputs': tool_outputs,
             'timestamp': time.time(),
         })
-        redis_conn.rpush(act_redis_keys.TOOL_REFLECTION_QUEUE, payload)
-        redis_conn.expire(act_redis_keys.TOOL_REFLECTION_QUEUE, act_redis_keys.TOOL_REFLECTION_TTL)
+        store.rpush(act_memory_keys.TOOL_REFLECTION_QUEUE, payload)
+        store.expire(act_memory_keys.TOOL_REFLECTION_QUEUE, act_memory_keys.TOOL_REFLECTION_TTL)
         logger.debug(
             f"{LOG_PREFIX} Enqueued reflection for topic '{topic}' "
             f"({len(tool_outputs)} tool output(s))"

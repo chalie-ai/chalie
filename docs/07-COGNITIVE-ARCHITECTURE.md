@@ -147,9 +147,9 @@ Otherwise → generate_for_mode(selected_mode)
 
 ### Signal Collection
 
-The router collects signals from existing services (all Redis reads, ~5ms total) plus NLP regex patterns (<1ms):
+The router collects signals from existing services (all MemoryStore reads, ~5ms total) plus NLP regex patterns (<1ms):
 
-**Context Signals (from Redis):**
+**Context Signals (from MemoryStore):**
 - `context_warmth` (float 0-1)
 - `working_memory_turns` (int 0-4)
 - `gist_count` (int, excluding cold_start type)
@@ -462,7 +462,7 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 
 - **Mode Router:** Deterministic mathematical function that selects engagement mode from observable signals
 - **Tie-Breaker:** Small LLM (qwen3:4b) consulted when top 2 modes are within effective margin
-- **Routing Signals:** Observable features collected from Redis and NLP analysis (~5ms)
+- **Routing Signals:** Observable features collected from MemoryStore and NLP analysis (~5ms)
 - **Effective Margin:** Dynamic threshold for tie-breaker invocation (narrows with context warmth)
 - **Router Confidence:** Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal:** Metric logged by monitors, consumed by the single regulator

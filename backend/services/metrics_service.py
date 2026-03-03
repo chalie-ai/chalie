@@ -1,7 +1,7 @@
 """
 Metrics Service - Structured metrics and per-request tracing.
 
-Redis-backed counters and timing records with daily rollup keys.
+MemoryStore-backed counters and timing records with daily rollup keys.
 No external dependencies required.
 """
 
@@ -10,15 +10,15 @@ import json
 import uuid
 import logging
 from typing import Dict, Any, Optional
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 
 class MetricsService:
-    """Manages metrics collection with Redis counters and timing records."""
+    """Manages metrics collection with MemoryStore counters and timing records."""
 
     def __init__(self):
-        """Initialize metrics service with Redis connection."""
-        self.redis = RedisClientService.create_connection()
+        """Initialize metrics service with MemoryStore connection."""
+        self.store = MemoryClientService.create_connection()
 
     def start_trace(self) -> str:
         """
@@ -38,7 +38,7 @@ class MetricsService:
         }
 
         # Store trace with 1-hour TTL
-        self.redis.setex(trace_key, 3600, json.dumps(trace_data))
+        self.store.setex(trace_key, 3600, json.dumps(trace_data))
         return trace_id
 
     def record_timing(self, trace_id: str, operation: str, duration_ms: float):
@@ -51,18 +51,18 @@ class MetricsService:
             duration_ms: Duration in milliseconds
         """
         trace_key = f"trace:{trace_id}"
-        trace_json = self.redis.get(trace_key)
+        trace_json = self.store.get(trace_key)
 
         if trace_json:
             trace_data = json.loads(trace_json)
             trace_data['timings'][operation] = duration_ms
-            self.redis.setex(trace_key, 3600, json.dumps(trace_data))
+            self.store.setex(trace_key, 3600, json.dumps(trace_data))
 
         # Also record in daily rollup
         day_key = time.strftime('%Y-%m-%d')
         rollup_key = f"metrics:timing:{operation}:{day_key}"
 
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.rpush(rollup_key, str(duration_ms))
         pipe.expire(rollup_key, 86400 * 7)  # 7-day retention
         pipe.execute()
@@ -78,7 +78,7 @@ class MetricsService:
         day_key = time.strftime('%Y-%m-%d')
         counter_key = f"metrics:counter:{metric_name}:{day_key}"
 
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.incrby(counter_key, value)
         pipe.expire(counter_key, 86400 * 7)  # 7-day retention
         pipe.execute()
@@ -94,7 +94,7 @@ class MetricsService:
             Trace data dict or None
         """
         trace_key = f"trace:{trace_id}"
-        trace_json = self.redis.get(trace_key)
+        trace_json = self.store.get(trace_key)
 
         if trace_json:
             return json.loads(trace_json)
@@ -123,7 +123,7 @@ class MetricsService:
 
         for name in counter_names:
             counter_key = f"metrics:counter:{name}:{day_key}"
-            value = self.redis.get(counter_key)
+            value = self.store.get(counter_key)
             dashboard['counters'][name] = int(value) if value else 0
 
         # Collect timing averages
@@ -134,7 +134,7 @@ class MetricsService:
 
         for operation in timing_operations:
             rollup_key = f"metrics:timing:{operation}:{day_key}"
-            values = self.redis.lrange(rollup_key, 0, -1)
+            values = self.store.lrange(rollup_key, 0, -1)
 
             if values:
                 float_values = [float(v) for v in values]

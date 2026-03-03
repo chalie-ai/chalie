@@ -318,12 +318,12 @@ class CuriosityThreadService:
         """
         Boost engagement_score by +0.1 (capped at 1.0).
 
-        Rate-limited to max +0.2/day per thread via Redis daily counter.
+        Rate-limited to max +0.2/day per thread via MemoryStore daily counter.
         Called when user-generated episodes align with a thread's seed_topic.
         """
         try:
-            from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -340,9 +340,9 @@ class CuriosityThreadService:
                 thread_id = row[0]
                 current_score = row[1]
 
-                # Daily reinforcement cap via Redis counter
+                # Daily reinforcement cap via MemoryStore counter
                 daily_key = f"curiosity:reinforce:{thread_id}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
-                current_daily = float(redis.get(daily_key) or 0)
+                current_daily = float(store.get(daily_key) or 0)
 
                 if current_daily >= self.MAX_DAILY_REINFORCEMENT:
                     logger.debug(
@@ -361,7 +361,7 @@ class CuriosityThreadService:
                 cursor.close()
 
                 # Update daily counter
-                pipe = redis.pipeline()
+                pipe = store.pipeline()
                 pipe.incrbyfloat(daily_key, boost)
                 pipe.expire(daily_key, 86400)
                 pipe.execute()

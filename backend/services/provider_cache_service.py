@@ -1,4 +1,4 @@
-"""Provider cache service — in-memory lazy cache with Redis-backed invalidation."""
+"""Provider cache service — in-memory lazy cache with MemoryStore-backed invalidation."""
 
 import logging
 from typing import Dict, Any, Optional
@@ -10,8 +10,8 @@ class ProviderCacheService:
     """
     In-memory lazy cache for provider configurations.
 
-    Solves cache staleness by using Redis versioning:
-    - API process mutates DB → increments Redis version → local caches invalidate
+    Solves cache staleness by using MemoryStore versioning:
+    - API process mutates DB → increments MemoryStore version → local caches invalidate
     - Worker processes: next get_providers() sees version mismatch → cache miss → re-fetch
 
     Decryption happens ONLY on cache miss (cold start or after provider change).
@@ -20,25 +20,25 @@ class ProviderCacheService:
     # Class-level state (shared across all calls in this process)
     _providers: Dict[str, Any] = {}  # {name: {platform, model, host, api_key, ...}}
     _job_assignments: Dict[str, str] = {}  # {job_name: provider_name}
-    _version: Optional[int] = None  # Last seen Redis version
+    _version: Optional[int] = None  # Last seen MemoryStore version
 
 
     @staticmethod
     def get_providers() -> Dict[str, Any]:
         """
-        Get all providers with lazy caching and Redis-based invalidation.
+        Get all providers with lazy caching and MemoryStore-based invalidation.
 
         Returns:
             dict: {provider_name: {platform, model, host, api_key, ...}}
         """
-        # Check if Redis version has changed (cross-process invalidation)
+        # Check if MemoryStore version has changed (cross-process invalidation)
         try:
-            from services.redis_client import RedisClientService
-            redis_client = RedisClientService.create_connection()
-            current_version = redis_client.get("providers:cache_version")
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            current_version = store.get("providers:cache_version")
             current_version = int(current_version) if current_version else 0
         except Exception as e:
-            logger.warning(f"[ProviderCache] Redis version check failed: {e}, using local cache")
+            logger.warning(f"[ProviderCache] MemoryStore version check failed: {e}, using local cache")
             current_version = ProviderCacheService._version or 0
 
         # If version changed, invalidate local cache
@@ -131,18 +131,18 @@ class ProviderCacheService:
         Invalidate provider cache across all processes.
         Called after create/update/delete provider.
 
-        Uses Redis version counter for cross-process invalidation:
-        - Increments Redis version
+        Uses MemoryStore version counter for cross-process invalidation:
+        - Increments MemoryStore version
         - Clears local cache (this process)
         - Other processes detect version mismatch on next get_providers()
         """
         try:
-            from services.redis_client import RedisClientService
-            redis_client = RedisClientService.create_connection()
-            new_version = redis_client.incr("providers:cache_version")
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            new_version = store.incr("providers:cache_version")
             logger.debug(f"[ProviderCache] Invalidated cache (new version: {new_version})")
         except Exception as e:
-            logger.warning(f"[ProviderCache] Redis version increment failed: {e}")
+            logger.warning(f"[ProviderCache] MemoryStore version increment failed: {e}")
 
         # Clear local cache
         ProviderCacheService._providers = {}

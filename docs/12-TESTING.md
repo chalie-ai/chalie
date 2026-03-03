@@ -101,7 +101,7 @@ def test_something(self, mock_llm):
 Full Flask app with all blueprints, auth bypassed, DB/MemoryStore mocked:
 ```python
 def test_endpoint(self, authed_client):
-    client, mock_db, mock_redis = authed_client
+    client, mock_db, mock_store = authed_client
     response = client.get('/system/health')
     assert response.status_code == 200
 ```

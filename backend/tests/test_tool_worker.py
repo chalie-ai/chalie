@@ -143,5 +143,6 @@ class TestInnateSkills:
         expected = {
             'recall', 'memorize', 'introspect', 'associate', 'schedule',
             'persistent_task', 'list', 'autobiography', 'focus', 'moment', 'emit_card',
+            'document', 'read',
         }
         assert INNATE_SKILLS == expected

@@ -121,7 +121,7 @@ class TestConversationAPI:
              patch('services.database_service.get_shared_db_service') as mock_db_fn, \
              patch('services.episodic_retrieval_service.EpisodicRetrievalService') as mock_er_cls, \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
-             patch('services.redis_client.RedisClientService.create_connection') as mock_redis:
+             patch('services.memory_client.MemoryClientService.create_connection') as mock_store:
             # No active thread
             mock_ts = MagicMock()
             mock_ts.get_active_thread_id.return_value = None

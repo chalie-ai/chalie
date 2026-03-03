@@ -1,12 +1,12 @@
 """
-Identity State Service — Zero-latency Redis-backed identity authority.
+Identity State Service — Zero-latency MemoryStore-backed identity authority.
 
 Stores explicit identity fields (name, etc.) written synchronously when the user
 makes an explicit identity statement (e.g., "call me Dylan"). Read by
 FrontalCortexService before user_traits so identity is available immediately,
 before the async memory-chunker pipeline has run.
 
-Redis key: identity_state:{user_id}
+MemoryStore key: identity_state:{user_id}
 TTL: 7 days, refreshed on every write.
 Schema per field:
     {
@@ -27,21 +27,21 @@ import logging
 import time
 from typing import Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 logger = logging.getLogger(__name__)
 
 
 class IdentityStateService:
-    """Zero-latency Redis-backed identity authority store."""
+    """Zero-latency MemoryStore-backed identity authority store."""
 
-    _REDIS_KEY_PREFIX = "identity_state"
-    REDIS_TTL = 604800          # 7 days
+    _STORE_KEY_PREFIX = "identity_state"
+    STORE_TTL = 604800          # 7 days
     MAX_PREVIOUS_HISTORY = 5
 
     def __init__(self, user_id: str = 'primary'):
         self._user_id = user_id
-        self._redis_key = f"{self._REDIS_KEY_PREFIX}:{user_id}"
+        self._store_key = f"{self._STORE_KEY_PREFIX}:{user_id}"
 
     def set_field(
         self,
@@ -51,7 +51,7 @@ class IdentityStateService:
         provisional: bool = False,
     ) -> bool:
         """
-        Store an identity field in Redis.
+        Store an identity field in MemoryStore.
 
         - Normalizes value to lowercase for dedup comparisons.
         - Stores display form as title-case when input is all-lowercase;
@@ -64,10 +64,10 @@ class IdentityStateService:
             bool: True if stored successfully, False on error. Never raises.
         """
         try:
-            r = RedisClientService.create_connection()
+            r = MemoryClientService.create_connection()
 
             # Read-modify-write
-            raw = r.get(self._redis_key)
+            raw = r.get(self._store_key)
             blob = json.loads(raw) if raw else {}
 
             normalized = value.lower()
@@ -95,7 +95,7 @@ class IdentityStateService:
                 'previous': previous,
             }
 
-            r.setex(self._redis_key, self.REDIS_TTL, json.dumps(blob))
+            r.setex(self._store_key, self.STORE_TTL, json.dumps(blob))
             logger.debug(
                 f"[IDENTITY STATE] Stored {field_name}='{display}' "
                 f"for user '{self._user_id}'"
@@ -108,15 +108,15 @@ class IdentityStateService:
 
     def get_all(self) -> dict:
         """
-        Get the full identity state blob from Redis.
+        Get the full identity state blob from MemoryStore.
 
         Returns:
             dict: Full blob (may include '_onboarding' key), or {} on missing
-                  key or Redis error. Never raises.
+                  key or MemoryStore error. Never raises.
         """
         try:
-            r = RedisClientService.create_connection()
-            raw = r.get(self._redis_key)
+            r = MemoryClientService.create_connection()
+            raw = r.get(self._store_key)
             if not raw:
                 return {}
             return json.loads(raw)
@@ -147,14 +147,14 @@ class IdentityStateService:
             bool: True if successful, False on error. Never raises.
         """
         try:
-            r = RedisClientService.create_connection()
-            raw = r.get(self._redis_key)
+            r = MemoryClientService.create_connection()
+            raw = r.get(self._store_key)
             if not raw:
                 return True
             blob = json.loads(raw)
             if field_name in blob:
                 del blob[field_name]
-                r.setex(self._redis_key, self.REDIS_TTL, json.dumps(blob))
+                r.setex(self._store_key, self.STORE_TTL, json.dumps(blob))
             return True
         except Exception as e:
             logger.warning(f"[IDENTITY STATE] clear_field failed (non-fatal): {e}")
@@ -171,11 +171,11 @@ class IdentityStateService:
             bool: True if successful, False on error. Never raises.
         """
         try:
-            r = RedisClientService.create_connection()
-            raw = r.get(self._redis_key)
+            r = MemoryClientService.create_connection()
+            raw = r.get(self._store_key)
             blob = json.loads(raw) if raw else {}
             blob['_onboarding'] = onboarding_state
-            r.setex(self._redis_key, self.REDIS_TTL, json.dumps(blob))
+            r.setex(self._store_key, self.STORE_TTL, json.dumps(blob))
             return True
         except Exception as e:
             logger.warning(

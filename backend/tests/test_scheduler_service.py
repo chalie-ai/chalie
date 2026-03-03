@@ -2,7 +2,7 @@
 Tests for backend/services/scheduler_service.py
 
 Covers pure-computation functions (_calculate_next_due, _build_recurrence, _fire_item).
-Poll/DB tests require PostgreSQL and are covered by integration tests.
+Poll/DB tests require SQLite and are covered by integration tests.
 """
 
 import pytest

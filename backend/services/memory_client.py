@@ -1,8 +1,8 @@
 """
-Redis Client Service — now backed by in-memory MemoryStore.
+Memory Client Service — shared MemoryStore singleton.
 
-All callers that use RedisClientService.create_connection() get a shared
-MemoryStore singleton. This propagates to all 85+ files with zero per-file changes.
+All callers that use MemoryClientService.create_connection() get a shared
+MemoryStore singleton. This propagates to all services with zero per-file changes.
 """
 
 import json
@@ -29,7 +29,7 @@ def _get_store():
     return _store
 
 
-class RedisClientService:
+class MemoryClientService:
 
     def __init__(self):
         self._config = ConfigService.connections()
@@ -43,7 +43,7 @@ class RedisClientService:
             decode_responses: Ignored (MemoryStore always returns strings)
 
         Returns:
-            MemoryStore: Thread-safe in-memory store with Redis-compatible API
+            MemoryStore: Thread-safe in-memory store
         """
         return _get_store()
 
@@ -55,5 +55,8 @@ class RedisClientService:
         key: str
             The key name defined in the config under `topics`.
         """
-        topics = self._config.get("redis", {}).get("topics", {})
+        topics = self._config.get("memory", {}).get("topics", {})
+        if not topics:
+            # Fallback: check legacy config key
+            topics = self._config.get("redis", {}).get("topics", {})
         return topics.get(key, key)

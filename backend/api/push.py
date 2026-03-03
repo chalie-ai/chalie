@@ -19,7 +19,7 @@ VAPID_KEYS_KEY = 'push:vapid_keys'
 
 
 def _get_vapid_keys():
-    """Load or generate VAPID keys. Checks env vars first, then Redis.
+    """Load or generate VAPID keys. Checks env vars first, then MemoryStore.
 
     Returns dict with 'public' (unpadded URL-safe base64 of raw EC public key)
     and 'private' (PEM-encoded private key string).
@@ -31,16 +31,16 @@ def _get_vapid_keys():
     if pub and priv:
         return {'public': pub, 'private': priv}
 
-    from services.redis_client import RedisClientService
-    redis = RedisClientService.create_connection()
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection()
 
-    cached = redis.get(VAPID_KEYS_KEY)
+    cached = store.get(VAPID_KEYS_KEY)
     if cached:
         keys = json.loads(cached)
         # Old keys stored in PEM format are incompatible with py_vapid's from_string()
         if keys.get('private', '').startswith('-----'):
             logger.warning("[Push] Cached VAPID key in PEM format, regenerating")
-            redis.delete(VAPID_KEYS_KEY)
+            store.delete(VAPID_KEYS_KEY)
         else:
             return keys
 
@@ -62,7 +62,7 @@ def _get_vapid_keys():
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode('ascii').rstrip('=')
 
     keys = {'public': pub_b64, 'private': priv_b64}
-    redis.set(VAPID_KEYS_KEY, json.dumps(keys))
+    store.set(VAPID_KEYS_KEY, json.dumps(keys))
     logger.info("[Push] Generated and stored new VAPID keys (raw base64 format)")
     return keys
 
@@ -87,9 +87,9 @@ def push_subscribe():
         return jsonify({'error': 'Invalid subscription'}), 400
 
     try:
-        from services.redis_client import RedisClientService
-        redis = RedisClientService.create_connection()
-        redis.sadd(SUBSCRIPTIONS_KEY, json.dumps(subscription))
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        store.sadd(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         logger.info(f"[Push] Stored subscription: {subscription['endpoint'][:60]}...")
         return jsonify({'ok': True}), 201
     except Exception as e:
@@ -106,9 +106,9 @@ def push_unsubscribe():
         return jsonify({'error': 'Invalid subscription'}), 400
 
     try:
-        from services.redis_client import RedisClientService
-        redis = RedisClientService.create_connection()
-        redis.srem(SUBSCRIPTIONS_KEY, json.dumps(subscription))
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        store.srem(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         return jsonify({'ok': True}), 200
     except Exception as e:
         logger.error(f"[Push] Unsubscribe error: {e}", exc_info=True)
@@ -119,11 +119,11 @@ def send_push_to_all(title, body, tag='chalie-message'):
     """Send a web push notification to all stored subscriptions."""
     try:
         from pywebpush import webpush, WebPushException
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
         keys = _get_vapid_keys()
-        redis = RedisClientService.create_connection()
-        subscriptions = redis.smembers(SUBSCRIPTIONS_KEY)
+        store = MemoryClientService.create_connection()
+        subscriptions = store.smembers(SUBSCRIPTIONS_KEY)
 
         if not subscriptions:
             return
@@ -159,7 +159,7 @@ def send_push_to_all(title, body, tag='chalie-message'):
 
         # Clean up expired subscriptions
         for raw_sub in stale:
-            redis.srem(SUBSCRIPTIONS_KEY, raw_sub)
+            store.srem(SUBSCRIPTIONS_KEY, raw_sub)
             logger.info("[Push] Removed stale subscription")
 
     except Exception as e:

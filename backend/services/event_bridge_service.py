@@ -22,12 +22,12 @@ import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[EVENT BRIDGE]"
 
-# Redis key prefixes
+# MemoryStore key prefixes
 _STABILIZATION_PREFIX = "event_bridge:stabilize:"
 _COOLDOWN_PREFIX = "event_bridge:cooldown:"
 _AGGREGATION_KEY = "event_bridge:pending_bundle"
@@ -80,7 +80,7 @@ class EventBridgeService:
 
     def __init__(self):
         self._config = _load_config()
-        self._redis = RedisClientService.create_connection()
+        self._store = MemoryClientService.create_connection()
 
     def submit_event(self, event: BridgeEvent) -> bool:
         """
@@ -149,14 +149,14 @@ class EventBridgeService:
         key = f"{_STABILIZATION_PREFIX}{event.event_type}"
 
         try:
-            stored = self._redis.get(key)
+            stored = self._store.get(key)
             if stored:
                 data = json.loads(stored)
                 if data.get('to_state') == event.to_state:
                     elapsed = time.time() - data.get('first_seen', time.time())
                     if elapsed >= window:
                         # Stable — clear stabilization state and allow
-                        self._redis.delete(key)
+                        self._store.delete(key)
                         logger.debug(
                             f"{LOG_PREFIX} {event.event_type} stabilized "
                             f"({event.to_state}, {elapsed:.0f}s >= {window}s)"
@@ -170,7 +170,7 @@ class EventBridgeService:
                     pass
 
             # Record new state candidate
-            self._redis.setex(key, window + 30, json.dumps({
+            self._store.setex(key, window + 30, json.dumps({
                 'to_state': event.to_state,
                 'first_seen': time.time(),
             }))
@@ -191,7 +191,7 @@ class EventBridgeService:
 
         key = f"{_COOLDOWN_PREFIX}{event_type}"
         try:
-            return not bool(self._redis.get(key))
+            return not bool(self._store.get(key))
         except Exception:
             return True
 
@@ -204,7 +204,7 @@ class EventBridgeService:
 
         key = f"{_COOLDOWN_PREFIX}{event_type}"
         try:
-            self._redis.setex(key, cooldown, "1")
+            self._store.setex(key, cooldown, "1")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Cooldown set failed: {e}")
 
@@ -244,15 +244,15 @@ class EventBridgeService:
         """
         try:
             if event.event_type == 'attention_deepened':
-                self._redis.setex("event_bridge:suppress_suggestions", 1800, "1")
+                self._store.setex("event_bridge:suppress_suggestions", 1800, "1")
                 logger.debug(f"{LOG_PREFIX} Attention deepened — suppressing suggestions for 30min")
 
             elif event.event_type == 'energy_low':
-                self._redis.setex("event_bridge:low_energy_mode", 3600, "1")
+                self._store.setex("event_bridge:low_energy_mode", 3600, "1")
                 logger.debug(f"{LOG_PREFIX} Energy low — lighter suggestions for 1hr")
 
             # Always set a generic flag for the event
-            self._redis.setex(f"event_bridge:flag:{event.event_type}", 1800, json.dumps({
+            self._store.setex(f"event_bridge:flag:{event.event_type}", 1800, json.dumps({
                 'confidence': event.confidence,
                 'timestamp': event.timestamp,
             }))
@@ -273,8 +273,8 @@ class EventBridgeService:
                 'payload': event.payload,
                 'interrupt_priority': event.interrupt_priority,
             })
-            self._redis.rpush(_AGGREGATION_KEY, entry)
-            self._redis.expire(_AGGREGATION_KEY, _AGGREGATION_TTL)
+            self._store.rpush(_AGGREGATION_KEY, entry)
+            self._store.expire(_AGGREGATION_KEY, _AGGREGATION_TTL)
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Bundle add failed: {e}")
 
@@ -288,7 +288,7 @@ class EventBridgeService:
         window = self._config.get('aggregation_window_seconds', 60)
 
         try:
-            items = self._redis.lrange(_AGGREGATION_KEY, 0, -1)
+            items = self._store.lrange(_AGGREGATION_KEY, 0, -1)
             if not items:
                 return []
 
@@ -300,7 +300,7 @@ class EventBridgeService:
                 return []
 
             # Flush all items
-            self._redis.delete(_AGGREGATION_KEY)
+            self._store.delete(_AGGREGATION_KEY)
 
             events = []
             for raw in items:
@@ -444,13 +444,13 @@ class EventBridgeService:
     def is_suggestions_suppressed(self) -> bool:
         """Check if suggestions are suppressed (attention_deepened active)."""
         try:
-            return bool(self._redis.get("event_bridge:suppress_suggestions"))
+            return bool(self._store.get("event_bridge:suppress_suggestions"))
         except Exception:
             return False
 
     def is_low_energy_mode(self) -> bool:
         """Check if low-energy mode is active."""
         try:
-            return bool(self._redis.get("event_bridge:low_energy_mode"))
+            return bool(self._store.get("event_bridge:low_energy_mode"))
         except Exception:
             return False

@@ -8,9 +8,9 @@ from services.thread_conversation_service import ThreadConversationService
 
 
 @pytest.fixture
-def conv_service(mock_redis):
-    """ThreadConversationService with fake Redis."""
-    with patch('services.thread_conversation_service.RedisClientService.create_connection', return_value=mock_redis):
+def conv_service(mock_store):
+    """ThreadConversationService with fake MemoryStore."""
+    with patch('services.thread_conversation_service.MemoryClientService.create_connection', return_value=mock_store):
         yield ThreadConversationService()
 
 
@@ -18,7 +18,7 @@ THREAD_ID = "telegram:user1:chan1:1"
 
 
 class TestAddExchange:
-    def test_adds_exchange_with_prompt(self, conv_service, mock_redis):
+    def test_adds_exchange_with_prompt(self, conv_service, mock_store):
         eid = conv_service.add_exchange(THREAD_ID, "test-topic", {
             "message": "Hello there",
             "classification_time": 0.05,
@@ -92,7 +92,7 @@ class TestGetActiveSteps:
         history = conv_service.get_conversation_history(THREAD_ID)
         exchange = history[0]
         exchange["steps"][0]["status"] = "completed"
-        conv_service.redis.lset(conv_service._conv_key(THREAD_ID), 0, json.dumps(exchange))
+        conv_service.store.lset(conv_service._conv_key(THREAD_ID), 0, json.dumps(exchange))
 
         active = conv_service.get_active_steps(THREAD_ID)
         assert len(active) == 1

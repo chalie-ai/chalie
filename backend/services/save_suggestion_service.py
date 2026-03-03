@@ -4,7 +4,7 @@ persistence via interactive card.
 
 Architecture:
   1. Phase D (post-response): Deterministic heuristic detects structured deliverables
-     in the assistant's response. If found, sets a Redis flag.
+     in the assistant's response. If found, sets a MemoryStore flag.
   2. Phase A (next message): If user sends a completion/deferral signal and a flag
      exists, emit a save suggestion card.
   3. Idle trigger: Thread expiry service checks for stale flags (5min idle) and
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SAVE SUGGEST]"
 
-# Redis key patterns
+# MemoryStore key patterns
 FLAG_KEY = "saveable:{thread_id}"
 COOLDOWN_KEY = "save_suggest:cooldown:{thread_id}"
 REJECT_KEY = "save_suggest:reject:{thread_id}:{topic}"
@@ -78,18 +78,18 @@ class SaveSuggestionService:
 
         # Guard: cooldown check
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             cooldown_key = COOLDOWN_KEY.format(thread_id=thread_id)
-            if redis.exists(cooldown_key):
+            if ms.exists(cooldown_key):
                 return None
         except Exception:
             pass
 
         # Guard: topic rejection check
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             reject_key = REJECT_KEY.format(thread_id=thread_id, topic=topic or 'unknown')
-            if redis.exists(reject_key):
+            if ms.exists(reject_key):
                 return None
         except Exception:
             pass
@@ -203,9 +203,9 @@ class SaveSuggestionService:
         content_type: str,
         exchange_id: str,
     ) -> None:
-        """Set Redis flag: saveable:{thread_id}. TTL 30min."""
+        """Set MemoryStore flag: saveable:{thread_id}. TTL 30min."""
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             key = FLAG_KEY.format(thread_id=thread_id)
             data = json.dumps({
                 'content_type': content_type,
@@ -213,7 +213,7 @@ class SaveSuggestionService:
                 'exchange_id': exchange_id,
                 'ts': time.time(),
             })
-            redis.setex(key, FLAG_TTL, data)
+            ms.setex(key, FLAG_TTL, data)
             logger.info(f"{LOG_PREFIX} Flagged saveable {content_type} in thread {thread_id}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} flag_saveable failed: {e}")
@@ -221,9 +221,9 @@ class SaveSuggestionService:
     def get_saveable_flag(self, thread_id: str) -> Optional[Dict]:
         """Read and return the saveable flag if it exists."""
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             key = FLAG_KEY.format(thread_id=thread_id)
-            raw = redis.get(key)
+            raw = ms.get(key)
             if raw:
                 return json.loads(raw)
         except Exception as e:
@@ -233,9 +233,9 @@ class SaveSuggestionService:
     def clear_flag(self, thread_id: str) -> None:
         """Remove the saveable flag."""
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             key = FLAG_KEY.format(thread_id=thread_id)
-            redis.delete(key)
+            ms.delete(key)
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} clear_flag failed: {e}")
 
@@ -367,17 +367,17 @@ class SaveSuggestionService:
     def record_rejection(self, thread_id: str, topic: str) -> None:
         """Record a save suggestion rejection for rate limiting."""
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             # Set cooldown (prevent re-suggesting for 1 hour)
             cooldown_key = COOLDOWN_KEY.format(thread_id=thread_id)
-            redis.setex(cooldown_key, COOLDOWN_TTL, '1')
+            ms.setex(cooldown_key, COOLDOWN_TTL, '1')
             # Set topic-level rejection (prevent for 7 days on same topic)
             if topic:
                 reject_key = REJECT_KEY.format(
                     thread_id=thread_id,
                     topic=topic,
                 )
-                redis.setex(reject_key, REJECT_TTL, '1')
+                ms.setex(reject_key, REJECT_TTL, '1')
             logger.info(f"{LOG_PREFIX} Recorded rejection for thread {thread_id}, topic {topic}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} record_rejection failed: {e}")
@@ -386,9 +386,9 @@ class SaveSuggestionService:
     # Private helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _get_redis(self):
-        from services.redis_client_service import RedisClientService
-        return RedisClientService.create_connection()
+    def _get_store(self):
+        from services.memory_client import MemoryClientService
+        return MemoryClientService.create_connection()
 
     def _get_conversation_window(self, thread_id: str) -> Optional[str]:
         """Get recent conversation turns formatted for LLM synthesis."""
@@ -459,12 +459,12 @@ class SaveSuggestionService:
     def _is_duplicate(self, conv_hash: str) -> bool:
         """Check if we've already created a document from this exact conversation."""
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             dup_key = f"save_suggest:hash:{conv_hash}"
-            if redis.exists(dup_key):
+            if ms.exists(dup_key):
                 return True
             # Mark as seen for 1 hour
-            redis.setex(dup_key, 3600, '1')
+            ms.setex(dup_key, 3600, '1')
             return False
         except Exception:
             return False
@@ -472,8 +472,8 @@ class SaveSuggestionService:
     def _set_cooldown(self, thread_id: str) -> None:
         """Set cooldown to prevent re-suggesting."""
         try:
-            redis = self._get_redis()
+            ms = self._get_store()
             key = COOLDOWN_KEY.format(thread_id=thread_id)
-            redis.setex(key, COOLDOWN_TTL, '1')
+            ms.setex(key, COOLDOWN_TTL, '1')
         except Exception:
             pass

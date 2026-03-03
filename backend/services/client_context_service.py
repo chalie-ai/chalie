@@ -1,6 +1,6 @@
 """
 Client Context Service — Stores and retrieves client timezone, location, device info,
-behavioral signals, and system info from Redis.
+behavioral signals, and system info from MemoryStore.
 
 This provides a single source of truth for the user's context, accessible
 by all services (frontal cortex, scheduler, date_time tool, weather tool, etc.).
@@ -20,10 +20,10 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 
-REDIS_KEY = "client_context:primary"
+STORE_KEY = "client_context:primary"
 HISTORY_KEY = "client_context:history"
 HISTORY_MAX = 12  # ~1hr at 5min intervals
 TTL = 3600  # 1 hour
@@ -85,10 +85,10 @@ LOCALE_REGION_OVERRIDES = {
 
 
 class ClientContextService:
-    """Manages client context (timezone, location, device, behavioral signals) in Redis."""
+    """Manages client context (timezone, location, device, behavioral signals) in MemoryStore."""
 
     def __init__(self):
-        self._redis = RedisClientService.create_connection()
+        self._store = MemoryClientService.create_connection()
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
         """Resolve location name from lat/lon coordinates."""
@@ -113,7 +113,7 @@ class ClientContextService:
 
     def save(self, ctx: dict):
         """
-        Save client context to Redis with extended processing.
+        Save client context to MemoryStore with extended processing.
 
         Handles: location resolution, behavioral data merging, location history,
         place transition detection, session re-entry, demographic seeding,
@@ -145,7 +145,7 @@ class ClientContextService:
 
         # Save primary context
         ctx["saved_at"] = time.time()
-        self._redis.set(REDIS_KEY, json.dumps(ctx), ex=TTL)
+        self._store.set(STORE_KEY, json.dumps(ctx), ex=TTL)
 
         # Location history ring buffer (for mobility inference)
         self._push_history(ctx)
@@ -166,8 +166,8 @@ class ClientContextService:
                      f"device={ctx.get('device', {}).get('class')}")
 
     def get(self) -> dict:
-        """Retrieve client context from Redis."""
-        raw = self._redis.get(REDIS_KEY)
+        """Retrieve client context from MemoryStore."""
+        raw = self._store.get(STORE_KEY)
         return json.loads(raw) if raw else {}
 
     def is_stale(self, max_age_seconds: int = 600) -> bool:
@@ -273,16 +273,16 @@ class ClientContextService:
             entry["network"] = network
 
         try:
-            self._redis.lpush(HISTORY_KEY, json.dumps(entry))
-            self._redis.ltrim(HISTORY_KEY, 0, HISTORY_MAX - 1)
-            self._redis.expire(HISTORY_KEY, TTL)
+            self._store.lpush(HISTORY_KEY, json.dumps(entry))
+            self._store.ltrim(HISTORY_KEY, 0, HISTORY_MAX - 1)
+            self._store.expire(HISTORY_KEY, TTL)
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to push history: {e}")
 
     # ── Place Transition Detection ─────────────────────────────────────
 
     def _detect_place_transition(self, old_ctx: dict, new_ctx: dict):
-        """Detect place transitions and set Redis flag for downstream consumers."""
+        """Detect place transitions and set MemoryStore flag for downstream consumers."""
         if not old_ctx:
             return
 
@@ -304,7 +304,7 @@ class ClientContextService:
                     "to": new_place,
                     "at": time.time(),
                 })
-                self._redis.setex(PLACE_TRANSITION_KEY, PLACE_TRANSITION_TTL, transition)
+                self._store.setex(PLACE_TRANSITION_KEY, PLACE_TRANSITION_TTL, transition)
                 logging.debug(f"[CLIENT CONTEXT] Place transition: {old_place} → {new_place}")
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Place transition detection failed: {e}")
@@ -324,7 +324,7 @@ class ClientContextService:
         age = time.time() - saved_at
         if age > REENTRY_THRESHOLD:
             try:
-                self._redis.setex(REENTRY_KEY, REENTRY_TTL, json.dumps({
+                self._store.setex(REENTRY_KEY, REENTRY_TTL, json.dumps({
                     "absent_seconds": int(age),
                     "returned_at": time.time(),
                 }))
@@ -348,7 +348,7 @@ class ClientContextService:
 
     def is_session_reentry(self) -> bool:
         """Check if the user just returned from an extended absence."""
-        return bool(self._redis.get(REENTRY_KEY))
+        return bool(self._store.get(REENTRY_KEY))
 
     # ── Demographic Trait Seeding ──────────────────────────────────────
 
@@ -359,7 +359,7 @@ class ClientContextService:
         Religion, gender, and age are NEVER telemetry-seeded.
         """
         # Only seed once
-        if self._redis.get(CULTURE_SEED_KEY):
+        if self._store.get(CULTURE_SEED_KEY):
             return
 
         locale = ctx.get("locale", "")
@@ -409,7 +409,7 @@ class ClientContextService:
                     is_literal=True,
                 )
 
-            self._redis.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days
+            self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days
             logging.debug(f"[CLIENT CONTEXT] Seeded culture_region={culture} from locale={locale}")
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Demographic seeding failed: {e}")
@@ -418,7 +418,7 @@ class ClientContextService:
 
     def _record_circadian(self, ctx: dict):
         """
-        Store hourly interaction count in Redis for future circadian analysis.
+        Store hourly interaction count in MemoryStore for future circadian analysis.
         Passive — no inference yet.
         """
         timezone = ctx.get("timezone")
@@ -430,9 +430,9 @@ class ClientContextService:
             day_of_week = user_dt.weekday()  # 0=Monday
             hour = user_dt.hour
             key = f"ambient:circadian:{day_of_week}:{hour}"
-            self._redis.incr(key)
+            self._store.incr(key)
             # 7-day rolling window
-            self._redis.expire(key, 86400 * 7)
+            self._store.expire(key, 86400 * 7)
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Circadian recording failed: {e}")
 

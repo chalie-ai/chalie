@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class NurtureAction(AutonomousAction):
         super().__init__(name='NURTURE', enabled=True, priority=7)
 
         config = config or {}
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.user_id = config.get('user_id', 'default')
 
         # Phase-specific minimum idle (seconds)
@@ -96,7 +96,7 @@ class NurtureAction(AutonomousAction):
             return (False, details)
 
         # 2. Must have prior interaction history (reuse COMMUNICATE's key)
-        last_interaction = self.redis.get(f"proactive:{self.user_id}:last_interaction_ts")
+        last_interaction = self.store.get(f"proactive:{self.user_id}:last_interaction_ts")
         if not last_interaction:
             details['rejected'] = 'no_interaction_history'
             return (False, details)
@@ -112,12 +112,12 @@ class NurtureAction(AutonomousAction):
             return (False, details)
 
         # 4. Daily cooldown (multiplied by backoff)
-        backoff = int(self.redis.get(_key(self.user_id, 'backoff_multiplier')) or 1)
+        backoff = int(self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1)
         effective_cooldown = self.daily_cooldown_seconds * backoff
         details['backoff'] = backoff
         details['effective_cooldown'] = effective_cooldown
 
-        last_sent = self.redis.get(_key(self.user_id, 'last_sent_ts'))
+        last_sent = self.store.get(_key(self.user_id, 'last_sent_ts'))
         if last_sent and (now - float(last_sent)) < effective_cooldown:
             details['rejected'] = 'daily_cooldown'
             return (False, details)
@@ -129,15 +129,15 @@ class NurtureAction(AutonomousAction):
         details: Dict[str, Any] = {}
 
         # Paused?
-        if self.redis.get(_key(self.user_id, 'paused')) == '1':
+        if self.store.get(_key(self.user_id, 'paused')) == '1':
             details['rejected'] = 'paused'
             return (False, details)
 
         # Too many unanswered?
-        unanswered = int(self.redis.get(_key(self.user_id, 'unanswered_count')) or 0)
+        unanswered = int(self.store.get(_key(self.user_id, 'unanswered_count')) or 0)
         details['unanswered'] = unanswered
         if unanswered >= self.max_unanswered:
-            self.redis.set(_key(self.user_id, 'paused'), '1')
+            self.store.set(_key(self.user_id, 'paused'), '1')
             logger.info(f"{LOG_PREFIX} Paused — {unanswered} unanswered nurtures")
             details['rejected'] = 'max_unanswered'
             return (False, details)
@@ -222,16 +222,16 @@ class NurtureAction(AutonomousAction):
 
         # 4. Update tracking
         now = time.time()
-        self.redis.set(_key(self.user_id, 'last_sent_ts'), str(now))
-        self.redis.incr(_key(self.user_id, 'unanswered_count'))
-        self.redis.incr(_key(self.user_id, 'total_sent'))
+        self.store.set(_key(self.user_id, 'last_sent_ts'), str(now))
+        self.store.incr(_key(self.user_id, 'unanswered_count'))
+        self.store.incr(_key(self.user_id, 'total_sent'))
 
         # Increase backoff (capped)
         current_backoff = int(
-            self.redis.get(_key(self.user_id, 'backoff_multiplier')) or 1
+            self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1
         )
         new_backoff = min(current_backoff * 2, self.backoff_multiplier_cap)
-        self.redis.set(_key(self.user_id, 'backoff_multiplier'), str(new_backoff))
+        self.store.set(_key(self.user_id, 'backoff_multiplier'), str(new_backoff))
 
         # 5. Log event
         self._log_nurture_event(phase, thought)
@@ -395,9 +395,9 @@ class NurtureAction(AutonomousAction):
         """Track silent LLM failures for observability."""
         try:
             fail_key = _key(self.user_id, 'llm_fail_count')
-            self.redis.incr(fail_key)
-            self.redis.expire(fail_key, 604800)  # 7-day window
-            self.redis.set(
+            self.store.incr(fail_key)
+            self.store.expire(fail_key, 604800)  # 7-day window
+            self.store.set(
                 _key(self.user_id, 'last_llm_fail_ts'), str(time.time())
             )
         except Exception:
@@ -434,9 +434,9 @@ class NurtureAction(AutonomousAction):
         Called from digest_worker alongside spark exchange tracking.
         """
         try:
-            redis = RedisClientService.create_connection()
-            redis.set(f"{_NS}:{user_id}:unanswered_count", '0')
-            redis.set(f"{_NS}:{user_id}:backoff_multiplier", '1')
-            redis.delete(f"{_NS}:{user_id}:paused")
+            store = MemoryClientService.create_connection()
+            store.set(f"{_NS}:{user_id}:unanswered_count", '0')
+            store.set(f"{_NS}:{user_id}:backoff_multiplier", '1')
+            store.delete(f"{_NS}:{user_id}:paused")
         except Exception:
             pass

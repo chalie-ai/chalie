@@ -1,19 +1,19 @@
 """
 Fact Store Service - Key-value structured short-term memory.
 
-Redis-based storage of atomic facts extracted from exchanges.
-Follows GistStorageService pattern (Redis sorted sets, TTL, confidence filtering).
+MemoryStore-based storage of atomic facts extracted from exchanges.
+Follows GistStorageService pattern (MemoryStore sorted sets, TTL, confidence filtering).
 """
 
 import json
 import time
 import logging
 from typing import List, Dict, Optional, Any
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 
 class FactStoreService:
-    """Manages storage and retrieval of atomic facts in Redis."""
+    """Manages storage and retrieval of atomic facts in MemoryStore."""
 
     def __init__(self, ttl_minutes: int = 1440, max_facts_per_topic: int = 50):
         """
@@ -23,16 +23,16 @@ class FactStoreService:
             ttl_minutes: TTL for facts in minutes (default 1440 = 24 hours)
             max_facts_per_topic: Maximum facts per topic (default 50)
         """
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.ttl_seconds = ttl_minutes * 60
         self.max_facts_per_topic = max_facts_per_topic
 
     def _get_fact_key(self, topic: str, key: str) -> str:
-        """Generate Redis key for a fact."""
+        """Generate MemoryStore key for a fact."""
         return f"fact:{topic}:{key}"
 
     def _get_fact_index_key(self, topic: str) -> str:
-        """Generate Redis key for the sorted set index of facts."""
+        """Generate MemoryStore key for the sorted set index of facts."""
         return f"fact_index:{topic}"
 
     def store_fact(
@@ -56,11 +56,11 @@ class FactStoreService:
         Returns:
             True if stored, False if existing fact had higher confidence
         """
-        fact_redis_key = self._get_fact_key(topic, key)
+        fact_store_key = self._get_fact_key(topic, key)
         current_time = time.time()
 
         # Check for existing fact (conflict resolution)
-        existing_json = self.redis.get(fact_redis_key)
+        existing_json = self.store.get(fact_store_key)
         if existing_json:
             existing = json.loads(existing_json)
             if not self._resolve_conflict(existing, confidence, current_time):
@@ -80,26 +80,26 @@ class FactStoreService:
             'updated_at': current_time
         }
 
-        self.redis.setex(
-            fact_redis_key,
+        self.store.setex(
+            fact_store_key,
             self.ttl_seconds,
             json.dumps(fact_data)
         )
 
         # Add to sorted set index (score = timestamp for ordering)
         index_key = self._get_fact_index_key(topic)
-        self.redis.zadd(index_key, {key: current_time})
-        self.redis.expire(index_key, self.ttl_seconds)
+        self.store.zadd(index_key, {key: current_time})
+        self.store.expire(index_key, self.ttl_seconds)
 
         # Trim if over max
-        fact_count = self.redis.zcard(index_key)
+        fact_count = self.store.zcard(index_key)
         if fact_count > self.max_facts_per_topic:
             # Remove oldest facts
             excess = fact_count - self.max_facts_per_topic
-            oldest_keys = self.redis.zrange(index_key, 0, excess - 1)
+            oldest_keys = self.store.zrange(index_key, 0, excess - 1)
             for old_key in oldest_keys:
-                self.redis.delete(self._get_fact_key(topic, old_key))
-                self.redis.zrem(index_key, old_key)
+                self.store.delete(self._get_fact_key(topic, old_key))
+                self.store.zrem(index_key, old_key)
 
         logging.info(f"[FACT STORE] Stored fact '{key}' = '{value}' for topic '{topic}' (confidence: {confidence})")
         return True
@@ -137,8 +137,8 @@ class FactStoreService:
         Returns:
             Fact dict or None
         """
-        fact_redis_key = self._get_fact_key(topic, key)
-        fact_json = self.redis.get(fact_redis_key)
+        fact_store_key = self._get_fact_key(topic, key)
+        fact_json = self.store.get(fact_store_key)
 
         if fact_json:
             return json.loads(fact_json)
@@ -155,21 +155,21 @@ class FactStoreService:
             List of fact dicts ordered by most recent first
         """
         index_key = self._get_fact_index_key(topic)
-        fact_keys = self.redis.zrevrange(index_key, 0, -1)
+        fact_keys = self.store.zrevrange(index_key, 0, -1)
 
         if not fact_keys:
             return []
 
         facts = []
         for key in fact_keys:
-            fact_redis_key = self._get_fact_key(topic, key)
-            fact_json = self.redis.get(fact_redis_key)
+            fact_store_key = self._get_fact_key(topic, key)
+            fact_json = self.store.get(fact_store_key)
 
             if fact_json:
                 facts.append(json.loads(fact_json))
             else:
                 # Clean up stale entry
-                self.redis.zrem(index_key, key)
+                self.store.zrem(index_key, key)
 
         return facts
 
@@ -204,9 +204,9 @@ class FactStoreService:
             topic: Topic name
         """
         index_key = self._get_fact_index_key(topic)
-        fact_keys = self.redis.zrange(index_key, 0, -1)
+        fact_keys = self.store.zrange(index_key, 0, -1)
 
         for key in fact_keys:
-            self.redis.delete(self._get_fact_key(topic, key))
+            self.store.delete(self._get_fact_key(topic, key))
 
-        self.redis.delete(index_key)
+        self.store.delete(index_key)

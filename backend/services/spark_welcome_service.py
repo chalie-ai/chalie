@@ -17,7 +17,7 @@ import time
 import threading
 from typing import Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.spark_state_service import SparkStateService
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class SparkWelcomeService:
         """
         Check if welcome is needed and send it if so.
 
-        Uses atomic Redis lock to prevent duplicate sends across tabs.
+        Uses atomic MemoryStore lock to prevent duplicate sends across tabs.
         Generates welcome via LLM with tiered fallback.
 
         Returns:
@@ -66,14 +66,14 @@ class SparkWelcomeService:
             return False
 
         # Atomic lock: only one tab/process should generate the welcome
-        redis = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
         lock_key = _WELCOME_LOCK_KEY.format(user_id=self._user_id)
 
-        if not redis.setnx(lock_key, '1'):
+        if not store.setnx(lock_key, '1'):
             logger.debug(f"{LOG_PREFIX} Lock already held, skipping")
             return False
 
-        redis.expire(lock_key, _WELCOME_LOCK_TTL)
+        store.expire(lock_key, _WELCOME_LOCK_TTL)
 
         try:
             # Generate welcome message with tiered fallback
@@ -81,7 +81,7 @@ class SparkWelcomeService:
 
             if not welcome_text:
                 logger.warning(f"{LOG_PREFIX} Failed to generate welcome")
-                redis.delete(lock_key)
+                store.delete(lock_key)
                 return False
 
             # Deliver via OutputService
@@ -98,7 +98,7 @@ class SparkWelcomeService:
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Failed to send welcome: {e}")
-            redis.delete(lock_key)
+            store.delete(lock_key)
             return False
 
     def _generate_welcome(self) -> tuple:

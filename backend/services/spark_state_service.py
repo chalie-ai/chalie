@@ -1,11 +1,11 @@
 """
-Spark State Service — Redis-backed phase state machine for first-contact rapport.
+Spark State Service — MemoryStore-backed phase state machine for first-contact rapport.
 
 Tracks the relationship phase between Chalie and a new user, from first contact
 through graduated (when normal systems take over). Uses effective exchanges
 (weighted scoring) to prevent spammy messages from accelerating progression.
 
-Redis key: spark_state:{user_id}
+MemoryStore key: spark_state:{user_id}
 TTL: 30 days, refreshed on every write.
 
 Phases: first_contact → surface → exploratory → connected → graduated
@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +60,14 @@ _MAX_TOPICS = 50  # max topics tracked
 
 
 class SparkStateService:
-    """Redis-backed phase state machine for Spark rapport system."""
+    """MemoryStore-backed phase state machine for Spark rapport system."""
 
-    _REDIS_KEY_PREFIX = "spark_state"
-    REDIS_TTL = 2592000  # 30 days
+    _STORE_KEY_PREFIX = "spark_state"
+    STORE_TTL = 2592000  # 30 days
 
     def __init__(self, user_id: str = 'primary'):
         self._user_id = user_id
-        self._redis_key = f"{self._REDIS_KEY_PREFIX}:{user_id}"
+        self._store_key = f"{self._STORE_KEY_PREFIX}:{user_id}"
 
     def _default_state(self) -> dict:
         return {
@@ -88,14 +88,14 @@ class SparkStateService:
 
     def get_state(self) -> dict:
         """
-        Get the current spark state from Redis.
+        Get the current spark state from MemoryStore.
 
         Falls back to graduated if state is missing but user has 5+ traits.
         Returns default first_contact state for new users.
         """
         try:
-            r = RedisClientService.create_connection()
-            raw = r.get(self._redis_key)
+            r = MemoryClientService.create_connection()
+            raw = r.get(self._store_key)
             if raw:
                 return json.loads(raw)
 
@@ -119,10 +119,10 @@ class SparkStateService:
             return self._default_state()
 
     def _save_state(self, state: dict) -> bool:
-        """Save state to Redis with TTL refresh."""
+        """Save state to MemoryStore with TTL refresh."""
         try:
-            r = RedisClientService.create_connection()
-            r.setex(self._redis_key, self.REDIS_TTL, json.dumps(state))
+            r = MemoryClientService.create_connection()
+            r.setex(self._store_key, self.STORE_TTL, json.dumps(state))
             return True
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} _save_state failed (non-fatal): {e}")

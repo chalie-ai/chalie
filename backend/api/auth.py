@@ -2,7 +2,7 @@
 Session-based authentication middleware.
 
 Decorator @require_session checks for a valid chalie_session cookie.
-Sessions are stored in Redis via services.auth_session_service.
+Sessions are stored in MemoryStore via services.auth_session_service.
 """
 
 import logging

@@ -1,5 +1,5 @@
 """
-Background LLM Queue — serializes all background LLM calls through a single Redis queue.
+Background LLM Queue — serializes all background LLM calls through a single MemoryStore queue.
 
 Prevents thundering herd on LLM providers when multiple background services fire
 simultaneously. Drop-in replacement for RefreshableLLMService in background workers.
@@ -18,7 +18,7 @@ import uuid
 import logging
 from typing import Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.llm_service import LLMResponse
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class BackgroundLLMProxy:
     """
     Drop-in proxy for RefreshableLLMService in background services.
 
-    Routes LLM calls through the bg_llm:queue Redis list, consumed by the single
+    Routes LLM calls through the bg_llm:queue MemoryStore list, consumed by the single
     background-llm-worker process. All background LLM calls are serialized,
     preventing thundering herd on the provider.
 
@@ -46,7 +46,7 @@ class BackgroundLLMProxy:
 
     def __init__(self, agent_name: str):
         self.agent_name = agent_name
-        self._redis = RedisClientService.create_connection()
+        self._store = MemoryClientService.create_connection()
 
     def send_message(
         self,
@@ -61,7 +61,7 @@ class BackgroundLLMProxy:
         """
         # Watchdog: warn if worker heartbeat is stale
         try:
-            heartbeat = self._redis.get(HEARTBEAT_KEY)
+            heartbeat = self._store.get(HEARTBEAT_KEY)
             if heartbeat and (time.time() - float(heartbeat)) > HEARTBEAT_STALE_THRESHOLD:
                 logger.critical(
                     "BG LLM worker heartbeat stale (>%ds) — worker may be down",
@@ -72,7 +72,7 @@ class BackgroundLLMProxy:
 
         # Queue depth guard — drop if backlog is too large
         try:
-            depth = self._redis.llen(QUEUE_KEY)
+            depth = self._store.llen(QUEUE_KEY)
             if depth >= MAX_QUEUE_DEPTH:
                 logger.warning(
                     "BG queue full (depth=%d, max=%d) — dropped job for %s",
@@ -93,7 +93,7 @@ class BackgroundLLMProxy:
         }
 
         try:
-            self._redis.rpush(QUEUE_KEY, json.dumps(job))
+            self._store.rpush(QUEUE_KEY, json.dumps(job))
         except Exception as e:
             logger.error("BG LLM enqueue failed: %s", e)
             return None
@@ -101,7 +101,7 @@ class BackgroundLLMProxy:
         # Block waiting for the worker to push the result
         result_key = f"{RESULT_KEY_PREFIX}{job_id}"
         try:
-            raw = self._redis.brpop(result_key, timeout=RESULT_WAIT_TIMEOUT)
+            raw = self._store.brpop(result_key, timeout=RESULT_WAIT_TIMEOUT)
         except Exception as e:
             logger.error("BG LLM result wait failed: %s", e)
             return None

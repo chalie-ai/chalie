@@ -18,9 +18,9 @@ def _make_service_instance():
     return object.__new__(FrontalCortexService)
 
 
-def _mock_identity_and_redis(identity_blob: dict, exchange_count: int, thread_id: str = "t1"):
+def _mock_identity_and_store(identity_blob: dict, exchange_count: int, thread_id: str = "t1"):
     """
-    Context manager that patches IdentityStateService and RedisClientService
+    Context manager that patches IdentityStateService and MemoryClientService
     for onboarding nudge tests.
 
     Both are imported locally inside _get_onboarding_nudge, so we patch them
@@ -31,18 +31,18 @@ def _mock_identity_and_redis(identity_blob: dict, exchange_count: int, thread_id
     @contextlib.contextmanager
     def _ctx():
         with patch('services.identity_state_service.IdentityStateService') as mock_id_cls, \
-             patch('services.redis_client.RedisClientService') as mock_redis_cls:
+             patch('services.memory_client.MemoryClientService') as mock_store_cls:
 
             mock_id = MagicMock()
             mock_id.get_all.return_value = identity_blob
             mock_id.set_onboarding_state.return_value = True
             mock_id_cls.return_value = mock_id
 
-            mock_r = MagicMock()
-            mock_r.hget.return_value = str(exchange_count)
-            mock_redis_cls.create_connection.return_value = mock_r
+            mock_store = MagicMock()
+            mock_store.hget.return_value = str(exchange_count)
+            mock_store_cls.create_connection.return_value = mock_store
 
-            yield mock_id, mock_r
+            yield mock_id, mock_store
 
     return _ctx()
 
@@ -57,7 +57,7 @@ class TestOnboardingNudge:
         """No nudge when exchange_count < min_turn (3)."""
         svc = _make_service_instance()
 
-        with _mock_identity_and_redis({}, exchange_count=2):
+        with _mock_identity_and_store({}, exchange_count=2):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -71,7 +71,7 @@ class TestOnboardingNudge:
                      'previous': []}
         }
 
-        with _mock_identity_and_redis(identity, exchange_count=10):
+        with _mock_identity_and_store(identity, exchange_count=10):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -80,7 +80,7 @@ class TestOnboardingNudge:
         """Nudge emitted at exchange_count == min_turn (5) with no name set."""
         svc = _make_service_instance()
 
-        with _mock_identity_and_redis({}, exchange_count=5) as (mock_id, _):
+        with _mock_identity_and_store({}, exchange_count=5) as (mock_id, _):
             result = svc._get_onboarding_nudge("t1")
 
         assert result != ""
@@ -97,7 +97,7 @@ class TestOnboardingNudge:
             '_onboarding': {'name': {'nudged_at_turn': 5, 'attempts': 1}},
         }
 
-        with _mock_identity_and_redis(identity, exchange_count=6):
+        with _mock_identity_and_store(identity, exchange_count=6):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -110,7 +110,7 @@ class TestOnboardingNudge:
             '_onboarding': {'name': {'nudged_at_turn': 5, 'attempts': 1}},
         }
 
-        with _mock_identity_and_redis(identity, exchange_count=13) as (mock_id, _):
+        with _mock_identity_and_store(identity, exchange_count=13) as (mock_id, _):
             result = svc._get_onboarding_nudge("t1")
 
         assert result != ""
@@ -128,7 +128,7 @@ class TestOnboardingNudge:
             },
         }
 
-        with _mock_identity_and_redis(identity, exchange_count=50):
+        with _mock_identity_and_store(identity, exchange_count=50):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -143,7 +143,7 @@ class TestOnboardingNudge:
         """Returns '' when classification signals tool use (needs_tools=True)."""
         svc = _make_service_instance()
 
-        with _mock_identity_and_redis({}, exchange_count=10):
+        with _mock_identity_and_store({}, exchange_count=10):
             result = svc._get_onboarding_nudge("t1", {'needs_tools': True})
 
         assert result == ""
@@ -152,18 +152,18 @@ class TestOnboardingNudge:
         """Returns '' when classification urgency is 'high'."""
         svc = _make_service_instance()
 
-        with _mock_identity_and_redis({}, exchange_count=10):
+        with _mock_identity_and_store({}, exchange_count=10):
             result = svc._get_onboarding_nudge("t1", {'urgency': 'high'})
 
         assert result == ""
 
-    def test_returns_empty_on_redis_error(self):
-        """Redis error → returns '', does not raise."""
+    def test_returns_empty_on_store_error(self):
+        """MemoryStore error -- returns '', does not raise."""
         svc = _make_service_instance()
 
-        with patch('services.redis_client.RedisClientService') as mock_redis_cls, \
+        with patch('services.memory_client.MemoryClientService') as mock_store_cls, \
              patch('services.identity_state_service.IdentityStateService'):
-            mock_redis_cls.create_connection.side_effect = ConnectionError("Redis down")
+            mock_store_cls.create_connection.side_effect = ConnectionError("MemoryStore down")
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""

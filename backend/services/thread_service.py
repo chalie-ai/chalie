@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, List
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
 
 
@@ -31,7 +31,7 @@ class ThreadService:
     """Manages thread resolution and lifecycle."""
 
     def __init__(self, soft_expiry_minutes: int = 30, hard_expiry_minutes: int = 240):
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.soft_expiry_seconds = soft_expiry_minutes * 60
         self.hard_expiry_seconds = hard_expiry_minutes * 60
 
@@ -61,7 +61,7 @@ class ThreadService:
             ThreadResolution with thread state information
         """
         pointer_key = f"active_thread:{user_id}:{channel_id}"
-        active_thread_id = self.redis.get(pointer_key)
+        active_thread_id = self.store.get(pointer_key)
 
         if active_thread_id:
             thread_data = self._get_thread_hash(active_thread_id)
@@ -82,7 +82,7 @@ class ThreadService:
                     # Soft resume
                     self._update_activity(active_thread_id)
                     resume_count = int(thread_data.get("resume_count", 0)) + 1
-                    self.redis.hset(f"thread:{active_thread_id}", mapping={
+                    self.store.hset(f"thread:{active_thread_id}", mapping={
                         "resume_count": str(resume_count),
                         "last_resume_at": str(time.time()),
                     })
@@ -108,16 +108,16 @@ class ThreadService:
     def _create_new_thread(self, user_id: str, channel_id: str, platform: str) -> ThreadResolution:
         """Create a new thread with SETNX race condition protection."""
         seq_key = f"thread_seq:{user_id}:{channel_id}"
-        sequence = self.redis.incr(seq_key)
+        sequence = self.store.incr(seq_key)
 
         thread_id = f"{platform}:{user_id}:{channel_id}:{sequence}"
         pointer_key = f"active_thread:{user_id}:{channel_id}"
 
         # SETNX to prevent duplicate thread creation from concurrent messages
-        was_set = self.redis.setnx(pointer_key, thread_id)
+        was_set = self.store.setnx(pointer_key, thread_id)
         if not was_set:
             # Another message already created a thread — use that one
-            existing_thread_id = self.redis.get(pointer_key)
+            existing_thread_id = self.store.get(pointer_key)
             if existing_thread_id:
                 self._update_activity(existing_thread_id)
                 return ThreadResolution(
@@ -127,11 +127,11 @@ class ThreadService:
                 )
 
         # Set pointer TTL
-        self.redis.expire(pointer_key, 86400)  # 24h
+        self.store.expire(pointer_key, 86400)  # 24h
 
         # Create thread hash
         now = str(time.time())
-        self.redis.hset(f"thread:{thread_id}", mapping={
+        self.store.hset(f"thread:{thread_id}", mapping={
             "state": "active",
             "user_id": user_id,
             "channel_id": channel_id,
@@ -145,7 +145,7 @@ class ThreadService:
             "resume_count": "0",
             "last_resume_at": "",
         })
-        self.redis.expire(f"thread:{thread_id}", 86400)
+        self.store.expire(f"thread:{thread_id}", 86400)
 
         # Write to SQLite for durable tracking
         self._persist_thread_created(thread_id, user_id, channel_id, platform)
@@ -160,7 +160,7 @@ class ThreadService:
     def _update_activity(self, thread_id: str):
         """Update last_activity timestamp and refresh TTLs."""
         now = str(time.time())
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.hset(f"thread:{thread_id}", "last_activity", now)
         pipe.expire(f"thread:{thread_id}", 86400)
         pipe.execute()
@@ -171,7 +171,7 @@ class ThreadService:
             user_id = thread_data.get("user_id", "")
             channel_id = thread_data.get("channel_id", "")
             pointer_key = f"active_thread:{user_id}:{channel_id}"
-            self.redis.expire(pointer_key, 86400)
+            self.store.expire(pointer_key, 86400)
 
     def update_activity(self, thread_id: str, topic: str = None):
         """Public: update thread activity and optionally set current topic."""
@@ -182,11 +182,11 @@ class ThreadService:
     def update_topic(self, thread_id: str, topic: str):
         """Update current topic and append to topic history if new."""
         thread_key = f"thread:{thread_id}"
-        current = self.redis.hget(thread_key, "current_topic")
+        current = self.store.hget(thread_key, "current_topic")
 
         if current != topic:
             # Append to topic history
-            history_raw = self.redis.hget(thread_key, "topic_history") or "[]"
+            history_raw = self.store.hget(thread_key, "topic_history") or "[]"
             try:
                 history = json.loads(history_raw)
             except (json.JSONDecodeError, TypeError):
@@ -195,14 +195,14 @@ class ThreadService:
             if topic not in history:
                 history.append(topic)
 
-            self.redis.hset(thread_key, mapping={
+            self.store.hset(thread_key, mapping={
                 "current_topic": topic,
                 "topic_history": json.dumps(history),
             })
 
     def increment_exchange_count(self, thread_id: str):
         """Increment exchange count and update last_exchange_at."""
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.hincrby(f"thread:{thread_id}", "exchange_count", 1)
         pipe.hset(f"thread:{thread_id}", "last_exchange_at", str(time.time()))
         pipe.execute()
@@ -216,7 +216,7 @@ class ThreadService:
             return  # Already expired or doesn't exist
 
         # Mark as expired
-        self.redis.hset(thread_key, mapping={
+        self.store.hset(thread_key, mapping={
             "state": "expired",
             "expired_at": str(time.time()),
         })
@@ -227,9 +227,9 @@ class ThreadService:
         pointer_key = f"active_thread:{user_id}:{channel_id}"
 
         # Only delete pointer if it still points to this thread
-        current_pointer = self.redis.get(pointer_key)
+        current_pointer = self.store.get(pointer_key)
         if current_pointer == thread_id:
-            self.redis.delete(pointer_key)
+            self.store.delete(pointer_key)
 
         # Persist expiry to SQLite
         self._persist_thread_expired(thread_id, thread_data)
@@ -237,17 +237,17 @@ class ThreadService:
         logging.info(f"[THREAD] Expired thread: {thread_id}")
 
     def get_thread(self, thread_id: str) -> Optional[dict]:
-        """Get full thread data from Redis hash."""
+        """Get full thread data from MemoryStore hash."""
         return self._get_thread_hash(thread_id)
 
     def get_active_thread_id(self, user_id: str, channel_id: str) -> Optional[str]:
         """Get the active thread ID for a user+channel pair."""
         pointer_key = f"active_thread:{user_id}:{channel_id}"
-        return self.redis.get(pointer_key)
+        return self.store.get(pointer_key)
 
     def _get_thread_hash(self, thread_id: str) -> Optional[dict]:
-        """Read thread hash from Redis."""
-        data = self.redis.hgetall(f"thread:{thread_id}")
+        """Read thread hash from MemoryStore."""
+        data = self.store.hgetall(f"thread:{thread_id}")
         return data if data else None
 
     def _get_recent_visible_context(self, thread_id: str) -> Optional[List[dict]]:
@@ -259,7 +259,7 @@ class ThreadService:
         try:
             conv_key = f"thread_conv:{thread_id}"
             # Get last 2 exchanges
-            raw_exchanges = self.redis.lrange(conv_key, -2, -1)
+            raw_exchanges = self.store.lrange(conv_key, -2, -1)
             if not raw_exchanges:
                 return None
 

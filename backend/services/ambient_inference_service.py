@@ -13,12 +13,12 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[AMBIENT INFERENCE]"
 
-# Redis keys for hysteresis state
+# MemoryStore keys for hysteresis state
 _PREV_ATTENTION_KEY = "ambient:prev_attention"
 _PREV_ATTENTION_TTL = 600  # 10min
 
@@ -39,7 +39,7 @@ class AmbientInferenceService:
 
     def __init__(self, place_learning_service=None):
         self._config = _load_config()
-        self._redis = RedisClientService.create_connection()
+        self._store = MemoryClientService.create_connection()
         self._place_learning = place_learning_service
 
     def infer(self, ctx: dict, emit_events: bool = False) -> dict:
@@ -47,7 +47,7 @@ class AmbientInferenceService:
         Run all inferences from client context.
 
         Args:
-            ctx: Full client context dict from Redis (includes device, behavioral, etc.)
+            ctx: Full client context dict from MemoryStore (includes device, behavioral, etc.)
             emit_events: If True, emit event bridge events on state transitions
 
         Returns:
@@ -132,9 +132,9 @@ class AmbientInferenceService:
             logger.debug(f"{LOG_PREFIX} Event emission failed: {e}")
 
     def _get_previous_inferences(self) -> dict:
-        """Retrieve previous inference results from Redis."""
+        """Retrieve previous inference results from MemoryStore."""
         try:
-            raw = self._redis.get("ambient:prev_inferences")
+            raw = self._store.get("ambient:prev_inferences")
             return json.loads(raw) if raw else {}
         except Exception:
             return {}
@@ -142,7 +142,7 @@ class AmbientInferenceService:
     def _store_inferences(self, inferences: dict):
         """Store current inferences for next comparison."""
         try:
-            self._redis.setex(
+            self._store.setex(
                 "ambient:prev_inferences", 3600,
                 json.dumps({k: v for k, v in inferences.items() if v is not None})
             )
@@ -269,14 +269,14 @@ class AmbientInferenceService:
     def _store_prev_attention(self, label: str):
         """Store previous attention label for hysteresis."""
         try:
-            self._redis.setex(_PREV_ATTENTION_KEY, _PREV_ATTENTION_TTL, label)
+            self._store.setex(_PREV_ATTENTION_KEY, _PREV_ATTENTION_TTL, label)
         except Exception:
             pass
 
     def _get_prev_attention(self) -> Optional[str]:
         """Retrieve previous attention label."""
         try:
-            val = self._redis.get(_PREV_ATTENTION_KEY)
+            val = self._store.get(_PREV_ATTENTION_KEY)
             return val if val else None
         except Exception:
             return None
@@ -331,10 +331,10 @@ class AmbientInferenceService:
     def _infer_mobility(self, ctx: dict) -> Optional[str]:
         """
         Infer mobility: stationary / commuting / traveling.
-        Requires location history in Redis.
+        Requires location history in MemoryStore.
         """
         try:
-            raw_history = self._redis.lrange("client_context:history", 0, -1)
+            raw_history = self._store.lrange("client_context:history", 0, -1)
         except Exception:
             return None
 

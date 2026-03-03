@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryStore:
-    """Thread-safe in-memory store with Redis-compatible API."""
+    """Thread-safe in-memory store with MemoryStore-compatible API."""
 
     def __init__(self):
         # Keyspaces
@@ -176,7 +176,7 @@ class MemoryStore:
             lst = self._get_list(key)
             if lst is None:
                 return True
-            # Python slice: handle negative indexes like Redis
+            # Python slice: handle negative indexes (Redis-compatible semantics)
             length = len(lst)
             if start < 0:
                 start = max(0, length + start)
@@ -629,7 +629,7 @@ class MemoryStore:
 
 
 class PubSubProxy:
-    """Mimics redis.PubSub interface using queue.Queue per subscriber."""
+    """PubSub interface (Redis-compatible API) using queue.Queue per subscriber."""
 
     def __init__(self, store: MemoryStore):
         import queue as queue_module
@@ -677,7 +677,7 @@ class PubSubProxy:
 
 
 class PipelineProxy:
-    """Mimics redis.Pipeline — collects operations, executes sequentially on .execute()."""
+    """Pipeline proxy (Redis-compatible API) — collects operations, executes sequentially on .execute()."""
 
     def __init__(self, store: MemoryStore):
         self._store = store

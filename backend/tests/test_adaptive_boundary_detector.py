@@ -37,22 +37,22 @@ def _orthogonal(base: np.ndarray, seed: int = None) -> np.ndarray:
 
 def _make_detector(thread_id: str = "test-thread", regulator_params: dict = None,
                    initial_state: dict = None):
-    """Create an AdaptiveBoundaryDetector with mocked Redis."""
-    with patch('services.adaptive_boundary_detector.RedisClientService') as mock_redis_cls:
-        mock_r = MagicMock()
-        mock_redis_cls.create_connection.return_value = mock_r
+    """Create an AdaptiveBoundaryDetector with mocked MemoryStore."""
+    with patch('services.adaptive_boundary_detector.MemoryClientService') as mock_store_cls:
+        mock_store = MagicMock()
+        mock_store_cls.create_connection.return_value = mock_store
 
         if initial_state is not None:
-            mock_r.get.return_value = json.dumps(initial_state)
+            mock_store.get.return_value = json.dumps(initial_state)
         else:
-            mock_r.get.return_value = None
+            mock_store.get.return_value = None
 
         from services.adaptive_boundary_detector import AdaptiveBoundaryDetector
         detector = AdaptiveBoundaryDetector(
             thread_id=thread_id,
             regulator_params=regulator_params or {}
         )
-        return detector, mock_r
+        return detector, mock_store
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,17 +164,17 @@ class TestAdaptiveBoundaryDetector:
         """save_state() writes JSON; subsequent load reconstructs it."""
         captured_payload = {}
 
-        with patch('services.adaptive_boundary_detector.RedisClientService') as mock_cls:
-            mock_r = MagicMock()
-            mock_cls.create_connection.return_value = mock_r
-            mock_r.get.return_value = None
+        with patch('services.adaptive_boundary_detector.MemoryClientService') as mock_cls:
+            mock_store = MagicMock()
+            mock_cls.create_connection.return_value = mock_store
+            mock_store.get.return_value = None
 
             def capture_setex(key, ttl, payload):
                 captured_payload['key'] = key
                 captured_payload['ttl'] = ttl
                 captured_payload['data'] = payload
 
-            mock_r.setex.side_effect = capture_setex
+            mock_store.setex.side_effect = capture_setex
 
             from services.adaptive_boundary_detector import AdaptiveBoundaryDetector
             det = AdaptiveBoundaryDetector(thread_id="persist-test")
@@ -189,22 +189,22 @@ class TestAdaptiveBoundaryDetector:
         assert saved['msg_count'] == 1
 
         # Now reload from saved state
-        with patch('services.adaptive_boundary_detector.RedisClientService') as mock_cls2:
-            mock_r2 = MagicMock()
-            mock_cls2.create_connection.return_value = mock_r2
-            mock_r2.get.return_value = captured_payload['data']
+        with patch('services.adaptive_boundary_detector.MemoryClientService') as mock_cls2:
+            mock_store2 = MagicMock()
+            mock_cls2.create_connection.return_value = mock_store2
+            mock_store2.get.return_value = captured_payload['data']
 
             det2 = AdaptiveBoundaryDetector(thread_id="persist-test")
             assert det2._state['msg_count'] == 1
 
-    def test_redis_failure_degrades_to_cold_start(self):
-        """Redis unavailable → cold-start mode, no crash."""
-        with patch('services.adaptive_boundary_detector.RedisClientService') as mock_cls:
-            mock_r = MagicMock()
-            mock_cls.create_connection.side_effect = ConnectionError("Redis down")
+    def test_store_failure_degrades_to_cold_start(self):
+        """MemoryStore unavailable -- cold-start mode, no crash."""
+        with patch('services.adaptive_boundary_detector.MemoryClientService') as mock_cls:
+            mock_store = MagicMock()
+            mock_cls.create_connection.side_effect = ConnectionError("MemoryStore down")
 
             from services.adaptive_boundary_detector import AdaptiveBoundaryDetector
-            det = AdaptiveBoundaryDetector(thread_id="redis-fail-test")
+            det = AdaptiveBoundaryDetector(thread_id="store-fail-test")
 
         # Should have cold-start state
         assert det._state['msg_count'] == 0

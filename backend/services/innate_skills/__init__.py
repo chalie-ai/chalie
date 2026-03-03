@@ -51,8 +51,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["emit_card"] = lambda topic, action: handle_emit_card(topic, action)
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
     dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)
-    # web_read was the former Docker tool — route to the innate skill
-    dispatcher.handlers["web_read"] = lambda topic, action: handle_read(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)
