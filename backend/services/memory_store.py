@@ -410,6 +410,32 @@ class MemoryStore:
             zset = self._get_zset(key)
             return len(zset) if zset is not None else 0
 
+    def zscore(self, key: str, member: str) -> Optional[float]:
+        """Return score of member in sorted set, or None if not present."""
+        with self._zset_lock:
+            zset = self._get_zset(key)
+            if zset is None:
+                return None
+            member = str(member)
+            for s, m in zset:
+                if m == member:
+                    return s
+            return None
+
+    def zremrangebyscore(self, key: str, min_score: float, max_score: float) -> int:
+        """Remove all members with scores between min_score and max_score (inclusive)."""
+        with self._zset_lock:
+            zset = self._get_zset(key)
+            if zset is None:
+                return 0
+            if isinstance(min_score, str) and min_score == '-inf':
+                min_score = float('-inf')
+            if isinstance(max_score, str) and max_score == '+inf':
+                max_score = float('inf')
+            before = len(zset)
+            zset[:] = [(s, m) for s, m in zset if not (float(min_score) <= s <= float(max_score))]
+            return before - len(zset)
+
     # ── SET operations ─────────────────────────────────────────
 
     def _get_set(self, key: str) -> Optional[set]:
