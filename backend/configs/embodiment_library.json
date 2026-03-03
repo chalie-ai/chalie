@@ -9,5 +9,16 @@
     "trigger": "on_demand",
     "trust": "trusted",
     "installs_by_default": true
+  },
+  {
+    "name": "wikipedia",
+    "title": "Wikipedia",
+    "icon": "fa-book",
+    "repo": "chalie-ai/chalie-tool-wikipedia",
+    "summary": "Search and retrieve articles from Wikipedia. Free, no API key required.",
+    "category": "search",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
   }
 ]
