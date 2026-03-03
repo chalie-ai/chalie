@@ -27,12 +27,12 @@ def recent_events():
     if not validate_session(request):
         return jsonify({"error": "Unauthorized"}), 401
 
-    from services.redis_client import RedisClientService
-    redis = RedisClientService.create_connection()
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection()
 
     events = []
     while True:
-        item = redis.lpop('notifications:recent')
+        item = store.lpop('notifications:recent')
         if not item:
             break
         try:

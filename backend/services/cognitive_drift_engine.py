@@ -18,7 +18,7 @@ These are stored as drift gists and naturally surface in frontal cortex context.
 After each thought, an ActionDecisionRouter evaluates what to do with it:
   - COMMUNICATE: Share with the user proactively (quality + timing + engagement gated)
   - REFLECT: Internal enrichment — store association-linked gist, boost concepts
-  - NOTHING: Let the gist live in Redis as before (reactive surfacing only)
+  - NOTHING: Let the gist live in MemoryStore as before (reactive surfacing only)
   - PLAN: Create plan-backed persistent tasks from recurring topics
   - Future: USE_SKILL, LEARN
 """
@@ -31,7 +31,7 @@ import uuid
 import logging
 from typing import Optional, List, Dict, Any
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
 from services.gist_storage_service import GistStorageService
 from services.semantic_storage_service import SemanticStorageService
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[COGNITIVE DRIFT]"
 
-# Redis keys
+# MemoryStore keys
 COOLDOWN_KEY = "cognitive_drift_concept_cooldowns"
 FATIGUE_KEY = "cognitive_drift_activations"
 STATE_KEY = "cognitive_drift_state"
@@ -60,17 +60,17 @@ class CognitiveDriftEngine:
     """
 
     def __init__(self, check_interval: int = 300):
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.config = ConfigService.resolve_agent_config("cognitive-drift")
         self.check_interval = check_interval
 
         # Load queue names for idle check
         conn_config = ConfigService.connections()
-        topics = conn_config.get("redis", {}).get("topics", {})
+        topics = conn_config.get("memory", {}).get("topics", {})
         self.prompt_queue = topics.get("prompt_queue", "prompt-queue")
         self.memory_queue = topics.get("memory_chunker", "memory-chunker-queue")
         self.episodic_queue = topics.get("episodic_memory", "episodic-memory-queue")
-        self.semantic_queue = conn_config.get("redis", {}).get("queues", {}).get(
+        self.semantic_queue = conn_config.get("memory", {}).get("queues", {}).get(
             "semantic_consolidation_queue", {}
         ).get("name", "semantic_consolidation_queue")
 
@@ -248,7 +248,7 @@ class CognitiveDriftEngine:
             self.semantic_queue,
         ]
         for queue_name in queues:
-            if self.redis.llen(queue_name) > 0:
+            if self.store.llen(queue_name) > 0:
                 return False
         return True
 
@@ -286,7 +286,7 @@ class CognitiveDriftEngine:
     def _is_fatigued(self) -> bool:
         """Check if cumulative drift activation exceeds budget."""
         cutoff = time.time() - (self.fatigue_window_minutes * 60)
-        recent = self.redis.zrangebyscore(FATIGUE_KEY, cutoff, '+inf', withscores=True)
+        recent = self.store.zrangebyscore(FATIGUE_KEY, cutoff, '+inf', withscores=True)
 
         total_activation = 0.0
         for member, _ in recent:
@@ -305,9 +305,9 @@ class CognitiveDriftEngine:
 
     def _record_drift_activation(self, drift_id: str, max_activation: float):
         """Record drift activation for fatigue tracking."""
-        self.redis.zadd(FATIGUE_KEY, {f"{drift_id}:{max_activation}": time.time()})
+        self.store.zadd(FATIGUE_KEY, {f"{drift_id}:{max_activation}": time.time()})
         cutoff = time.time() - (self.fatigue_window_minutes * 60)
-        self.redis.zremrangebyscore(FATIGUE_KEY, '-inf', cutoff)
+        self.store.zremrangebyscore(FATIGUE_KEY, '-inf', cutoff)
 
     def _is_user_deep_focus(self) -> bool:
         """Check if user is in deep focus — skip drift to avoid interrupting."""
@@ -322,16 +322,16 @@ class CognitiveDriftEngine:
 
     def _is_on_cooldown(self, concept_id: str) -> bool:
         """Check if a concept was recently used in drift."""
-        last_used = self.redis.zscore(COOLDOWN_KEY, concept_id)
+        last_used = self.store.zscore(COOLDOWN_KEY, concept_id)
         if last_used and (time.time() - last_used) < self.cooldown_minutes * 60:
             return True
         return False
 
     def _mark_used(self, concept_id: str):
         """Record concept as recently used."""
-        self.redis.zadd(COOLDOWN_KEY, {concept_id: time.time()})
+        self.store.zadd(COOLDOWN_KEY, {concept_id: time.time()})
         cutoff = time.time() - (self.cooldown_minutes * 60)
-        self.redis.zremrangebyscore(COOLDOWN_KEY, '-inf', cutoff)
+        self.store.zremrangebyscore(COOLDOWN_KEY, '-inf', cutoff)
 
     # -- Activation energy -----------------------------------------------------
 
@@ -546,7 +546,7 @@ class CognitiveDriftEngine:
         """
         insight_cap = self.config.get('insight_sessions_cap', 5)
         last_insight_key = f"drift:insight_seed:last_used"
-        last_used_epoch = self.redis.get(last_insight_key)
+        last_used_epoch = self.store.get(last_insight_key)
         if last_used_epoch:
             # Check if enough drift cycles have passed (approximate: cap * check_interval)
             elapsed = time.time() - float(last_used_epoch)
@@ -598,7 +598,7 @@ class CognitiveDriftEngine:
             if not rows:
                 return None
 
-            self.redis.set(last_insight_key, str(time.time()), ex=insight_cap * self.check_interval * 2)
+            self.store.set(last_insight_key, str(time.time()), ex=insight_cap * self.check_interval * 2)
 
             row = random.choice(rows)
             return {
@@ -750,9 +750,9 @@ class CognitiveDriftEngine:
     # -- State tracking --------------------------------------------------------
 
     def _update_state(self, seed: Dict):
-        """Update Redis state hash for debugging/monitoring."""
-        total = int(self.redis.hget(STATE_KEY, 'total_drifts') or 0)
-        self.redis.hset(STATE_KEY, mapping={
+        """Update MemoryStore state hash for debugging/monitoring."""
+        total = int(self.store.hget(STATE_KEY, 'total_drifts') or 0)
+        self.store.hset(STATE_KEY, mapping={
             'last_drift_time': time.time(),
             'total_drifts': total + 1,
             'last_seed_type': seed['seed_type'],

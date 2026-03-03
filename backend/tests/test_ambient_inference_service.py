@@ -7,11 +7,11 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def mock_redis():
-    """Create a mock Redis for hysteresis state."""
+def mock_store():
+    """Create a mock MemoryStore for hysteresis state."""
     store = {}
 
-    class FakeRedis:
+    class FakeStore:
         def get(self, key):
             return store.get(key)
 
@@ -24,19 +24,19 @@ def mock_redis():
         def lrange(self, key, start, end):
             return store.get(key, [])
 
-    fake = FakeRedis()
+    fake = FakeStore()
     fake._store = store
     return fake
 
 
 @pytest.fixture
-def inference_service(mock_redis):
-    """Create AmbientInferenceService with mocked Redis."""
-    with patch("services.ambient_inference_service.RedisClientService") as mock_rcs:
-        mock_rcs.create_connection.return_value = mock_redis
+def inference_service(mock_store):
+    """Create AmbientInferenceService with mocked MemoryStore."""
+    with patch("services.ambient_inference_service.MemoryClientService") as mock_mcs:
+        mock_mcs.create_connection.return_value = mock_store
         from services.ambient_inference_service import AmbientInferenceService
         service = AmbientInferenceService(place_learning_service=None)
-        service._redis = mock_redis
+        service._store = mock_store
         return service
 
 
@@ -229,18 +229,18 @@ class TestEnergyInference:
 # ── Mobility inference ───────────────────────────────────────────
 
 class TestMobilityInference:
-    def test_jitter_stays_stationary(self, inference_service, mock_redis):
+    def test_jitter_stays_stationary(self, inference_service, mock_store):
         """Movement <500m → still stationary."""
         # Two locations ~100m apart
-        mock_redis._store["client_context:history"] = [
+        mock_store._store["client_context:history"] = [
             json.dumps({"location": {"lat": 35.9000, "lon": 14.5000}}),
             json.dumps({"location": {"lat": 35.9008, "lon": 14.5008}}),
         ]
         assert inference_service._infer_mobility({}) == "stationary"
 
-    def test_sustained_movement_is_commuting(self, inference_service, mock_redis):
+    def test_sustained_movement_is_commuting(self, inference_service, mock_store):
         """Sustained >2km over 2+ samples → commuting."""
-        mock_redis._store["client_context:history"] = [
+        mock_store._store["client_context:history"] = [
             json.dumps({"location": {"lat": 35.90, "lon": 14.50}}),
             json.dumps({"location": {"lat": 35.92, "lon": 14.52}}),
             json.dumps({"location": {"lat": 35.95, "lon": 14.55}}),
@@ -248,12 +248,12 @@ class TestMobilityInference:
         result = inference_service._infer_mobility({})
         assert result == "commuting"
 
-    def test_no_history_is_stationary(self, inference_service, mock_redis):
+    def test_no_history_is_stationary(self, inference_service, mock_store):
         assert inference_service._infer_mobility({}) == "stationary"
 
-    def test_large_distance_is_traveling(self, inference_service, mock_redis):
+    def test_large_distance_is_traveling(self, inference_service, mock_store):
         """Movement >50km → traveling."""
-        mock_redis._store["client_context:history"] = [
+        mock_store._store["client_context:history"] = [
             json.dumps({"location": {"lat": 35.90, "lon": 14.50}}),
             json.dumps({"location": {"lat": 36.50, "lon": 15.10}}),
             json.dumps({"location": {"lat": 37.00, "lon": 15.50}}),
@@ -320,7 +320,7 @@ class TestFullInference:
         assert result["tempo"] is None
         assert result["device_context"] is None
 
-    def test_full_context_returns_all(self, inference_service, mock_redis):
+    def test_full_context_returns_all(self, inference_service, mock_store):
         import time
         ctx = {
             "device": {"class": "desktop"},
@@ -350,7 +350,7 @@ class TestSessionReentry:
         import time
         store = {}
 
-        class FakeRedis:
+        class FakeStore:
             def get(self, key):
                 raw = store.get(key)
                 return raw
@@ -377,11 +377,11 @@ class TestSessionReentry:
                 if key in store:
                     store[key] = store[key][start:end + 1]
 
-        with patch("services.client_context_service.RedisClientService") as mock_rcs:
-            mock_rcs.create_connection.return_value = FakeRedis()
+        with patch("services.client_context_service.MemoryClientService") as mock_mcs:
+            mock_mcs.create_connection.return_value = FakeStore()
             from services.client_context_service import ClientContextService
             service = ClientContextService()
-            service._redis = FakeRedis()
+            service._store = FakeStore()
 
             # Simulate stale context (saved 40min ago)
             old_ctx = {"saved_at": time.time() - 2400, "timezone": "UTC"}

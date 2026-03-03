@@ -1,5 +1,5 @@
 """
-Focus Session Service - Redis-backed focus session management.
+Focus Session Service - MemoryStore-backed focus session management.
 
 Tracks declared or inferred focus sessions per thread. Raises boundary
 thresholds during focus, detects distraction gently, and auto-infers focus
@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Focus session Redis key prefix
+# Focus session MemoryStore key prefix
 _KEY_PREFIX = "focus_session"
 
 # Focus session TTL: 2 hours
@@ -35,7 +35,7 @@ _BOUNDARY_MODIFIER = {
 
 
 class FocusSessionService:
-    """Manages per-thread focus sessions backed by Redis."""
+    """Manages per-thread focus sessions backed by MemoryStore."""
 
     def set_focus(
         self,
@@ -57,9 +57,9 @@ class FocusSessionService:
             True if stored successfully
         """
         try:
-            from services.redis_client import RedisClientService
+            from services.memory_client import MemoryClientService
 
-            redis = RedisClientService.create_connection()
+            store = MemoryClientService.create_connection()
 
             # Generate embedding for distraction detection
             embedding = self._generate_embedding(description + " " + topic)
@@ -72,7 +72,7 @@ class FocusSessionService:
             }
 
             key = f"{_KEY_PREFIX}:{thread_id}"
-            redis.setex(key, _SESSION_TTL, json.dumps(session))
+            store.setex(key, _SESSION_TTL, json.dumps(session))
 
             logger.info(
                 f"[FOCUS] Set focus for thread {thread_id}: "
@@ -95,10 +95,10 @@ class FocusSessionService:
             Focus session dict or None if no active focus
         """
         try:
-            from services.redis_client import RedisClientService
+            from services.memory_client import MemoryClientService
 
-            redis = RedisClientService.create_connection()
-            raw = redis.get(f"{_KEY_PREFIX}:{thread_id}")
+            store = MemoryClientService.create_connection()
+            raw = store.get(f"{_KEY_PREFIX}:{thread_id}")
             if not raw:
                 return None
             return json.loads(raw)
@@ -118,10 +118,10 @@ class FocusSessionService:
             True if cleared (or already absent)
         """
         try:
-            from services.redis_client import RedisClientService
+            from services.memory_client import MemoryClientService
 
-            redis = RedisClientService.create_connection()
-            redis.delete(f"{_KEY_PREFIX}:{thread_id}")
+            store = MemoryClientService.create_connection()
+            store.delete(f"{_KEY_PREFIX}:{thread_id}")
             logger.info(f"[FOCUS] Cleared focus for thread {thread_id}")
             return True
 

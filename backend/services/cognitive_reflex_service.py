@@ -125,21 +125,21 @@ class CognitiveReflexService:
     rolling-average centroids. Same proven pattern as TopicClassifierService.
     """
 
-    def __init__(self, db=None, redis=None):
+    def __init__(self, db=None, store=None):
         """
         Args:
             db: DatabaseService instance (uses shared if None)
-            redis: Redis connection (uses shared if None)
+            store: MemoryStore connection (uses shared if None)
         """
         if db is None:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
         self.db = db
 
-        if redis is None:
-            from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
-        self.redis = redis
+        if store is None:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+        self.store = store
 
     # ─── Public interface ─────────────────────────────────────────────────
 
@@ -278,7 +278,7 @@ class CognitiveReflexService:
     def set_pending_validation(self, thread_id: str, cluster_id: int):
         """Store pending validation state — next user message checked for correction."""
         try:
-            self.redis.setex(
+            self.store.setex(
                 f"reflex:pending:{thread_id}",
                 PENDING_VALIDATION_TTL,
                 str(cluster_id),
@@ -295,12 +295,12 @@ class CognitiveReflexService:
         """
         try:
             key = f"reflex:pending:{thread_id}"
-            cluster_id_str = self.redis.get(key)
+            cluster_id_str = self.store.get(key)
             if not cluster_id_str:
                 return
 
             # Consume the pending validation (one-shot)
-            self.redis.delete(key)
+            self.store.delete(key)
             cluster_id = int(cluster_id_str)
 
             is_correction = self._is_correction(next_message)
@@ -391,7 +391,7 @@ class CognitiveReflexService:
                 'cluster_id': cluster_id,
                 'queued_at': time.time(),
             })
-            self.redis.setex(
+            self.store.setex(
                 f"reflex:shadow:{thread_id}",
                 600,  # 10 min TTL
                 shadow_data,
@@ -408,11 +408,11 @@ class CognitiveReflexService:
         """
         try:
             key = f"reflex:shadow:{thread_id}"
-            shadow_data_str = self.redis.get(key)
+            shadow_data_str = self.store.get(key)
             if not shadow_data_str:
                 return
 
-            self.redis.delete(key)
+            self.store.delete(key)
             shadow_data = json.loads(shadow_data_str)
             cluster_id = shadow_data['cluster_id']
             reflex_response = shadow_data['reflex_response']

@@ -1,6 +1,6 @@
 from .config_service import ConfigService
 from .ollama_service import OllamaService
-from .redis_client import RedisClientService
+from .memory_client import MemoryClientService
 from .prompt_queue import PromptQueue
 from .worker_base import WorkerBase
 from .frontal_cortex_service import FrontalCortexService
@@ -17,7 +17,7 @@ from .gist_storage_service import GistStorageService
 
 __all__ = [
     'ConfigService', 'OllamaService',
-    'RedisClientService', 'PromptQueue',
+    'MemoryClientService', 'PromptQueue',
     'WorkerBase',
     'FrontalCortexService', 'OrchestratorService',
     'WorldStateService', 'DatabaseService',

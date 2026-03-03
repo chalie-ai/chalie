@@ -39,11 +39,10 @@ def health_check():
 
 @system_bp.route('/ready', methods=['GET'])
 def readiness_check():
-    """Readiness probe — true only when PostgreSQL, Redis, and prompt-queue worker are all available."""
-    checks = {'postgres': False, 'redis': False, 'workers': False}
-    redis_conn = None
+    """Readiness probe — true only when SQLite, MemoryStore, and prompt-queue worker are all available."""
+    checks = {'database': False, 'memory_store': False, 'workers': False}
 
-    # PostgreSQL
+    # SQLite
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -51,29 +50,25 @@ def readiness_check():
             cursor = conn.cursor()
             cursor.execute('SELECT 1')
             cursor.close()
-        checks['postgres'] = True
+        checks['database'] = True
     except Exception as e:
-        logger.debug(f'[READY] postgres not ready: {e}')
+        logger.debug(f'[READY] database not ready: {e}')
 
-    # Redis
+    # MemoryStore
     try:
-        from services.redis_client import RedisClientService
-        redis_conn = RedisClientService.create_connection()
-        redis_conn.ping()
-        checks['redis'] = True
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        store.ping()
+        checks['memory_store'] = True
     except Exception as e:
-        logger.debug(f'[READY] redis not ready: {e}')
+        logger.debug(f'[READY] memory store not ready: {e}')
 
-    # prompt-queue worker (only if Redis is reachable)
-    if redis_conn and checks['redis']:
-        try:
-            from rq import Worker
-            workers = Worker.all(connection=redis_conn)
-            checks['workers'] = any(
-                any(q.name == 'prompt-queue' for q in w.queues) for w in workers
-            )
-        except Exception as e:
-            logger.debug(f'[READY] worker check failed: {e}')
+    # prompt-queue worker (PromptQueue spawns daemon threads, always available in-process)
+    try:
+        from services.prompt_queue import PromptQueue
+        checks['workers'] = bool(PromptQueue._locks)  # registry populated once first queue is created
+    except Exception as e:
+        logger.debug(f'[READY] worker check failed: {e}')
 
     ready = all(checks.values())
     return jsonify({'ready': ready}), (200 if ready else 503)
@@ -98,22 +93,22 @@ def metrics_endpoint():
 def system_status():
     """Comprehensive system health and diagnostics."""
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
 
-        redis = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
         result = {"status": "ok", "memory": {}, "storage": {}, "queues": {}}
 
-        # Redis health
+        # MemoryStore health
         try:
-            redis.ping()
+            store.ping()
             # Count memory store keys
-            result["memory"]["working_memory_keys"] = len(redis.keys("working_memory:*"))
-            result["memory"]["gist_keys"] = len(redis.keys("gist_index:*"))
-            result["memory"]["fact_keys"] = len(redis.keys("fact_index:*"))
+            result["memory"]["working_memory_keys"] = len(store.keys("working_memory:*"))
+            result["memory"]["gist_keys"] = len(store.keys("gist_index:*"))
+            result["memory"]["fact_keys"] = len(store.keys("fact_index:*"))
         except Exception as e:
             result["status"] = "degraded"
-            result["redis_error"] = str(e)
+            result["memory_store_error"] = str(e)
 
         # SQLite counts
         try:
@@ -129,18 +124,18 @@ def system_status():
                         result["storage"][table] = -1
         except Exception as e:
             result["status"] = "degraded"
-            result["postgres_error"] = str(e)
+            result["database_error"] = str(e)
 
         # Queue depths
         for queue_name in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
             try:
-                result["queues"][queue_name] = redis.llen(queue_name)
+                result["queues"][queue_name] = store.llen(queue_name)
             except Exception:
                 result["queues"][queue_name] = -1
 
         # Last proactive drift run
         try:
-            last_run = redis.get("cognitive_drift:last_run")
+            last_run = store.get("cognitive_drift:last_run")
             result["last_proactive_run"] = last_run if last_run else None
         except Exception:
             pass
@@ -207,7 +202,7 @@ def observability_routing():
 def observability_memory():
     """Memory layer counts and health indicators."""
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
 
         result = {
@@ -245,22 +240,22 @@ def observability_memory():
                     result['traits'] = row[0] or 0
                     result['avg_trait_strength'] = round(float(row[1] or 0), 3)
         except Exception as e:
-            logger.warning(f"[OBS] memory postgres error: {e}")
+            logger.warning(f"[OBS] memory database error: {e}")
 
-        # Redis counts
+        # MemoryStore counts
         try:
-            redis = RedisClientService.create_connection()
-            result['working_memory'] = len(redis.keys("working_memory:*"))
-            result['gists'] = len(redis.keys("gist_index:*"))
-            result['facts'] = len(redis.keys("fact_index:*"))
+            store = MemoryClientService.create_connection()
+            result['working_memory'] = len(store.keys("working_memory:*"))
+            result['gists'] = len(store.keys("gist_index:*"))
+            result['facts'] = len(store.keys("fact_index:*"))
 
             # Queue depths (only include non-zero)
             for q in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
-                depth = redis.llen(q)
+                depth = store.llen(q)
                 if depth:
                     result['queues'][q] = depth
         except Exception as e:
-            logger.warning(f"[OBS] memory redis error: {e}")
+            logger.warning(f"[OBS] memory store error: {e}")
 
         return jsonify(result), 200
     except Exception as e:

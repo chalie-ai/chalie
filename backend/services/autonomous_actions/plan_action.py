@@ -20,13 +20,13 @@ import logging
 import time
 from typing import Dict, Any, Optional, Tuple
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PLAN ACTION]"
 
-# Redis keys
+# MemoryStore keys
 TOPIC_SIGNALS_KEY = "plan:topic_signals"
 COOLDOWN_KEY = "plan:proposal_cooldown"
 COOLDOWN_TTL = 172800  # 48 hours
@@ -54,7 +54,7 @@ class PlanAction(AutonomousAction):
         super().__init__(name='PLAN', enabled=True, priority=7)
 
         config = config or {}
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
 
         self.min_activation = config.get('min_activation', DEFAULT_MIN_ACTIVATION)
         self.min_signals = config.get('min_signals', DEFAULT_MIN_SIGNALS)
@@ -86,14 +86,14 @@ class PlanAction(AutonomousAction):
         # Record this signal (always, even if gate fails)
         now = time.time()
         signal_key = f"{topic}:drift:{now}"
-        self.redis.zadd(TOPIC_SIGNALS_KEY, {signal_key: now})
+        self.store.zadd(TOPIC_SIGNALS_KEY, {signal_key: now})
 
         # Clean signals older than 7 days
         week_ago = now - (7 * 86400)
-        self.redis.zremrangebyscore(TOPIC_SIGNALS_KEY, '-inf', week_ago)
+        self.store.zremrangebyscore(TOPIC_SIGNALS_KEY, '-inf', week_ago)
 
         # Count signals for this topic (from sorted set members starting with topic:)
-        all_signals = self.redis.zrangebyscore(
+        all_signals = self.store.zrangebyscore(
             TOPIC_SIGNALS_KEY, week_ago, '+inf'
         )
         topic_count = sum(
@@ -158,7 +158,7 @@ class PlanAction(AutonomousAction):
 
     def _cooldown_gate(self) -> bool:
         """Gate 7: 48h cooldown between plan proposals."""
-        return self.redis.get(COOLDOWN_KEY) is None
+        return self.store.get(COOLDOWN_KEY) is None
 
     # -- Main interface --------------------------------------------------------
 
@@ -244,7 +244,7 @@ class PlanAction(AutonomousAction):
                 self._surface_confirmation(thought, plan)
 
             # Set cooldown
-            self.redis.setex(COOLDOWN_KEY, self.cooldown_seconds, '1')
+            self.store.setex(COOLDOWN_KEY, self.cooldown_seconds, '1')
 
             # Log
             self._log_plan_event(thought, task_id, cost_class)

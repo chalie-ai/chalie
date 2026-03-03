@@ -162,13 +162,13 @@ class TestMemoryAPI:
         assert "X-Confirm-Delete" in data["error"]
 
     def test_forget_all_with_header_clears_data(self, client):
-        """POST /memory/forget scope=all with header clears Redis and PostgreSQL."""
-        with patch('services.redis_client.RedisClientService.create_connection') as mock_redis_fn, \
+        """POST /memory/forget scope=all with header clears MemoryStore and SQLite."""
+        with patch('services.memory_client.MemoryClientService.create_connection') as mock_store_fn, \
              patch('services.database_service.get_shared_db_service') as mock_db_fn, \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
-            mock_redis = MagicMock()
-            mock_redis.keys.return_value = ["key1", "key2"]
-            mock_redis_fn.return_value = mock_redis
+            mock_store = MagicMock()
+            mock_store.keys.return_value = ["key1", "key2"]
+            mock_store_fn.return_value = mock_store
 
             mock_conn = MagicMock()
             mock_conn_ctx = MagicMock()
@@ -193,9 +193,9 @@ class TestMemoryAPI:
             assert data["deleted"] is True
             assert data["scope"] == "all"
 
-            # Redis keys should have been queried and deleted
-            assert mock_redis.keys.call_count > 0
-            assert mock_redis.delete.call_count > 0
+            # MemoryStore keys should have been queried and deleted
+            assert mock_store.keys.call_count > 0
+            assert mock_store.delete.call_count > 0
 
     # ------------------------------------------------------------------
     # POST /memory/forget — invalid scope

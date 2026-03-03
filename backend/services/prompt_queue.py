@@ -1,9 +1,8 @@
 """
 Prompt Queue — Lightweight thread dispatcher.
 
-Same API as the RQ-based implementation, but spawns background threads
-instead of enqueueing to Redis/RQ. Serialization per queue name ensures
-one job at a time per queue (matching RQ max_workers=1 behavior).
+Spawns background threads for job execution. Serialization per queue name
+ensures one job at a time per queue.
 """
 
 import logging
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class PromptQueue:
-    """Lightweight thread dispatcher. Same API as before, no RQ dependency."""
+    """Lightweight thread dispatcher for serialized background job execution."""
 
     # Class-level registry: shared locks per queue name for serialization
     _locks: dict = {}

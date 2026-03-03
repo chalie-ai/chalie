@@ -10,11 +10,9 @@ Sends small-talk messages via the REST API and verifies:
 - No errors in pipeline
 
 Usage:
-    python3 tests/e2e_smoke_test.py                    # Run from inside container
-    python3 tests/e2e_smoke_test.py --host grck.lan    # Run from remote host (requires port 8080 exposed)
-
-Or via docker exec:
-    docker exec chalie python3 tests/e2e_smoke_test.py
+    python3 tests/e2e_smoke_test.py                    # Run against localhost
+    python3 tests/e2e_smoke_test.py --host myserver.local  # Run against remote host
+    python3 tests/e2e_smoke_test.py --port 9000        # Custom port
 """
 
 import sys
@@ -30,7 +28,7 @@ log = logging.getLogger(__name__)
 
 # --- Configuration ---
 
-API_BASE = "http://localhost:8080"
+API_BASE = "http://localhost:8081"
 TEST_UUID = "e2e-smoke-test"
 TIMEOUT = 300  # seconds per request (LLM can be slow)
 
@@ -74,33 +72,6 @@ def api_request(endpoint, method="GET", data=None):
         return {"error": str(e)}, 0
 
 
-def check_redis_queues():
-    """Check that no queues are stuck."""
-    try:
-        import redis as redis_lib
-        r = redis_lib.Redis(host='grck.lan', port=6379, decode_responses=True)
-        queues = {
-            "prompt-queue": r.llen("rq:queue:prompt-queue"),
-            "memory-chunker-queue": r.llen("rq:queue:memory-chunker-queue"),
-            "episodic-memory-queue": r.llen("rq:queue:episodic-memory-queue"),
-            "semantic_consolidation_queue": r.llen("rq:queue:semantic_consolidation_queue"),
-        }
-
-        # Check for stuck scheduled jobs
-        scheduled = {}
-        for queue_name in queues:
-            sched_key = f"rq:scheduled:{queue_name}"
-            count = r.zcard(sched_key)
-            if count > 0:
-                scheduled[queue_name] = count
-
-        return queues, scheduled
-    except ImportError:
-        return None, None
-    except Exception as e:
-        return {"error": str(e)}, None
-
-
 # --- Test Runner ---
 
 def run_tests():
@@ -114,7 +85,7 @@ def run_tests():
     total_time = 0
 
     # Test 0: Health check
-    log.info("\n[0/4] Health check...")
+    log.info("\n[0/3] Health check...")
     health, status = api_request("/health")
     if status == 200 and health.get("status") == "ok":
         log.info("  PASS - REST API is healthy")
@@ -127,7 +98,7 @@ def run_tests():
 
     # Tests 1-3: Send messages
     for i, test in enumerate(TEST_MESSAGES, 1):
-        log.info(f"\n[{i}/{len(TEST_MESSAGES) + 1}] {test['description']}")
+        log.info(f"\n[{i}/{len(TEST_MESSAGES)}] {test['description']}")
         log.info(f"  Sending: \"{test['message']}\"")
 
         start = time.time()
@@ -158,29 +129,6 @@ def run_tests():
         if i < len(TEST_MESSAGES):
             time.sleep(1)
 
-    # Test 4: Queue health (if redis available)
-    log.info(f"\n[4/4] Queue health check...")
-    queues, scheduled = check_redis_queues()
-    if queues is None:
-        log.info("  SKIP - redis library not available (run inside container)")
-        results.append(("Queue health", True, "skipped (no redis lib)"))
-    elif "error" in queues:
-        log.info(f"  WARN - Could not connect to Redis: {queues['error']}")
-        results.append(("Queue health", True, f"skipped ({queues['error']})"))
-    else:
-        stuck_scheduled = sum(scheduled.values()) if scheduled else 0
-        if stuck_scheduled > 0:
-            log.info(f"  FAIL - {stuck_scheduled} stuck scheduled jobs: {scheduled}")
-            results.append(("Queue health", False, f"{stuck_scheduled} stuck scheduled jobs"))
-        else:
-            # Report queue depths (non-zero is OK, just informational)
-            active = {k: v for k, v in queues.items() if v > 0}
-            if active:
-                log.info(f"  OK   - Active queues (processing): {active}")
-            else:
-                log.info(f"  OK   - All queues empty")
-            results.append(("Queue health", True, f"queues={queues}"))
-
     log.info(f"\n  Total LLM time: {total_time:.1f}s")
 
     return print_summary(results)
@@ -208,12 +156,20 @@ def print_summary(results):
 
 
 if __name__ == "__main__":
-    # Allow overriding API base from CLI
+    # Allow overriding from CLI
     if "--host" in sys.argv:
         idx = sys.argv.index("--host")
         if idx + 1 < len(sys.argv):
             host = sys.argv[idx + 1]
-            API_BASE = f"http://{host}:8080"
+            API_BASE = f"http://{host}:8081"
+
+    if "--port" in sys.argv:
+        idx = sys.argv.index("--port")
+        if idx + 1 < len(sys.argv):
+            port = sys.argv[idx + 1]
+            # Replace port in API_BASE
+            parts = API_BASE.rsplit(":", 1)
+            API_BASE = f"{parts[0]}:{port}"
 
     exit_code = run_tests()
     sys.exit(exit_code)

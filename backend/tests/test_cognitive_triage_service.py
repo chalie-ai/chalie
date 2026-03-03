@@ -178,7 +178,7 @@ class TestSelfEvalRules:
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         result = self._make_result('respond', 'RESPOND')
-        ctx = self._make_context(tool_summaries='## Info\n- web_read: read URLs')
+        ctx = self._make_context(tool_summaries='## Info\n- read: read URLs and local files')
         result = svc._self_evaluate(result, "open https://github.com/chalie-ai/chalie", ctx)
         assert result.branch == 'act'
         assert result.mode == 'ACT'
@@ -197,7 +197,7 @@ class TestSelfEvalRules:
         """ACT + URL → no change (already ACT)."""
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
-        result = self._make_result('act', 'ACT', tools=['web_read'])
+        result = self._make_result('act', 'ACT', tools=['read'])
         ctx = self._make_context()
         result = svc._self_evaluate(result, "read https://example.com", ctx)
         assert result.branch == 'act'

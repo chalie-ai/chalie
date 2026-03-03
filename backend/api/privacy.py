@@ -42,10 +42,10 @@ def data_summary():
     """Overview of all stored data — counts by type."""
     try:
         from services.database_service import get_shared_db_service
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
         db = get_shared_db_service()
-        redis = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
 
         result = {}
 
@@ -77,9 +77,9 @@ def data_summary():
             except Exception:
                 pass
 
-        # Redis fact count (SCAN avoids O(N) keyspace block of KEYS)
+        # MemoryStore fact count
         try:
-            result["facts"] = sum(1 for _ in redis.scan_iter(match="fact_index:*", count=100))
+            result["facts"] = sum(1 for _ in store.scan_iter(match="fact_index:*", count=100))
         except Exception:
             result["facts"] = 0
 
@@ -96,11 +96,11 @@ def export_data():
     """Export all user data as JSON."""
     try:
         from services.database_service import get_shared_db_service
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
         db = get_shared_db_service()
-        redis_conn = RedisClientService.create_connection()
-        export = {"exported_at": datetime.now(timezone.utc).isoformat(), "tables": {}, "redis": {}}
+        store = MemoryClientService.create_connection()
+        export = {"exported_at": datetime.now(timezone.utc).isoformat(), "tables": {}, "memory_store": {}}
 
         # ── SQLite tables ──
         user_data_tables = [
@@ -137,35 +137,35 @@ def export_data():
                 except Exception:
                     export["tables"][table] = {"count": 0, "error": "table not found or empty"}
 
-        # ── Redis keys (user-data patterns only) ──
-        redis_patterns = [
+        # ── MemoryStore keys (user-data patterns only) ──
+        store_patterns = [
             "working_memory:*", "gist:*", "fact:*",
             "identity_state:*", "spark_state:*", "focus_session:*",
         ]
-        for pattern in redis_patterns:
-            keys = redis_conn.keys(pattern)
+        for pattern in store_patterns:
+            keys = store.keys(pattern)
             if keys:
                 section = {}
                 for key in keys:
                     key_str = key if isinstance(key, str) else key.decode()
-                    key_type = redis_conn.type(key)
+                    key_type = store.type(key)
                     key_type = key_type if isinstance(key_type, str) else key_type.decode()
                     try:
                         if key_type == "string":
-                            val = redis_conn.get(key)
+                            val = store.get(key)
                             section[key_str] = val if isinstance(val, str) else val.decode() if val else None
                         elif key_type == "list":
-                            section[key_str] = [v.decode() if isinstance(v, bytes) else v for v in redis_conn.lrange(key, 0, -1)]
+                            section[key_str] = [v.decode() if isinstance(v, bytes) else v for v in store.lrange(key, 0, -1)]
                         elif key_type == "hash":
-                            raw = redis_conn.hgetall(key)
+                            raw = store.hgetall(key)
                             section[key_str] = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in raw.items()}
                         elif key_type == "zset":
-                            section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in redis_conn.zrange(key, 0, -1)]
+                            section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.zrange(key, 0, -1)]
                         elif key_type == "set":
-                            section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in redis_conn.smembers(key)]
+                            section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.smembers(key)]
                     except Exception:
                         section[key_str] = "<unreadable>"
-                export["redis"][pattern] = section
+                export["memory_store"][pattern] = section
 
         response = jsonify(export)
         response.headers["Content-Disposition"] = "attachment; filename=chalie-export.json"
@@ -185,11 +185,11 @@ def delete_all():
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400
 
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
 
-        # Clear Redis — all user-data patterns
-        redis = RedisClientService.create_connection()
+        # Clear MemoryStore — all user-data patterns
+        store = MemoryClientService.create_connection()
         for pattern in [
             # Memory layer
             "working_memory:*", "gist:*", "gist_index:*",
@@ -251,9 +251,9 @@ def delete_all():
             "curiosity:*",
             "bg_llm:*",
         ]:
-            keys = redis.keys(pattern)
+            keys = store.keys(pattern)
             if keys:
-                redis.delete(*keys)
+                store.delete(*keys)
 
         # Truncate SQLite — all user-data tables
         # NOTE: lists CASCADE handles list_items and list_events via FK relationships

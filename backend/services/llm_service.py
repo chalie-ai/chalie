@@ -187,7 +187,7 @@ class RefreshableLLMService:
     """
     LLM service wrapper that auto-refreshes when provider configuration changes.
 
-    Detects provider cache version changes (via Redis invalidation) and re-creates
+    Detects provider cache version changes (via MemoryStore invalidation) and re-creates
     the underlying LLM client, so workers don't need to restart when providers change
     via the Brain UI.
     """

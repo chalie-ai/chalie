@@ -23,7 +23,7 @@ import time
 import uuid
 from typing import Optional, Dict, Any, Tuple, List
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ class SuggestAction(AutonomousAction):
         super().__init__(name='SUGGEST', enabled=True, priority=8)
 
         config = config or {}
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
         self.user_id = config.get('user_id', 'default')
 
         self.min_trait_confidence = config.get('min_trait_confidence', 0.7)
@@ -168,18 +168,18 @@ class SuggestAction(AutonomousAction):
         now = time.time()
 
         # Global daily cooldown
-        last_sent = self.redis.get(_key(self.user_id, 'last_suggest_ts'))
+        last_sent = self.store.get(_key(self.user_id, 'last_suggest_ts'))
         if last_sent and (now - float(last_sent)) < _DAILY_COOLDOWN:
             return False
 
         # Per-topic cooldown
         if topic:
             topic_key = _key(self.user_id, f'topic_cooldown:{topic}')
-            if self.redis.get(topic_key):
+            if self.store.get(topic_key):
                 return False
 
         # Auto-pause check
-        paused_until = self.redis.get(_key(self.user_id, 'paused_until'))
+        paused_until = self.store.get(_key(self.user_id, 'paused_until'))
         if paused_until and now < float(paused_until):
             return False
 
@@ -189,9 +189,9 @@ class SuggestAction(AutonomousAction):
         """Check engagement score is above threshold."""
         try:
             score = float(
-                self.redis.get(f"proactive:{self.user_id}:engagement_score") or 1.0
+                self.store.get(f"proactive:{self.user_id}:engagement_score") or 1.0
             )
-            paused = self.redis.get(f"proactive:{self.user_id}:paused")
+            paused = self.store.get(f"proactive:{self.user_id}:paused")
             if paused == '1':
                 return False
             return score > 0.5
@@ -271,10 +271,10 @@ class SuggestAction(AutonomousAction):
 
         # Update rate limits
         now = time.time()
-        self.redis.set(_key(self.user_id, 'last_suggest_ts'), str(now))
+        self.store.set(_key(self.user_id, 'last_suggest_ts'), str(now))
         if thought.seed_topic:
             topic_key = _key(self.user_id, f'topic_cooldown:{thought.seed_topic}')
-            self.redis.setex(topic_key, _TOPIC_COOLDOWN, '1')
+            self.store.setex(topic_key, _TOPIC_COOLDOWN, '1')
 
         # Log
         self._log_suggestion_event(trait, skill, self._pending_relevance)
@@ -410,12 +410,12 @@ class SuggestAction(AutonomousAction):
             'outcome': outcome,
             'ts': time.time(),
         })
-        self.redis.rpush(rejections_key, entry)
-        self.redis.ltrim(rejections_key, -20, -1)
-        self.redis.expire(rejections_key, _REJECT_WINDOW)
+        self.store.rpush(rejections_key, entry)
+        self.store.ltrim(rejections_key, -20, -1)
+        self.store.expire(rejections_key, _REJECT_WINDOW)
 
         # Check rejection rate
-        raw = self.redis.lrange(rejections_key, 0, -1)
+        raw = self.store.lrange(rejections_key, 0, -1)
         if raw and len(raw) >= 3:
             now = time.time()
             window_entries = []
@@ -435,7 +435,7 @@ class SuggestAction(AutonomousAction):
                 rate = rejects / len(window_entries)
                 if rate > self.reject_pause_threshold:
                     pause_until = now + _AUTO_PAUSE_DURATION
-                    self.redis.set(
+                    self.store.set(
                         _key(self.user_id, 'paused_until'), str(pause_until)
                     )
                     logger.info(

@@ -46,9 +46,9 @@ class CronToolWorker:
                 time.sleep(interval)
 
                 try:
-                    from services.redis_client import RedisClientService
-                    redis = RedisClientService.create_connection()
-                    queue_depth = redis.llen("rq:queue:prompt-queue")
+                    from services.memory_client import MemoryClientService
+                    store = MemoryClientService.create_connection()
+                    queue_depth = store.llen("prompt-queue")
                     if queue_depth > 5:
                         _log.info(
                             f"[TOOL CRON] {self.tool_name} deferred: "
@@ -86,19 +86,19 @@ class CronToolWorker:
 
                 flattened_telemetry = build_tool_telemetry(raw_telemetry)
 
-                # Load persisted tool state from Redis (survives container restarts)
+                # Load persisted tool state from MemoryStore (survives container restarts)
                 tool_state = {}
                 state_key = f"tool_state:{self.tool_name}"
                 old_state_key = f"tool_cron_state:{self.tool_name}"
                 try:
-                    from services.redis_client import RedisClientService as _RCS
-                    _state_redis = _RCS.create_connection()
+                    from services.memory_client import MemoryClientService as _MCS
+                    _state_store = _MCS.create_connection()
                     # Migration: copy old key to new key on first access
-                    if not _state_redis.exists(state_key) and _state_redis.exists(old_state_key):
-                        old_val = _state_redis.get(old_state_key)
+                    if not _state_store.exists(state_key) and _state_store.exists(old_state_key):
+                        old_val = _state_store.get(old_state_key)
                         if old_val:
-                            _state_redis.setex(state_key, 7 * 24 * 3600, old_val)
-                    state_json = _state_redis.get(state_key)
+                            _state_store.setex(state_key, 7 * 24 * 3600, old_val)
+                    state_json = _state_store.get(state_key)
                     if state_json:
                         tool_state = json.loads(state_json)
                 except Exception:
@@ -125,12 +125,12 @@ class CronToolWorker:
                     timeout=self.timeout, on_tool_output=_on_tool_output,
                 )
 
-                # Persist returned state back to Redis (7-day TTL)
+                # Persist returned state back to MemoryStore (7-day TTL)
                 if isinstance(result, dict) and "_state" in result:
                     try:
-                        from services.redis_client import RedisClientService as _RCS
-                        _state_redis = _RCS.create_connection()
-                        _state_redis.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
+                        from services.memory_client import MemoryClientService as _MCS
+                        _state_store = _MCS.create_connection()
+                        _state_store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
                     except Exception as e:
                         _log.warning(f"[TOOL CRON] {self.tool_name}: failed to persist state: {e}")
 

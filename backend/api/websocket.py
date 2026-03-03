@@ -72,14 +72,14 @@ def register_websocket(sock):
             return
 
         # Subscribe to output:events for drift/card/task push
-        from services.redis_client import RedisClientService
-        redis = RedisClientService.create_connection()
-        pubsub = redis.pubsub()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        pubsub = store.pubsub()
         pubsub.subscribe('output:events')
 
         # Drain buffered notifications on connect
         while True:
-            item = redis.lpop('notifications:recent')
+            item = store.lpop('notifications:recent')
             if not item:
                 break
             try:
@@ -152,7 +152,7 @@ def register_websocket(sock):
                 msg_type = msg.get('type', '')
 
                 if msg_type == 'chat':
-                    _handle_chat(ws, redis, msg)
+                    _handle_chat(ws, store, msg)
                 elif msg_type == 'resume':
                     _handle_resume(ws, msg)
                 elif msg_type == 'pong':
@@ -173,7 +173,7 @@ def _handle_resume(ws, msg):
     logger.debug(f"[WS] Resume: replayed {len(events)} events from seq {last_seq}")
 
 
-def _handle_chat(ws, redis, msg):
+def _handle_chat(ws, store, msg):
     """Process a chat message — replaces the POST /chat SSE endpoint."""
     text = (msg.get('text') or '').strip()
     if not text:
@@ -184,7 +184,7 @@ def _handle_chat(ws, redis, msg):
     request_id = str(uuid.uuid4())
 
     # Subscribe to per-request SSE channel (OutputService publishes here)
-    pubsub = redis.pubsub()
+    pubsub = store.pubsub()
     sse_channel = f"sse:{request_id}"
     pubsub.subscribe(sse_channel)
 
@@ -207,7 +207,7 @@ def _handle_chat(ws, redis, msg):
             logger.error(f"[WS] digest_worker error for {request_id}: {e}", exc_info=True)
             bg_error['message'] = str(e)
             try:
-                redis.publish(sse_channel, json.dumps({"error": str(e)}))
+                store.publish(sse_channel, json.dumps({"error": str(e)}))
             except Exception:
                 pass
         finally:
@@ -256,7 +256,7 @@ def _handle_chat(ws, redis, msg):
 
             # It's an output_id — fetch the full output
             output_id = payload.strip('"')
-            output_data = redis.get(f"output:{output_id}")
+            output_data = store.get(f"output:{output_id}")
 
             if output_data:
                 output = json.loads(output_data)
@@ -284,7 +284,7 @@ def _handle_chat(ws, redis, msg):
         # Fallback: background thread done but no pub/sub arrived
         if bg_done.is_set() and not message_received:
             # ACT triage sets sse_pending flag when a tool_worker job is pending
-            sse_pending_value = redis.get(f"sse_pending:{request_id}")
+            sse_pending_value = store.get(f"sse_pending:{request_id}")
             if sse_pending_value:
                 # Maximum pending wait of 300s (tool_worker hard timeout)
                 if time.time() - start_time > 300:
@@ -301,7 +301,7 @@ def _handle_chat(ws, redis, msg):
 
             time.sleep(0.5)  # Brief grace period
             output_key = f"output:{request_id}"
-            fallback_data = redis.get(output_key)
+            fallback_data = store.get(output_key)
             if fallback_data:
                 output = json.loads(fallback_data)
                 metadata = output.get("metadata", {})

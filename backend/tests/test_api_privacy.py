@@ -49,11 +49,11 @@ class TestPrivacyAPI:
         mock_db = MagicMock()
         mock_db.connection.return_value = mock_conn_ctx
 
-        mock_redis = MagicMock()
-        mock_redis.scan_iter.return_value = iter(["fact_index:topic1", "fact_index:topic2"])
+        mock_store = MagicMock()
+        mock_store.scan_iter.return_value = iter(["fact_index:topic1", "fact_index:topic2"])
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis):
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             response = client.get('/privacy/data-summary')
 
             assert response.status_code == 200
@@ -66,7 +66,7 @@ class TestPrivacyAPI:
             assert "autobiography" in data
             assert "persistent_tasks" in data
             assert "place_fingerprints" in data
-            # Redis fact count
+            # MemoryStore fact count
             assert data["facts"] == 2
 
     # ------------------------------------------------------------------
@@ -84,8 +84,8 @@ class TestPrivacyAPI:
 
     def test_delete_all_with_header_clears_data(self, client):
         """DELETE /privacy/delete-all with header clears data and returns 200."""
-        mock_redis = MagicMock()
-        mock_redis.keys.return_value = ["key1", "key2"]
+        mock_store = MagicMock()
+        mock_store.keys.return_value = ["key1", "key2"]
 
         mock_conn = MagicMock()
         mock_conn_ctx = MagicMock()
@@ -95,7 +95,7 @@ class TestPrivacyAPI:
         mock_db = MagicMock()
         mock_db.connection.return_value = mock_conn_ctx
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()
@@ -111,18 +111,18 @@ class TestPrivacyAPI:
             assert data["deleted"] is True
             assert "timestamp" in data
 
-            # Redis patterns were scanned and deleted
-            assert mock_redis.keys.call_count > 0
-            assert mock_redis.delete.call_count > 0
+            # MemoryStore patterns were scanned and deleted
+            assert mock_store.keys.call_count > 0
+            assert mock_store.delete.call_count > 0
 
-            # PostgreSQL tables were truncated via cursor pattern
+            # Database tables were truncated via cursor pattern
             cursor = mock_conn.cursor.return_value
             assert cursor.execute.call_count > 0
 
     def test_delete_all_logs_audit_event(self, client):
         """DELETE /privacy/delete-all logs a privacy_delete_all audit event."""
-        mock_redis = MagicMock()
-        mock_redis.keys.return_value = []
+        mock_store = MagicMock()
+        mock_store.keys.return_value = []
 
         mock_conn = MagicMock()
         mock_conn_ctx = MagicMock()
@@ -132,7 +132,7 @@ class TestPrivacyAPI:
         mock_db = MagicMock()
         mock_db.connection.return_value = mock_conn_ctx
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()

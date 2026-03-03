@@ -33,8 +33,8 @@ RESERVED_OAUTH_KEYS = frozenset({
 class OAuthService:
     """Generic OAuth2 service — tool-agnostic, provider-agnostic."""
 
-    # Redis key prefix for in-flight OAuth state (PKCE verifier, tool name)
-    _REDIS_STATE_PREFIX = "oauth_state:"
+    # MemoryStore key prefix for in-flight OAuth state (PKCE verifier, tool name)
+    _STORE_STATE_PREFIX = "oauth_state:"
     _STATE_TTL = 300  # 5 minutes
 
     def __init__(self):
@@ -80,7 +80,7 @@ class OAuthService:
         if use_pkce:
             code_verifier = secrets.token_urlsafe(64)[:128]
 
-        # Store state → {tool_name, code_verifier} in Redis
+        # Store state → {tool_name, code_verifier} in MemoryStore
         self._store_oauth_state(state, {
             "tool_name": tool_name,
             "code_verifier": code_verifier,
@@ -123,7 +123,7 @@ class OAuthService:
         """
         Exchange an authorization code for tokens.
 
-        Validates state token against Redis, retrieves PKCE verifier,
+        Validates state token against MemoryStore, retrieves PKCE verifier,
         exchanges code at the token endpoint, and stores tokens.
 
         Returns:
@@ -410,9 +410,9 @@ class OAuthService:
     def _store_oauth_state(self, state: str, data: dict):
         """Store OAuth state data in MemoryStore with TTL."""
         try:
-            from services.redis_client import RedisClientService
-            store = RedisClientService.create_connection()
-            key = f"{self._REDIS_STATE_PREFIX}{state}"
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            key = f"{self._STORE_STATE_PREFIX}{state}"
             payload = json.dumps(data)
             store.setex(key, self._STATE_TTL, payload)
 
@@ -432,9 +432,9 @@ class OAuthService:
     def _pop_oauth_state(self, state: str) -> dict | None:
         """Retrieve and delete OAuth state data from MemoryStore."""
         try:
-            from services.redis_client import RedisClientService
-            store = RedisClientService.create_connection()
-            key = f"{self._REDIS_STATE_PREFIX}{state}"
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            key = f"{self._STORE_STATE_PREFIX}{state}"
             ttl = store.ttl(key)
             data = store.get(key)
             logger.info(

@@ -32,10 +32,10 @@ class TestPushNotifications:
 
     def test_vapid_key_generation(self):
         """VAPID keys should be generated and stored."""
-        mock_r = MagicMock()
-        mock_r.get.return_value = None
+        mock_store = MagicMock()
+        mock_store.get.return_value = None
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch.dict('os.environ', {}, clear=True):
             keys = _get_vapid_keys()
 
@@ -56,21 +56,21 @@ class TestPushNotifications:
             assert keys['private'] == 'env_private'
 
     def test_vapid_key_from_cache(self):
-        """Redis cache should be used if available."""
+        """MemoryStore cache should be used if available."""
         cached_keys = {'public': 'cached_public', 'private': 'cached_private'}
-        mock_r = MagicMock()
-        mock_r.get.return_value = json.dumps(cached_keys)
+        mock_store = MagicMock()
+        mock_store.get.return_value = json.dumps(cached_keys)
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch.dict('os.environ', {}, clear=True):
             keys = _get_vapid_keys()
 
             assert keys == cached_keys
 
     def test_subscribe_stores_subscription(self, client):
-        """Subscribe should store subscription in Redis."""
-        mock_r = MagicMock()
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r):
+        """Subscribe should store subscription in MemoryStore."""
+        mock_store = MagicMock()
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             subscription = {
                 'endpoint': 'https://example.com/push',
                 'keys': {'p256dh': 'key1', 'auth': 'key2'}
@@ -82,16 +82,16 @@ class TestPushNotifications:
 
     def test_subscribe_invalid_payload(self, client):
         """Invalid subscription should return 400."""
-        mock_r = MagicMock()
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r):
+        mock_store = MagicMock()
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             response = client.post('/push/subscribe', json={})
 
         assert response.status_code == 400
 
     def test_unsubscribe_removes_subscription(self, client):
-        """Unsubscribe should remove subscription from Redis."""
-        mock_r = MagicMock()
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r):
+        """Unsubscribe should remove subscription from MemoryStore."""
+        mock_store = MagicMock()
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             subscription = {'endpoint': 'https://example.com/push'}
 
             response = client.post('/push/unsubscribe', json=subscription)
@@ -100,8 +100,8 @@ class TestPushNotifications:
 
     def test_send_push_to_all(self):
         """Send push should call webpush for all subscriptions."""
-        mock_r = MagicMock()
-        mock_r.smembers.return_value = {
+        mock_store = MagicMock()
+        mock_store.smembers.return_value = {
             json.dumps({'endpoint': 'https://example.com/push', 'keys': {}})
         }
 
@@ -112,7 +112,7 @@ class TestPushNotifications:
         mock_pywebpush.WebPushException = MockWebPushException
 
         with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}), \
-             patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r), \
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('api.push._get_vapid_keys', return_value={'public': 'pub', 'private': 'priv'}):
             send_push_to_all("Test", "Body")
 
@@ -120,8 +120,8 @@ class TestPushNotifications:
 
     def test_send_push_stale_cleanup(self):
         """410 responses should remove stale subscriptions."""
-        mock_r = MagicMock()
-        mock_r.smembers.return_value = {
+        mock_store = MagicMock()
+        mock_store.smembers.return_value = {
             json.dumps({'endpoint': 'https://example.com/push1'}),
             json.dumps({'endpoint': 'https://example.com/push2'})
         }
@@ -140,16 +140,16 @@ class TestPushNotifications:
         mock_webpush_fn.side_effect = [None, exc]
 
         with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}), \
-             patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r), \
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('api.push._get_vapid_keys', return_value={'public': 'pub', 'private': 'priv'}):
             send_push_to_all("Test", "Body")
 
-            assert mock_r.srem.called
+            assert mock_store.srem.called
 
     def test_send_push_no_subscriptions_skips_webpush(self):
         """No subscriptions should skip webpush entirely."""
-        mock_r = MagicMock()
-        mock_r.smembers.return_value = set()
+        mock_store = MagicMock()
+        mock_store.smembers.return_value = set()
 
         MockWebPushException = type('WebPushException', (Exception,), {})
         mock_webpush_fn = MagicMock()
@@ -158,7 +158,7 @@ class TestPushNotifications:
         mock_pywebpush.WebPushException = MockWebPushException
 
         with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}), \
-             patch('services.redis_client.RedisClientService.create_connection', return_value=mock_r), \
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('api.push._get_vapid_keys', return_value={'public': 'pub', 'private': 'priv'}):
             send_push_to_all("Test", "Body")
 

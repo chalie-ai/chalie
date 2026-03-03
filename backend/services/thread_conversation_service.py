@@ -1,7 +1,7 @@
 """
-Thread Conversation Service - Redis-backed conversation storage per thread.
+Thread Conversation Service - MemoryStore-backed conversation storage per thread.
 
-Replaces TopicConversationService's file-based storage with Redis lists.
+Replaces TopicConversationService's file-based storage with MemoryStore lists.
 Each thread has a conversation list (thread_conv:{thread_id}) and an
 exchange count index (thread_conv_index:{thread_id}).
 """
@@ -13,17 +13,17 @@ import time
 from datetime import datetime
 from typing import Optional, List
 
-from services.redis_client import RedisClientService
+from services.memory_client import MemoryClientService
 
 
 class ThreadConversationService:
-    """Manages conversation exchanges stored in Redis, scoped by thread."""
+    """Manages conversation exchanges stored in MemoryStore, scoped by thread."""
 
     TTL_SECONDS = 86400  # 24 hours
     MAX_EXCHANGES = 50
 
     def __init__(self):
-        self.redis = RedisClientService.create_connection()
+        self.store = MemoryClientService.create_connection()
 
     def _conv_key(self, thread_id: str) -> str:
         return f"thread_conv:{thread_id}"
@@ -33,7 +33,7 @@ class ThreadConversationService:
 
     def _refresh_ttl(self, thread_id: str):
         """Refresh TTL on all conversation keys."""
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.expire(self._conv_key(thread_id), self.TTL_SECONDS)
         pipe.expire(self._index_key(thread_id), self.TTL_SECONDS)
         pipe.execute()
@@ -68,7 +68,7 @@ class ThreadConversationService:
         }
 
         conv_key = self._conv_key(thread_id)
-        pipe = self.redis.pipeline()
+        pipe = self.store.pipeline()
         pipe.rpush(conv_key, json.dumps(exchange))
         pipe.incr(self._index_key(thread_id))
         pipe.expire(conv_key, self.TTL_SECONDS)
@@ -76,7 +76,7 @@ class ThreadConversationService:
         pipe.execute()
 
         # Trim to max exchanges
-        self.redis.ltrim(conv_key, -self.MAX_EXCHANGES, -1)
+        self.store.ltrim(conv_key, -self.MAX_EXCHANGES, -1)
 
         logging.debug(f"[THREAD_CONV] Added exchange {exchange_id[:8]} to thread {thread_id}")
         return exchange_id
@@ -84,7 +84,7 @@ class ThreadConversationService:
     def add_response(self, thread_id: str, response_message: str, generation_time: float) -> None:
         """Add a response to the most recent exchange."""
         conv_key = self._conv_key(thread_id)
-        raw = self.redis.lindex(conv_key, -1)
+        raw = self.store.lindex(conv_key, -1)
         if not raw:
             logging.warning(f"[THREAD_CONV] No exchange found in thread {thread_id}")
             return
@@ -97,13 +97,13 @@ class ThreadConversationService:
             "generation_time": generation_time,
         }
 
-        self.redis.lset(conv_key, -1, json.dumps(exchange))
+        self.store.lset(conv_key, -1, json.dumps(exchange))
         self._refresh_ttl(thread_id)
 
     def add_response_error(self, thread_id: str, error_message: str) -> None:
         """Record an error for the most recent exchange."""
         conv_key = self._conv_key(thread_id)
-        raw = self.redis.lindex(conv_key, -1)
+        raw = self.store.lindex(conv_key, -1)
         if not raw:
             return
 
@@ -114,13 +114,13 @@ class ThreadConversationService:
             "time": timestamp,
         }
 
-        self.redis.lset(conv_key, -1, json.dumps(exchange))
+        self.store.lset(conv_key, -1, json.dumps(exchange))
         self._refresh_ttl(thread_id)
 
     def add_steps_to_exchange(self, thread_id: str, next_actions: list) -> None:
         """Add steps to the most recent exchange."""
         conv_key = self._conv_key(thread_id)
-        raw = self.redis.lindex(conv_key, -1)
+        raw = self.store.lindex(conv_key, -1)
         if not raw:
             return
 
@@ -139,7 +139,7 @@ class ThreadConversationService:
             steps.append(step)
 
         exchange["steps"] = steps
-        self.redis.lset(conv_key, -1, json.dumps(exchange))
+        self.store.lset(conv_key, -1, json.dumps(exchange))
         self._refresh_ttl(thread_id)
 
     def add_memory_chunk(self, thread_id: str, exchange_id: str, memory_chunk: dict) -> bool:
@@ -153,7 +153,7 @@ class ThreadConversationService:
             True if the exchange was found and updated, False if not found.
         """
         conv_key = self._conv_key(thread_id)
-        all_raw = self.redis.lrange(conv_key, 0, -1)
+        all_raw = self.store.lrange(conv_key, 0, -1)
 
         for i, raw in enumerate(all_raw):
             exchange = json.loads(raw)
@@ -164,7 +164,7 @@ class ThreadConversationService:
                     merged_gists = existing["gists"] + memory_chunk.get("gists", [])
                     memory_chunk = {**memory_chunk, "gists": merged_gists}
                 exchange["memory_chunk"] = memory_chunk
-                self.redis.lset(conv_key, i, json.dumps(exchange))
+                self.store.lset(conv_key, i, json.dumps(exchange))
                 self._refresh_ttl(thread_id)
                 return True
 
@@ -174,7 +174,7 @@ class ThreadConversationService:
     def get_conversation_history(self, thread_id: str) -> list:
         """Get all exchanges for a thread."""
         conv_key = self._conv_key(thread_id)
-        all_raw = self.redis.lrange(conv_key, 0, -1)
+        all_raw = self.store.lrange(conv_key, 0, -1)
 
         exchanges = []
         for raw in all_raw:
@@ -187,7 +187,7 @@ class ThreadConversationService:
     def get_latest_exchange_id(self, thread_id: str) -> str:
         """Get the ID of the most recent exchange."""
         conv_key = self._conv_key(thread_id)
-        raw = self.redis.lindex(conv_key, -1)
+        raw = self.store.lindex(conv_key, -1)
         if not raw:
             return "unknown"
 
@@ -210,13 +210,13 @@ class ThreadConversationService:
 
     def get_exchange_count(self, thread_id: str) -> int:
         """Get exchange count (O(1) via index key)."""
-        count = self.redis.get(self._index_key(thread_id))
+        count = self.store.get(self._index_key(thread_id))
         return int(count) if count else 0
 
     def remove_exchanges(self, thread_id: str, exchange_ids: list) -> None:
         """Remove specific exchanges by ID (for post-episodic cleanup)."""
         conv_key = self._conv_key(thread_id)
-        all_raw = self.redis.lrange(conv_key, 0, -1)
+        all_raw = self.store.lrange(conv_key, 0, -1)
 
         ids_to_remove = set(exchange_ids)
         kept = []
@@ -231,7 +231,7 @@ class ThreadConversationService:
 
         removed_count = len(all_raw) - len(kept)
         if removed_count > 0:
-            pipe = self.redis.pipeline()
+            pipe = self.store.pipeline()
             pipe.delete(conv_key)
             for item in kept:
                 pipe.rpush(conv_key, item)

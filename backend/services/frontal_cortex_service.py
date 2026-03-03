@@ -415,7 +415,7 @@ class FrontalCortexService:
             identity_modulation = ''
         result = result.replace('{{identity_modulation}}', identity_modulation)
 
-        # Identity context — authoritative, zero-latency (Redis-backed)
+        # Identity context — authoritative, zero-latency (MemoryStore-backed)
         # Shown when returning from silence OR when context is cold (warmth < 0.3)
         if _include('identity_context'):
             identity_context = self._get_identity_context(
@@ -639,10 +639,10 @@ class FrontalCortexService:
                     return ""
 
             from services.identity_state_service import IdentityStateService
-            from services.redis_client import RedisClientService
+            from services.memory_client import MemoryClientService
 
             # Read current exchange count from thread hash
-            r = RedisClientService.create_connection()
+            r = MemoryClientService.create_connection()
             exchange_count = int(r.hget(f"thread:{thread_id}", "exchange_count") or 0)
 
             identity_svc = IdentityStateService()
@@ -809,16 +809,16 @@ class FrontalCortexService:
                 except Exception:
                     pass
 
-            # Build current signals — start with prompt length, augment from Redis snapshot
+            # Build current signals — start with prompt length, augment from MemoryStore snapshot
             current_signals = {
                 'prompt_token_count': len(original_prompt.split()) if original_prompt else 0,
             }
             if thread_id:
                 try:
-                    from services.redis_client import RedisClientService
+                    from services.memory_client import MemoryClientService
                     import json as _json
-                    _redis = RedisClientService.create_connection()
-                    _snapshot_raw = _redis.get(f"adaptive_signals:{thread_id}")
+                    _store = MemoryClientService.create_connection()
+                    _snapshot_raw = _store.get(f"adaptive_signals:{thread_id}")
                     if _snapshot_raw:
                         _snapshot = _json.loads(_snapshot_raw)
                         current_signals.update(_snapshot)
@@ -836,7 +836,7 @@ class FrontalCortexService:
 
     def _get_client_context(self) -> str:
         """
-        Get client context (timezone, location, locale) from Redis heartbeat.
+        Get client context (timezone, location, locale) from MemoryStore heartbeat.
 
         Returns:
             str: Formatted client context or empty string if not available

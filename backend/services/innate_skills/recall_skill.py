@@ -2,7 +2,7 @@
 Recall Skill — Unified memory retrieval across all layers.
 
 Searches working memory, gists, facts, episodes, concepts, and user traits in one call.
-Stores partial_match_count in Redis for the introspect skill's FOK signal.
+Stores partial_match_count in MemoryStore for the introspect skill's FOK signal.
 """
 
 import logging
@@ -62,7 +62,7 @@ def handle_recall(topic: str, params: dict) -> str:
         layer_status[layer] = status
         results.extend(hits)
 
-    # Store partial match count in Redis for FOK signal
+    # Store partial match count in MemoryStore for FOK signal
     partial_match_count = sum(
         1 for r in results if r.get("confidence", 0) < 0.5
     )
@@ -77,11 +77,11 @@ def handle_recall(topic: str, params: dict) -> str:
 def _search_working_memory(topic: str, query: str, limit: int) -> tuple:
     """Search working memory turns for query keywords."""
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
-        redis = RedisClientService.create_connection()
+        store = MemoryClientService.create_connection()
         key = f"working_memory:{topic}"
-        turns = redis.lrange(key, 0, -1)
+        turns = store.lrange(key, 0, -1)
 
         if not turns:
             return [], "empty"
@@ -259,7 +259,7 @@ def _count_episode_candidates(db_service, topic: str) -> int:
         conn = db_service.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND topic = %s",
+            "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND topic = ?",
             (topic,),
         )
         count = cursor.fetchone()[0]
@@ -372,12 +372,12 @@ def _format_trait_hit(key: str, value: str, category: str, confidence: float, so
 
 
 def _store_fok_signal(topic: str, partial_match_count: int) -> None:
-    """Store partial match count in Redis for introspect's FOK signal."""
+    """Store partial match count in MemoryStore for introspect's FOK signal."""
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
 
-        redis = RedisClientService.create_connection()
-        redis.setex(f"fok:{topic}", 300, str(partial_match_count))
+        store = MemoryClientService.create_connection()
+        store.setex(f"fok:{topic}", 300, str(partial_match_count))
     except Exception as e:
         logger.warning(f"[RECALL] Failed to store FOK signal: {e}")
 

@@ -112,7 +112,7 @@ class TestProvidersAPI:
         assert data["provider"]["id"] == 5
         mock_service.create_provider.assert_called_once()
 
-    def test_create_first_provider_auto_assigns_13_jobs(
+    def test_create_first_provider_auto_assigns_all_jobs(
         self, client, mock_service, mock_cache
     ):
         """POST /providers for the first provider auto-assigns all 13 jobs."""
@@ -132,16 +132,18 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 14
+        assert mock_service.set_job_assignment.call_count == 19
 
-        assigned_jobs = [c.args[0] for c in mock_service.set_job_assignment.call_args_list]
-        expected_jobs = [
-            'frontal-cortex', 'frontal-cortex-respond', 'frontal-cortex-clarify',
-            'frontal-cortex-acknowledge', 'frontal-cortex-act', 'frontal-cortex-proactive',
-            'memory-chunker', 'episodic-memory', 'semantic-memory',
-            'mode-tiebreaker', 'mode-reflection', 'cognitive-drift',
-            'experience-assimilation', 'plan-decomposition',
-        ]
+        assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
+        expected_jobs = sorted([
+            'autobiography', 'frontal-cortex', 'frontal-cortex-act',
+            'plan-decomposition', 'frontal-cortex-respond',
+            'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
+            'frontal-cortex-proactive', 'mode-reflection', 'semantic-memory',
+            'cognitive-triage', 'experience-assimilation', 'fact-store',
+            'frontal-cortex-acknowledge', 'memory-chunker', 'moment-enrichment',
+            'mode-tiebreaker', 'topic-namer',
+        ])
         assert assigned_jobs == expected_jobs
 
         # Each assignment should reference the newly created provider's id

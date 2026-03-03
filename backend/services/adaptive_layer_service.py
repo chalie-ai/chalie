@@ -144,7 +144,7 @@ _MAX_DIRECTIVES = 4
 # Max micro-preference lines appended after directives
 _MAX_MICRO_PREFS = 2
 
-# Redis cooldown TTLs (seconds)
+# MemoryStore cooldown TTLs (seconds)
 _FORK_COOLDOWN_TTL = 300
 _FORK_PENDING_TTL = 600
 _GROWTH_COOLDOWN_TTL = 86400
@@ -548,7 +548,7 @@ class AdaptiveLayerService:
         Only fires when:
           - thread_id is provided
           - a dimension in FORK_TRIGGERS sits in the 4-7 mid-range (ambiguous)
-          - the Redis cooldown key is not set
+          - the MemoryStore cooldown key is not set
 
         Sets adaptive_fork_pending:{thread_id} (TTL 600s) when a fork is chosen.
 
@@ -559,11 +559,11 @@ class AdaptiveLayerService:
             if not thread_id or not style:
                 return ""
 
-            from services.redis_client import RedisClientService
-            r = RedisClientService.create_connection()
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
 
             cooldown_key = f"adaptive_fork_cooldown:{thread_id}"
-            if r.exists(cooldown_key):
+            if store.exists(cooldown_key):
                 return ""
 
             # Find eligible dims: in fork triggers AND in ambiguous zone (4-7)
@@ -587,7 +587,7 @@ class AdaptiveLayerService:
 
             # Set pending key so downstream can observe which fork was offered
             pending_key = f"adaptive_fork_pending:{thread_id}"
-            r.set(pending_key, chosen_dim, ex=_FORK_PENDING_TTL)
+            store.set(pending_key, chosen_dim, ex=_FORK_PENDING_TTL)
 
             return fork_text
 
@@ -606,18 +606,18 @@ class AdaptiveLayerService:
         Queries user_traits for growth_signal:* rows (category='core'), parses
         the JSON value, and checks for consecutive_cycles >= 6.
 
-        Respects a 24-hour per-user Redis cooldown.
+        Respects a 24-hour per-user MemoryStore cooldown.
 
         Returns:
             str: Randomly selected reflection sentence, or "".
         """
         try:
-            from services.redis_client import RedisClientService
+            from services.memory_client import MemoryClientService
             from services.database_service import get_shared_db_service
 
-            r = RedisClientService.create_connection()
+            store = MemoryClientService.create_connection()
             cooldown_key = f"adaptive_growth_reflection_cooldown:{user_id}"
-            if r.exists(cooldown_key):
+            if store.exists(cooldown_key):
                 return ""
 
             db = get_shared_db_service()
@@ -663,7 +663,7 @@ class AdaptiveLayerService:
             reflection = random.choice(variants)
 
             # Set 24-hour cooldown
-            r.set(cooldown_key, '1', ex=_GROWTH_COOLDOWN_TTL)
+            store.set(cooldown_key, '1', ex=_GROWTH_COOLDOWN_TTL)
 
             return reflection
 

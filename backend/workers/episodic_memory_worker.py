@@ -76,16 +76,16 @@ def are_other_workers_idle() -> tuple[bool, str]:
     Returns:
         Tuple of (idle: bool, reason: str)
     """
-    redis_connection = RedisClientService.create_connection(decode_responses=False)
-    config = ConfigService.connections().get("redis", {})
+    store = MemoryClientService.create_connection(decode_responses=False)
+    config = ConfigService.connections().get("memory", {})
 
     # Check prompt queue (digest worker)
     prompt_queue_name = config.get("topics", {}).get("prompt_queue", "prompt-queue")
-    prompt_queue = Queue(prompt_queue_name, connection=redis_connection)
+    prompt_queue = Queue(prompt_queue_name, connection=store)
 
     # Check memory chunker queue
     chunker_queue_name = config.get("topics", {}).get("memory_chunker", "memory-chunker-queue")
-    chunker_queue = Queue(chunker_queue_name, connection=redis_connection)
+    chunker_queue = Queue(chunker_queue_name, connection=store)
 
     prompt_count = len(prompt_queue)
     chunker_count = len(chunker_queue)
@@ -318,11 +318,11 @@ def episodic_memory_worker(job_data: dict) -> str:
             if should_trigger:
                 from services.config_service import ConfigService as _CS
                 _sem_config = _CS.connections()
-                _sem_queue_name = _sem_config.get("redis", {}).get("queues", {}).get(
+                _sem_queue_name = _sem_config.get("memory", {}).get("queues", {}).get(
                     "semantic_consolidation_queue", {}
                 ).get("name", "semantic_consolidation_queue")
-                _sem_redis = RedisClientService.create_connection(decode_responses=False)
-                _sem_queue = Queue(_sem_queue_name, connection=_sem_redis)
+                _sem_store = MemoryClientService.create_connection(decode_responses=False)
+                _sem_queue = Queue(_sem_queue_name, connection=_sem_store)
                 _sem_queue.enqueue(
                     'workers.semantic_consolidation_worker.semantic_consolidation_worker',
                     {

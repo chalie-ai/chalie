@@ -27,6 +27,7 @@ LOG_PREFIX = "[TRIAGE]"
 # Cognitive primitives — always selected for ACT regardless of prompt compliance
 _PRIMITIVES = ['recall', 'memorize', 'introspect']
 _VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task', 'document', 'read'}
+_CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES)  # innate skills that don't need external tools
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
 
 # Social filter regex patterns (reused from IntentClassifierService)

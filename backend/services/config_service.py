@@ -30,7 +30,7 @@ class ConfigService:
     def connections() -> Dict[str, Any]:
         """Load connections config (topic/queue names for MemoryStore key prefixes).
 
-        Returns only the redis block from connections.json. Server bind address
+        Returns only the memory block from connections.json. Server bind address
         is managed by CLI args via runtime_config, not here.
         """
         try:
@@ -38,13 +38,15 @@ class ConfigService:
         except Exception:
             base_config = {}
 
+        # Support both "memory" (new) and "redis" (legacy) keys
+        mem_config = base_config.get("memory") or base_config.get("redis", {})
         return {
-            "redis": base_config.get("redis", {}),
+            "memory": mem_config,
         }
 
     @staticmethod
     def get_providers() -> Dict[str, Any]:
-        """Load providers from cache (with Redis-backed invalidation)."""
+        """Load providers from cache (with MemoryStore-backed invalidation)."""
         from services.provider_cache_service import ProviderCacheService
         return ProviderCacheService.get_providers()
 

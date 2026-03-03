@@ -12,7 +12,7 @@ Fixes:
 import json
 import logging
 
-from services import act_redis_keys
+from services import act_memory_keys
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +37,19 @@ def enqueue_tool_cards(act_history: list, topic: str, metadata: dict,
     rendered by the emit_card skill during the loop. Rendering them again
     from tool_raw_cache would produce duplicates.
 
-    B8 fix: A per-topic Redis set (rendered_cards:{topic}, 60s TTL) prevents
+    B8 fix: A per-topic MemoryStore set (rendered_cards:{topic}, 60s TTL) prevents
     duplicate cards when the critic retries a synthesize=false tool.
     """
     any_synthesize_false = False
     try:
-        from services.redis_client import RedisClientService
+        from services.memory_client import MemoryClientService
         from services.tool_registry_service import ToolRegistryService
         from services.card_renderer_service import CardRendererService
         from services.output_service import OutputService
 
-        redis = RedisClientService.create_connection()
-        raw_items = redis.lrange(act_redis_keys.tool_raw_cache(topic), 0, -1)
-        redis.delete(act_redis_keys.tool_raw_cache(topic))
+        store = MemoryClientService.create_connection()
+        raw_items = store.lrange(act_memory_keys.tool_raw_cache(topic), 0, -1)
+        store.delete(act_memory_keys.tool_raw_cache(topic))
 
         # Build {tool_name: raw_result} map (last result per tool wins)
         raw_map = {}
@@ -73,9 +73,9 @@ def enqueue_tool_cards(act_history: list, topic: str, metadata: dict,
                 if rendered_by_emit:
                     rendered_tools.add(rendered_by_emit)
 
-        # B8: Check per-topic rendered_cards Redis set for cross-invocation dedup
-        rendered_key = act_redis_keys.rendered_cards(topic)
-        already_rendered = redis.smembers(rendered_key)
+        # B8: Check per-topic rendered_cards MemoryStore set for cross-invocation dedup
+        rendered_key = act_memory_keys.rendered_cards(topic)
+        already_rendered = store.smembers(rendered_key)
         if already_rendered:
             rendered_tools.update(
                 m.decode() if isinstance(m, bytes) else m
@@ -130,9 +130,9 @@ def enqueue_tool_cards(act_history: list, topic: str, metadata: dict,
             if card_data:
                 output_svc.enqueue_card(topic, card_data, metadata)
                 rendered_tools.add(tool_name)
-                # B8: Record in Redis so critic retries don't double-render
-                redis.sadd(rendered_key, tool_name)
-                redis.expire(rendered_key, 60)
+                # B8: Record in MemoryStore so critic retries don't double-render
+                store.sadd(rendered_key, tool_name)
+                store.expire(rendered_key, 60)
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Card enqueue failed: {e}")

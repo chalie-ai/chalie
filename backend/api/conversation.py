@@ -82,9 +82,9 @@ def conversation_summary():
 
         # Today's gists from active topic
         if thread_id:
-            from services.redis_client import RedisClientService
-            redis = RedisClientService.create_connection()
-            topic_data = redis.hgetall(f"thread:{thread_id}")
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            topic_data = store.hgetall(f"thread:{thread_id}")
             current_topic = topic_data.get("current_topic", "") if topic_data else ""
 
             if current_topic:

@@ -144,17 +144,17 @@ class TestSystemAPI:
 
     def test_system_status_returns_expected_keys(self, client):
         """GET /system/status returns status, memory, storage, queues top-level keys."""
-        mock_redis = MagicMock()
-        mock_redis.ping.return_value = True
-        mock_redis.keys.return_value = ['k1', 'k2']
-        mock_redis.llen.return_value = 5
-        mock_redis.get.return_value = '2026-02-26T10:00:00'
+        mock_store = MagicMock()
+        mock_store.ping.return_value = True
+        mock_store.keys.return_value = ['k1', 'k2']
+        mock_store.llen.return_value = 5
+        mock_store.get.return_value = '2026-02-26T10:00:00'
 
         mock_db, mock_conn = _make_db_mock()
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.return_value = (42,)
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/status')
 
@@ -164,7 +164,7 @@ class TestSystemAPI:
         assert 'memory' in data
         assert 'storage' in data
         assert 'queues' in data
-        # Memory keys should reflect redis.keys() calls (3 calls: working_memory, gist, fact)
+        # Memory keys should reflect store.keys() calls (3 calls: working_memory, gist, fact)
         assert data['memory']['working_memory_keys'] == 2
         assert data['memory']['gist_keys'] == 2
         assert data['memory']['fact_keys'] == 2
@@ -172,25 +172,25 @@ class TestSystemAPI:
         for q in ['prompt-queue', 'output-queue', 'memory-chunker-queue']:
             assert data['queues'][q] == 5
 
-    def test_system_status_degraded_when_redis_fails(self, client):
-        """GET /system/status reports 'degraded' when Redis ping raises."""
-        mock_redis = MagicMock()
-        mock_redis.ping.side_effect = ConnectionError('redis unreachable')
-        mock_redis.llen.return_value = 0
-        mock_redis.get.return_value = None
+    def test_system_status_degraded_when_store_fails(self, client):
+        """GET /system/status reports 'degraded' when MemoryStore ping raises."""
+        mock_store = MagicMock()
+        mock_store.ping.side_effect = ConnectionError('store unreachable')
+        mock_store.llen.return_value = 0
+        mock_store.get.return_value = None
 
         mock_db, mock_conn = _make_db_mock()
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.return_value = (0,)
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/status')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['status'] == 'degraded'
-        assert 'redis_error' in data
+        assert 'memory_store_error' in data
 
     # ────────────────────────────────────────────
     # GET /system/observability/routing
@@ -233,21 +233,21 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_memory_returns_all_layers(self, client):
-        """GET /system/observability/memory returns episode, concept, trait counts and Redis counts."""
-        mock_redis = MagicMock()
-        mock_redis.keys.side_effect = lambda pattern: {
+        """GET /system/observability/memory returns episode, concept, trait counts and MemoryStore counts."""
+        mock_store = MagicMock()
+        mock_store.keys.side_effect = lambda pattern: {
             'working_memory:*': ['wm1'],
             'gist_index:*': ['g1', 'g2'],
             'fact_index:*': ['f1', 'f2', 'f3'],
         }.get(pattern, [])
-        mock_redis.llen.return_value = 0
+        mock_store.llen.return_value = 0
 
         # Three SQL calls: episodes (count+avg), semantic_concepts (count), user_traits (count+avg)
         mock_db, mock_conn = _make_db_mock()
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.side_effect = [(100, 0.72), (50,), (30, 0.85)]
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
@@ -576,15 +576,15 @@ class TestSystemAPI:
 
     def test_observability_memory_queries_confidence_not_strength(self, client):
         """Memory endpoint must query AVG(confidence) from user_traits (not AVG(strength))."""
-        mock_redis = MagicMock()
-        mock_redis.keys.return_value = []
-        mock_redis.llen.return_value = 0
+        mock_store = MagicMock()
+        mock_store.keys.return_value = []
+        mock_store.llen.return_value = 0
 
         mock_db, mock_conn = _make_db_mock()
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.side_effect = [(10, 0.5), (5,), (3, 0.75)]
 
-        with patch('services.redis_client.RedisClientService.create_connection', return_value=mock_redis), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 

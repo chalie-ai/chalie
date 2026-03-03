@@ -33,7 +33,7 @@ def handle_emit_card(topic: str, params: dict) -> dict:
     Render and enqueue a deferred tool card.
 
     Args:
-        topic: Current conversation topic (used for Redis key lookup)
+        topic: Current conversation topic (used for MemoryStore key lookup)
         params: {
             "summary"      (required) — one-line summary from Chalie
             "response"     (required) — detailed analysis from Chalie
@@ -45,7 +45,7 @@ def handle_emit_card(topic: str, params: dict) -> dict:
         {"card_emitted": True, "tool": tool_name}  on success
         str error message                           on failure
     """
-    from services.redis_client import RedisClientService
+    from services.memory_client import MemoryClientService
     from services.tool_registry_service import ToolRegistryService
     from services.card_renderer_service import CardRendererService
     from services.output_service import OutputService
@@ -57,13 +57,13 @@ def handle_emit_card(topic: str, params: dict) -> dict:
     if not summary:
         return "Error: summary is required"
 
-    redis = RedisClientService.create_connection()
+    store = MemoryClientService.create_connection()
 
     # ── 1. Resolve the cached tool result ────────────────────────────────────
     entry = None
 
     if invocation_id:
-        raw = redis.get(f"tool_card_cache:{topic}:{invocation_id}")
+        raw = store.get(f"tool_card_cache:{topic}:{invocation_id}")
         if raw:
             try:
                 entry = json.loads(raw)
@@ -72,13 +72,13 @@ def handle_emit_card(topic: str, params: dict) -> dict:
 
     if not entry:
         # Fallback: use the most recent deferred card registered for this topic
-        deferred_items = redis.lrange(f"deferred_cards:{topic}", 0, -1)
+        deferred_items = store.lrange(f"deferred_cards:{topic}", 0, -1)
         if deferred_items:
             try:
                 last_deferred = json.loads(deferred_items[-1])
                 fallback_id = last_deferred.get("invocation_id", "")
                 if fallback_id:
-                    raw = redis.get(f"tool_card_cache:{topic}:{fallback_id}")
+                    raw = store.get(f"tool_card_cache:{topic}:{fallback_id}")
                     if raw:
                         entry = json.loads(raw)
             except Exception as e:
@@ -163,21 +163,21 @@ def handle_emit_card(topic: str, params: dict) -> dict:
     # ── 6. Clean up deferred state so subsequent emit_card calls and
     #    _enqueue_tool_cards don't recycle stale data (B7/B11 fix)
     try:
-        redis.delete(f"deferred_cards:{topic}")
+        store.delete(f"deferred_cards:{topic}")
         # B7: Also remove this tool from tool_raw_cache so _enqueue_tool_cards
         # doesn't re-render the same data after the loop.
-        raw_items = redis.lrange(f"tool_raw_cache:{topic}", 0, -1)
+        raw_items = store.lrange(f"tool_raw_cache:{topic}", 0, -1)
         for raw_item in raw_items:
             try:
                 import json as _json
                 parsed = _json.loads(raw_item)
                 if parsed.get('tool') == tool_name:
-                    redis.lrem(f"tool_raw_cache:{topic}", 1, raw_item)
+                    store.lrem(f"tool_raw_cache:{topic}", 1, raw_item)
             except Exception:
                 pass
         # B11: Delete per-invocation cache to prevent re-render on second emit_card call
         used_id = invocation_id or entry.get("invocation_id", "latest")
-        redis.delete(f"tool_card_cache:{topic}:{used_id}")
+        store.delete(f"tool_card_cache:{topic}:{used_id}")
     except Exception:
         pass
 
