@@ -288,6 +288,8 @@ body::before {
     flex-shrink: 0;
 }
 
+
+
 /* Cognition List */
 .cognition-list {
     display: flex;
@@ -2302,6 +2304,11 @@ body::before {
         min-width: 100%;
     }
 
+    .provider-card {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
     .provider-actions {
         flex-wrap: wrap;
         width: 100%;
@@ -2347,6 +2354,8 @@ body::before {
         width: 70px;
         font-size: 10px;
     }
+
+    
 }
 
 /* ── Documents Tab ───────────────────────────────────────── */
