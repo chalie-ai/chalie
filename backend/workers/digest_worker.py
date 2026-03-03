@@ -683,6 +683,18 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
         except Exception as e:
             logging.error(f"[ORCHESTRATOR] Failed: {e}")
 
+    # Signal completion for IGNORE mode on sync WebSocket channels.
+    # RESPOND/CLARIFY/ACKNOWLEDGE handlers call OutputService.enqueue_text()
+    # which signals the WebSocket handler. IGNORE skips OutputService entirely,
+    # so the handler never receives a completion signal — send a close signal
+    # so it can emit "done" instead of "No response received".
+    if response_data.get('mode') == 'IGNORE' and metadata and metadata.get('uuid'):
+        try:
+            from services.output_service import OutputService
+            OutputService().enqueue_close_signal(metadata['uuid'])
+        except Exception as e:
+            logging.warning(f"[IGNORE] Failed to publish close signal: {e}")
+
     return response_data, routing_result
 
 
@@ -1617,7 +1629,16 @@ def _handle_innate_skill_dispatch(
             f"{result['status']} ({result['execution_time']:.2f}s)"
         )
 
-    # Card was already emitted by the skill — no text follow-up needed
+    # Card was already emitted by the skill — close the WebSocket response channel
+    # so the handler emits "done" instead of timing out with "No response received".
+    ws_uuid = metadata.get('uuid')
+    if ws_uuid:
+        try:
+            from services.output_service import OutputService
+            OutputService().enqueue_close_signal(ws_uuid)
+        except Exception as _ce:
+            logging.warning(f"[DIGEST] Innate skill close signal failed: {_ce}")
+
     return {
         'response': '',
         'mode': 'ACT',
@@ -2661,6 +2682,14 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         intent, intent_classifier, working_memory, thread_conv_service,
                         context_warmth, exchange_id,
                     )
+            else:
+                # Direct dispatch succeeded — record the exchange so /conversation/recent
+                # has a closed entry with a timestamp (the card is the response; text is empty).
+                thread_conv_service.add_response(
+                    thread_id,
+                    response_data.get('response', ''),
+                    response_data.get('generation_time', 0.0),
+                )
             is_fast_path_ack = True
             if routing_result is None:
                 routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'}
