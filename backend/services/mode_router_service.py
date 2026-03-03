@@ -420,6 +420,9 @@ class ModeRouterService:
             act -= w.get('act.very_cold_penalty', 0.10)
         if is_warm and fact_density > 0.5:
             act -= w.get('act.warm_facts_penalty', 0.10)
+        # Action intent — user wants Chalie to DO something (set reminder, manage list, etc.)
+        if signals.get('intent_type') == 'action':
+            act += w.get('act.action_intent', 0.40)
         # Graduated memory confidence: low recall confidence → lean toward ACT
         mem_conf = signals.get('memory_confidence', 1.0)
         if interrog or has_q:

@@ -63,10 +63,12 @@ def readiness_check():
     except Exception as e:
         logger.debug(f'[READY] memory store not ready: {e}')
 
-    # prompt-queue worker (PromptQueue spawns daemon threads, always available in-process)
+    # prompt-queue worker (PromptQueue is an in-process thread dispatcher — always available
+    # once the module is importable; _locks is lazily populated on first enqueue so checking
+    # it causes a false 503 on every cold boot before the first message arrives)
     try:
-        from services.prompt_queue import PromptQueue
-        checks['workers'] = bool(PromptQueue._locks)  # registry populated once first queue is created
+        from services.prompt_queue import PromptQueue  # noqa: F401 — import-only check
+        checks['workers'] = True
     except Exception as e:
         logger.debug(f'[READY] worker check failed: {e}')
 
@@ -477,10 +479,11 @@ def observability_delete_trait(trait_key):
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "DELETE FROM user_traits WHERE user_id = 'primary' AND trait_key = %s",
+                "DELETE FROM user_traits WHERE user_id = 'primary' AND trait_key = ?",
                 (trait_key,)
             )
             deleted = cursor.rowcount
+            conn.commit()
 
         if deleted:
             return jsonify({'ok': True, 'deleted': trait_key}), 200

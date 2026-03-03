@@ -87,6 +87,12 @@ class MemoryStore:
             for k in expired:
                 del store[k]
 
+    # ── Connection / health ────────────────────────────────────
+
+    def ping(self) -> bool:
+        """Always returns True — MemoryStore is in-process and never unavailable."""
+        return True
+
     # ── STRING operations ──────────────────────────────────────
 
     def get(self, key: str) -> Optional[str]:
