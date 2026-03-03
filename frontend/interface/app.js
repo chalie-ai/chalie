@@ -469,8 +469,8 @@ class ChalieApp {
   async _loadActiveTasks() {
     try {
       const [taskData, schedData] = await Promise.all([
-        this.api._get('/system/observability/tasks').catch(() => ({})),
-        this.api._get('/scheduler?status=pending').catch(() => ({})),
+        this.api._get('/system/observability/tasks').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; }),
+        this.api._get('/scheduler?status=pending').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; }),
       ]);
       const tasks = (taskData.persistent_tasks || []).filter(
         t => t.status === 'accepted' || t.status === 'in_progress' || t.status === 'paused'
@@ -479,8 +479,11 @@ class ChalieApp {
         r => r.status === 'pending' && r.due_at
       );
       this._renderTaskStrip(tasks, reminders);
-    } catch {
-      // Silently fail — task strip is supplementary
+    } catch (e) {
+      if (e?.message === 'AUTH') {
+        this._handleAuthFailure();
+      }
+      // Other errors: silently fail — task strip is supplementary
     }
   }
 
@@ -1194,6 +1197,8 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _handleAuthFailure() {
+    // Stop the task strip interval so it doesn't keep firing 401s while user re-authenticates
+    clearInterval(this._taskStripInterval);
     this._showLoginDialog();
   }
 
