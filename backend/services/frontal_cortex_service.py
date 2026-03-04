@@ -49,6 +49,70 @@ _ONBOARDING_SCHEDULE = [
             "ask what they enjoy working on or exploring."
         ),
     },
+    # ── Phase 1: Core identity ────────────────────────────────────────────────
+    {
+        'trait': 'age_range',
+        'min_turn': 5,
+        'cooldown_turns': 8,
+        'max_attempts': 1,
+        'hint': (
+            "If it comes up naturally, ask their general age range (e.g. 20s, 30s). "
+            "Don't press if it doesn't fit — it helps adapt communication style."
+        ),
+    },
+    {
+        'trait': 'occupation',
+        'min_turn': 8,
+        'cooldown_turns': 10,
+        'max_attempts': 1,
+        'hint': (
+            "If relevant to the conversation, ask what they do — "
+            "engineer, designer, student, etc. "
+            "Helps understand context and time constraints."
+        ),
+    },
+    # ── Phase 2: Communication & work ────────────────────────────────────────
+    {
+        'trait': 'communication_preference',
+        'min_turn': 18,
+        'cooldown_turns': 12,
+        'max_attempts': 1,
+        'hint': (
+            "Ask whether they prefer detailed explanations or quick summaries. "
+            "Do they like theory first, or jump straight to examples?"
+        ),
+    },
+    {
+        'trait': 'work_schedule',
+        'min_turn': 22,
+        'cooldown_turns': 12,
+        'max_attempts': 1,
+        'hint': (
+            "If scheduling or availability comes up, ask when they're usually free. "
+            "Helps with proactive outreach timing."
+        ),
+    },
+    {
+        'trait': 'primary_goal',
+        'min_turn': 25,
+        'cooldown_turns': 15,
+        'max_attempts': 1,
+        'hint': (
+            "Ask what they're mainly trying to accomplish right now. "
+            "Helps prioritise what matters most."
+        ),
+    },
+    # ── Phase 3: Refinement ───────────────────────────────────────────────────
+    {
+        'trait': 'learning_style',
+        'min_turn': 30,
+        'cooldown_turns': 20,
+        'max_attempts': 1,
+        'hint': (
+            "Ask whether they prefer examples, step-by-step guides, "
+            "or high-level conceptual overviews."
+        ),
+    },
 ]
 
 
