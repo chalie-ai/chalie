@@ -42,6 +42,8 @@ You do NOT:
 
 {{client_context}}
 
+{{temporal_rhythm}}
+
 {{communication_style}}
 
 {{active_lists}}
