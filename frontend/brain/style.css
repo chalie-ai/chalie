@@ -49,8 +49,9 @@ body::before {
 
 /* Header */
 .header {
-    background: var(--surface);
+    background: rgba(255, 255, 255, 0.07);
     border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(4px);
     position: sticky;
     top: 0;
     z-index: 100;
