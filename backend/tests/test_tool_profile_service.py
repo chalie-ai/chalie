@@ -177,12 +177,12 @@ class TestManifestFallback:
 
         # Mock registry with one on-demand tool
         mock_registry = MagicMock()
-        mock_registry.get_on_demand_tools.return_value = ['google_news']
+        mock_registry.get_on_demand_tools.return_value = ['news_tool']
         mock_registry.tools = {
-            'google_news': {
+            'news_tool': {
                 'manifest': {
-                    'name': 'google_news',
-                    'description': 'Search Google News',
+                    'name': 'news_tool',
+                    'description': 'Search news',
                     'documentation': "Search news. Triggers: 'latest news on...', 'what's happening in...'",
                     'category': 'research',
                     'trigger': {'type': 'on_demand'},
@@ -193,7 +193,7 @@ class TestManifestFallback:
         with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
             result = svc.get_triage_summaries()
 
-        assert 'google_news' in result
+        assert 'news_tool' in result
         assert '## Research' in result
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
@@ -245,11 +245,11 @@ class TestManifestFallback:
         svc._db = mock_db
 
         mock_registry = MagicMock()
-        mock_registry.get_on_demand_tools.return_value = ['google_news']
+        mock_registry.get_on_demand_tools.return_value = ['news_tool']
         mock_registry.tools = {
-            'google_news': {
+            'news_tool': {
                 'manifest': {
-                    'name': 'google_news',
+                    'name': 'news_tool',
                     'description': 'Search news',
                     'documentation': "News search. Use for 'latest news on...'",
                     'category': 'research',
@@ -262,7 +262,7 @@ class TestManifestFallback:
             result = svc.get_triage_summaries()
 
         # Skills filtered out → by_domain empty → manifest fallback fires
-        assert 'google_news' in result
+        assert 'news_tool' in result
 
     def test_manifest_fallback_includes_triggers(self):
         """Manifest fallback should include trigger phrases in summaries."""
@@ -271,12 +271,12 @@ class TestManifestFallback:
         svc = ToolProfileService()
 
         mock_registry = MagicMock()
-        mock_registry.get_on_demand_tools.return_value = ['google_news']
+        mock_registry.get_on_demand_tools.return_value = ['news_tool']
         mock_registry.tools = {
-            'google_news': {
+            'news_tool': {
                 'manifest': {
-                    'name': 'google_news',
-                    'description': 'Search Google News',
+                    'name': 'news_tool',
+                    'description': 'Search news',
                     'documentation': "News tool. Triggers: 'latest news on...', 'what's happening in...'",
                     'category': 'research',
                     'trigger': {'type': 'on_demand'},
@@ -298,11 +298,11 @@ class TestFallbackProfile:
         from services.tool_profile_service import ToolProfileService
         svc = ToolProfileService()
         manifest = {
-            'name': 'google_news',
+            'name': 'news_tool',
             'documentation': "Use for 'latest news on...', 'any updates about...', 'catch me up on...'",
             'category': 'research',
         }
-        profile = svc._fallback_profile('google_news', manifest)
+        profile = svc._fallback_profile('news_tool', manifest)
         triggers = profile['triage_triggers']
         assert len(triggers) == 3
         assert 'latest news on' in triggers
@@ -313,11 +313,11 @@ class TestFallbackProfile:
         from services.tool_profile_service import ToolProfileService
         svc = ToolProfileService()
         manifest = {
-            'name': 'google_news',
+            'name': 'news_tool',
             'documentation': 'Search news articles',
             'category': 'research',
         }
-        profile = svc._fallback_profile('google_news', manifest)
+        profile = svc._fallback_profile('news_tool', manifest)
         assert profile['domain'] == 'Research'
 
     def test_domain_normalizes_underscores(self):

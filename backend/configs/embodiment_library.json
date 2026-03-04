@@ -20,5 +20,16 @@
     "trigger": "on_demand",
     "trust": "trusted",
     "installs_by_default": false
+  },
+  {
+    "name": "news_tool",
+    "title": "News",
+    "icon": "fa-newspaper",
+    "repo": "chalie-ai/chalie-tool-news",
+    "summary": "Search Google News for current headlines and multi-source coverage. No API key required.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
   }
 ]
