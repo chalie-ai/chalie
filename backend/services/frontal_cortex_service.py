@@ -572,6 +572,13 @@ class FrontalCortexService:
             client_context = ''
         result = result.replace('{{client_context}}', client_context)
 
+        # Temporal rhythm (learned behavioral patterns from temporal mining)
+        if _include('temporal_rhythm'):
+            temporal_rhythm = self._get_temporal_rhythm()
+        else:
+            temporal_rhythm = ''
+        result = result.replace('{{temporal_rhythm}}', temporal_rhythm)
+
         return result
 
     def _get_identity_modulation(self) -> str:
@@ -911,6 +918,24 @@ class FrontalCortexService:
         except Exception as e:
             logging.debug(f"Client context not available: {e}")
             return ""
+
+    def _get_temporal_rhythm(self) -> str:
+        """Get rhythm context from temporal pattern mining.
+
+        Returns max 3 most salient lines, sanitized, total < 200 chars.
+        Returns empty string if no patterns available.
+        """
+        try:
+            from services.temporal_pattern_service import TemporalPatternService
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            service = TemporalPatternService(db)
+            summary = service.get_rhythm_summary()
+            return summary if summary else ''
+        except Exception as e:
+            logging.debug(f"Temporal rhythm not available: {e}")
+            return ''
 
     def _get_spark_guidance(self) -> str:
         """

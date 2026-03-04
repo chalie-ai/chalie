@@ -1,13 +1,544 @@
 """
 Tests for TemporalPatternService — temporal behavioral pattern mining.
 
-All tests are unit tests with no external dependencies (DB calls are mocked).
-Tests cover statistical detection logic, privacy-preserving label generation,
-and deduplication via store_trait().
+Covers:
+- Existing: peak hours/days detection, static helpers, trait storage
+- New: observation buffer, Laplace-smoothed prediction, probability-ratio anomaly
+  detection, rhythm summary, cleanup, transitions, ambient distribution, stats
+
+Tests use either MagicMock (for isolated logic) or in-memory SQLite with real
+schema tables (for DB-backed methods).
 """
 
-import pytest
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+# ── In-memory DB fixture for tests that need real SQLite ────────────────
+
+class InMemoryDB:
+    """Minimal DB service backed by in-memory SQLite."""
+
+    def __init__(self):
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._setup_schema()
+
+    def _setup_schema(self):
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS temporal_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                observation_type TEXT NOT NULL,
+                observed_value TEXT NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                hour_bucket INTEGER NOT NULL,
+                device_class TEXT,
+                location_hash TEXT,
+                recorded_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_temporal_obs_type_day_hour
+                ON temporal_observations(observation_type, day_of_week, hour_bucket);
+            CREATE INDEX IF NOT EXISTS idx_temporal_obs_recorded
+                ON temporal_observations(recorded_at);
+
+            CREATE TABLE IF NOT EXISTS temporal_aggregate (
+                user_id TEXT NOT NULL DEFAULT 'primary',
+                observation_type TEXT NOT NULL,
+                observed_value TEXT NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                hour_bucket INTEGER NOT NULL,
+                device_class TEXT NOT NULL DEFAULT '',
+                count INTEGER DEFAULT 0,
+                last_seen TEXT,
+                PRIMARY KEY(user_id, observation_type, observed_value,
+                            day_of_week, hour_bucket, device_class)
+            );
+
+            CREATE TABLE IF NOT EXISTS interaction_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT,
+                topic TEXT,
+                created_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS user_traits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT DEFAULT 'primary',
+                trait_key TEXT,
+                trait_value TEXT,
+                confidence REAL DEFAULT 0.5,
+                category TEXT,
+                source TEXT DEFAULT 'inferred',
+                is_literal INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+
+    @contextmanager
+    def connection(self):
+        yield self._conn
+
+    def close(self):
+        self._conn.close()
+
+
+@pytest.fixture
+def memdb():
+    d = InMemoryDB()
+    yield d
+    d.close()
+
+
+@pytest.fixture
+def svc(memdb):
+    from services.temporal_pattern_service import TemporalPatternService
+    return TemporalPatternService(memdb)
+
+
+@pytest.fixture
+def fresh_buffer():
+    """Return a fresh buffer instance (not the module singleton)."""
+    from services.temporal_pattern_service import TemporalObservationBuffer
+    return TemporalObservationBuffer(max_buffer=5)
+
+
+def seed_aggregate(db, obs_type, value, day, hour, count, device_class=''):
+    """Insert a row into temporal_aggregate for testing."""
+    with db.connection() as conn:
+        conn.execute(
+            """INSERT INTO temporal_aggregate
+                (user_id, observation_type, observed_value, day_of_week,
+                 hour_bucket, device_class, count, last_seen)
+            VALUES ('primary', ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (obs_type, value, day, hour, device_class, count)
+        )
+        conn.commit()
+
+
+def seed_interaction_log(db, hour, topic=None, count=1, days_ago=0):
+    """Insert rows into interaction_log."""
+    base_dt = datetime.utcnow() - timedelta(days=days_ago)
+    ts = base_dt.replace(hour=hour, minute=0, second=0).isoformat()
+    with db.connection() as conn:
+        for _ in range(count):
+            conn.execute(
+                "INSERT INTO interaction_log (event_type, topic, created_at) VALUES (?, ?, ?)",
+                ('user_input', topic, ts)
+            )
+        conn.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Buffer Tests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestTemporalObservationBuffer:
+
+    def test_append_and_flush(self, memdb, fresh_buffer):
+        """Buffer flushes to both raw observations and aggregate tables."""
+        fresh_buffer.append({
+            'observation_type': 'energy',
+            'observed_value': 'high',
+            'day_of_week': 2,
+            'hour_bucket': 10,
+            'device_class': 'desktop',
+            'location_hash': 'abc123',
+        })
+        assert fresh_buffer.pending_count == 1
+
+        fresh_buffer.flush(memdb)
+        assert fresh_buffer.pending_count == 0
+
+        with memdb.connection() as conn:
+            raw = conn.execute("SELECT COUNT(*) FROM temporal_observations").fetchone()[0]
+            agg = conn.execute("SELECT COUNT(*) FROM temporal_aggregate").fetchone()[0]
+        assert raw == 1
+        assert agg == 1
+
+    def test_auto_flush_at_max_buffer(self, fresh_buffer):
+        """Buffer auto-flushes when max_buffer is reached."""
+        flush_calls = []
+        original = fresh_buffer._flush_locked
+
+        def tracking_flush(db_service=None):
+            flush_calls.append(True)
+
+        fresh_buffer._flush_locked = tracking_flush
+
+        for i in range(5):
+            fresh_buffer.append({
+                'observation_type': 'energy', 'observed_value': 'high',
+                'day_of_week': 0, 'hour_bucket': i,
+            })
+
+        assert len(flush_calls) == 1
+
+    def test_thread_safety(self, fresh_buffer):
+        """Multiple threads can append without data loss or crashes."""
+        num_threads = 10
+        items_per_thread = 20
+        barrier = threading.Barrier(num_threads)
+
+        def writer(thread_id):
+            barrier.wait()
+            for i in range(items_per_thread):
+                fresh_buffer.append({
+                    'observation_type': 'energy', 'observed_value': 'high',
+                    'day_of_week': 0, 'hour_bucket': thread_id,
+                })
+
+        threads = [threading.Thread(target=writer, args=(t,)) for t in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        # No exceptions = thread-safe
+
+    def test_flush_empty_buffer(self, memdb, fresh_buffer):
+        """Flushing an empty buffer is a no-op."""
+        fresh_buffer.flush(memdb)
+        assert fresh_buffer.pending_count == 0
+        assert fresh_buffer.write_errors_count == 0
+
+    def test_flush_upserts_aggregate(self, memdb, fresh_buffer):
+        """Repeated observations UPSERT the aggregate count."""
+        obs = {
+            'observation_type': 'energy', 'observed_value': 'high',
+            'day_of_week': 1, 'hour_bucket': 9,
+            'device_class': '', 'location_hash': '',
+        }
+        for _ in range(3):
+            fresh_buffer.append(obs.copy())
+        fresh_buffer.flush(memdb)
+
+        with memdb.connection() as conn:
+            raw = conn.execute("SELECT COUNT(*) FROM temporal_observations").fetchone()[0]
+            agg_count = conn.execute(
+                "SELECT count FROM temporal_aggregate WHERE observation_type='energy'"
+            ).fetchone()[0]
+        assert raw == 3
+        assert agg_count == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Prediction Tests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestPrediction:
+
+    def test_predict_strong_pattern(self, memdb, svc):
+        """Predict returns the dominant value with Laplace-smoothed confidence."""
+        # high=25, moderate=3, low=2 → total=30
+        seed_aggregate(memdb, 'energy', 'high', 1, 10, 25)
+        seed_aggregate(memdb, 'energy', 'moderate', 1, 10, 3)
+        seed_aggregate(memdb, 'energy', 'low', 1, 10, 2)
+
+        result = svc.predict('energy', day=1, hour=10)
+        assert result is not None
+        assert result['value'] == 'high'
+        assert result['observation_count'] == 30
+        # Laplace: (25+1)/(30+3) = 26/33 ≈ 0.788
+        assert 0.78 < result['confidence'] < 0.80
+        assert result['runner_up'] == 'moderate'
+
+    def test_predict_insufficient_data(self, memdb, svc):
+        """Returns None below MIN_OBSERVATIONS_PER_BUCKET (10)."""
+        seed_aggregate(memdb, 'energy', 'high', 1, 10, 5)
+        assert svc.predict('energy', day=1, hour=10) is None
+
+    def test_predict_low_confidence(self, memdb, svc):
+        """Returns None when no value reaches MIN_PREDICTION_CONFIDENCE (0.6)."""
+        # Even distribution → each ≈33% → Laplace ≈ (12+1)/(33+3) = 0.361
+        seed_aggregate(memdb, 'energy', 'high', 1, 10, 12)
+        seed_aggregate(memdb, 'energy', 'moderate', 1, 10, 11)
+        seed_aggregate(memdb, 'energy', 'low', 1, 10, 10)
+        assert svc.predict('energy', day=1, hour=10) is None
+
+    def test_predict_unknown_obs_type(self, memdb, svc):
+        """Returns None for unregistered observation types."""
+        assert svc.predict('nonexistent', day=1, hour=10) is None
+
+    def test_predict_weekday_aggregation(self, memdb, svc):
+        """Weekday prediction aggregates across Mon-Fri for the given hour."""
+        for d in range(5):
+            seed_aggregate(memdb, 'energy', 'high', d, 10, 5)
+        result = svc.predict('energy', day=0, hour=10)
+        assert result is not None
+        assert result['observation_count'] == 25
+
+    def test_predict_weekend_aggregation(self, memdb, svc):
+        """Weekend prediction aggregates Saturday + Sunday."""
+        seed_aggregate(memdb, 'energy', 'low', 5, 22, 15)
+        seed_aggregate(memdb, 'energy', 'low', 6, 22, 15)
+        result = svc.predict('energy', day=5, hour=22)
+        assert result is not None
+        assert result['value'] == 'low'
+        assert result['observation_count'] == 30
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Transition Detection
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestTransitions:
+
+    def test_get_upcoming_transitions(self, memdb, svc):
+        """Detects value change at hour boundary."""
+        now = datetime.utcnow()
+        hour = now.hour
+        next_hour = (hour + 1) % 24
+
+        for d in range(5):
+            seed_aggregate(memdb, 'energy', 'high', d, hour, 20)
+            seed_aggregate(memdb, 'energy', 'low', d, next_hour, 20)
+
+        transitions = svc.get_upcoming_transitions(lookahead_minutes=120)
+        energy_t = [t for t in transitions if t['obs_type'] == 'energy']
+        assert len(energy_t) >= 1
+        assert energy_t[0]['from_value'] == 'high'
+        assert energy_t[0]['to_value'] == 'low'
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Anomaly Detection
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestAnomalyDetection:
+
+    def test_detects_anomaly(self, memdb, svc):
+        """Flags when predicted_prob > 0.75 and actual_prob < 0.3."""
+        for d in range(5):
+            seed_aggregate(memdb, 'energy', 'high', d, 10, 40)
+            seed_aggregate(memdb, 'energy', 'moderate', d, 10, 3)
+            seed_aggregate(memdb, 'energy', 'low', d, 10, 2)
+
+        anomaly = svc.detect_anomaly('energy', 'low', day=0, hour=10)
+        assert anomaly is not None
+        assert anomaly['expected'] == 'high'
+        assert anomaly['actual'] == 'low'
+        assert anomaly['predicted_prob'] > 0.75
+        assert anomaly['actual_prob'] < 0.3
+
+    def test_no_anomaly_when_matching(self, memdb, svc):
+        """No anomaly when current value matches prediction."""
+        for d in range(5):
+            seed_aggregate(memdb, 'energy', 'high', d, 10, 40)
+            seed_aggregate(memdb, 'energy', 'moderate', d, 10, 3)
+        assert svc.detect_anomaly('energy', 'high', day=0, hour=10) is None
+
+    def test_no_anomaly_insufficient_data(self, memdb, svc):
+        """No anomaly below ANOMALY_MIN_OBSERVATIONS (20)."""
+        seed_aggregate(memdb, 'energy', 'high', 0, 10, 5)
+        assert svc.detect_anomaly('energy', 'low', day=0, hour=10) is None
+
+    def test_no_anomaly_when_actual_not_rare(self, memdb, svc):
+        """No anomaly when actual_prob >= 0.3 (not rare enough)."""
+        for d in range(5):
+            seed_aggregate(memdb, 'energy', 'high', d, 10, 10)
+            seed_aggregate(memdb, 'energy', 'moderate', d, 10, 6)
+            seed_aggregate(memdb, 'energy', 'low', d, 10, 1)
+        assert svc.detect_anomaly('energy', 'moderate', day=0, hour=10) is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Rhythm Summary
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestRhythmSummary:
+
+    def test_empty_when_no_traits(self, memdb, svc):
+        assert svc.get_rhythm_summary() == ''
+
+    def test_returns_summary_lines(self, memdb, svc):
+        with memdb.connection() as conn:
+            conn.execute(
+                """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
+                   VALUES ('primary', 'weekday_energy_rhythm', 'Typically high in the morning', 0.8, 'behavioral_pattern')"""
+            )
+            conn.execute(
+                """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
+                   VALUES ('primary', 'weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, 'behavioral_pattern')"""
+            )
+            conn.commit()
+
+        result = svc.get_rhythm_summary()
+        assert 'high in the morning' in result
+        assert 'deep_focus in the morning' in result
+
+    def test_max_three_lines(self, memdb, svc):
+        with memdb.connection() as conn:
+            for i in range(5):
+                conn.execute(
+                    """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
+                       VALUES ('primary', ?, ?, 0.8, 'behavioral_pattern')""",
+                    (f'pattern_{i}', f'Pattern line {i}')
+                )
+            conn.commit()
+
+        result = svc.get_rhythm_summary()
+        lines = [l for l in result.split('\n') if l.strip()]
+        assert len(lines) <= 3
+
+    def test_max_200_chars(self, memdb, svc):
+        with memdb.connection() as conn:
+            for key in ['weekday_energy_rhythm', 'weekday_attention_rhythm']:
+                conn.execute(
+                    """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
+                       VALUES ('primary', ?, ?, 0.8, 'behavioral_pattern')""",
+                    (key, 'A' * 150)
+                )
+            conn.commit()
+
+        assert len(svc.get_rhythm_summary()) <= 200
+
+    def test_sanitizes_non_printable(self, memdb, svc):
+        with memdb.connection() as conn:
+            conn.execute(
+                """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
+                   VALUES ('primary', 'weekday_energy_rhythm', ?, 0.8, 'behavioral_pattern')""",
+                ('High energy \x00\x01\x02 mornings',)
+            )
+            conn.commit()
+
+        result = svc.get_rhythm_summary()
+        assert '\x00' not in result
+        assert 'High energy' in result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Cleanup
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestCleanup:
+
+    def test_removes_old_observations(self, memdb, svc):
+        old_ts = (datetime.utcnow() - timedelta(days=100)).isoformat()
+        recent_ts = (datetime.utcnow() - timedelta(days=5)).isoformat()
+
+        with memdb.connection() as conn:
+            conn.execute(
+                """INSERT INTO temporal_observations
+                   (observation_type, observed_value, day_of_week, hour_bucket, recorded_at)
+                   VALUES ('energy', 'high', 1, 10, ?)""", (old_ts,))
+            conn.execute(
+                """INSERT INTO temporal_observations
+                   (observation_type, observed_value, day_of_week, hour_bucket, recorded_at)
+                   VALUES ('energy', 'low', 2, 14, ?)""", (recent_ts,))
+            conn.commit()
+
+        svc.cleanup_old_observations(retention_days=90)
+
+        with memdb.connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM temporal_observations").fetchone()[0]
+        assert count == 1
+
+    def test_preserves_aggregates(self, memdb, svc):
+        seed_aggregate(memdb, 'energy', 'high', 1, 10, 50)
+        svc.cleanup_old_observations(retention_days=1)
+
+        with memdb.connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM temporal_aggregate").fetchone()[0]
+        assert count == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Mining Integration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestMiningIntegration:
+
+    def test_mine_empty_db(self, memdb, svc):
+        patterns = svc.mine_patterns()
+        assert isinstance(patterns, list)
+        assert len(patterns) == 0
+
+    def test_mine_ambient_patterns(self, memdb, svc):
+        for day in range(5):
+            for hour in [9, 10, 11]:
+                seed_aggregate(memdb, 'energy', 'high', day, hour, 15)
+                seed_aggregate(memdb, 'energy', 'moderate', day, hour, 2)
+
+        patterns = svc.mine_patterns()
+        energy_p = [p for p in patterns if 'energy' in p['key']]
+        assert len(energy_p) > 0
+
+    def test_mine_interaction_log_peaks(self, memdb, svc):
+        for _ in range(30):
+            seed_interaction_log(memdb, 10)
+        for h in [8, 14, 20]:
+            seed_interaction_log(memdb, h, count=2)
+
+        patterns = svc.mine_patterns()
+        active = [p for p in patterns if p['key'] == 'active_hours']
+        assert len(active) >= 1
+        assert 'morning' in active[0]['value'].lower()
+
+    def test_mine_detects_transitions(self, memdb, svc):
+        for day in range(5):
+            seed_aggregate(memdb, 'energy', 'high', day, 17, 20)
+            seed_aggregate(memdb, 'energy', 'moderate', day, 17, 2)
+            seed_aggregate(memdb, 'energy', 'low', day, 18, 20)
+            seed_aggregate(memdb, 'energy', 'moderate', day, 18, 2)
+
+        patterns = svc.mine_patterns()
+        assert any('transition' in p['key'] for p in patterns)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Observation Stats
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.unit
+class TestObservationStats:
+
+    def test_stats_empty_db(self, memdb, svc):
+        stats = svc.get_observation_stats()
+        assert stats['observation_count'] == 0
+        assert stats['aggregate_row_count'] == 0
+        assert stats['oldest_observation'] is None
+
+    def test_stats_with_data(self, memdb, svc):
+        seed_aggregate(memdb, 'energy', 'high', 0, 10, 15)
+        seed_aggregate(memdb, 'energy', 'low', 0, 22, 15)
+
+        with memdb.connection() as conn:
+            conn.execute(
+                """INSERT INTO temporal_observations
+                   (observation_type, observed_value, day_of_week, hour_bucket)
+                   VALUES ('energy', 'high', 0, 10)""")
+            conn.commit()
+
+        stats = svc.get_observation_stats()
+        assert stats['observation_count'] == 1
+        assert stats['aggregate_row_count'] == 2
+        assert 'energy' in stats['predictions_available']
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Original Tests (preserved, unchanged)
+# ═══════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.unit

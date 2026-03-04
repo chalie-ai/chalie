@@ -434,6 +434,14 @@ class EventBridgeService:
                 'high': f"{event.payload.get('item_title', 'A scheduled item')} is due now.",
                 'medium': f"{event.payload.get('item_title', 'A scheduled item')} is due now.",
             },
+            'predicted_transition': {
+                'high': f"Based on your usual pattern, you may shift to {event.to_state} soon.",
+                'medium': f"Your rhythm suggests a shift to {event.to_state} may be coming.",
+            },
+            'behavioral_anomaly': {
+                'high': '',  # Always silent — internal routing only
+                'medium': '',
+            },
         }
 
         event_templates = templates.get(event.event_type, {})

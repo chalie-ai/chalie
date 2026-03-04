@@ -365,11 +365,6 @@ def get_scheduler_item(item_id):
 @require_session
 def update_scheduler_item(item_id):
     """Update a pending scheduled item."""
-    data = request.get_json(silent=True) or {}
-    clean, err = _validate_item(data, require_future=True)
-    if err:
-        return jsonify({"error": err}), 400
-
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -377,6 +372,20 @@ def update_scheduler_item(item_id):
         cols = ["id", "item_type", "message", "due_at", "recurrence",
                 "window_start", "window_end", "status", "topic",
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
+
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM scheduled_items WHERE id = ? AND status = 'pending'",
+                (item_id,)
+            )
+            if not cursor.fetchone():
+                return jsonify({"error": "Not found or item is not pending"}), 404
+
+        data = request.get_json(silent=True) or {}
+        clean, err = _validate_item(data, require_future=True)
+        if err:
+            return jsonify({"error": err}), 400
 
         with db.connection() as conn:
             cursor = conn.cursor()
