@@ -97,7 +97,8 @@ class CognitiveDriftEngine:
 
         # Config values
         self.seed_weights = self.config.get('seed_weights', {
-            'decaying': 0.35, 'recent': 0.25, 'salient': 0.15, 'insight': 0.15, 'random': 0.10
+            'decaying': 0.35, 'recent': 0.25, 'salient': 0.15,
+            'insight': 0.15, 'temporal': 0.05, 'random': 0.05,
         })
         self.max_activation_depth = self.config.get('max_activation_depth', 2)
         self.max_activated_concepts = self.config.get('max_activated_concepts', 5)
@@ -384,6 +385,8 @@ class CognitiveDriftEngine:
                 return self._seed_salient()
             elif strategy == 'insight':
                 return self._seed_insight()
+            elif strategy == 'temporal':
+                return self._seed_temporal()
             elif strategy == 'random':
                 return self._seed_random()
         except Exception as e:
@@ -538,6 +541,72 @@ class CognitiveDriftEngine:
             'topic': row[3] or 'general',
         }
 
+    def _seed_temporal(self) -> Optional[Dict[str, Any]]:
+        """Select seed from topics with strong temporal associations.
+
+        If the current time matches a topic-time pattern (e.g., user often
+        discusses 'cooking' in the evening), select that topic's concept.
+        """
+        try:
+            from services.temporal_pattern_service import TemporalPatternService
+            from services.user_trait_service import UserTraitService
+            from datetime import datetime
+
+            now = datetime.utcnow()
+            hour = now.hour
+
+            # Get topic-time traits
+            trait_service = UserTraitService(self.db_service)
+            traits = trait_service.get_traits_by_category('behavioral_pattern')
+
+            # Find topic-time associations matching current hour label
+            hour_label = TemporalPatternService._hour_to_label(hour)
+            matching_topics = []
+            for t in traits:
+                key = t.get('trait_key', '')
+                value = t.get('trait_value', '')
+                if key.startswith('topic_time_') and hour_label in value.lower():
+                    # Extract topic name from the value
+                    # Format: "Often discusses {topic} in the {label}"
+                    topic = value.replace('Often discusses ', '').split(' in the ')[0]
+                    matching_topics.append((topic, t.get('confidence', 0.5)))
+
+            if not matching_topics:
+                return None
+
+            # Pick highest confidence match
+            matching_topics.sort(key=lambda x: x[1], reverse=True)
+            topic_name = matching_topics[0][0]
+
+            # Find concept matching this topic
+            with self.db_service.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, concept_name, definition, domain
+                    FROM semantic_concepts
+                    WHERE deleted_at IS NULL
+                      AND (concept_name LIKE ? OR domain LIKE ?)
+                    ORDER BY strength DESC
+                    LIMIT 1
+                """, (f'%{topic_name}%', f'%{topic_name}%'))
+                row = cursor.fetchone()
+                cursor.close()
+
+            if not row:
+                return None
+
+            return {
+                'concept_id': str(row[0]),
+                'concept_name': row[1],
+                'definition': row[2],
+                'seed_type': 'temporal',
+                'topic': row[3] or topic_name,
+            }
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Temporal seed selection failed: {e}")
+            return None
+
     def _seed_insight(self) -> Optional[Dict[str, Any]]:
         """
         Select seed from recurring interaction patterns: topics that appear
@@ -669,10 +738,21 @@ class CognitiveDriftEngine:
                 f"Outcome: {episode.get('outcome', 'N/A')}"
             )
 
+        # Temporal rhythm context (may be empty if no patterns yet)
+        rhythm_text = ""
+        try:
+            from services.temporal_pattern_service import TemporalPatternService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            rhythm_text = TemporalPatternService(db).get_rhythm_summary()
+        except Exception:
+            pass
+
         user_message = self.prompt_template \
             .replace("{{seed_concept}}", seed_text) \
             .replace("{{activated_concepts}}", activated_text) \
-            .replace("{{grounding_episode}}", episode_text)
+            .replace("{{grounding_episode}}", episode_text) \
+            .replace("{{temporal_rhythm}}", rhythm_text)
 
         # Soul axioms appended as stability anchor
         system_prompt = self.soul_axioms

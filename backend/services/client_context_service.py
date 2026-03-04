@@ -162,6 +162,9 @@ class ClientContextService:
         # Record place fingerprint for learning (after all context is saved)
         self._record_place_fingerprint(ctx)
 
+        # Record ambient observations for temporal pattern mining
+        self._record_ambient_observations(ctx)
+
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
                      f"device={ctx.get('device', {}).get('class')}")
 
@@ -453,3 +456,84 @@ class ClientContextService:
                 place_learning.record(ctx, place)
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Place fingerprint recording failed: {e}")
+
+    # ── Ambient Observation Recording (Temporal Pattern Mining) ──────
+
+    def _record_ambient_observations(self, ctx: dict):
+        """Persist ambient inference results for temporal pattern mining.
+
+        Runs ambient inference and appends results to the observation buffer
+        (non-blocking, flushed to SQLite by the temporal pattern worker).
+        Throttled to 1 write per 15min per observation_type via MemoryStore debounce.
+        DST-safe: uses ZoneInfo for timezone-correct hour bucketing.
+        """
+        timezone = ctx.get("timezone")
+        if not timezone:
+            return
+
+        try:
+            from services.ambient_inference_service import AmbientInferenceService
+            from services.place_learning_service import PlaceLearningService
+            from services.database_service import DatabaseService
+            from services.temporal_pattern_service import observation_buffer
+
+            # Run ambient inference
+            db = DatabaseService()
+            place_learning = PlaceLearningService(db)
+            inference = AmbientInferenceService(place_learning_service=place_learning)
+            inferences = inference.infer(ctx)
+
+            # Extract day/hour from user's local timezone (DST-safe)
+            user_dt = datetime.now(ZoneInfo(timezone))
+            day_of_week = user_dt.weekday()  # 0=Monday
+            hour = user_dt.hour
+
+            device_class = ctx.get("device", {}).get("class", "")
+            location_hash = self._hash_location_for_temporal(ctx)
+
+            for obs_type, value in inferences.items():
+                if value is None or obs_type == 'device_context':
+                    continue
+
+                # 15min debounce per observation type + hour bucket
+                debounce_key = f"temporal:debounce:{obs_type}:{day_of_week}:{hour}"
+                if self._store.get(debounce_key):
+                    continue
+                self._store.setex(debounce_key, 900, "1")  # 15min
+
+                observation_buffer.append({
+                    'observation_type': obs_type,
+                    'observed_value': value,
+                    'day_of_week': day_of_week,
+                    'hour_bucket': hour,
+                    'device_class': device_class,
+                    'location_hash': location_hash,
+                })
+
+        except Exception as e:
+            logging.debug(f"[CLIENT CONTEXT] Ambient observation recording failed: {e}")
+
+    @staticmethod
+    def _hash_location_for_temporal(ctx: dict) -> str:
+        """HMAC-SHA256 of coarse geohash with per-instance key.
+
+        Uses 5-char equivalent precision (~5km). The same physical location
+        produces different hashes across installations — not reversible
+        without the instance key.
+        """
+        import hashlib
+        import hmac as _hmac
+        import os
+
+        location = ctx.get("location")
+        if not location or "lat" not in location or "lon" not in location:
+            return ""
+
+        # Coarse quantization (~5km precision)
+        qlat = round(location["lat"], 2)
+        qlon = round(location["lon"], 2)
+        raw = f"{qlat:.2f},{qlon:.2f}"
+
+        # HMAC with instance key (falls back to fixed salt if no key configured)
+        key = os.environ.get("DB_ENCRYPTION_KEY", "chalie-temporal-default").encode()
+        return _hmac.new(key, raw.encode(), hashlib.sha256).hexdigest()[:12]

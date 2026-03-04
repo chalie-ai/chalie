@@ -10,7 +10,9 @@
     "session_resume": 900,
     "item_approaching": 0,
     "item_due": 0,
-    "phase_transition": 1800
+    "phase_transition": 1800,
+    "predicted_transition": 3600,
+    "behavioral_anomaly": 7200
   },
   "interrupt_priority": {
     "item_due": "critical",
@@ -20,8 +22,10 @@
     "session_start": "normal",
     "session_resume": "normal",
     "item_approaching": "normal",
-    "phase_transition": "low"
+    "phase_transition": "low",
+    "predicted_transition": "low",
+    "behavioral_anomaly": "low"
   },
-  "silent_events": ["attention_deepened", "energy_low"],
+  "silent_events": ["attention_deepened", "energy_low", "predicted_transition", "behavioral_anomaly"],
   "focus_gate_bypass": ["item_due"]
 }

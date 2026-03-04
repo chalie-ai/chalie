@@ -800,6 +800,41 @@ CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- TEMPORAL OBSERVATIONS — ambient inference signal history
+-- ────────────────────────────────────────────────────────────────
+-- Raw observations (append-only, periodic cleanup after retention_days).
+-- Privacy: only generalized labels, HMAC'd geohash, user-local hour buckets.
+CREATE TABLE IF NOT EXISTS temporal_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    observation_type TEXT NOT NULL,     -- 'attention', 'energy', 'place', 'tempo', 'mobility'
+    observed_value TEXT NOT NULL,       -- 'deep_focus', 'high', 'home', 'rushed', etc.
+    day_of_week INTEGER NOT NULL,      -- 0=Monday..6=Sunday (explicit: Monday=0)
+    hour_bucket INTEGER NOT NULL,      -- 0-23 (user local time, timezone-normalized)
+    device_class TEXT,                 -- 'phone', 'desktop', 'tablet'
+    location_hash TEXT,                -- HMAC(geohash_5char, instance_key), never raw coords
+    recorded_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_temporal_obs_type_day_hour
+    ON temporal_observations(observation_type, day_of_week, hour_bucket);
+CREATE INDEX IF NOT EXISTS idx_temporal_obs_recorded
+    ON temporal_observations(recorded_at);
+
+-- Precomputed aggregates — UPSERT on each write, mining reads this (not raw rows).
+-- Bounded by value space (~17k rows max), not by time.
+CREATE TABLE IF NOT EXISTS temporal_aggregate (
+    user_id TEXT NOT NULL DEFAULT 'primary',
+    observation_type TEXT NOT NULL,
+    observed_value TEXT NOT NULL,
+    day_of_week INTEGER NOT NULL,      -- 0=Monday..6=Sunday
+    hour_bucket INTEGER NOT NULL,      -- 0-23
+    device_class TEXT NOT NULL DEFAULT '',
+    count INTEGER DEFAULT 0,
+    last_seen TEXT,
+    PRIMARY KEY(user_id, observation_type, observed_value, day_of_week, hour_bucket, device_class)
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- SCHEMA VERSION
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS schema_version (

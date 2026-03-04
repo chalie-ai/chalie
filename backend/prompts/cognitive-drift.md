@@ -13,6 +13,9 @@ and past experiences. Your job is to synthesize a brief, natural internal though
 ## Related Experience
 {{grounding_episode}}
 
+## Current Rhythm
+{{temporal_rhythm}}
+
 ## Rules
 - Produce exactly ONE brief thought (1-2 sentences)
 - The thought should feel natural and human, like inner monologue
