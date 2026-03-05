@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ROUTING DECISION]"
 
 
+def _parse_json_field(val):
+    """Deserialize a JSON column value that may have been stored as a string."""
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return val
+    return val
+
+
 class RoutingDecisionService:
     """Manages routing decision audit trail in SQLite."""
 
@@ -177,14 +187,14 @@ class RoutingDecisionService:
                         'exchange_id': row[2],
                         'selected_mode': row[3],
                         'router_confidence': row[4],
-                        'scores': row[5],
+                        'scores': _parse_json_field(row[5]),
                         'tiebreaker_used': row[6],
-                        'tiebreaker_candidates': row[7],
+                        'tiebreaker_candidates': _parse_json_field(row[7]),
                         'margin': row[8],
                         'effective_margin': row[9],
-                        'signal_snapshot': row[10],
-                        'feedback': row[11],
-                        'reflection': row[12],
+                        'signal_snapshot': _parse_json_field(row[10]),
+                        'feedback': _parse_json_field(row[11]),
+                        'reflection': _parse_json_field(row[12]),
                         'previous_mode': row[13],
                         'created_at': row[14],
                     })
@@ -232,10 +242,10 @@ class RoutingDecisionService:
                         'exchange_id': row[2],
                         'selected_mode': row[3],
                         'router_confidence': row[4],
-                        'scores': row[5],
+                        'scores': _parse_json_field(row[5]),
                         'tiebreaker_used': row[6],
-                        'signal_snapshot': row[7],
-                        'feedback': row[8],
+                        'signal_snapshot': _parse_json_field(row[7]),
+                        'feedback': _parse_json_field(row[8]),
                         'previous_mode': row[9],
                         'created_at': row[10],
                     })
