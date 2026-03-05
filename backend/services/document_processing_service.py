@@ -160,22 +160,36 @@ class DocumentProcessingService:
             logger.info(f"[DOC PROC] Document {doc_id} processed: {len(chunk_records)} chunks, "
                         f"awaiting confirmation")
 
-            # Step 13: LLM synthesis (non-blocking enrichment)
+            # Step 13: LLM synthesis (non-blocking enrichment, 60s hard timeout)
             # Runs AFTER status change so the user isn't stuck waiting.
             # If it succeeds, metadata is updated with synthesis + key_facts.
-            # If it fails, the confirmation card shows the truncated summary instead.
-            try:
-                synthesis_data = self._generate_llm_synthesis(
-                    clean_text, metadata, doc['original_name'])
-                if synthesis_data:
-                    metadata['_synthesis'] = synthesis_data.get('synthesis', '')
-                    metadata['_key_facts'] = synthesis_data.get('key_facts', [])
-                    doc_service.update_extracted_metadata(
-                        doc_id, metadata=metadata, summary=summary,
-                    )
-                    logger.info(f"[DOC PROC] LLM synthesis stored for {doc_id}")
-            except Exception as synth_err:
-                logger.warning(f"[DOC PROC] Post-confirmation synthesis failed (non-fatal): {synth_err}")
+            # If it fails or times out, the confirmation card shows the truncated summary instead.
+            # NOTE: signal.alarm() only works in the main thread; use a thread-based timeout instead.
+            import threading
+            _synthesis_result = {}
+            def _run_synthesis():
+                try:
+                    result = self._generate_llm_synthesis(
+                        clean_text, metadata, doc['original_name'])
+                    if result:
+                        _synthesis_result['data'] = result
+                except Exception as e:
+                    logger.warning(f"[DOC PROC] Post-confirmation synthesis failed (non-fatal): {e}")
+
+            synth_thread = threading.Thread(target=_run_synthesis, daemon=True)
+            synth_thread.start()
+            synth_thread.join(timeout=60)
+
+            if synth_thread.is_alive():
+                logger.warning(f"[DOC PROC] Synthesis timed out after 60s for {doc_id} — proceeding without")
+            elif _synthesis_result.get('data'):
+                synthesis_data = _synthesis_result['data']
+                metadata['_synthesis'] = synthesis_data.get('synthesis', '')
+                metadata['_key_facts'] = synthesis_data.get('key_facts', [])
+                doc_service.update_extracted_metadata(
+                    doc_id, metadata=metadata, summary=summary,
+                )
+                logger.info(f"[DOC PROC] LLM synthesis stored for {doc_id}")
 
             return True
 
