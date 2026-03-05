@@ -212,16 +212,13 @@ def main():
 
     if not schema_service.database_exists():
         logger.info("Initializing database...")
-        schema_service.create_database()
-        logger.info("Database initialized")
-    else:
-        current_version = schema_service.schema_version()
-        if current_version == 0:
-            logger.info("Initializing schema...")
-            schema_service.initialize_schema()
-            logger.info("Schema initialized")
-        else:
-            logger.info(f"Schema up to date (version {current_version})")
+
+    # Always apply schema.sql — every CREATE TABLE/INDEX uses IF NOT EXISTS, so this is
+    # fully idempotent. Running it on every startup ensures new tables added in any commit
+    # are created in existing databases without requiring an explicit migration.
+    schema_service.initialize_schema()
+    current_version = schema_service.schema_version()
+    logger.info(f"Schema applied (version {current_version})")
 
     # Always ensure vec tables exist — idempotent, repairs existing DBs missing new tables
     schema_service.ensure_vec_tables()

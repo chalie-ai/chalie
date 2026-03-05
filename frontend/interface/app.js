@@ -1233,8 +1233,10 @@ class ChalieApp {
           if (res.ok) {
             dialog.close();
             resolve();
-            // Re-run init now that session is established
-            this._init();
+            // Reload the page — the first _init() returned early (before any _initXxx() calls)
+            // so the app shell was never wired up. A clean reload is more reliable than
+            // trying to re-bootstrap in-place with leftover timers and partial state.
+            window.location.reload();
           } else {
             statusEl.textContent = res.status === 401 ? 'Invalid credentials.' : 'Login failed.';
             statusEl.className = 'api-key-dialog__status api-key-dialog__status--error';
@@ -1491,6 +1493,8 @@ class ChalieApp {
   async _pollDocumentStatus(docId, label, dialog) {
     let attempts = 0;
     const maxAttempts = 60; // 2 minutes max
+    let synthWaitAttempts = 0;
+    const maxSynthWait = 15; // 30s max to wait for LLM synthesis before showing card anyway
 
     const poll = async () => {
       if (attempts++ > maxAttempts) {
@@ -1514,8 +1518,8 @@ class ChalieApp {
           return;
         } else if (status === 'awaiting_confirmation') {
           const hasSynthesis = res.item.extracted_metadata?._synthesis;
-          if (!hasSynthesis && attempts < maxAttempts) {
-            // Synthesis LLM call still in progress — wait for it
+          if (!hasSynthesis && synthWaitAttempts++ < maxSynthWait) {
+            // Synthesis LLM call still in progress — wait up to 30s then proceed anyway
             label.textContent = 'Generating summary...';
             setTimeout(poll, 2000);
             return;

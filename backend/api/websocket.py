@@ -69,6 +69,13 @@ def register_websocket(sock):
         # Auth: validate session cookie from the upgrade request
         if not validate_session(flask_request):
             _send_json(ws, {"type": "error", "message": "Unauthorized"})
+            # Explicitly close the WebSocket before returning. Without this, flask-sock's
+            # Werkzeug integration writes an HTTP 200 response into the already-upgraded TCP
+            # connection, causing the browser to see "Invalid frame header".
+            try:
+                ws.close()
+            except Exception:
+                pass
             return
 
         # Subscribe to output:events for drift/card/task push
