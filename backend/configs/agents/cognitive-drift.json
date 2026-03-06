@@ -81,6 +81,15 @@
       "max_active_tasks": 5,
       "cooldown_seconds": 172800,
       "actionable_verbs": ["research", "find", "compare", "learn", "build", "prepare", "compile", "analyze", "investigate", "explore"]
+    },
+    "ambient_tool": {
+      "enabled": true,
+      "relevance_threshold": 0.35,
+      "min_activation": 0.5,
+      "per_tool_cooldown": 43200,
+      "signal_threshold": 0.4,
+      "llm_timeout": 8.0,
+      "surface_high_signal": false
     }
   },
   "descriptions": {
@@ -99,6 +108,7 @@
     "insight_sessions_cap": "Minimum drift cycles between insight seed selections (throttle to avoid over-surfacing pattern observations)",
     "autonomous_actions.communicate": "Config for proactive messaging action. enabled=false to disable outreach entirely.",
     "autonomous_actions.reflect": "Config for internal reflection action. Enriches drift thoughts with associations, stores as reflection gists. type_repeat_decay penalizes consecutive same-type reflections.",
-    "autonomous_actions.plan": "Config for proactive plan creation. Creates plan-backed persistent tasks from recurring drift topics. Signal persistence gate prevents over-eager planning."
+    "autonomous_actions.plan": "Config for proactive plan creation. Creates plan-backed persistent tasks from recurring drift topics. Signal persistence gate prevents over-eager planning.",
+    "autonomous_actions.ambient_tool": "Config for proactive external tool invocation. Bridges drift thoughts to ambient-capable tools (Reddit, News, etc.). per_tool_cooldown prevents flooding any single tool."
   }
 }
