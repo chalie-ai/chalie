@@ -1,9 +1,6 @@
-# Chalie Vision & Philosophy - Product Design Principles & Cognitive Assistant Goals
+# Product Vision: Attention-First AI Design
 
-This comprehensive guide covers Chalie vision, product philosophy, design principles, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [[Quick Start](01-QUICK-START.md) Guide](../docs/01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Discover the attention-first AI design philosophy driving Chalie's development. See also [Architecture](04-ARCHITECTURE.md).
 
 
 This document defines what Chalie is, why it exists, and how every design decision should be evaluated. It is the source of truth for product philosophy.
@@ -200,16 +197,6 @@ If the answer to most is **no**, reconsider or simplify.
 Chalie is not a chatbot or productivity tool. It is a **cognitive layer** that restores human attention as a protected resource and enables people to operate with clarity, focus, and calm control.
 
 ## Related Documentation
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+- [Architecture](04-ARCHITECTURE.md)
+- [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md)
+- [Quick Start](01-QUICK-START.md)

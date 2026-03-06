@@ -1,9 +1,6 @@
-# Chalie Quick Start Guide - Installation, Setup & Deployment Instructions
+# Quick Start: Install and Run Chalie in 2 Minutes
 
-This comprehensive guide covers Chalie installation, quick start tutorial, deployment guide, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [[LLM Providers](02-PROVIDERS-SETUP.md) Configuration](../docs/02-PROVIDERS-SETUP.md) | [[Web Interface](03-WEB-INTERFACE.md) Setup](../docs/03-WEB-INTERFACE.md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Get Chalie up and running on your local machine in under two minutes. See also [Provider Setup](02-PROVIDERS-SETUP.md) and [Architecture](04-ARCHITECTURE.md).
 
 
 ## Install Chalie
@@ -151,16 +148,6 @@ All other configuration ([LLM providers](02-PROVIDERS-SETUP.md), API keys) is do
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+- [Provider Setup](02-PROVIDERS-SETUP.md)
+- [Architecture](04-ARCHITECTURE.md)
+- [FAQ](15-FAQ.md)

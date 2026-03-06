@@ -1,9 +1,6 @@
-# Chalie System Architecture - Services, [Workers](06-WORKERS.md), Data Flow & Memory Hierarchy
+# System Architecture: Single-Process Design with SQLite
 
-This comprehensive guide covers system architecture, service overview, data flow pipeline, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md) Guide](../docs/07-COGNITIVE-ARCHITECTURE.md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+A deep dive into Chalie's single-process design, SQLite backend, and overall technical architecture. See also [Workers](06-WORKERS.md) and [Data Schemas](08-DATA-SCHEMAS.md).
 
 
 ## Overview
@@ -432,16 +429,6 @@ No external services required. SQLite and [MemoryStore](08-DATA-SCHEMAS.md) are 
 - **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Workers](06-WORKERS.md)
+- [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md)
 - [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)

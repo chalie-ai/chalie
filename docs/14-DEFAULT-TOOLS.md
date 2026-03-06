@@ -1,28 +1,25 @@
-# Chalie Default [Tools](09-TOOLS.md) Reference - Auto-install Behavior & Built-in Toolset
+# Default Tools: What Ships with Chalie
 
-This comprehensive guide covers default [tools](09-TOOLS.md), built-in toolset, auto-install behavior, providing essential information for developers and users. For related topics, see: [[Tools](09-TOOLS.md) System Documentation](../docs/09-[TOOLS](09-TOOLS.md).md) | [Documentation Index](../docs/INDEX.md) | [[LLM Providers](02-PROVIDERS-SETUP.md) Configuration](../docs/02-PROVIDERS-SETUP.md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+An overview of the built-in tools included with a standard Chalie installation. See also [Tools System](09-TOOLS.md) and [Quick Start](01-QUICK-START.md).
 
 
-Chalie ships with a curated set of **default [tools](09-TOOLS.md)** that are installed automatically on first startup. These [tools](09-TOOLS.md) are listed in `backend/configs/embodiment_library.json` with `"installs_by_default": true`.
+Chalie ships with a curated set of **default tools** that are installed automatically on first startup. These tools are listed in `backend/configs/embodiment_library.json` with `"installs_by_default": true`.
 
-Default [tools](09-TOOLS.md) are **trusted** — they run as subprocesses in Chalie's Python environment rather than inside Docker containers. This means they start instantly and don't require Docker to be installed.
+Default tools are **trusted** — they run as subprocesses in Chalie's Python environment rather than inside Docker containers. This means they start instantly and don't require Docker to be installed.
 
 ## Auto-Install Behavior
 
-On first startup, if a default tool is not present in `backend/[tools](09-TOOLS.md)/`, Chalie fetches the latest release tarball from the tool's GitHub repository and installs it automatically (background thread, non-blocking). Subsequent startups skip [tools](09-TOOLS.md) that are already present.
+On first startup, if a default tool is not present in `backend/tools/`, Chalie fetches the latest release tarball from the tool's GitHub repository and installs it automatically (background thread, non-blocking). Subsequent startups skip tools that are already present.
 
 To opt out of this behavior at install time:
 
 ```bash
-curl -fsSL https://chalie.ai/install | bash -s -- --disable-default-[tools](09-TOOLS.md)
+curl -fsSL https://chalie.ai/install | bash -s -- --disable-default-tools
 ```
 
-This writes a `backend/data/.no-default-[tools](09-TOOLS.md)` marker file. Chalie will not auto-install default [tools](09-TOOLS.md) as long as this file exists.
+This writes a `backend/data/.no-default-tools` marker file. Chalie will not auto-install default tools as long as this file exists.
 
-> **Note:** Disabling default [tools](09-TOOLS.md) does not prevent you from installing them manually later via the [Tools](09-TOOLS.md) → Catalog UI or the `POST /api/[tools](09-TOOLS.md)/install` endpoint.
+> **Note:** Disabling default tools does not prevent you from installing them manually later via the Tools → Catalog UI or the `POST /api/tools/install` endpoint.
 
 ---
 
@@ -88,16 +85,6 @@ Requirements for trusted default [tools](09-TOOLS.md):
 - Must not bundle any secrets or environment-specific configuration
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Tools System](09-TOOLS.md)
+- [Architecture](04-ARCHITECTURE.md)
+- [Quick Start](01-QUICK-START.md)

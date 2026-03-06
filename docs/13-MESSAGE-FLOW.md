@@ -1,9 +1,6 @@
-# Chalie Message Flow Diagrams - Visual Paths, [MemoryStore](08-DATA-SCHEMAS.md) Hits & LLM Calls
+# Message Flow Diagrams: Every Path, DB Hit, and LLM Call
 
-This comprehensive guide covers message flow diagrams, visual paths, [MemoryStore](08-DATA-SCHEMAS.md) hits, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Cognitive [Architecture](04-ARCHITECTURE.md)](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) Guide](../docs/07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Visual and detailed breakdowns of every execution path, database query, and LLM invocation during a message cycle. See also [Workflow](05-WORKFLOW.md) and [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md).
 
 
 This document is the single authoritative visual map of how a user message travels through Chalie. Every branch, every storage hit, every LLM call, and every background cycle is shown here.
@@ -692,16 +689,6 @@ Component latency breakdown (Path C RESPOND, typical):
 *Last updated: 2026-02-27. See `docs/INDEX.md` for the full documentation map.*
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+- [Workflow](05-WORKFLOW.md)
+- [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md)
+- [Workers](06-WORKERS.md)

@@ -1,12 +1,9 @@
-# Chalie Testing Documentation - Test Conventions, Fixtures & Mock Strategies
+# Testing Guide: Conventions, Fixtures, and Mocks
 
-This comprehensive guide covers testing guide, test conventions, mock strategies, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [[Data Schemas](08-DATA-SCHEMAS.md) Reference](../docs/08-DATA-SCHEMAS.md) | [[Tools](09-TOOLS.md) System Documentation](../docs/09-[TOOLS](09-TOOLS.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Guidelines for writing robust tests in Chalie using pytest, including fixture usage and mocking strategies. See also [Tools](09-TOOLS.md) and [Architecture](04-ARCHITECTURE.md).
 
 
-## [Quick Start](01-QUICK-START.md)
+## Quick Start
 
 ```bash
 cd backend
@@ -263,16 +260,6 @@ with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}):
 5. Test error cases: missing config, API failures, invalid responses
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+- [Architecture](04-ARCHITECTURE.md)
+- [Quick Start](01-QUICK-START.md)
+- [Tools](09-TOOLS.md)
