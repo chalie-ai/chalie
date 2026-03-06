@@ -14,6 +14,7 @@ Responsibility: Retrieval layer only (SRP).
 import math
 import struct
 from datetime import datetime
+from services.time_utils import utc_now, parse_utc
 from typing import Optional, List, Dict
 from services.database_service import DatabaseService, DictCursor
 from services.episodic_storage_service import EpisodicStorageService
@@ -500,8 +501,8 @@ class EpisodicRetrievalService:
             reference_time = last_accessed_at if last_accessed_at else created_at
             # SQLite returns datetime columns as ISO strings — parse if needed
             if isinstance(reference_time, str):
-                reference_time = datetime.fromisoformat(reference_time)
-            delta_hours = (datetime.now() - reference_time).total_seconds() / 3600.0
+                reference_time = parse_utc(reference_time)
+            delta_hours = (utc_now() - reference_time).total_seconds() / 3600.0
 
             # Salience slows decay (high salience = slower decay)
             effective_decay = self.decay_rate * (1.0 - salience)
