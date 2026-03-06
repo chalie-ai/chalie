@@ -17,6 +17,23 @@ Chalie doesn't replace user judgment—it exercises it on behalf of the user and
 
 ---
 
+## What You Get
+
+| Feature/Benefit | Description |
+|-----------------|-------------|
+| **Persistent Memory** | Remembers conversations, facts, and preferences across sessions with natural decay |
+| **Semantic Retrieval** | Surfaces relevant context automatically based on meaning, not just keywords |
+| **Deterministic Routing** | Fast (~5ms) mode selection ensures consistent, predictable responses |
+| **Local-First Privacy** | All data stays on your machine in a single SQLite database |
+| **Natural Language Lists** | Create and manage shopping lists, to-dos, and collections through conversation |
+| **Smart Scheduling** | Set reminders and tasks in plain English with automatic execution |
+| **Multi-Provider Support** | Works with Ollama (local), OpenAI, Anthropic, Google Gemini, and more |
+| **Extensible Tools System** | Add web search, weather, YouTube, and custom capabilities via sandboxed or trusted tools |
+| **Proactive Presence** | Spontaneous thoughts during idle time inspired by Default Mode Network research |
+| **Complete Data Sovereignty** | No telemetry, no analytics, no background sync — you own everything |
+
+---
+
 ## Quick Start
 
 ```bash
@@ -204,16 +221,18 @@ No telemetry. No analytics. No background sync. You own your data.
 
 ## Documentation
 
-| Document | Contents |
-|---|---|
-| [00-VISION.md](docs/00-VISION.md) | Product vision and design philosophy |
-| [01-QUICK-START.md](docs/01-QUICK-START.md) | Full setup guide, provider config, deployment |
-| [02-PROVIDERS-SETUP.md](docs/02-PROVIDERS-SETUP.md) | Configuring LLM providers in detail |
-| [03-WEB-INTERFACE.md](docs/03-WEB-INTERFACE.md) | UI specification and Radiant design system |
-| [04-ARCHITECTURE.md](docs/04-ARCHITECTURE.md) | System architecture, services, database schema |
-| [05-WORKFLOW.md](docs/05-WORKFLOW.md) | Step-by-step request processing pipeline |
-| [07-COGNITIVE-ARCHITECTURE.md](docs/07-COGNITIVE-ARCHITECTURE.md) | Mode router and cognitive decision flow |
-| [09-TOOLS.md](docs/09-TOOLS.md) | Tools system, creating extensions |
+Explore our comprehensive documentation to learn more about Chalie's features, architecture, and how to get the most out of your deployment.
+
+| Page Title | Brief Description | Link URL |
+|------|------|-------|
+| **Vision & Philosophy** | Product vision, design principles, and what makes Chalie different from other AI assistants | [00-VISION.md](docs/00-VISION.md) |
+| **Quick Start Guide** | Complete setup instructions including installation, provider configuration, and deployment options | [01-QUICK-START.md](docs/01-QUICK-START.md) |
+| **LLM Provider Setup** | Detailed guide for configuring local (Ollama) and cloud-based LLM providers with examples | [02-PROVIDERS-SETUP.md](docs/02-PROVIDERS-SETUP.md) |
+| **Web Interface** | UI specification, component library, and the Radiant design system documentation | [03-WEB-INTERFACE.md](docs/03-WEB-INTERFACE.md) |
+| **System Architecture** | Deep dive into services, database schema, memory layers, and technical implementation details | [04-ARCHITECTURE.md](docs/04-ARCHITECTURE.md) |
+| **Request Workflow** | Step-by-step breakdown of how Chalie processes requests from input to response generation | [05-WORKFLOW.md](docs/05-WORKFLOW.md) |
+| **Cognitive Architecture** | Mode router logic, decision flow diagrams, and the five cognitive modes explained | [07-COGNITIVE-ARCHITECTURE.md](docs/07-COGNITIVE-ARCHITECTURE.md) |
+| **Tools & Extensions** | How to create custom tools, sandbox vs trusted execution, and official tool documentation | [09-TOOLS.md](docs/09-TOOLS.md) |
 
 ---
 
@@ -222,6 +241,21 @@ No telemetry. No analytics. No background sync. You own your data.
 Contributions welcome. Small improvements accumulate.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, or open an issue on [GitHub](https://github.com/chalie-ai/chalie/issues).
+
+---
+
+## Community
+
+Join the Chalie community to connect with other users, share ideas, get help, and contribute to the project's development.
+
+| Platform | Description | Link |
+|------|-----|----|
+| **Discord** | Real-time chat with developers and users, support channels, and feature discussions | [Join Discord](https://discord.gg/chalie) |
+| **Twitter (X)** | Follow for updates, announcements, and community highlights | [@ChalieAI](https://twitter.com/ChalieAI) |
+| **GitHub Discussions** | Ask questions, propose ideas, and participate in technical conversations | [Start a Discussion](https://github.com/chalie-ai/chalie/discussions) |
+| **GitHub Issues** | Report bugs, request features, or track development progress | [Open an Issue](https://github.com/chalie-ai/chalie/issues) |
+
+Whether you're looking for help with setup, want to share your custom tools, or just chat about AI assistants — we'd love to have you!
 
 ---
 
