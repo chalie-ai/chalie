@@ -172,77 +172,18 @@ Information flows through multiple layers with different timescales:
 6. **Lists** (permanent, no decay) → Deterministic ground-truth state (shopping, to-do, chores)
 
 ### Autonomy
-Chalie can generate spontaneous thoughts during idle periods via the Cognitive Drift Engine (Default Mode Network). Thoughts go through three gates (quality, timing, engagement) before being sent to users.
+Chalie can generate spontaneous thoughts during idle time, inspired by the Default Mode Network (DMN) research. This proactive presence allows Chalie to suggest ideas, remind you of forgotten tasks, or nurture curiosity threads without explicit prompts.
 
-### Safety Boundaries
-- Prompts are immutable (marked as "authoritative")
-- Skills are fixed at startup (no runtime registration)
-- Data scoped by topic (no cross-topic leakage)
-- Hard timeouts on all operations
-- All external actions are async and audited
+---
 
-## Cognitive Terminology Glossary
+## Contributing
 
-| Term | Meaning in Chalie |
-|---|---|
-| **Episodic memory** | A stored narrative unit representing a past interaction — what happened, what was felt, what was decided |
-| **Semantic memory** | Knowledge nodes (concepts) and their relationships — facts abstracted away from specific events |
-| **Decay** | Natural fading of memory strength over time; prevents noise accumulation without explicit deletion |
-| **Salience** | How contextually relevant a memory is to the current moment — gates retrieval priority |
-| **Gist** | A compressed summary of a conversation exchange, bridging working memory and episodic storage |
-| **Spreading activation** | When one concept is retrieved, related concepts are activated with lower priority — mimics associative recall |
-| **Mode router** | The deterministic component that selects how Chalie should respond before any LLM is called |
-| **Deterministic routing** | Mode selection via scored signals (~5ms), not via LLM inference — auditable and fast |
-| **ACT loop** | The autonomous task execution cycle: plan → act → observe → continue-or-stop |
-| **Cognitive drift (DMN)** | Spontaneous thought generation during idle periods, inspired by the Default Mode Network |
+Contributions welcome. Small improvements accumulate.
 
-## What Chalie Is Not
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines, or open an issue on [GitHub](https://github.com/chalie-ai/chalie/issues).
 
-- **Not AGI** — it does not plan or act autonomously without human instruction
-- **Not a surveillance system** — memory decays by design; old facts fade unless reinforced
-- **Not a productivity robot** — it is a thinking aid, not a task manager
-- **Not a cloud service** — every byte stays local unless you configure an external LLM provider
-- **Not a general automation platform** — tools are sandboxed, audited, and bounded by hard limits
+---
 
-## Support & Development
+## License
 
-- **Issues**: Check GitHub issues or project backlog
-- **Contributing**: Create feature branch, add tests, follow existing patterns
-- **Questions**: Review relevant documentation section, check `docs/04-ARCHITECTURE.md` for recent work
-
-## Testing
-
-**Writing or reviewing tests?**
-- **[12-TESTING.md](12-TESTING.md)** — Test conventions, fixture catalog, mock strategies, how to add tests
-
-## Document Status
-
-**Last Updated**: 2026-02-26
-
-All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
-
-**Recent Additions**:
-- Testing guide: `12-TESTING.md` — conventions, fixtures, mock strategies
-- Observability endpoints: `/system/observability/*` for cognitive legibility
-- Moments API: Pin, list, search, and forget meaningful exchanges
-- Task strip: Persistent background tasks visible in the UI
-- Understanding tab: Brain dashboard cognitive transparency
-- Curiosity Threads: Self-directed exploration threads seeded from cognitive drift
-- 09-TOOLS.md: Comprehensive tools system documentation
-- Document skill: Upload, extract, chunk, embed, and hybrid-search documents (warranties, contracts, manuals) via ACT loop innate skill
-
-## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+Apache 2.0 — see [LICENSE](../LICENSE)

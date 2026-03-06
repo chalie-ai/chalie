@@ -20,16 +20,12 @@ I don't replace your judgment. I exercise it on your behalf — and defer to you
 
 | Feature/Benefit | Description |
 |-----------------|-------------|
-| **Persistent Memory** | Remembers conversations, facts, and preferences across sessions with natural decay |
-| **Semantic Retrieval** | Surfaces relevant context automatically based on meaning, not just keywords |
-| **Deterministic Routing** | Fast (~5ms) mode selection ensures consistent, predictable responses |
-| **Local-First Privacy** | All data stays on your machine in a single SQLite database |
-| **Natural Language Lists** | Create and manage shopping lists, to-dos, and collections through conversation |
-| **Smart Scheduling** | Set reminders and tasks in plain English with automatic execution |
-| **Multi-Provider Support** | Works with Ollama (local), OpenAI, Anthropic, Google Gemini, and more |
-| **Extensible Tools System** | Add web search, weather, YouTube, and custom capabilities via sandboxed or trusted tools |
-| **Proactive Presence** | Spontaneous thoughts during idle time inspired by Default Mode Network research |
-| **Complete Data Sovereignty** | No telemetry, no analytics, no background sync — you own everything |
+| **Memory Hierarchy (5-tier with natural decay)** | Remembers conversations, facts, and preferences across sessions |
+| **Deterministic Router (~5ms mode selection, no LLM)** | Fast mode selection ensures consistent, predictable responses |
+| **Graduated Autonomy (ACT loop with critic verification)** | Executes tasks safely with built-in verification |
+| **Zero Infrastructure (single process, SQLite only)** | No Redis, Postgres, or Docker required for core features |
+| **Privacy-First (local storage, zero telemetry)** | All data stays on your machine in a single SQLite database |
+| **Tool-Agnostic (extend with any tool, no framework lock-in)** | Add web search, weather, YouTube, and custom capabilities |
 
 ---
 
@@ -216,22 +212,28 @@ No telemetry. No analytics. No background sync. You own your data.
 
 Explore our comprehensive documentation to learn more about Chalie's features, architecture, and how to get the most out of your deployment.
 
-| Page Title | Brief Description | Link URL |
-|------|------|-------|
-| **Vision & Philosophy** | Product vision, design principles, and what makes Chalie different from other AI assistants | [00-VISION.md](docs/00-VISION.md) |
-| **Quick Start Guide** | Complete setup instructions including installation, provider configuration, and deployment options | [01-QUICK-START.md](docs/01-QUICK-START.md) |
-| **LLM Provider Setup** | Detailed guide for configuring local (Ollama) and cloud-based LLM providers with examples | [02-PROVIDERS-SETUP.md](docs/02-PROVIDERS-SETUP.md) |
-| **Web Interface** | UI specification, component library, and the Radiant design system documentation | [03-WEB-INTERFACE.md](docs/03-WEB-INTERFACE.md) |
-| **System Architecture** | Deep dive into services, database schema, memory layers, and technical implementation details | [04-ARCHITECTURE.md](docs/04-ARCHITECTURE.md) |
-| **Request Workflow** | Step-by-step breakdown of how Chalie processes requests from input to response generation | [05-WORKFLOW.md](docs/05-WORKFLOW.md) |
-| **Worker Management** | Background task execution, worker lifecycle, and concurrent job processing architecture | [06-WORKERS.md](docs/06-WORKERS.md) |
-| **Cognitive Architecture** | Mode router logic, decision flow diagrams, and the five cognitive modes explained | [07-COGNITIVE-ARCHITECTURE.md](docs/07-COGNITIVE-ARCHITECTURE.md) |
-| **Data Schemas** | Database schema definitions, table structures, and data model relationships for persistence | [08-DATA-SCHEMAS.md](docs/08-DATA-SCHEMAS.md) |
-| **Tools & Extensions** | How to create custom tools, sandbox vs trusted execution, and official tool documentation | [09-TOOLS.md](docs/09-TOOLS.md) |
-| **Context Relevance** | Semantic search strategies, context retrieval algorithms, and relevance scoring mechanisms | [10-CONTEXT-RELEVANCE.md](docs/10-CONTEXT-RELEVANCE.md) |
-| **Testing Guide** | Testing methodologies, test coverage requirements, and quality assurance practices | [12-TESTING.md](docs/12-TESTING.md) |
-| **Message Flow** | End-to-end message processing pipeline, routing logic, and response generation flow | [13-MESSAGE-FLOW.md](docs/13-MESSAGE-FLOW.md) |
-| **Default Tools** | Built-in tool implementations including weather, YouTube search, and standard utilities | [14-DEFAULT-TOOLS.md](docs/14-DEFAULT-TOOLS.md) |
+### Getting Started
+- [Quick Start](docs/01-QUICK-START.md) — Install and run in 2 minutes
+- [Provider Setup](docs/02-PROVIDERS-SETUP.md) — Configure Ollama, OpenAI, Anthropic, Gemini
+- [FAQ](docs/15-FAQ.md) — Common questions answered
+
+### Architecture & Design
+- [System Architecture](docs/04-ARCHITECTURE.md) — Single-process design with SQLite
+- [Message Flow](docs/13-MESSAGE-FLOW.md) — Every path, DB hit, and LLM call
+- [Cognitive Router](docs/07-COGNITIVE-ARCHITECTURE.md) — 5ms deterministic mode selection
+- [System Workflow](docs/05-WORKFLOW.md) — 15 steps from input to response
+- [Workers & Services](docs/06-WORKERS.md) — 20+ daemon threads overview
+- [Data Schemas](docs/08-DATA-SCHEMAS.md) — SQLite tables, MemoryStore, vectors
+- [Context Optimization](docs/10-CONTEXT-RELEVANCE.md) — Saving 1500-3000 tokens per message
+
+### Extending Chalie
+- [Tools System](docs/09-TOOLS.md) — Tool-agnostic extension framework
+- [Default Tools](docs/14-DEFAULT-TOOLS.md) — What ships with Chalie
+- [Testing Guide](docs/12-TESTING.md) — Conventions, fixtures, and mocks
+
+### Vision & Design
+- [Product Vision](docs/00-VISION.md) — Attention-first AI design philosophy
+- [Radiant Design System](docs/03-WEB-INTERFACE.md) — Cinematic dark UI specification
 
 ---
 
