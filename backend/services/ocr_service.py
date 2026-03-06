@@ -122,11 +122,11 @@ def _get_vision_provider() -> Optional[dict]:
     Checks 'document-ocr' job assignment first, falls back to first vision-capable provider.
     """
     try:
-        from services.provider_db_service import ProviderDBService
+        from services.provider_db_service import ProviderDbService
         from services.database_service import get_shared_db_service
 
         db = get_shared_db_service()
-        provider_svc = ProviderDBService(db)
+        provider_svc = ProviderDbService(db)
 
         # Check job-provider assignment for 'document-ocr'
         assignment = provider_svc.get_job_assignment('document-ocr')

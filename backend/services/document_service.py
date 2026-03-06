@@ -367,7 +367,6 @@ class DocumentService:
                         JOIN documents d ON d.rowid = v.rowid
                         WHERE v.embedding MATCH ? AND k = 5
                           AND d.deleted_at IS NULL
-                          AND d.summary_embedding IS NOT NULL
                         ORDER BY v.distance
                     """, (packed,))
                     for row in cursor.fetchall():
@@ -513,15 +512,13 @@ class DocumentService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 for chunk in chunks:
-                    chunk_id = str(uuid.uuid4())
                     embedding = chunk.get('embedding')
                     cursor.execute("""
                         INSERT INTO document_chunks
-                            (id, document_id, chunk_index, content, page_number,
+                            (document_id, chunk_index, content, page_number,
                              section_title, token_count)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     """, (
-                        chunk_id,
                         doc_id,
                         chunk['chunk_index'],
                         chunk['content'],
@@ -533,13 +530,11 @@ class DocumentService:
                     # Store embedding in the sqlite-vec virtual table
                     if embedding is not None:
                         packed = _pack_embedding(embedding)
-                        cursor.execute("SELECT rowid FROM document_chunks WHERE id = ?", (chunk_id,))
-                        row = cursor.fetchone()
-                        if row:
-                            cursor.execute(
-                                "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
-                                (row[0], packed),
-                            )
+                        rowid = cursor.lastrowid
+                        cursor.execute(
+                            "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
+                            (rowid, packed),
+                        )
 
                 cursor.close()
 
