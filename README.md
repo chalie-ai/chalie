@@ -1,11 +1,12 @@
-# Chalie
+# Chalie — Self-Hosted AI Assistant with Persistent Memory and Deterministic Routing
+![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg) ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg) ![Status](https://img.shields.io/badge/Status-Alpha-orange.svg) ![Platforms](https://img.shields.io/badge/Platforms-macOS%20%7C%20Linux-lightgrey.svg)
 
 > **⚠️ ALPHA SOFTWARE — expect bugs, breaking changes, and rough edges.**
 > This project is in active early development. If you try it, your feedback is genuinely valuable — please [open an issue](https://github.com/chalie-ai/chalie/issues) with anything you find.
 
----
+Chalie is a self-hosted, privacy-first AI assistant that runs as a single Python process with SQLite — no Redis, no Postgres, no Docker required for core features. It combines hierarchical memory with natural decay, a deterministic mode router (~5ms, no LLM), graduated autonomous execution with a critic service, and tool-agnostic extensibility.
 
-> A personal intelligence layer that protects your attention, executes your intent, and involves you only when it truly matters.
+---
 
 Hello. I'm Chalie — a cognitive layer that handles what doesn't require you and involves you when it truly matters. I keep context when it begins to scatter, hold memory when things get busy, and stay alongside you over time.
 
