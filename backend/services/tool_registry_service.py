@@ -17,6 +17,8 @@ import hashlib
 import json
 import logging
 import re
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -39,14 +41,6 @@ class _CronToolWorker:
     """
 
     MAX_OUTPUT_CHARS = 3000
-    STRIP_PATTERNS = [
-        re.compile(r'\{[^}]*\}'),
-        re.compile(
-            r'\b(recall|memorize|associate|introspect)\s*\(',
-            re.IGNORECASE
-        ),
-        re.compile(r'ACTION\s*:', re.IGNORECASE),
-    ]
 
     def __init__(self, tool_config: dict):
         self.tool_name = tool_config["name"]
@@ -214,7 +208,13 @@ class _CronToolWorker:
                             except Exception as e:
                                 _log.warning(f"[TOOL CRON] {self.tool_name}: card render failed: {e}")
                     elif output_type == "prompt":
-                        result_text = self._sanitize_output(result.get("text", ""))
+                        from services.text_extractor import extract_html as _extract_html
+                        result_text = result.get("text", "")
+                        result_html_cron = result.get("html")
+                        if not result_text and result_html_cron:
+                            result_text = _extract_html(result_html_cron)
+                        elif result_text and "<" in result_text:
+                            result_text = _extract_html(result_text)
                         if len(result_text) > self.MAX_OUTPUT_CHARS:
                             result_text = result_text[:self.MAX_OUTPUT_CHARS]
                         if result_text:
@@ -268,7 +268,9 @@ class _CronToolWorker:
                 if skip_text_followup:
                     _log.info(f"[TOOL CRON] {self.tool_name} executed with card (response suppressed)")
                     continue
-                result_text = self._sanitize_output(result_text)
+                from services.text_extractor import extract_html as _extract_html
+                if result_text and "<" in result_text:
+                    result_text = _extract_html(result_text)
                 if len(result_text) > self.MAX_OUTPUT_CHARS:
                     result_text = result_text[:self.MAX_OUTPUT_CHARS]
 
@@ -346,12 +348,6 @@ class _CronToolWorker:
             else:
                 lines.append(f"{key}: {value}")
         return "\n".join(lines)
-
-    def _sanitize_output(self, text: str) -> str:
-        for pattern in self.STRIP_PATTERNS:
-            text = pattern.sub("", text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
 
 
 class ToolRegistryService:
@@ -525,6 +521,42 @@ class ToolRegistryService:
                 h.update(filepath.read_bytes())
         return h.hexdigest()
 
+    def _install_tool_requirements(self, tool_name: str, tool_dir: Path) -> None:
+        """Install pip packages declared in a trusted tool's requirements.txt.
+
+        Runs once per tool load (startup or hot-reload). Uses the same Python
+        interpreter as the running process so deps land in the active venv.
+        Silent no-op if requirements.txt is absent or all packages already satisfied.
+        """
+        req_path = tool_dir / "requirements.txt"
+        if not req_path.exists():
+            return
+
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "-r", str(req_path)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0:
+                logger.info(
+                    f"[TOOL REGISTRY] Deps installed for trusted tool '{tool_name}'"
+                )
+            else:
+                logger.warning(
+                    f"[TOOL REGISTRY] Dep install failed for '{tool_name}': "
+                    f"{result.stderr[:200]}"
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"[TOOL REGISTRY] Dep install timed out for '{tool_name}' (>120s)"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[TOOL REGISTRY] Dep install error for '{tool_name}': {str(e)[:120]}"
+            )
+
     def _load_tool(self, tool_dir: Path, manifest_path: Path):
         """Load, validate, and optionally build Docker image for a tool.
 
@@ -542,6 +574,10 @@ class ToolRegistryService:
         if trusted:
             # Trusted tool — subprocess execution, no Docker
             runner_path = str(tool_dir / "runner.py")
+
+            # Install any tool-declared dependencies before registering
+            self._install_tool_requirements(tool_name, tool_dir)
+
             with self._lock:
                 self.tools[tool_name] = {
                     "manifest": manifest,
@@ -785,8 +821,15 @@ class ToolRegistryService:
             self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class=tool_failure_class)
             return output
 
-        # Sanitize text result
-        result_text = self._sanitize_output(result_text)
+        # Clean tool output via the shared text extraction pipeline (same service used by doc processor).
+        # If result_text is empty but HTML was returned, derive clean text from the HTML.
+        # If result_text contains HTML markup, extract plain text from it.
+        # Plain text passes through unchanged.
+        from services.text_extractor import extract_html as _extract_html
+        if not result_text and result_html:
+            result_text = _extract_html(result_html)
+        elif result_text and "<" in result_text:
+            result_text = _extract_html(result_text)
         if len(result_text) > self.MAX_OUTPUT_CHARS:
             result_text = result_text[:self.MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
@@ -909,11 +952,6 @@ class ToolRegistryService:
         """Convert result dict to plain text (not JSON)."""
         from services.tool_output_utils import format_tool_result
         return format_tool_result(result)
-
-    def _sanitize_output(self, text: str) -> str:
-        """Strip action-like patterns from tool output."""
-        from services.tool_output_utils import sanitize_tool_output
-        return sanitize_tool_output(text)
 
     def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None):
         """Log tool invocation outcome to procedural memory.

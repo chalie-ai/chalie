@@ -1,15 +1,17 @@
 """
-Moment Enrichment Service — Background worker that enriches pinned moments.
+Moment Enrichment Service — Background worker that enriches pinned moment documents.
 
-Polls every 5 minutes for moments with status='enriching'. For each:
+Polls every 5 minutes for documents with source_type='moment' and moment_status='enriching'.
+For each:
 1. Collects gists from interaction_log in ±4hr window around pinned_at
-2. Merges into moment's gists array (Jaccard dedup)
+2. Merges into document's extracted_metadata.moment_gists array (Jaccard dedup)
 3. Generates LLM summary when >= 2 gists collected
-4. Seals the moment when pinned_at + 4hrs has passed
+4. Seals the moment when pinned_at + 4hrs has passed (rewrites file with enriched content)
 
 Entry point: moment_enrichment_worker(shared_state=None) registered in run.py.
 """
 
+import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -42,7 +44,7 @@ def moment_enrichment_worker(shared_state=None):
 
 
 def _poll_and_enrich():
-    """Poll for enriching moments and process each."""
+    """Poll for enriching moment documents and process each."""
     try:
         from services.database_service import get_shared_db_service
         from services.moment_service import MomentService
@@ -69,16 +71,21 @@ def _poll_and_enrich():
 
 
 def _enrich_single_moment(service, db, moment, now):
-    """Enrich a single moment with gists from interaction_log."""
+    """Enrich a single moment document with gists from interaction_log."""
     moment_id = moment["id"]
     topic = moment.get("topic")
-    pinned_at = moment.get("pinned_at")
+    pinned_at_str = moment.get("pinned_at")
 
-    if not pinned_at:
+    if not pinned_at_str:
         logger.warning(f"{LOG_PREFIX} Moment {moment_id} has no pinned_at, skipping")
         return
 
-    # Ensure timezone-aware
+    # Parse pinned_at from ISO string
+    if isinstance(pinned_at_str, str):
+        pinned_at = datetime.fromisoformat(pinned_at_str.replace('Z', '+00:00'))
+    else:
+        pinned_at = pinned_at_str
+
     if pinned_at.tzinfo is None:
         pinned_at = pinned_at.replace(tzinfo=timezone.utc)
 
@@ -101,7 +108,6 @@ def _enrich_single_moment(service, db, moment, now):
 
     # Seal if past enrichment window
     if now > pinned_at + timedelta(hours=4):
-        # Generate final summary if not yet done and has gists
         current_moment = service.get_moment(moment_id)
         if current_moment:
             gists = current_moment.get("gists") or []
@@ -120,7 +126,6 @@ def _collect_gists_from_interactions(db, topic, window_start, window_end):
         with db.connection() as conn:
             cursor = conn.cursor()
 
-            # Build query — filter by topic if available, otherwise use time window only
             if topic:
                 cursor.execute("""
                     SELECT payload, event_type, created_at
@@ -130,7 +135,7 @@ def _collect_gists_from_interactions(db, topic, window_start, window_end):
                       AND created_at BETWEEN ? AND ?
                     ORDER BY created_at ASC
                     LIMIT 20
-                """, (topic, window_start, window_end))
+                """, (topic, window_start.isoformat(), window_end.isoformat()))
             else:
                 cursor.execute("""
                     SELECT payload, event_type, created_at
@@ -139,16 +144,14 @@ def _collect_gists_from_interactions(db, topic, window_start, window_end):
                       AND created_at BETWEEN ? AND ?
                     ORDER BY created_at ASC
                     LIMIT 20
-                """, (window_start, window_end))
+                """, (window_start.isoformat(), window_end.isoformat()))
 
             rows = cursor.fetchall()
             cursor.close()
 
-        # Extract text from payloads and create short summaries
         for payload, event_type, created_at in rows:
             text = _extract_text_from_payload(payload)
             if text and len(text) > 10:
-                # Truncate long entries to gist-like summaries
                 gist = text[:200].strip()
                 if len(text) > 200:
                     gist += "..."
@@ -166,7 +169,6 @@ def _extract_text_from_payload(payload):
         return ""
 
     if isinstance(payload, str):
-        import json
         try:
             payload = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
