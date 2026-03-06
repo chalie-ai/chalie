@@ -21,6 +21,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timezone
+from services.time_utils import utc_now, parse_utc
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -238,8 +239,8 @@ class FolderWatcherService:
         if not last_scan:
             return True
         try:
-            last_dt = datetime.fromisoformat(last_scan)
-            elapsed = (datetime.utcnow() - last_dt).total_seconds()
+            last_dt = parse_utc(last_scan)
+            elapsed = (utc_now() - last_dt).total_seconds()
             return elapsed >= folder.get('scan_interval', 300)
         except (ValueError, TypeError):
             return True
