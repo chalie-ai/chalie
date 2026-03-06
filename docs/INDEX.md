@@ -1,22 +1,16 @@
-# Chalie Documentation Index - Complete Guide & Reference
-
-This comprehensive guide covers Chalie documentation, cognitive assistant guide, AI system reference, providing essential information for developers and users. For related topics, see: [[Quick Start](01-QUICK-START.md) Guide](01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Chalie [Vision](00-VISION.md) & [Philosophy](00-[VISION](00-VISION.md).md)](00-[VISION](00-VISION.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
-
+# Chalie Documentation Index
 
 Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
 
-## [Vision](00-VISION.md) & [Philosophy](00-[VISION](00-VISION.md).md)
+## Vision & Philosophy
 
 **Understand what Chalie is and why it exists:**
-- **[00-[VISION](00-VISION.md).md](00-[VISION](00-VISION.md).md)** — Product [vision](00-VISION.md), design principles, delegation boundary, feature decision filter
+- **[00-VISION.md](00-VISION.md)** — Product vision, design principles, delegation boundary, feature decision filter
 
 ## Getting Started
 
 **New to Chalie?** Start here:
-1. **[01-QUICK-START.md](01-QUICK-START.md)** — [Quick start](01-QUICK-START.md) guide, prerequisites, [deployment](01-QUICK-START.md) instructions
+1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, deployment instructions
 
 ## Setup & Configuration
 

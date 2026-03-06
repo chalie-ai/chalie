@@ -1,6 +1,4 @@
-# Chalie AI — Self-Hosted Local AI Assistant with Persistent Memory, Semantic Retrieval & Deterministic Routing for Privacy-Conscious Developers
-
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-green.svg)](#getting-started) [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)](#status) [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20macOS-lightgrey.svg)](#getting-started)
+# Chalie
 
 > **⚠️ ALPHA SOFTWARE — expect bugs, breaking changes, and rough edges.**
 > This project is in active early development. If you try it, your feedback is genuinely valuable — please [open an issue](https://github.com/chalie-ai/chalie/issues) with anything you find.
@@ -9,7 +7,9 @@
 
 > A personal intelligence layer that protects your attention, executes your intent, and involves you only when it truly matters.
 
-Chalie is an open-source, self-hosted AI assistant built for privacy-conscious developers and power users who require persistent memory, semantic retrieval, deterministic routing, and complete local-first deployment. This intelligent cognitive layer autonomously handles routine tasks while deferring to human judgment when critical decisions arise. Built with advanced semantic search capabilities, adaptive mode routing, proactive presence features, and a layered memory architecture that maintains context across sessions, Chalie operates entirely on your machine ensuring full data sovereignty. The system provides intelligent automation for natural language lists, smart scheduling, web search integration, multi-provider LLM support (Ollama, OpenAI, Anthropic, Google Gemini), and extensible sandboxed tools—all without telemetry, analytics, or background sync to external servers.
+Hello. I'm Chalie — a cognitive layer that handles what doesn't require you and involves you when it truly matters. I keep context when it begins to scatter, hold memory when things get busy, and stay alongside you over time.
+
+I don't replace your judgment. I exercise it on your behalf — and defer to yours when it counts.
 
 <img src="docs/images/cognition.png" width="700" alt="Cognition" />
 
