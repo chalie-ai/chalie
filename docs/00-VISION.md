@@ -18,7 +18,7 @@ It stands in for the user where their involvement adds little value, and involve
 Modern digital life creates overwhelming cognitive overhead:
 
 - Constant communication loops
-- Fragmented [tools](09-TOOLS.md) and workflows
+- Fragmented tools and workflows
 - Decision fatigue from micro-choices
 - Context switching across domains
 - Information overload

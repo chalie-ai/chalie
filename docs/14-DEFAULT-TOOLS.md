@@ -60,7 +60,7 @@ Results are cached per location for 10 minutes. Location is detected automatical
 
 ---
 
-## Adding More Default [Tools](09-TOOLS.md)
+## Adding More Default Tools
 
 To mark a new tool as a default, add an entry to `backend/configs/embodiment_library.json`:
 
@@ -78,7 +78,7 @@ To mark a new tool as a default, add an entry to `backend/configs/embodiment_lib
 }
 ```
 
-Requirements for trusted default [tools](09-TOOLS.md):
+Requirements for trusted default tools:
 - Must have a `runner.py` (subprocess entry point) — no `Dockerfile` needed
 - Must have a `manifest.json` with valid `name`, `description`, `trigger`, `parameters`, `returns`
 - Must be hosted on GitHub with at least one tagged release

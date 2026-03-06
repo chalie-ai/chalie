@@ -44,31 +44,31 @@ Open **http://localhost:8081/on-boarding/** and:
 
 ## [LLM Providers](02-PROVIDERS-SETUP.md)
 
-### [Ollama](02-PROVIDERS-SETUP.md) (local, recommended)
+### Ollama (local, recommended)
 
 Free, private, runs entirely on your machine.
 
 ```bash
-# Install from https://[ollama](02-PROVIDERS-SETUP.md).ai, then:
-[ollama](02-PROVIDERS-SETUP.md) pull qwen:8b
+# Install from https://ollama.ai, then:
+ollama pull qwen:8b
 ```
 
-In onboarding, select **[Ollama](02-PROVIDERS-SETUP.md)** and set the endpoint to `http://localhost:11434`.
+In onboarding, select **Ollama** and set the endpoint to `http://localhost:11434`.
 
-### [OpenAI](02-PROVIDERS-SETUP.md)
+### OpenAI
 
-1. Get an API key from [platform.[openai](02-PROVIDERS-SETUP.md).com](https://platform.[openai](02-PROVIDERS-SETUP.md).com)
-2. In onboarding, select **[OpenAI](02-PROVIDERS-SETUP.md)** and paste your key
+1. Get an API key from [platform.openai.com](https://platform.openai.com)
+2. In onboarding, select **OpenAI** and paste your key
 
-### [Anthropic](02-PROVIDERS-SETUP.md)
+### Anthropic
 
-1. Get an API key from [console.[anthropic](02-PROVIDERS-SETUP.md).com](https://console.[anthropic](02-PROVIDERS-SETUP.md).com)
-2. In onboarding, select **[Anthropic](02-PROVIDERS-SETUP.md)** and paste your key
+1. Get an API key from [console.anthropic.com](https://console.anthropic.com)
+2. In onboarding, select **Anthropic** and paste your key
 
-### Google [Gemini](02-PROVIDERS-SETUP.md)
+### Google Gemini
 
 1. Get an API key from [ai.google.dev](https://ai.google.dev)
-2. In onboarding, select **[Gemini](02-PROVIDERS-SETUP.md)** and paste your key
+2. In onboarding, select **Gemini** and paste your key
 
 ---
 

@@ -32,8 +32,8 @@ def process_file(file_path: str) -> bool:
     in_footer = False
     
     for line in lines:
-        # Detect footer (horizontal rule) - everything after this is protected
-        if re.match(r'^---\s*$', line):
+        # Detect footer (## Related Documentation header) - everything after this is protected
+        if re.match(r'^##\s*Related\s+Documentation\s*$', line):
             in_footer = True
         
         # If we're not in a protected section, process the line

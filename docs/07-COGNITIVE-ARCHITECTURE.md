@@ -150,9 +150,9 @@ Otherwise → generate_for_mode(selected_mode)
 
 ### Signal Collection
 
-The router collects signals from existing [services](04-ARCHITECTURE.md) (all [MemoryStore](08-DATA-SCHEMAS.md) reads, ~5ms total) plus NLP regex patterns (<1ms):
+The router collects signals from existing services (all MemoryStore reads, ~5ms total) plus NLP regex patterns (<1ms):
 
-**Context Signals (from [MemoryStore](08-DATA-SCHEMAS.md)):**
+**Context Signals (from MemoryStore):**
 - `context_warmth` (float 0-1)
 - `working_memory_turns` (int 0-4)
 - `gist_count` (int, excluding cold_start type)
@@ -417,7 +417,7 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 ## Adaptive Layer
 
-The **Adaptive Layer** (`[services](04-ARCHITECTURE.md)/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
+The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
 
 ### Style Detection (9 dimensions)
 
@@ -465,7 +465,7 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 
 - **Mode Router:** Deterministic mathematical function that selects engagement mode from observable signals
 - **Tie-Breaker:** Small LLM (qwen3:4b) consulted when top 2 modes are within effective margin
-- **Routing Signals:** Observable features collected from [MemoryStore](08-DATA-SCHEMAS.md) and NLP analysis (~5ms)
+- **Routing Signals:** Observable features collected from MemoryStore and NLP analysis (~5ms)
 - **Effective Margin:** Dynamic threshold for tie-breaker invocation (narrows with context warmth)
 - **Router Confidence:** Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal:** Metric logged by monitors, consumed by the single regulator
