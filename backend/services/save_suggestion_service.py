@@ -345,10 +345,8 @@ class SaveSuggestionService:
 
             # 5. Enqueue processing
             try:
-                from services import PromptQueue
-                from workers.document_worker import process_document_job
-                queue = PromptQueue(queue_name="document-queue", worker_func=process_document_job)
-                queue.enqueue({'doc_id': doc_id})
+                from services.document_queue import enqueue_document_processing
+                enqueue_document_processing(doc_id)
             except Exception as e:
                 logger.warning(f"{LOG_PREFIX} Failed to enqueue processing: {e}")
 

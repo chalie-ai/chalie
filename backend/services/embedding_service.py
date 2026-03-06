@@ -8,6 +8,7 @@ Model downloads automatically from HuggingFace on first run (~438MB, cached loca
 """
 
 import logging
+import threading
 import numpy as np
 from typing import List
 
@@ -15,14 +16,20 @@ from services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
 
-# Singleton model (lazy loaded)
+# Singleton model (lazy loaded, thread-safe)
 _st_model = None
+_st_model_lock = threading.Lock()
 
 
 def _get_st_model(model_name: str = 'all-mpnet-base-v2'):
-    """Get or create the sentence-transformers model (singleton)."""
+    """Get or create the sentence-transformers model (singleton, thread-safe)."""
     global _st_model
-    if _st_model is None:
+    if _st_model is not None:
+        return _st_model
+    with _st_model_lock:
+        # Double-check after acquiring lock
+        if _st_model is not None:
+            return _st_model
         from sentence_transformers import SentenceTransformer
         # Try loading from local cache first to avoid HuggingFace revision checks on
         # every startup. Falls back to normal load (with network) only on first run.

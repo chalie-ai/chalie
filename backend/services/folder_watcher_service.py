@@ -315,15 +315,12 @@ class FolderWatcherService:
         doc_svc = DocumentService(self.db)
         existing_docs = doc_svc.get_documents_by_watched_folder(folder_id)
 
-        # Build lookups (skip failed docs so they get re-processed)
+        # Build lookups — include failed docs to prevent infinite retry loops.
+        # Failed docs are only retried when their file is modified on disk.
         existing_by_path = {}  # {file_path: doc_dict}
         existing_by_hash = {}  # {file_hash: doc_dict} (for rename detection)
-        failed_by_path = {}    # {file_path: doc_dict} (for cleanup before retry)
         for doc in existing_docs:
             if doc.get('deleted_at'):
-                continue
-            if doc.get('status') == 'failed':
-                failed_by_path[doc['file_path']] = doc
                 continue
             existing_by_path[doc['file_path']] = doc
             if doc.get('file_hash'):
@@ -343,10 +340,25 @@ class FolderWatcherService:
                 if existing:
                     # File exists in DB — check if modified
                     cached_mtime = cached.get('mtime')
-                    if cached_mtime and abs(mtime - cached_mtime) < 1:
+
+                    # Failed docs: only retry if the file was actually modified
+                    if existing.get('status') == 'failed':
+                        if cached_mtime is None or abs(mtime - cached_mtime) < 1:
+                            # No cached mtime (cold start) or file unchanged — skip
+                            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
+                            result['skipped'] += 1
+                            continue
+                        # File was modified since failure — fall through to supersede
+
+                    # Pending/processing docs: skip (already queued)
+                    elif existing.get('status') in ('pending', 'processing'):
+                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
+                        result['skipped'] += 1
+                        continue
+
+                    elif cached_mtime and abs(mtime - cached_mtime) < 1:
                         # mtime unchanged — skip
                         result['skipped'] += 1
-                        # Clear any missing count
                         if 'missing_count' in cached:
                             del cached['missing_count']
                         scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
@@ -374,7 +386,7 @@ class FolderWatcherService:
                         result['skipped'] += 1
 
                 else:
-                    # File not in DB (or previously failed) — new or renamed?
+                    # File not in DB — new or renamed?
                     file_hash = self._compute_hash(abs_path)
 
                     # Check for rename (same hash, different path)
@@ -388,12 +400,7 @@ class FolderWatcherService:
                         result['renamed'] += 1
                         continue
 
-                    # Clean up previously failed doc before retry
-                    failed_doc = failed_by_path.get(abs_path)
-                    if failed_doc:
-                        doc_svc.soft_delete(failed_doc['id'])
-
-                    # New file (or retry of previously failed)
+                    # New file
                     if enqueued < MAX_ENQUEUE_PER_SCAN:
                         new_doc_id = self._create_watched_document(
                             doc_svc, folder, abs_path, file_hash, mtime)
