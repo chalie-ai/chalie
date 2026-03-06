@@ -255,6 +255,10 @@ Join the Chalie community to connect with other users, share ideas, get help, an
 
 Whether you're looking for help with setup, want to share your custom tools, or just chat about AI assistants — we'd love to have you!
 
+### Security
+
+If you discover a security vulnerability, please report it responsibly. See our [Security Policy](SECURITY.md) for details on how to submit reports and our response process.
+
 ---
 
 ## License
