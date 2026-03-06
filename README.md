@@ -1,4 +1,6 @@
-# Chalie
+# Chalie — Self-Hosted AI Assistant with Persistent Memory and Deterministic Routing
+
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-green.svg)](#getting-started) [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)](#status) [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20macOS-lightgrey.svg)](#getting-started)
 
 > **⚠️ ALPHA SOFTWARE — expect bugs, breaking changes, and rough edges.**
 > This project is in active early development. If you try it, your feedback is genuinely valuable — please [open an issue](https://github.com/chalie-ai/chalie/issues) with anything you find.
@@ -7,11 +9,22 @@
 
 > A personal intelligence layer that protects your attention, executes your intent, and involves you only when it truly matters.
 
-Hello. I'm Chalie — a cognitive layer that handles what doesn't require you and involves you when it truly matters. I keep context when it begins to scatter, hold memory when things get busy, and stay alongside you over time.
+Chalie is a self-hosted AI assistant designed for privacy-conscious users who demand persistent memory, deterministic routing, and local-first deployment. This cognitive layer handles routine tasks autonomously while involving users only when human judgment is essential. Built with semantic retrieval, adaptive mode routing, and proactive presence capabilities, Chalie maintains context across sessions through its layered memory architecture. The system operates entirely on your machine, ensuring complete data sovereignty while providing intelligent automation for lists, scheduling, web search, and more.
 
-I don't replace your judgment. I exercise it on your behalf — and defer to yours when it counts.
+Chalie doesn't replace user judgment—it exercises it on behalf of the user and defers to human oversight when critical decisions arise.
 
 <img src="docs/images/cognition.png" width="700" alt="Cognition" />
+
+---
+
+## Quick Start
+
+```bash
+curl -fsSL https://chalie.ai/install | bash
+```
+
+The installer checks prerequisites (Python 3.9+, Docker optional), downloads the latest release, and installs the `chalie` CLI. Takes about 2 minutes on a typical connection.
+
 
 ---
 
