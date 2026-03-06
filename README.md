@@ -160,12 +160,6 @@ More tools are on the way via the marketplace. See [docs/09-TOOLS.md](docs/09-TO
 ## Getting Started
 
 ```bash
-curl -fsSL https://chalie.ai/install | bash
-```
-
-The installer checks prerequisites (Python 3.9+, Docker optional), downloads the latest release, and installs the `chalie` CLI. Takes about 2 minutes on a typical connection.
-
-```bash
 chalie                 # Start → http://localhost:8081
 chalie --port=9000     # Start on a custom port
 chalie stop            # Stop
