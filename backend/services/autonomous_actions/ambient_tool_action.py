@@ -177,10 +177,7 @@ class AmbientToolAction(AutonomousAction):
             from services.tool_registry_service import ToolRegistryService
             registry = ToolRegistryService()
 
-            params = dict(tool.get('default_params', {}))
-            params['query'] = query
-
-            result_text = registry.invoke(tool_name, thought.seed_topic, params)
+            result_text = registry.invoke(tool_name, thought.seed_topic, {'query': query})
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Tool invocation failed: {e}")
             return ActionResult(action_name='AMBIENT_TOOL', success=False,
