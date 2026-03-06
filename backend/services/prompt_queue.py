@@ -72,6 +72,8 @@ def enqueue_episodic_memory(topic_data: dict):
     }
     if topic_data.get('thread_id'):
         job_data['thread_id'] = topic_data['thread_id']
+    if topic_data.get('retry_count'):
+        job_data['retry_count'] = topic_data['retry_count']
 
     queue = PromptQueue(queue_name="episodic-memory-queue", worker_func=episodic_memory_worker)
     queue.enqueue(job_data)

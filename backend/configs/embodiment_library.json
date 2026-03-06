@@ -31,5 +31,60 @@
     "trigger": "on_demand",
     "trust": "trusted",
     "installs_by_default": true
+  },
+  {
+    "name": "reddit",
+    "title": "Reddit",
+    "icon": "fa-brands fa-reddit",
+    "repo": "chalie-ai/chalie-tool-reddit",
+    "summary": "Search Reddit for community discussions, opinions, recommendations, and troubleshooting. No API key required.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "web_search",
+    "title": "Web Search",
+    "icon": "fa-magnifying-glass",
+    "repo": "chalie-ai/chalie-tool-web-search",
+    "summary": "Search the web via DuckDuckGo. Privacy-focused, no API key required.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "stackexchange",
+    "title": "Stack Exchange",
+    "icon": "fa-brands fa-stack-overflow",
+    "repo": "chalie-ai/chalie-tool-stackexchange",
+    "summary": "Search Stack Overflow and 170+ Stack Exchange sites for Q&A on programming, sysadmin, science, and more. No API key required.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "hackernews",
+    "title": "Hacker News",
+    "icon": "fa-brands fa-hacker-news",
+    "repo": "chalie-ai/chalie-tool-hackernews",
+    "summary": "Search Hacker News for tech discussions, startup news, Show HN projects, and developer opinions. No API key required.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "arxiv",
+    "title": "arXiv",
+    "icon": "fa-graduation-cap",
+    "repo": "chalie-ai/chalie-tool-arxiv",
+    "summary": "Search arXiv for academic papers in CS, physics, math, and more. No API key required.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
   }
 ]

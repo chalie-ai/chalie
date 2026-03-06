@@ -231,7 +231,11 @@ class ToolProfileService:
                     if row:
                         blob = _pack_embedding(embedding)
                         cursor.execute(
-                            "INSERT OR REPLACE INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                            "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
+                            (row[0],)
+                        )
+                        cursor.execute(
+                            "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
                             (row[0], blob)
                         )
 
@@ -341,7 +345,11 @@ class ToolProfileService:
                     if row:
                         blob = _pack_embedding(embedding)
                         cursor.execute(
-                            "INSERT OR REPLACE INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                            "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
+                            (row[0],)
+                        )
+                        cursor.execute(
+                            "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
                             (row[0], blob)
                         )
 
@@ -441,7 +449,11 @@ class ToolProfileService:
                     if row:
                         blob = _pack_embedding(embedding)
                         cursor.execute(
-                            "INSERT OR REPLACE INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
+                            "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
+                            (row[0],)
+                        )
+                        cursor.execute(
+                            "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
                             (row[0], blob)
                         )
 

@@ -160,11 +160,11 @@ class DocumentProcessingService:
                                           'No text chunks could be created from this document.')
                 return False
 
-            # Step 12: Set status — watched folder docs auto-confirm (no human in the loop)
-            if doc.get('source_type') == 'watched_folder':
+            # Step 12: Set status — watched folder and moment docs auto-confirm
+            if doc.get('source_type') in ('watched_folder', 'moment'):
                 doc_service.update_status(doc_id, 'ready',
                                           chunk_count=len(chunk_records))
-                logger.info(f"[DOC PROC] Document {doc_id} auto-confirmed (watched folder): "
+                logger.info(f"[DOC PROC] Document {doc_id} auto-confirmed ({doc['source_type']}): "
                             f"{len(chunk_records)} chunks")
             else:
                 doc_service.update_status(doc_id, 'awaiting_confirmation',
@@ -202,6 +202,33 @@ class DocumentProcessingService:
                     doc_id, metadata=metadata, summary=summary,
                 )
                 logger.info(f"[DOC PROC] LLM synthesis stored for {doc_id}")
+
+            # Step 14: Document classification (non-fatal enrichment)
+            # Infers category, project, and date via LLM.
+            try:
+                from services.document_classification_service import DocumentClassificationService
+                folder_context = ''
+                if doc.get('watched_folder_id'):
+                    from services.folder_watcher_service import FolderWatcherService
+                    watcher_svc = FolderWatcherService(db)
+                    folder = watcher_svc.get_folder(doc['watched_folder_id'])
+                    if folder:
+                        folder_context = f"Watched folder: {folder.get('label') or folder['folder_path']}"
+                        rel = os.path.relpath(os.path.dirname(doc['file_path']), folder['folder_path'])
+                        if rel != '.':
+                            folder_context += f" / {rel}"
+
+                cls_svc = DocumentClassificationService(db)
+                cls_svc.classify_document(
+                    doc_id=doc_id,
+                    summary=summary,
+                    clean_text=clean_text,
+                    metadata=metadata,
+                    original_name=doc['original_name'],
+                    folder_context=folder_context,
+                )
+            except Exception as e:
+                logger.warning(f"[DOC PROC] Classification failed (non-fatal): {e}")
 
             return True
 

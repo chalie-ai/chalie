@@ -67,6 +67,7 @@ const JOBS = [
 
     // ── Vision ────────────────────────────────────────────────
     { id: 'document-ocr',    name: 'Document OCR',    desc: 'Extracts text from image-only PDFs and scanned documents via vision LLM.',  badge: 'Vision', badgeClass: 'badge-vision', tokens: '~1.5K', frequency: 'Per image-only document', strengths: ['Vision', 'OCR', 'Extraction'] },
+    { id: 'document-classification', name: 'Document Classification', desc: 'Classifies documents into categories, projects, and dates via LLM for automatic organisation.', badge: '≤ 8B', badgeClass: 'badge-8b', tokens: '~1K', frequency: 'Per document', strengths: ['Classification', 'Structured Output', 'JSON'] },
 
 ];
 
@@ -2863,6 +2864,7 @@ function renderIconHtml(icon) {
 
 let allDocuments = [];
 let docFilter = 'active';
+let docGroupBy = 'all'; // 'all', 'doc_category', 'doc_project', 'doc_date'
 
 async function loadDocuments() {
     const el = document.getElementById('docList');
@@ -2877,6 +2879,62 @@ async function loadDocuments() {
     } catch (e) {
         el.innerHTML = '<div class="empty-state"><p>Failed to load documents.</p></div>';
     }
+}
+
+function renderDocumentRow(doc) {
+    const meta = doc.extracted_metadata || {};
+    const docType = meta.document_type?.value || '';
+    const typeBadge = docType && docType !== 'document'
+        ? `<span class="doc-type-badge">${escapeHtml(docType)}</span>`
+        : '';
+
+    const categoryBadge = doc.doc_category
+        ? `<span class="doc-category-badge">${escapeHtml(doc.doc_category)}</span>`
+        : '';
+
+    const size = doc.file_size_bytes
+        ? (doc.file_size_bytes > 1024 * 1024
+            ? `${(doc.file_size_bytes / 1024 / 1024).toFixed(1)} MB`
+            : `${Math.round(doc.file_size_bytes / 1024)} KB`)
+        : '';
+
+    const pages = doc.page_count ? `${doc.page_count}p` : '';
+    const chunks = `${doc.chunk_count || 0} chunks`;
+    const date = doc.doc_date || (doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '');
+
+    const statusClass = doc.status === 'ready' ? 'status-ready'
+        : doc.status === 'failed' ? 'status-error'
+        : doc.status === 'processing' ? 'status-building'
+        : '';
+
+    const isDeleted = !!doc.deleted_at;
+
+    let actions = '';
+    if (isDeleted) {
+        actions = `<button class="tool-card__btn" onclick="restoreDocument('${doc.id}')">Restore</button>
+                   <button class="tool-card__btn btn-danger-sm" onclick="purgeDocument('${doc.id}')">Purge</button>`;
+    } else {
+        actions = `<button class="tool-card__btn btn-danger-sm" onclick="deleteDocument('${doc.id}')">Delete</button>
+                   <button class="tool-card__btn" onclick="previewDocument('${doc.id}')">View</button>
+                   <button class="tool-card__btn" onclick="window.open('${API_BASE}/documents/${doc.id}/preview', '_blank')">Preview</button>`;
+    }
+
+    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+        <div class="doc-row__info">
+            <div class="doc-row__name">
+                <span class="doc-icon">${getDocIcon(doc.mime_type)}</span>
+                <span>${escapeHtml(doc.original_name)}</span>
+                ${doc.watched_folder_id ? '<span class="doc-folder-badge" title="From watched folder">⊙</span>' : ''}
+                ${categoryBadge}
+                ${typeBadge}
+                <span class="doc-status ${statusClass}">${doc.status}</span>
+            </div>
+            <div class="doc-row__meta">
+                ${[size, pages, chunks, date].filter(Boolean).join(' · ')}
+            </div>
+        </div>
+        <div class="doc-row__actions">${actions}</div>
+    </div>`;
 }
 
 function renderDocuments() {
@@ -2894,7 +2952,11 @@ function renderDocuments() {
     // Apply search filter
     const search = (document.getElementById('docSearchInput')?.value || '').trim().toLowerCase();
     if (search) {
-        docs = docs.filter(d => d.original_name.toLowerCase().includes(search));
+        docs = docs.filter(d =>
+            d.original_name.toLowerCase().includes(search)
+            || (d.doc_category || '').toLowerCase().includes(search)
+            || (d.doc_project || '').toLowerCase().includes(search)
+        );
     }
 
     if (docs.length === 0) {
@@ -2902,55 +2964,44 @@ function renderDocuments() {
         return;
     }
 
-    el.innerHTML = docs.map(doc => {
-        const meta = doc.extracted_metadata || {};
-        const docType = meta.document_type?.value || '';
-        const typeBadge = docType && docType !== 'document'
-            ? `<span class="doc-type-badge">${escapeHtml(docType)}</span>`
-            : '';
-
-        const size = doc.file_size_bytes
-            ? (doc.file_size_bytes > 1024 * 1024
-                ? `${(doc.file_size_bytes / 1024 / 1024).toFixed(1)} MB`
-                : `${Math.round(doc.file_size_bytes / 1024)} KB`)
-            : '';
-
-        const pages = doc.page_count ? `${doc.page_count}p` : '';
-        const chunks = `${doc.chunk_count || 0} chunks`;
-        const date = doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '';
-
-        const statusClass = doc.status === 'ready' ? 'status-ready'
-            : doc.status === 'failed' ? 'status-error'
-            : doc.status === 'processing' ? 'status-building'
-            : '';
-
-        const isDeleted = !!doc.deleted_at;
-
-        let actions = '';
-        if (isDeleted) {
-            actions = `<button class="tool-card__btn" onclick="restoreDocument('${doc.id}')">Restore</button>
-                       <button class="tool-card__btn btn-danger-sm" onclick="purgeDocument('${doc.id}')">Purge</button>`;
-        } else {
-            actions = `<button class="tool-card__btn" onclick="previewDocument('${doc.id}')">View</button>
-                       <button class="tool-card__btn btn-danger-sm" onclick="deleteDocument('${doc.id}')">Delete</button>`;
+    // Grouped view
+    if (docGroupBy !== 'all') {
+        const groups = {};
+        for (const doc of docs) {
+            let key;
+            if (docGroupBy === 'doc_date') {
+                key = doc.doc_date ? doc.doc_date.substring(0, 4) : 'Unknown';
+            } else {
+                key = doc[docGroupBy] || 'Uncategorized';
+            }
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(doc);
         }
 
-        return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
-            <div class="doc-row__info">
-                <div class="doc-row__name">
-                    <span class="doc-icon">${getDocIcon(doc.mime_type)}</span>
-                    <span>${escapeHtml(doc.original_name)}</span>
-                    ${doc.watched_folder_id ? '<span class="doc-folder-badge" title="From watched folder">⊙</span>' : ''}
-                    ${typeBadge}
-                    <span class="doc-status ${statusClass}">${doc.status}</span>
+        // Sort groups: Uncategorized/Unknown last, rest by count desc
+        const sortedKeys = Object.keys(groups).sort((a, b) => {
+            if (a === 'Uncategorized' || a === 'Unknown') return 1;
+            if (b === 'Uncategorized' || b === 'Unknown') return -1;
+            return groups[b].length - groups[a].length;
+        });
+
+        el.innerHTML = sortedKeys.map(key => `
+            <div class="doc-group">
+                <div class="doc-group__header" onclick="this.parentElement.classList.toggle('collapsed')">
+                    <span class="doc-group__chevron">▾</span>
+                    <span class="doc-group__name">${escapeHtml(key)}</span>
+                    <span class="doc-group__count">${groups[key].length}</span>
                 </div>
-                <div class="doc-row__meta">
-                    ${[size, pages, chunks, date].filter(Boolean).join(' · ')}
+                <div class="doc-group__items">
+                    ${groups[key].map(renderDocumentRow).join('')}
                 </div>
             </div>
-            <div class="doc-row__actions">${actions}</div>
-        </div>`;
-    }).join('');
+        `).join('');
+        return;
+    }
+
+    // Flat view (default)
+    el.innerHTML = docs.map(renderDocumentRow).join('');
 }
 
 function getDocIcon(mime) {
@@ -2968,6 +3019,7 @@ async function previewDocument(id) {
     const meta = document.getElementById('docPreviewMeta');
     const body = document.getElementById('docPreviewBody');
     const downloadLink = document.getElementById('docDownloadLink');
+    const previewLink = document.getElementById('docPreviewOpenBtn');
     const deleteBtn = document.getElementById('docPreviewDeleteBtn');
 
     overlay.style.display = 'flex';
@@ -2987,6 +3039,14 @@ async function previewDocument(id) {
         if (doc.language) metaHtml += `<span class="doc-meta-pill">${doc.language}</span> `;
         if (doc.page_count) metaHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
         metaHtml += `<span class="doc-meta-pill">${doc.chunk_count} chunks</span>`;
+        if (doc.doc_project) metaHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
+        if (doc.doc_date) metaHtml += ` <span class="doc-meta-pill">${doc.doc_date}</span>`;
+        metaHtml += `<div class="doc-classify-fields">
+            <label>Category <input type="text" class="doc-classify-input" id="docClassCategory" value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt..."></label>
+            <label>Project <input type="text" class="doc-classify-input" id="docClassProject" value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation..."></label>
+            <label>Date <input type="date" class="doc-classify-input" id="docClassDate" value="${doc.doc_date || ''}"></label>
+            <button class="tool-card__btn" onclick="saveDocClassification('${id}')">Save</button>
+        </div>`;
         meta.innerHTML = metaHtml;
 
         // Render chunks
@@ -3005,6 +3065,7 @@ async function previewDocument(id) {
         }
 
         downloadLink.href = `${API_BASE}/documents/${id}/download`;
+        previewLink.href = `${API_BASE}/documents/${id}/preview`;
         deleteBtn.onclick = async () => {
             await deleteDocument(id);
             overlay.style.display = 'none';
@@ -3012,6 +3073,25 @@ async function previewDocument(id) {
     } catch (e) {
         body.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
     }
+}
+
+async function saveDocClassification(id) {
+    const category = document.getElementById('docClassCategory')?.value?.trim() || null;
+    const project = document.getElementById('docClassProject')?.value?.trim() || null;
+    const date = document.getElementById('docClassDate')?.value || null;
+    try {
+        const res = await apiFetch(`/documents/${id}/classify`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category, project, date }),
+        });
+        if (res.ok) {
+            showToast('Classification saved', 'success');
+            loadDocuments();
+        } else {
+            showToast('Failed to save classification', 'error');
+        }
+    } catch { showToast('Failed to save classification', 'error'); }
 }
 
 async function deleteDocument(id) {
@@ -3059,6 +3139,16 @@ document.getElementById('docFilters')?.addEventListener('click', (e) => {
     document.querySelectorAll('#docFilters .filter-tab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     docFilter = btn.dataset.filter;
+    renderDocuments();
+});
+
+// Document group tabs
+document.getElementById('docGroupTabs')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.group-tab');
+    if (!btn) return;
+    document.querySelectorAll('#docGroupTabs .group-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    docGroupBy = btn.dataset.group;
     renderDocuments();
 });
 

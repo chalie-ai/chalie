@@ -92,6 +92,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           doc_category, doc_project, doc_date, meta_locked,
                            watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents WHERE id = ?
@@ -145,7 +146,7 @@ class DocumentService:
             return []
 
     def search_documents_metadata(self, query: str) -> List[Dict[str, Any]]:
-        """Text search on original_name and tags."""
+        """Text search on original_name, tags, category, and project."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -155,14 +156,17 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           doc_category, doc_project, doc_date, meta_locked,
                            watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
                     WHERE deleted_at IS NULL
                       AND (LOWER(original_name) LIKE LOWER(?)
-                           OR EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?))
+                           OR EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)
+                           OR LOWER(doc_category) LIKE LOWER(?)
+                           OR LOWER(doc_project) LIKE LOWER(?))
                     ORDER BY created_at DESC
-                """, (like_query, query))
+                """, (like_query, query, like_query, like_query))
                 rows = cursor.fetchall()
                 cursor.close()
 
@@ -752,6 +756,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           doc_category, doc_project, doc_date, meta_locked,
                            watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
@@ -781,6 +786,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           doc_category, doc_project, doc_date, meta_locked,
                            watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
@@ -804,6 +810,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           doc_category, doc_project, doc_date, meta_locked,
                            watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
@@ -830,6 +837,70 @@ class DocumentService:
                 cursor.close()
         except Exception as e:
             logger.error(f"[DOCS] update_tags failed: {e}")
+
+    def update_classification(
+        self, doc_id: str,
+        category: str = None, project: str = None,
+        doc_date: str = None, lock: bool = False,
+    ) -> None:
+        """Update document classification metadata. Set lock=True for user edits."""
+        try:
+            set_parts = ["updated_at = datetime('now')"]
+            params = []
+            if category is not None:
+                set_parts.append("doc_category = ?")
+                params.append(category)
+            if project is not None:
+                set_parts.append("doc_project = ?")
+                params.append(project)
+            if doc_date is not None:
+                set_parts.append("doc_date = ?")
+                params.append(doc_date)
+            if lock:
+                set_parts.append("meta_locked = 1")
+            params.append(doc_id)
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    UPDATE documents SET {', '.join(set_parts)} WHERE id = ?
+                """, params)
+                cursor.close()
+        except Exception as e:
+            logger.error(f"[DOCS] update_classification failed: {e}")
+
+    def get_classification_groups(self, field: str) -> List[Dict[str, Any]]:
+        """Get unique values and counts for a classification field (doc_category, doc_project, doc_date).
+
+        For doc_date, groups by year. Returns [{value, count}] sorted by count desc.
+        """
+        if field not in ('doc_category', 'doc_project', 'doc_date'):
+            return []
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                if field == 'doc_date':
+                    # Group by year
+                    cursor.execute("""
+                        SELECT COALESCE(SUBSTR(doc_date, 1, 4), 'Unknown') as grp,
+                               COUNT(*) as cnt
+                        FROM documents
+                        WHERE deleted_at IS NULL AND status = 'ready'
+                        GROUP BY grp ORDER BY grp DESC
+                    """)
+                else:
+                    cursor.execute(f"""
+                        SELECT COALESCE({field}, 'Uncategorized') as grp,
+                               COUNT(*) as cnt
+                        FROM documents
+                        WHERE deleted_at IS NULL AND status = 'ready'
+                        GROUP BY grp ORDER BY cnt DESC
+                    """)
+                rows = cursor.fetchall()
+                cursor.close()
+            return [{'value': r[0], 'count': r[1]} for r in rows]
+        except Exception as e:
+            logger.error(f"[DOCS] get_classification_groups failed: {e}")
+            return []
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
         """Update the file_path for a document (e.g., rename detection)."""
@@ -869,9 +940,13 @@ class DocumentService:
             'clean_text': row[15],
             'language': row[16],
             'fingerprint': row[17],
-            'watched_folder_id': row[18],
-            'created_at': row[19],
-            'updated_at': row[20],
-            'deleted_at': row[21],
-            'purge_after': row[22],
+            'doc_category': row[18],
+            'doc_project': row[19],
+            'doc_date': row[20],
+            'meta_locked': bool(row[21]),
+            'watched_folder_id': row[22],
+            'created_at': row[23],
+            'updated_at': row[24],
+            'deleted_at': row[25],
+            'purge_after': row[26],
         }

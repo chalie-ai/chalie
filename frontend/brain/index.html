@@ -156,6 +156,12 @@
                 <button class="filter-tab" data-filter="processing">Processing</button>
                 <button class="filter-tab" data-filter="deleted">Deleted</button>
             </div>
+            <div class="doc-group-tabs" id="docGroupTabs">
+                <button class="group-tab active" data-group="all">All</button>
+                <button class="group-tab" data-group="doc_category">Category</button>
+                <button class="group-tab" data-group="doc_project">Project</button>
+                <button class="group-tab" data-group="doc_date">Date</button>
+            </div>
             <div class="watched-folders-panel" id="watchedFoldersPanel" style="display:none">
                 <div class="watched-folders-header" id="watchedFoldersToggle">
                     <h4>Watched Folders</h4>
@@ -182,8 +188,9 @@
                     <div class="loading">Loading content...</div>
                 </div>
                 <div class="form-actions">
-                    <a id="docDownloadLink" class="btn btn-secondary" href="#" download>Download Original</a>
                     <button id="docPreviewDeleteBtn" class="btn btn-danger">Delete</button>
+                    <a id="docDownloadLink" class="btn btn-secondary" href="#" download>Download</a>
+                    <a id="docPreviewOpenBtn" class="btn btn-primary" href="#" target="_blank">Preview</a>
                 </div>
             </div>
         </div>

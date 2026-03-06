@@ -77,6 +77,7 @@ class TestGetDocument:
             'hash', 5, 'ready', None, 10,
             'upload', ['tag1'], 'summary text', {'key': 'val'}, None,
             'clean text', 'en', 'fingerprint123',
+            None, None, None, 0,  # doc_category, doc_project, doc_date, meta_locked
             None,  # watched_folder_id
             now, now, None, None,
         )

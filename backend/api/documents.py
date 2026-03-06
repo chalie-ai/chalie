@@ -324,6 +324,73 @@ def download_document(doc_id):
         return jsonify({"error": "Internal server error"}), 500
 
 
+@documents_bp.route("/documents/<doc_id>/preview", methods=["GET"])
+@require_session
+def preview_document(doc_id):
+    """Stream file for inline browser preview (no Content-Disposition: attachment)."""
+    try:
+        svc = _get_document_service()
+        doc = svc.get_document(doc_id)
+        if not doc:
+            return jsonify({"error": "Not found"}), 404
+
+        if doc.get('watched_folder_id'):
+            full_path = doc['file_path']
+            if not os.path.isfile(os.path.realpath(full_path)):
+                return jsonify({"error": "File not found on disk"}), 404
+        else:
+            full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
+            if not _validate_file_path(full_path) or not os.path.exists(full_path):
+                return jsonify({"error": "File not found on disk"}), 404
+
+        return send_file(
+            full_path,
+            mimetype=doc['mime_type'],
+            as_attachment=False,
+            download_name=doc['original_name'],
+        )
+    except Exception as e:
+        logger.error(f"[DOCS API] preview error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/<doc_id>/classify", methods=["PUT"])
+@require_session
+def update_document_classification(doc_id):
+    """Update document classification metadata (user edit — locks auto-classification)."""
+    try:
+        svc = _get_document_service()
+        doc = svc.get_document(doc_id)
+        if not doc:
+            return jsonify({"error": "Not found"}), 404
+
+        data = request.get_json() or {}
+        svc.update_classification(
+            doc_id,
+            category=data.get('category'),
+            project=data.get('project'),
+            doc_date=data.get('date'),
+            lock=True,
+        )
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"[DOCS API] classify update error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/groups/<field>", methods=["GET"])
+@require_session
+def get_document_groups(field):
+    """Get unique classification groups for a field (doc_category, doc_project, doc_date)."""
+    try:
+        svc = _get_document_service()
+        groups = svc.get_classification_groups(field)
+        return jsonify({"groups": groups})
+    except Exception as e:
+        logger.error(f"[DOCS API] groups error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @documents_bp.route("/documents/<doc_id>", methods=["DELETE"])
 @require_session
 def delete_document(doc_id):

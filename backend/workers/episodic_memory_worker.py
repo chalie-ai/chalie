@@ -7,7 +7,8 @@ import json
 import time
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
+from services.time_utils import utc_now
 from services import ConfigService, DatabaseService, EpisodicStorageService, SalienceService
 from services.llm_service import create_llm_service
 from services.thread_conversation_service import ThreadConversationService
@@ -52,14 +53,14 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
         if response_time_str:
             # Parse time (format: "2026-01-22 04:52")
             try:
-                exchange_time = datetime.strptime(response_time_str, "%Y-%m-%d %H:%M")
+                exchange_time = datetime.strptime(response_time_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
                 if earliest_time is None or exchange_time < earliest_time:
                     earliest_time = exchange_time
             except ValueError:
                 continue
 
     if earliest_time:
-        elapsed = datetime.now() - earliest_time
+        elapsed = utc_now() - earliest_time
         if elapsed.total_seconds() >= timeout_minutes * 60:
             return True, f"timeout reached, {len(enriched)} enriched", enriched
 
