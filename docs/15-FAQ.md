@@ -1,6 +1,6 @@
 # Frequently Asked Questions About Chalie AI
 
-Find answers to common questions about Chalie. See also [Quick Start](01-QUICK-START.md) and [Architecture](04-ARCHITECTURE.md).
+Find answers to common questions about Chalie. See also [Quick Start](01-QUICK-START.md) and Architecture.
 
 ## General
 

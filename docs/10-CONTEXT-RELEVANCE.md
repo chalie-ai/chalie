@@ -265,7 +265,7 @@ Fields:
 - **Circular dependencies**: Raises `ConfigError` at config load time
 - **Config load failure**: Falls back to "include all" with warning
 
-## [Testing](12-TESTING.md)
+## Testing
 
 Comprehensive unit tests cover:
 - Template mask correctness per mode
@@ -343,7 +343,7 @@ Define new dependency relationships:
 ## Implementation Details
 
 ### Service Class
-- `backend/[services](04-ARCHITECTURE.md)/context_relevance_service.py`
+- `backend/services/context_relevance_service.py`
 - `ContextRelevanceService` — Main service class
 - `compute_inclusion_map()` — Core method (returns `{node: True/False}`)
 
@@ -351,8 +351,8 @@ Define new dependency relationships:
 - `backend/configs/agents/context-relevance.json` — Configuration
 
 ### Integration Points
-- `backend/[workers](06-WORKERS.md)/digest_worker.py` — Calls service before `generate_for_mode()`
-- `backend/[services](04-ARCHITECTURE.md)/frontal_cortex_service.py` — Uses `inclusion_map` in `_inject_parameters()`
+- `backend/workers/digest_worker.py` — Calls service before `generate_for_mode()`
+- `backend/services/frontal_cortex_service.py` — Uses `inclusion_map` in `_inject_parameters()`
 
 ## Disabling the Feature
 
@@ -371,7 +371,7 @@ All context nodes will be included (current behavior). Useful for debugging or w
 - **Machine learning-based rules** — Learn signal-to-exclusion mappings from interaction data
 - **Per-user config** — Different rules per user based on communication patterns
 - **Dynamic token budget** — Estimate remaining tokens from prompt + mode
-- **A/B [testing](12-TESTING.md) framework** — Compare responses with/without context relevance pre-parsing
+- **A/B testing framework** — Compare responses with/without context relevance pre-parsing
 
 ## Related Documentation
 - [Vision & Philosophy](00-VISION.md)

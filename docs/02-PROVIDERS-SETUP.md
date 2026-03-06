@@ -1,6 +1,6 @@
 # LLM Provider Setup: Ollama, OpenAI, Anthropic, Gemini
 
-Chalie supports multiple LLM providers including local Ollama models and cloud APIs from OpenAI, Anthropic, and Google Gemini. This guide walks through configuring each provider. See also [Quick Start](01-QUICK-START.md) and [Architecture](04-ARCHITECTURE.md).
+Chalie supports multiple LLM providers including local Ollama models and cloud APIs from OpenAI, Anthropic, and Google Gemini. This guide walks through configuring each provider. See also [Quick Start](01-QUICK-START.md) and Architecture.
 
 
 After deploying the application, you can configure LLM providers through the [web interface](03-WEB-INTERFACE.md).
@@ -147,7 +147,7 @@ curl -X PUT http://localhost:8080/providers/jobs/frontal-cortex \
 - Keep Ollama instances local or behind a firewall
 - Use HTTPS/TLS for remote API connections
 - Restrict file access to the SQLite database
-- Enable CORS appropriately for your [deployment](01-QUICK-START.md)
+- Enable CORS appropriately for your deployment
 
 ## Embedding Models
 

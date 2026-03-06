@@ -1,6 +1,6 @@
 # Building Tools: Chalie's Tool-Agnostic Extension Framework
 
-Extend Chalie's capabilities using the tool-agnostic framework, allowing seamless integration of new external functions. See also [Default Tools](14-DEFAULT-TOOLS.md) and [Architecture](04-ARCHITECTURE.md).
+Extend Chalie's capabilities using the tool-agnostic framework, allowing seamless integration of new external functions. See also [Default Tools](14-DEFAULT-TOOLS.md) and Architecture.
 
 
 Tools extend Chalie's capabilities by allowing execution of external code. Tools can run as **sandboxed** (Docker container) or **trusted** (Python subprocess), and can be triggered on-demand or on a schedule.
@@ -25,7 +25,7 @@ Trust is determined by Chalie's internal `configs/embodiment_library.json` catal
 
 Trusted tools must include a `runner.py` entry point. Sandboxed tools must include a `Dockerfile`.
 
-## [Architecture](04-ARCHITECTURE.md)
+## Architecture
 
 ### Components
 

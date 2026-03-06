@@ -1,17 +1,17 @@
 # System Architecture: Single-Process Design with SQLite
 
-A deep dive into Chalie's single-process design, SQLite backend, and overall technical architecture. See also [Workers](06-WORKERS.md) and [Data Schemas](08-DATA-SCHEMAS.md).
+A deep dive into Chalie's single-process design, SQLite backend, and overall technical architecture. See also Workers and [Data Schemas](08-DATA-SCHEMAS.md).
 
 
 ## Overview
 
-Chalie is a human-in-the-loop cognitive assistant that combines memory consolidation, semantic reasoning, and proactive assistance. The system processes user prompts through a chain of [workers](06-WORKERS.md) and services, enriching conversations with memory chunks and generating episodic memories for future use.
+Chalie is a human-in-the-loop cognitive assistant that combines memory consolidation, semantic reasoning, and proactive assistance. The system processes user prompts through a chain of workers and services, enriching conversations with memory chunks and generating episodic memories for future use.
 
 ## Core Architecture
 
 ### System Type
 - **Synthetic cognitive brain** using LLMs to replicate human brain functions
-- **Tech Stack**: Python backend, SQLite (WAL mode + sqlite-vec + FTS5), [MemoryStore](08-DATA-SCHEMAS.md) (in-memory, thread-safe), [Ollama](02-PROVIDERS-SETUP.md) (configurable LLMs), Vanilla JavaScript frontend (Radiant design system)
+- **Tech Stack**: Python backend, SQLite (WAL mode + sqlite-vec + FTS5), MemoryStore (in-memory, thread-safe), Ollama (configurable LLMs), Vanilla JavaScript frontend (Radiant design system)
 - **Core Pattern**: Single-process architecture with daemon threads and PromptQueue, service-oriented design
 
 ### Communication Pattern
@@ -25,14 +25,14 @@ Chalie is a human-in-the-loop cognitive assistant that combines memory consolida
 ```
 backend/
 ├── services/          # Business logic (memory, orchestration, routing, embeddings)
-├── [workers](06-WORKERS.md)/           # Async [workers](06-WORKERS.md) (digest, memory chunking, consolidation)
+├── workers/           # Async workers (digest, memory chunking, consolidation)
 ├── listeners/         # Input handlers (direct REST API)
 ├── api/               # REST API blueprints (conversation, memory, proactive, privacy, system)
 ├── configs/           # Configuration files (connections.json, agent configs, generated/)
 ├── migrations/        # Database migrations
 ├── prompts/           # LLM prompt templates (mode-specific)
-├── [tools](09-TOOLS.md)/             # Skill implementations
-├── tests/             # [Test suite](12-[TESTING](12-TESTING.md).md)
+├── tools/             # Skill implementations
+├── tests/             # [Test suite](12-TESTING.md)
 └── run.py             # Single-process entry point
 ```
 
@@ -55,7 +55,7 @@ frontend/
 - **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
 - **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
-- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when [tools](09-TOOLS.md) exist but none named
+- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
 - **`cognitive_reflex_service.py`** — Learned fast path via semantic abstraction; heuristic pre-screen (~1ms) + sqlite-vec cosine search (~5-20ms) bypasses full pipeline for self-contained queries; rolling-average centroids generalize from observed examples; self-correcting per cluster via user corrections and shadow validation
 
 #### Response Generation
@@ -70,7 +70,7 @@ frontend/
 - **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as `behavioral_pattern` user traits with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — SQLite CRUD for episodic memories
 - **`semantic_storage_service.py`** — SQLite CRUD for semantic concepts
-- **`gist_storage_service.py`** — [MemoryStore](08-DATA-SCHEMAS.md)-backed short-term memory with deduplication
+- **`gist_storage_service.py`** — MemoryStore-backed short-term memory with deduplication
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
 - **`moment_service.py`** — Pinned message bookmarks with LLM-enriched context, sqlite-vec semantic search, and salience boosting; stores user-pinned Chalie responses as permanent, searchable moments via `moments` table
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs; boosts related episode salience on seal
@@ -97,7 +97,7 @@ frontend/
 - **`act_loop_service.py`** — Fatigue-based cognitive iteration manager with action execution, history tracking, and telemetry. Constructor-injected critic and dispatcher (no monkey-patching). Generic scalar output chaining between sequential actions.
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
 - **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
-- **`act_completion_service.py`** — Detects when expected [tools](09-TOOLS.md) were not invoked; injects `[NO_ACTION_TAKEN]` signal
+- **`act_completion_service.py`** — Detects when expected tools were not invoked; injects `[NO_ACTION_TAKEN]` signal
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
 - **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
 - **`plan_decomposition_service.py`** — LLM-powered goal → step DAG decomposition; validates DAG (Kahn's cycle detection), step quality (4–30 word descriptions, Jaccard dedup), and cost classification (cheap/expensive); plans stored in `persistent_tasks.progress` JSON (stored as TEXT in SQLite); ready-step ordering (shallowest depth, cheapest first)
@@ -105,16 +105,16 @@ frontend/
 #### Constants & Registries
 - **`services/innate_skills/registry.py`** — Authoritative frozenset definitions for all skill membership sets (`ALL_SKILL_NAMES`, `PLANNING_SKILLS`, `COGNITIVE_PRIMITIVES`, `CONTEXTUAL_SKILLS`, `TRIAGE_VALID_SKILLS`, etc.). Single source of truth — all consumers import from here.
 - **`services/act_action_categories.py`** — Authoritative frozenset definitions for action behavior categories (`READ_ACTIONS`, `DETERMINISTIC_ACTIONS`, `SAFE_ACTIONS`, `CRITIC_SKIP_READS`, `ACTION_FATIGUE_COSTS`).
-- **`services/act_memory_keys.py`** — Centralized [MemoryStore](08-DATA-SCHEMAS.md) key patterns for the ACT system (deferred cards, tool caches, heartbeat, reflection queue).
+- **`services/act_memory_keys.py`** — Centralized MemoryStore key patterns for the ACT system (deferred cards, tool caches, heartbeat, reflection queue).
 
 #### Tool Integration
 - **`tool_registry_service.py`** — Tool discovery, metadata management, and cron execution via `run_interactive` (bidirectional stdin/stdout dialog protocol); supports two trust levels: **trusted** (subprocess via `ToolSubprocessService`) and **sandboxed** (Docker via `ToolContainerService`); trust determined by Chalie's internal `embodiment_library.json`, not by tool authors
-- **`tool_container_service.py`** — Docker container lifecycle; `run()` for single-shot, `run_interactive()` for bidirectional tool↔Chalie dialog (JSON-lines stdout, Chalie responses via stdin); used for [sandboxed [tools](09-TOOLS.md)](09-[TOOLS](09-TOOLS.md).md) only
-- **`tool_subprocess_service.py`** — Subprocess execution for trusted [tools](09-TOOLS.md); mirrors `ToolContainerService` API (same IPC contract: base64 JSON in, JSON out) but runs as a Python subprocess instead of a Docker container; no sandboxing
+- **`tool_container_service.py`** — Docker container lifecycle; `run()` for single-shot, `run_interactive()` for bidirectional tool↔Chalie dialog (JSON-lines stdout, Chalie responses via stdin); used for [sandboxed tools](09-TOOLS.md) only
+- **`tool_subprocess_service.py`** — Subprocess execution for trusted tools; mirrors `ToolContainerService` API (same IPC contract: base64 JSON in, JSON out) but runs as a Python subprocess instead of a Docker container; no sandboxing
 - **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
 - **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
-- **`tool_profile_service.py`** — LLM-generated tool capability profiles with `triage_triggers` (short action verbs injected into triage prompt for vocabulary bridging), `short_summary`, `full_profile`, and `usage_scenarios`; [MemoryStore](08-DATA-SCHEMAS.md)-cached triage summaries (5min TTL)
-- **Webhook endpoint** (`/api/[tools](09-TOOLS.md)/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
+- **`tool_profile_service.py`** — LLM-generated tool capability profiles with `triage_triggers` (short action verbs injected into triage prompt for vocabulary bridging), `short_summary`, `full_profile`, and `usage_scenarios`; MemoryStore-cached triage summaries (5min TTL)
+- **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
@@ -123,7 +123,7 @@ frontend/
 
 #### Infrastructure
 - **`database_service.py`** — SQLite connection management (WAL mode) and migrations
-- **`memory_store.py`** — [MemoryStore](08-DATA-SCHEMAS.md): thread-safe, in-memory key-value store with Redis-compatible API
+- **`memory_store.py`** — MemoryStore: thread-safe, in-memory key-value store with Redis-compatible API
 - **`config_service.py`** — JSON file config loader (agent configs, connection names); runtime config (port, host) managed by `runtime_config.py` via CLI args
 - **`output_service.py`** — Output queue management for responses
 - **`event_bus_service.py`** — Pub/sub event routing
@@ -131,18 +131,18 @@ frontend/
 
 #### Topic Classification
 - **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
-- **`adaptive_boundary_detector.py`** — 3-layer self-calibrating topic boundary detector (NEWMA + Transient Surprise + Leaky Accumulator); persists per-thread state in [MemoryStore](08-DATA-SCHEMAS.md); degrades gracefully to static threshold when < 5 messages
+- **`adaptive_boundary_detector.py`** — 3-layer self-calibrating topic boundary detector (NEWMA + Transient Surprise + Leaky Accumulator); persists per-thread state in MemoryStore; degrades gracefully to static threshold when < 5 messages
 - **`topic_stability_regulator_service.py`** — 24h adaptive tuning of topic classification and boundary detector parameters
 
 #### Session & Conversation
-- **`thread_conversation_service.py`** — [MemoryStore](08-DATA-SCHEMAS.md)-backed conversation thread persistence
+- **`thread_conversation_service.py`** — MemoryStore-backed conversation thread persistence
 - **`thread_service.py`** — Manages conversation threads with expiry
 - **`session_service.py`** — Tracks user sessions and topic changes
 
 #### Documents & File Management
 - **`document_service.py`** — Document CRUD, chunk storage, hybrid search (semantic via sqlite-vec + FTS5 + keyword boost via Reciprocal Rank Fusion), soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings)
 - **`document_processing_service.py`** — Full extraction pipeline: text extraction (pdfplumber, python-docx, python-pptx, trafilatura), regex-based metadata extraction (dates, companies, monetary values, reference numbers, document type heuristic), adaptive chunk sizing by document type, SimHash fingerprinting, language detection (langdetect)
-- **`camera_ocr_service.py`** — [Vision](00-VISION.md) LLM-based text extraction from camera-captured images; multi-provider ([Anthropic](02-PROVIDERS-SETUP.md), [OpenAI](02-PROVIDERS-SETUP.md), [Gemini](02-PROVIDERS-SETUP.md), [Ollama](02-PROVIDERS-SETUP.md)); 10MB image limit
+- **`camera_ocr_service.py`** — Vision LLM-based text extraction from camera-captured images; multi-provider (Anthropic, OpenAI, Gemini, Ollama); 10MB image limit
 - **`document_card_service.py`** — Inline HTML card emission for document search results (source attribution with type badges, confidence indicators), upload confirmations, document previews, and lifecycle events; cyan `#00F0FF` accent
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
@@ -160,9 +160,9 @@ frontend/
 - **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 
-## [Worker Processes](06-[WORKERS](06-WORKERS.md).md) (`backend/[workers](06-WORKERS.md)/`)
+## [Worker Processes](06-WORKERS.md) (`backend/workers/`)
 
-### Queue [Workers](06-WORKERS.md) (Daemon Threads)
+### Queue Workers (Daemon Threads)
 - **Digest Worker** — Core pipeline: classify → route → generate response → enqueue memory job
 - **Memory Chunker Worker** — Enriches exchanges with memory chunks via LLM
 - **Episodic Memory Worker** — Builds episodes from sequences of exchanges
@@ -182,7 +182,7 @@ frontend/
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
 - **Triage Calibration** — Triage correctness scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from clarification→tool resolution chains
-- **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 [tools](09-TOOLS.md)/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
+- **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
 - **Temporal Pattern Service** — Mines behavioral patterns from interaction timestamps (24h cycle, 5min warmup); detects hour-of-day peaks, day-of-week peaks, topic-time clusters; stores as `behavioral_pattern` user traits
@@ -250,9 +250,9 @@ frontend/
 - Focused scope prevents elaboration and improves consistency
 
 ### Memory Hierarchy
-- **Working Memory** ([MemoryStore](08-DATA-SCHEMAS.md), 4 turns, 24h TTL) — Current conversation
-- **Gists** ([MemoryStore](08-DATA-SCHEMAS.md), 30min TTL) — Compressed exchange summaries
-- **Facts** ([MemoryStore](08-DATA-SCHEMAS.md), 24h TTL) — Atomic key-value assertions
+- **Working Memory** (MemoryStore, 4 turns, 24h TTL) — Current conversation
+- **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries
+- **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
 - **Episodes** (SQLite + sqlite-vec) — Narrative units with decay
 - **Concepts** (SQLite + sqlite-vec) — Knowledge nodes and relationships
 - **Procedural Memory** (SQLite) — Learned action reliability; surfaced in context assembly as reliability hints (≥8 attempts, top 3 skills)
@@ -269,7 +269,7 @@ Environment variables > .env file > JSON config files > hardcoded defaults
 See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 
 ### Thread-Safe Worker State
-- All [workers](06-WORKERS.md) run as daemon threads within a single Python process
+- All workers run as daemon threads within a single Python process
 - Shared state managed via thread-safe data structures (locks, queues)
 - No multiprocessing overhead — lightweight, in-process coordination
 
@@ -279,7 +279,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - **Transient Surprise** (z-score of similarity drop) catches sharp topic shifts
 - **Leaky Accumulator** provides hysteresis — single-message outliers don't create false topics
 - All thresholds derived from running conversation statistics; no manual tuning
-- State persisted in [MemoryStore](08-DATA-SCHEMAS.md) (`adaptive_boundary:{thread_id}`, 24h TTL); cold-start fallback (0.55 threshold) when < 5 messages
+- State persisted in MemoryStore (`adaptive_boundary:{thread_id}`, 24h TTL); cold-start fallback (0.55 threshold) when < 5 messages
 - Base parameters (`accumulator_boundary_base`, `accumulator_leak_rate`, NEWMA windows) are the slow outer loop controlled by Topic Stability Regulator
 
 ### Topic Confidence Reinforcement
@@ -288,7 +288,7 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - Ensures gradual adaptation without oscillation
 
 ### Error Resilience
-- All [workers](06-WORKERS.md) catch JSON decode errors from LLM responses
+- All workers catch JSON decode errors from LLM responses
 - Log meaningful messages instead of crashing
 - Return status strings for graceful degradation
 
@@ -316,14 +316,14 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 ## Configuration Files
 
 ### Primary Configuration
-- **`configs/connections.json`** — SQLite path and [MemoryStore](08-DATA-SCHEMAS.md) settings
+- **`configs/connections.json`** — SQLite path and MemoryStore settings
 - **`configs/agents/*.json`** — LLM settings (model, temperature, timeout)
 - **`configs/generated/mode_router_config.json`** — Learned router weights (generated)
 
 ### Provider Configuration
 - Stored in SQLite `providers` table (not JSON files)
 - Runtime configurable via REST API (`/api/providers`)
-- Supports: [Ollama](02-PROVIDERS-SETUP.md), [Anthropic](02-PROVIDERS-SETUP.md), [OpenAI](02-PROVIDERS-SETUP.md), Google [Gemini](02-PROVIDERS-SETUP.md)
+- Supports: Ollama, Anthropic, OpenAI, Google Gemini
 
 See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 
@@ -335,8 +335,8 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 - **`memory`** — Memory search, fact management
 - **`proactive`** — Outreach/notifications, upcoming tasks
 - **`privacy`** — Data deletion, export
-- **`system`** — Health, version, settings, observability (routing, memory, [tools](09-TOOLS.md), identity, tasks, autobiography, traits)
-- **`[tools](09-TOOLS.md)`** — Tool execution, configuration
+- **`system`** — Health, version, settings, observability (routing, memory, tools, identity, tasks, autobiography, traits)
+- **`tools`** — Tool execution, configuration
 - **`providers`** — LLM provider configuration
 - **`push`** — Push notification subscription
 - **`scheduler`** — Reminders and scheduled tasks
@@ -346,7 +346,7 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 ### Observability Endpoints (`/system/observability/*`)
 - **`routing`** — Mode router decision distribution and recent activity
 - **`memory`** — Memory layer counts and health indicators
-- **`[tools](09-TOOLS.md)`** — Tool performance stats
+- **`tools`** — Tool performance stats
 - **`identity`** — Identity vector states
 - **`tasks`** — Active persistent tasks, curiosity threads, triage calibration
 - **`autobiography`** — Current autobiography narrative with delta (changed/unchanged sections)
@@ -355,11 +355,11 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 
 See API blueprints in `backend/api/` for full reference.
 
-## [Testing](12-TESTING.md) Strategy
+## Testing Strategy
 
 ### Test Markers
 - `@pytest.mark.unit` — No external dependencies (fast)
-- `@pytest.mark.integration` — Requires SQLite/[MemoryStore](08-DATA-SCHEMAS.md) (slower)
+- `@pytest.mark.integration` — Requires SQLite/MemoryStore (slower)
 
 ### Test Organization
 ```
@@ -373,7 +373,7 @@ Run all tests: `pytest`
 Run only unit: `pytest -m unit`
 Run with verbose: `pytest -v`
 
-## Development [Workflow](05-WORKFLOW.md)
+## Development Workflow
 
 ### Setup
 ```bash
@@ -389,9 +389,9 @@ cp .env.example .env
 python backend/run.py
 ```
 
-No external services required. SQLite and [MemoryStore](08-DATA-SCHEMAS.md) are embedded — everything runs in one process.
+No external services required. SQLite and MemoryStore are embedded — everything runs in one process.
 
-## [Deployment](01-QUICK-START.md) Notes
+## Deployment Notes
 
 - **No Telemetry**: Zero external calls except to configured LLM/voice providers
 - **Local First**: All data stored locally unless external providers configured
@@ -401,7 +401,7 @@ No external services required. SQLite and [MemoryStore](08-DATA-SCHEMAS.md) are 
 ## Future Roadmap
 
 ### Completed
-- **User memory transparency API**: Observability endpoints for autobiography, traits, memory, routing, identity, [tools](09-TOOLS.md), and tasks — with user trait deletion for correction
+- **User memory transparency API**: Observability endpoints for autobiography, traits, memory, routing, identity, tools, and tasks — with user trait deletion for correction
 
 ### Planned (Priority 1)
 
@@ -411,7 +411,7 @@ No external services required. SQLite and [MemoryStore](08-DATA-SCHEMAS.md) are 
 - **Negative memory mechanism**: Store "X is FALSE" assertions
 
 ### Planned (Priority 3)
-- **Formal hypothesis [testing](12-TESTING.md)**: A/B evaluation of alternatives
+- **Formal hypothesis testing**: A/B evaluation of alternatives
 - **Sandboxed computation**: Math evaluation and code execution skill
 - **Memory versioning**: Track how beliefs change over time
 
@@ -419,7 +419,7 @@ No external services required. SQLite and [MemoryStore](08-DATA-SCHEMAS.md) are 
 
 - **Mode Router**: Deterministic mathematical function selecting engagement mode from observable signals
 - **Tie-Breaker**: Small LLM consulted when top 2 modes are within effective margin
-- **Routing Signals**: Observable features collected from [MemoryStore](08-DATA-SCHEMAS.md) and NLP analysis (~5ms)
+- **Routing Signals**: Observable features collected from MemoryStore and NLP analysis (~5ms)
 - **Router Confidence**: Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal**: Metric logged by monitors, consumed by the single regulator
 - **Context Warmth**: Signal (0.0-1.0) measuring how much context is available for current topic
@@ -429,6 +429,6 @@ No external services required. SQLite and [MemoryStore](08-DATA-SCHEMAS.md) are 
 - **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment
 
 ## Related Documentation
-- [Workers](06-WORKERS.md)
+- Workers
 - [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md)
 - [Data Schemas](08-DATA-SCHEMAS.md)

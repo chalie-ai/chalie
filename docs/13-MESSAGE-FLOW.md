@@ -1,6 +1,6 @@
 # Message Flow Diagrams: Every Path, DB Hit, and LLM Call
 
-Visual and detailed breakdowns of every execution path, database query, and LLM invocation during a message cycle. See also [Workflow](05-WORKFLOW.md) and [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md).
+Visual and detailed breakdowns of every execution path, database query, and LLM invocation during a message cycle. See also Workflow and [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md).
 
 
 This document is the single authoritative visual map of how a user message travels through Chalie. Every branch, every storage hit, every LLM call, and every background cycle is shown here.
@@ -9,8 +9,8 @@ This document is the single authoritative visual map of how a user message trave
 ```
 ⚡ DET   — Deterministic (no LLM, <10ms)
 🧠 LLM   — LLM inference call
-📥 M     — [MemoryStore](08-DATA-SCHEMAS.md) READ
-📤 M     — [MemoryStore](08-DATA-SCHEMAS.md) WRITE
+📥 M     — MemoryStore READ
+📤 M     — MemoryStore WRITE
 📥 DB    — SQLite READ
 📤 DB    — SQLite WRITE
 ⏱ ~Xms  — Typical latency

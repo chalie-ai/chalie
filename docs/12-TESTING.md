@@ -1,6 +1,6 @@
 # Testing Guide: Conventions, Fixtures, and Mocks
 
-Guidelines for writing robust tests in Chalie using pytest, including fixture usage and mocking strategies. See also [Tools](09-TOOLS.md) and [Architecture](04-ARCHITECTURE.md).
+Guidelines for writing robust tests in Chalie using pytest, including fixture usage and mocking strategies. See also Tools and Architecture.
 
 
 ## Quick Start
@@ -58,8 +58,8 @@ def test_get_returns_value_when_found(self, mock_db):
 ### Markers
 
 ```python
-@pytest.mark.unit          # No external deps ([MemoryStore](08-DATA-SCHEMAS.md), SQLite, LLM)
-@pytest.mark.integration   # Requires running [services](04-ARCHITECTURE.md)
+@pytest.mark.unit          # No external deps (MemoryStore, SQLite, LLM)
+@pytest.mark.integration   # Requires running services
 ```
 
 ### Banned Patterns
@@ -74,16 +74,16 @@ def test_get_returns_value_when_found(self, mock_db):
 All fixtures live in `tests/conftest.py`.
 
 ### `mock_memory_store`
-In-memory [MemoryStore](08-DATA-SCHEMAS.md) instance. Patches `[MemoryStore](08-DATA-SCHEMAS.md)` connections. Flushes on teardown.
+In-memory MemoryStore instance. Patches `MemoryStore` connections. Flushes on teardown.
 
 ### `mock_config`
 Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for memory-chunker, mode-router, fact-store, frontal-cortex.
 
 ### `mock_ollama`
-Returns `LLMResponse(text='{"gists": [], "scope": "test"}', model='test-model', provider='[ollama](02-PROVIDERS-SETUP.md)')`. Also mocks `generate_embedding` → `[0.0] * 256`.
+Returns `LLMResponse(text='{"gists": [], "scope": "test"}', model='test-model', provider='ollama')`. Also mocks `generate_embedding` → `[0.0] * 256`.
 
 ### `mock_db`
-Basic DB mock. Context manager yields cursor directly. Good for simple [services](04-ARCHITECTURE.md).
+Basic DB mock. Context manager yields cursor directly. Good for simple services.
 
 ### `mock_db_rows`
 Extended DB mock with programmable cursor returns. Supports both patterns:
@@ -97,11 +97,11 @@ Configurable LLM mock. Set `mock_llm.response_text` before calling:
 ```python
 def test_something(self, mock_llm):
     mock_llm.response_text = '{"verdict": "good"}'
-    # [Services](04-ARCHITECTURE.md) calling create_llm_service().send_message() get that text
+    # Services calling create_llm_service().send_message() get that text
 ```
 
 ### `authed_client`
-Full Flask app with all blueprints, auth bypassed, DB/[MemoryStore](08-DATA-SCHEMAS.md) mocked:
+Full Flask app with all blueprints, auth bypassed, DB/MemoryStore mocked:
 ```python
 def test_endpoint(self, authed_client):
     client, mock_db, mock_store = authed_client
@@ -129,7 +129,7 @@ row = make_trait_row(trait_key='timezone', trait_value='CET')
 episode = make_episode_row(gist='Discussed morning routine')
 
 # 9-element tuple matching providers SELECT
-provider = make_provider_row(platform='[ollama](02-PROVIDERS-SETUP.md)', model='qwen3:4b')
+provider = make_provider_row(platform='ollama', model='qwen3:4b')
 ```
 
 ## Mock Strategies
@@ -150,13 +150,13 @@ def test_critic(self, mock_llm):
 def test_chunker(self, mock_ollama, mock_config):
     mock_ollama.send_message.return_value = LLMResponse(
         text='{"gists": [{"content": "test"}]}',
-        model='test', provider='[ollama](02-PROVIDERS-SETUP.md)'
+        model='test', provider='ollama'
     )
 ```
 
 ### DB Mocking — Connection Pattern
 
-For [services](04-ARCHITECTURE.md) using `db.connection()` → cursor (most [services](04-ARCHITECTURE.md)):
+For services using `db.connection()` → cursor (most services):
 
 ```python
 @pytest.fixture
@@ -174,7 +174,7 @@ def mock_db(self):
 
 ### DB Mocking — Session Pattern
 
-For [services](04-ARCHITECTURE.md) using `db.get_session()` → session (SettingsService, ProviderDbService, auth):
+For services using `db.get_session()` → session (SettingsService, ProviderDbService, auth):
 
 ```python
 @pytest.fixture
@@ -197,17 +197,17 @@ The `@require_session` decorator checks `validate_session(request)` at runtime:
 ```python
 @pytest.fixture(autouse=True)
 def bypass_auth(self):
-    with patch('[services](04-ARCHITECTURE.md).auth_session_service.validate_session', return_value=True):
+    with patch('services.auth_session_service.validate_session', return_value=True):
         yield
 ```
 
 ### Optional Dependencies
 
-Use `pytest.importorskip` for [tools](09-TOOLS.md) with optional deps:
+Use `pytest.importorskip` for tools with optional deps:
 
 ```python
 feedparser = pytest.importorskip('feedparser', reason='feedparser not installed')
-from [tools](09-TOOLS.md).reddit_digest.handler import execute
+from tools.reddit_digest.handler import execute
 ```
 
 ### Module Injection for Missing Packages
@@ -227,9 +227,9 @@ with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}):
 ## Adding Tests for a New Service
 
 1. Create `tests/test_my_service.py`
-2. Import the service: `from [services](04-ARCHITECTURE.md).my_service import MyService`
+2. Import the service: `from services.my_service import MyService`
 3. Add `@pytest.mark.unit` to the test class
-4. Mock external deps (DB, [MemoryStore](08-DATA-SCHEMAS.md), LLM) in fixtures
+4. Mock external deps (DB, MemoryStore, LLM) in fixtures
 5. Write tests following AAA structure
 6. Run: `pytest tests/test_my_service.py -v`
 7. Verify: `pytest -m unit` still passes
@@ -254,12 +254,12 @@ with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}):
 ## Adding Tests for a New Tool Handler
 
 1. Create `tests/test_tool_my_tool.py`
-2. Import: `from [tools](09-TOOLS.md).my_tool.handler import execute`
+2. Import: `from tools.my_tool.handler import execute`
 3. Mock external HTTP calls via `patch('requests.get')`
 4. Test state round-trip: `result['_state']` → feed back as `params['_state']`
 5. Test error cases: missing config, API failures, invalid responses
 
 ## Related Documentation
-- [Architecture](04-ARCHITECTURE.md)
+- Architecture
 - [Quick Start](01-QUICK-START.md)
-- [Tools](09-TOOLS.md)
+- Tools

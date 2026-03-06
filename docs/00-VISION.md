@@ -1,6 +1,6 @@
 # Product Vision: Attention-First AI Design
 
-Discover the attention-first AI design philosophy driving Chalie's development. See also [Architecture](04-ARCHITECTURE.md).
+Discover the attention-first AI design philosophy driving Chalie's development. See also Architecture.
 
 
 This document defines what Chalie is, why it exists, and how every design decision should be evaluated. It is the source of truth for product philosophy.

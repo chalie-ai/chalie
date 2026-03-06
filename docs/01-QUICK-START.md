@@ -1,6 +1,6 @@
 # Quick Start: Install and Run Chalie in 2 Minutes
 
-Get Chalie up and running on your local machine in under two minutes. See also [Provider Setup](02-PROVIDERS-SETUP.md) and [Architecture](04-ARCHITECTURE.md).
+Get Chalie up and running on your local machine in under two minutes. See also [Provider Setup](02-PROVIDERS-SETUP.md) and Architecture.
 
 
 ## Install Chalie

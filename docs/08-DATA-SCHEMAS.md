@@ -1,6 +1,6 @@
 # Data Schema Reference: SQLite Tables, MemoryStore, and Vectors
 
-Comprehensive reference for Chalie's local SQLite database schema, including hierarchical memory and vector storage. See also [Architecture](04-ARCHITECTURE.md) and [Context Optimization](10-CONTEXT-RELEVANCE.md).
+Comprehensive reference for Chalie's local SQLite database schema, including hierarchical memory and vector storage. See also Architecture and [Context Optimization](10-CONTEXT-RELEVANCE.md).
 
 
 ## MemoryStore Queue Topics (configurations)
@@ -21,7 +21,7 @@ Queue topic names are defined in `configs/connections.json`.  Current topic queu
     "episodic_memory": "episodic-memory-queue"
 }
 ```
-Each key maps to a queue name that the worker [services](04-ARCHITECTURE.md) consume from.
+Each key maps to a queue name that the worker services consume from.
 
 ## SQLite – Episodes Table
 The `episodic_storage_service.py` inserts rows into the `episodes` table. The table schema (partial) is:
@@ -260,7 +260,7 @@ CREATE TABLE providers (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    type TEXT NOT NULL,  -- [ollama](02-PROVIDERS-SETUP.md), [openai](02-PROVIDERS-SETUP.md), [anthropic](02-PROVIDERS-SETUP.md), [gemini](02-PROVIDERS-SETUP.md)
+    type TEXT NOT NULL,  -- ollama, openai, anthropic, gemini
     endpoint TEXT,
     config JSONB,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -308,6 +308,6 @@ CREATE TABLE triage_calibration (
 ```
 
 ## Related Documentation
-- [Architecture](04-ARCHITECTURE.md)
-- [Tools](09-TOOLS.md)
+- Architecture
+- Tools
 - [Context Optimization](10-CONTEXT-RELEVANCE.md)

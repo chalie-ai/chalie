@@ -4,39 +4,39 @@ Understand the end-to-end lifecycle of a message in Chalie, from initial input t
 
 
 ## Overview
-The application processes user prompts through a pipeline of [workers](06-WORKERS.md), queues, and [services](04-ARCHITECTURE.md). Each component is responsible for a single concern, following the **Single Responsibility Principle**.
+The application processes user prompts through a pipeline of workers, queues, and services. Each component is responsible for a single concern, following the **Single Responsibility Principle**.
 
-1. **Consumer (`run.py`)** – Supervises [worker processes](06-[WORKERS](06-WORKERS.md).md) and tracks shared state. Receives raw prompts via REST API entry point and enqueues them into the `prompt-queue`.
-2. **Prompt Queue (`[services](04-ARCHITECTURE.md)/prompt_queue.py`)** – A Thread-based queue that holds prompt jobs. [Workers](06-WORKERS.md) consume jobs from this queue.
-3. **Digest Worker (`[workers](06-WORKERS.md)/digest_worker.py`)** – Primary worker that:
+1. **Consumer (`run.py`)** – Supervises [worker processes](06-WORKERS.md) and tracks shared state. Receives raw prompts via REST API entry point and enqueues them into the `prompt-queue`.
+2. **Prompt Queue (`services/prompt_queue.py`)** – A Thread-based queue that holds prompt jobs. Workers consume jobs from this queue.
+3. **Digest Worker (`workers/digest_worker.py`)** – Primary worker that:
    - Loads configuration for the classifier, mode router, and mode-specific generation prompts.
    - Calls the **classifier** (embedding-based, deterministic) to determine the topic and confidence.
-   - Persists the prompt to a conversation thread via `ThreadConversationService` ([MemoryStore](08-DATA-SCHEMAS.md)-backed).
+   - Persists the prompt to a conversation thread via `ThreadConversationService` (MemoryStore-backed).
    - Tracks session activity through `SessionService` and triggers episodic memory generation when a topic switch is detected.
-   - Collects routing signals and runs **[deterministic mode](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) routing** (~5ms) via `ModeRouterService`.
+   - Collects routing signals and runs **[deterministic mode](07-COGNITIVE-ARCHITECTURE.md) routing** (~5ms) via `ModeRouterService`.
    - Generates a response using a **mode-specific prompt** via `FrontalCortexService`:
      - ACT mode → action loop → re-route → terminal response
      - IGNORE → empty response (no LLM call)
      - RESPOND/CLARIFY/ACKNOWLEDGE → single LLM call with mode-specific prompt
    - Enqueues a job to the `memory-chunker-queue`.
-4. **Memory Chunker Worker (`[workers](06-WORKERS.md)/memory_chunker_worker.py`)** – Enriches individual exchanges with *memory chunks*:
+4. **Memory Chunker Worker (`workers/memory_chunker_worker.py`)** – Enriches individual exchanges with *memory chunks*:
    - Loads the current world state from `WorldStateService`.
    - Generates a memory chunk via the **memory-chunker** LLM prompt.
-   - Stores the enriched exchange back into the conversation thread ([MemoryStore](08-DATA-SCHEMAS.md)).
-5. **Episodic Memory Worker (`[workers](06-WORKERS.md)/episodic_memory_worker.py`)** – Builds episodes from a sequence of exchanges:
+   - Stores the enriched exchange back into the conversation thread (MemoryStore).
+5. **Episodic Memory Worker (`workers/episodic_memory_worker.py`)** – Builds episodes from a sequence of exchanges:
    - Waits for all memory chunks to be available.
    - Formats a session context for the **episodic-memory** LLM prompt.
    - Stores the resulting episode in SQLite through `EpisodicStorageService`.
 6. **Experience Assimilation Service** – Converts tool results into episodic memory. Runs on 60s poll cycle.
-7. **Cognitive Drift Engine** (`[services](04-ARCHITECTURE.md)/cognitive_drift_engine.py`) – Default Mode Network service. During idle periods (all queues empty), generates spontaneous thoughts via spreading activation and LLM synthesis. Stores as drift gists that surface in frontal cortex context.
-8. **Routing Stability Regulator** (`[services](04-ARCHITECTURE.md)/routing_stability_regulator_service.py`) – Single authority for mode router weight mutation. Runs on 24h cycle, reads pressure signals, applies bounded corrections.
-9. **Routing Reflection Service** (`[services](04-ARCHITECTURE.md)/routing_reflection_service.py`) – Idle-time peer review of routing decisions via strong LLM. Feeds dimensional analysis into pressure signals consumed by the regulator.
+7. **Cognitive Drift Engine** (`services/cognitive_drift_engine.py`) – Default Mode Network service. During idle periods (all queues empty), generates spontaneous thoughts via spreading activation and LLM synthesis. Stores as drift gists that surface in frontal cortex context.
+8. **Routing Stability Regulator** (`services/routing_stability_regulator_service.py`) – Single authority for mode router weight mutation. Runs on 24h cycle, reads pressure signals, applies bounded corrections.
+9. **Routing Reflection Service** (`services/routing_reflection_service.py`) – Idle-time peer review of routing decisions via strong LLM. Feeds dimensional analysis into pressure signals consumed by the regulator.
 10. **Scheduler Service** – Fires due reminders and scheduled tasks. Runs on 60s poll cycle.
 11. **Thread Expiry Service** – Expires stale conversation threads. Runs on 5min poll cycle.
 12. **Autobiography Synthesis Service** – Synthesizes user narrative from interactions. Runs on 6h cycle.
 13. **Triage Calibration Service** – Scores triage/routing correctness. Runs on 24h cycle.
 14. **Profile Enrichment Service** – Enriches tool capability profiles. Runs on 6h cycle.
-15. **[MemoryStore](08-DATA-SCHEMAS.md) / SQLite** – [MemoryStore](08-DATA-SCHEMAS.md) holds queue topics and small runtime state. SQLite stores long-term episodic memories, semantic concepts, and routing decisions.
+15. **MemoryStore / SQLite** – MemoryStore holds queue topics and small runtime state. SQLite stores long-term episodic memories, semantic concepts, and routing decisions.
 
 ### Key Decisions
 - **Shared State** – `WorkerBase._update_shared_state` merges per-worker updates into a shared dictionary managed by the `WorkerManager`. This avoids global locks and keeps the worker pool lightweight.
@@ -44,8 +44,8 @@ The application processes user prompts through a pipeline of [workers](06-WORKER
 - **Mode-Specific Prompts** – Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT, IGNORE) has its own focused prompt template (~30-80 lines each), replacing the old combined 240-line prompt.
 - **Single Authority** – Multiple monitors observe routing quality but only the `RoutingStabilityRegulator` (24h cycle) mutates weights, preventing tug-of-war between independent monitors.
 - **Confidence Calculation** – `ThreadConversationService._calculate_new_confidence` uses a bounded reinforcement formula `new = current + (new_confidence - current) * 0.5`.
-- **Thread Context** – Conversation threads are managed in [MemoryStore](08-DATA-SCHEMAS.md) with expiry, not persistent files. Thread state includes active topic, confidence, and conversation history.
-- **Error Handling** – All [workers](06-WORKERS.md) catch JSON decoding errors from LLM responses and log meaningful messages instead of crashing.
+- **Thread Context** – Conversation threads are managed in MemoryStore with expiry, not persistent files. Thread state includes active topic, confidence, and conversation history.
+- **Error Handling** – All workers catch JSON decoding errors from LLM responses and log meaningful messages instead of crashing.
 
 ### Error Recovery Per Pipeline Stage
 
@@ -86,7 +86,7 @@ The `/chat` endpoint uses Server-Sent Events for real-time streaming:
 1. Client sends `POST /chat` with `{text, source}`
 2. Server returns `text/event-stream` with `X-Request-ID` header
 3. Background thread runs `digest_worker` with the request UUID
-4. Server listens on `sse:{uuid}` [MemoryStore](08-DATA-SCHEMAS.md) pub/sub channel
+4. Server listens on `sse:{uuid}` MemoryStore pub/sub channel
 5. Events flow: `status:processing` → `status:thinking` → `message:{response}` → `done`
 6. Keepalive pings every 15s; status updates every 20s; 360s hard timeout
 7. If background thread completes without pub/sub (race condition), server polls `output:{request_id}` key as fallback

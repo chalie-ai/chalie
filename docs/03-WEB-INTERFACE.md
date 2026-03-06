@@ -1,6 +1,6 @@
 # Radiant Design System: Cinematic Dark UI for AI
 
-The Radiant Design System provides a cinematic, attention-first dark user interface for Chalie. See also [Vision](00-VISION.md) and [Architecture](04-ARCHITECTURE.md).
+The Radiant Design System provides a cinematic, attention-first dark user interface for Chalie. See also Vision and Architecture.
 
 
 The Chalie web interface is a collection of three single-page applications: the main chat interface, the cognitive dashboard ("Brain"), and the onboarding wizard. All follow the **Radiant design system** for a cinematic, restrained dark UI.
@@ -219,7 +219,7 @@ All three sizes maintain Radiant design fidelity.
 
 ## References
 
-See `CLAUDE.md` "Design [Philosophy](00-[VISION](00-VISION.md).md): Radiant" for the authoritative design specification. This document is a UI-specific interpretation of that design system.
+See `CLAUDE.md` "Design Philosophy: Radiant" for the authoritative design specification. This document is a UI-specific interpretation of that design system.
 
 ## Related Documentation
 - [Vision & Philosophy](00-VISION.md)

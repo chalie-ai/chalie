@@ -1,11 +1,11 @@
 # Cognitive Router: 5ms Deterministic Mode Selection
 
-Chalie's cognitive router deterministically selects the optimal execution mode in under 5ms without requiring an LLM call. See also [Workflow](05-WORKFLOW.md) and [Architecture](04-ARCHITECTURE.md).
+Chalie's cognitive router deterministically selects the optimal execution mode in under 5ms without requiring an LLM call. See also Workflow and Architecture.
 
 
 ## Overview
 
-This document defines the cognitive [architecture](04-ARCHITECTURE.md) for mode routing and response generation. User input flows through classification, **deterministic mode routing** (~5ms), and mode-specific LLM generation.
+This document defines the cognitive architecture for mode routing and response generation. User input flows through classification, **deterministic mode routing** (~5ms), and mode-specific LLM generation.
 
 Mode selection is decoupled from response generation. A mathematical router selects the engagement mode using observable signals, then a mode-specific prompt drives the LLM to generate the response. A small LLM tie-breaker handles ambiguous cases.
 
