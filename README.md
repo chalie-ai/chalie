@@ -1,4 +1,4 @@
-# Chalie — Self-Hosted AI Assistant with Persistent Memory and Deterministic Routing
+# Chalie AI — Self-Hosted Local AI Assistant with Persistent Memory, Semantic Retrieval & Deterministic Routing for Privacy-Conscious Developers
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-green.svg)](#getting-started) [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)](#status) [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20macOS-lightgrey.svg)](#getting-started)
 
@@ -9,9 +9,7 @@
 
 > A personal intelligence layer that protects your attention, executes your intent, and involves you only when it truly matters.
 
-Chalie is a self-hosted AI assistant designed for privacy-conscious users who demand persistent memory, deterministic routing, and local-first deployment. This cognitive layer handles routine tasks autonomously while involving users only when human judgment is essential. Built with semantic retrieval, adaptive mode routing, and proactive presence capabilities, Chalie maintains context across sessions through its layered memory architecture. The system operates entirely on your machine, ensuring complete data sovereignty while providing intelligent automation for lists, scheduling, web search, and more.
-
-Chalie doesn't replace user judgment—it exercises it on behalf of the user and defers to human oversight when critical decisions arise.
+Chalie is an open-source, self-hosted AI assistant built for privacy-conscious developers and power users who require persistent memory, semantic retrieval, deterministic routing, and complete local-first deployment. This intelligent cognitive layer autonomously handles routine tasks while deferring to human judgment when critical decisions arise. Built with advanced semantic search capabilities, adaptive mode routing, proactive presence features, and a layered memory architecture that maintains context across sessions, Chalie operates entirely on your machine ensuring full data sovereignty. The system provides intelligent automation for natural language lists, smart scheduling, web search integration, multi-provider LLM support (Ollama, OpenAI, Anthropic, Google Gemini), and extensible sandboxed tools—all without telemetry, analytics, or background sync to external servers.
 
 <img src="docs/images/cognition.png" width="700" alt="Cognition" />
 
