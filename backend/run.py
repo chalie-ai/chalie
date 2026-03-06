@@ -274,6 +274,9 @@ def main():
     manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 
+    from workers.folder_watcher_worker import folder_watcher_worker
+    manager.register_service("folder-watcher-service", folder_watcher_worker)
+
     # Moment enrichment service
     from services.moment_enrichment_service import moment_enrichment_worker
     manager.register_service("moment-enrichment-service", moment_enrichment_worker)

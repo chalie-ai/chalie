@@ -354,6 +354,22 @@ class DatabaseService:
                 pending_count += 1
                 logger.info(f"Migration applied: {filename}")
 
+            # Idempotent column additions (SQLite lacks ADD COLUMN IF NOT EXISTS).
+            # Each tuple: (table, column, column_def, optional_index_sql).
+            _optional_columns = [
+                ("documents", "watched_folder_id", "TEXT REFERENCES watched_folders(id)",
+                 "CREATE INDEX IF NOT EXISTS idx_documents_watched_folder ON documents(watched_folder_id) WHERE watched_folder_id IS NOT NULL"),
+            ]
+            for table, col, col_def, *extra in _optional_columns:
+                cursor.execute(f"PRAGMA table_info({table})")
+                existing_cols = {row[1] for row in cursor.fetchall()}
+                if col not in existing_cols:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+                    logger.info(f"Added column {table}.{col}")
+                # Always try to create the index (idempotent)
+                if extra and extra[0]:
+                    cursor.execute(extra[0])
+
             if pending_count == 0:
                 logger.info("No pending migrations")
             else:

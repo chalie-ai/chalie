@@ -147,6 +147,7 @@
                 <h2>Documents</h2>
                 <div class="panel-header-actions">
                     <input type="text" id="docSearchInput" class="doc-search-input" placeholder="Search documents...">
+                    <button class="btn btn-secondary" id="docWatchFolderBtn">Watch Folder</button>
                     <button class="btn btn-primary" id="docUploadBtn">+ Upload</button>
                 </div>
             </div>
@@ -154,6 +155,13 @@
                 <button class="filter-tab active" data-filter="active">Active</button>
                 <button class="filter-tab" data-filter="processing">Processing</button>
                 <button class="filter-tab" data-filter="deleted">Deleted</button>
+            </div>
+            <div class="watched-folders-panel" id="watchedFoldersPanel" style="display:none">
+                <div class="watched-folders-header" id="watchedFoldersToggle">
+                    <h4>Watched Folders</h4>
+                    <span class="watched-folders-chevron">▾</span>
+                </div>
+                <div class="watched-folders-list" id="watchedFoldersList"></div>
             </div>
             <div class="doc-list" id="docList">
                 <div class="loading">Loading documents...</div>
@@ -492,6 +500,60 @@
                 <button class="btn btn-secondary" id="cancelDeleteListBtn">Cancel</button>
                 <button class="btn btn-danger" id="confirmDeleteListBtn">Delete</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Watch Folder Modal -->
+    <div class="modal-overlay hidden" id="watchFolderModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2 id="watchFolderModalTitle">Watch Folder</h2>
+                    <button class="btn-close" id="closeWatchFolderModal">✕</button>
+                </div>
+            </div>
+            <div class="dir-browser" id="dirBrowser">
+                <div class="dir-browser-path">
+                    <span id="dirBrowserPath">/</span>
+                    <button class="btn-icon" id="dirBrowserUp" title="Parent directory">↑</button>
+                </div>
+                <div class="dir-browser-list" id="dirBrowserList">
+                    <div class="loading">Loading…</div>
+                </div>
+            </div>
+            <form id="watchFolderForm">
+                <input type="hidden" id="watchFolderEditId" value="">
+                <input type="hidden" id="watchFolderPath" value="">
+                <div class="form-group">
+                    <label>Label</label>
+                    <input type="text" id="watchFolderLabel" placeholder="My Documents">
+                </div>
+                <div class="form-row">
+                    <div class="form-group" style="flex:1">
+                        <label>File Patterns</label>
+                        <input type="text" id="watchFolderPatterns" value="*" placeholder="*.pdf, *.docx">
+                        <small class="form-hint">Comma-separated glob patterns</small>
+                    </div>
+                    <div class="form-group" style="flex:1">
+                        <label>Ignore</label>
+                        <input type="text" id="watchFolderIgnore" value=".git, node_modules, __pycache__, build, dist, .DS_Store, Thumbs.db">
+                        <small class="form-hint">Comma-separated patterns to skip</small>
+                    </div>
+                </div>
+                <div class="form-row" style="align-items:center; gap:24px">
+                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
+                        <input type="checkbox" id="watchFolderRecursive" checked> Scan subdirectories
+                    </label>
+                    <div class="form-group" style="flex:0 0 160px; margin:0">
+                        <label>Scan interval (sec)</label>
+                        <input type="number" id="watchFolderInterval" value="300" min="60">
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelWatchFolderBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="saveWatchFolderBtn">Watch</button>
+                </div>
+            </form>
         </div>
     </div>
 

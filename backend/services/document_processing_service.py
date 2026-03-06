@@ -75,10 +75,16 @@ class DocumentProcessingService:
             doc_service.update_status(doc_id, 'processing')
 
             import os
+            # Watched folder docs store absolute paths; uploaded docs store relative paths.
+            # os.path.join already handles this correctly (absolute second arg wins).
             file_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
 
             # Step 2: Extract text
             text = _extract_text_from_file(file_path, doc['mime_type'])
+
+            # Step 2b: OCR fallback for image-only PDFs and images
+            if not text or not text.strip():
+                text = self._try_ocr(file_path, doc['mime_type'])
 
             if not text or not text.strip():
                 doc_service.update_status(doc_id, 'failed', 'No text could be extracted from this document.')
@@ -154,11 +160,17 @@ class DocumentProcessingService:
                                           'No text chunks could be created from this document.')
                 return False
 
-            # Step 12: Mark awaiting confirmation — unblocks the frontend immediately
-            doc_service.update_status(doc_id, 'awaiting_confirmation',
-                                      chunk_count=len(chunk_records))
-            logger.info(f"[DOC PROC] Document {doc_id} processed: {len(chunk_records)} chunks, "
-                        f"awaiting confirmation")
+            # Step 12: Set status — watched folder docs auto-confirm (no human in the loop)
+            if doc.get('source_type') == 'watched_folder':
+                doc_service.update_status(doc_id, 'ready',
+                                          chunk_count=len(chunk_records))
+                logger.info(f"[DOC PROC] Document {doc_id} auto-confirmed (watched folder): "
+                            f"{len(chunk_records)} chunks")
+            else:
+                doc_service.update_status(doc_id, 'awaiting_confirmation',
+                                          chunk_count=len(chunk_records))
+                logger.info(f"[DOC PROC] Document {doc_id} processed: {len(chunk_records)} chunks, "
+                            f"awaiting confirmation")
 
             # Step 13: LLM synthesis (non-blocking enrichment, 60s hard timeout)
             # Runs AFTER status change so the user isn't stuck waiting.
@@ -638,6 +650,20 @@ class DocumentProcessingService:
         if last_period > SUMMARY_MAX_CHARS // 2:
             return truncated[:last_period + 1]
         return truncated.strip()
+
+    def _try_ocr(self, file_path: str, mime_type: str) -> str:
+        """Attempt OCR for image-only PDFs and image files."""
+        try:
+            from services.ocr_service import ocr_pdf, ocr_image
+
+            if mime_type == 'application/pdf':
+                return ocr_pdf(file_path)
+            elif mime_type and mime_type.startswith('image/'):
+                return ocr_image(file_path)
+            return ''
+        except Exception as e:
+            logger.warning(f'[DOC PROC] OCR fallback failed: {e}')
+            return ''
 
     def _detect_language(self, text: str) -> str:
         """Detect document language from first 1000 chars."""

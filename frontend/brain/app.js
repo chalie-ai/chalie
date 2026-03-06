@@ -65,6 +65,9 @@ const JOBS = [
     { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Resolves ambiguous routing with binary A-vs-B decision. Must be fast.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~600',  frequency: '<5% of messages',    strengths: ['Fast Inference', 'Classification'] },
     { id: 'topic-namer',     name: 'Topic Namer',     desc: 'Generates short display names for conversation topics.',               badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~550',  frequency: '5–10% of messages',  strengths: ['Fast Inference'] },
 
+    // ── Vision ────────────────────────────────────────────────
+    { id: 'document-ocr',    name: 'Document OCR',    desc: 'Extracts text from image-only PDFs and scanned documents via vision LLM.',  badge: 'Vision', badgeClass: 'badge-vision', tokens: '~1.5K', frequency: 'Per image-only document', strengths: ['Vision', 'OCR', 'Extraction'] },
+
 ];
 
 // ==========================================
@@ -2870,6 +2873,7 @@ async function loadDocuments() {
         const data = await res.json();
         allDocuments = data.items || [];
         renderDocuments();
+        loadWatchedFolders();
     } catch (e) {
         el.innerHTML = '<div class="empty-state"><p>Failed to load documents.</p></div>';
     }
@@ -2936,6 +2940,7 @@ function renderDocuments() {
                 <div class="doc-row__name">
                     <span class="doc-icon">${getDocIcon(doc.mime_type)}</span>
                     <span>${escapeHtml(doc.original_name)}</span>
+                    ${doc.watched_folder_id ? '<span class="doc-folder-badge" title="From watched folder">⊙</span>' : ''}
                     ${typeBadge}
                     <span class="doc-status ${statusClass}">${doc.status}</span>
                 </div>
@@ -3095,6 +3100,249 @@ document.getElementById('docPreviewClose')?.addEventListener('click', () => {
 document.getElementById('docPreviewOverlay')?.addEventListener('click', (e) => {
     if (e.target.id === 'docPreviewOverlay') e.target.style.display = 'none';
 });
+
+// ==========================================
+// Watched Folders
+// ==========================================
+
+async function loadWatchedFolders() {
+    try {
+        const res = await apiFetch('/documents/watched-folders');
+        if (!res.ok) return;
+        const data = await res.json();
+        const folders = data.items || [];
+        const panel = document.getElementById('watchedFoldersPanel');
+        if (folders.length > 0) {
+            panel.style.display = '';
+            renderWatchedFolders(folders);
+        } else {
+            panel.style.display = 'none';
+        }
+    } catch (e) { console.error('[WatchedFolders] load error:', e); }
+}
+
+
+function renderWatchedFolders(folders) {
+    const el = document.getElementById('watchedFoldersList');
+    el.innerHTML = folders.map(f => {
+        const disabled = !f.enabled;
+        const lastScan = f.last_scan_at
+            ? `Last scan: ${new Date(f.last_scan_at).toLocaleString()} · ${f.last_scan_files} files`
+            : 'Not scanned yet';
+        const error = f.last_scan_error
+            ? `<span style="color:#ff4d4d;font-size:11px"> · ${escapeHtml(f.last_scan_error)}</span>`
+            : '';
+
+        return `<div class="watched-folder-row ${disabled ? 'watched-folder-disabled' : ''}">
+            <div class="watched-folder-info">
+                <div class="watched-folder-label">${escapeHtml(f.label || f.folder_path)}</div>
+                <div class="watched-folder-path">${escapeHtml(f.folder_path)}</div>
+                <div class="watched-folder-stats">${lastScan}${error}</div>
+            </div>
+            <div class="watched-folder-actions">
+                <label class="toggle-switch" title="${disabled ? 'Enable' : 'Disable'}">
+                    <input type="checkbox" ${disabled ? '' : 'checked'} onchange="toggleWatchFolder('${f.id}', this.checked)">
+                    <span class="slider"></span>
+                </label>
+                <button class="btn-icon scan-btn" title="Scan now" onclick="triggerFolderScan('${f.id}')">⟳</button>
+                <button class="btn-icon" title="Edit" onclick="openWatchFolderModal('${f.id}')">✎</button>
+                <button class="btn-icon delete-btn" title="Delete" onclick="deleteWatchFolder('${f.id}')">✕</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// Toggle watched folders panel
+document.getElementById('watchedFoldersToggle')?.addEventListener('click', () => {
+    document.getElementById('watchedFoldersPanel').classList.toggle('collapsed');
+});
+
+// Watch Folder button
+document.getElementById('docWatchFolderBtn')?.addEventListener('click', () => openWatchFolderModal());
+
+let _currentBrowsePath = null;
+
+async function openWatchFolderModal(editId) {
+    const modal = document.getElementById('watchFolderModal');
+    const title = document.getElementById('watchFolderModalTitle');
+    const pathInput = document.getElementById('watchFolderPath');
+    const editIdInput = document.getElementById('watchFolderEditId');
+    const saveBtn = document.getElementById('saveWatchFolderBtn');
+
+    editIdInput.value = editId || '';
+
+    if (editId) {
+        title.textContent = 'Edit Watched Folder';
+        saveBtn.textContent = 'Save';
+        try {
+            const res = await apiFetch(`/documents/watched-folders`);
+            const data = await res.json();
+            const folder = (data.items || []).find(f => f.id === editId);
+            if (folder) {
+                pathInput.value = folder.folder_path;
+                document.getElementById('watchFolderLabel').value = folder.label || '';
+                const pats = Array.isArray(folder.file_patterns) ? folder.file_patterns : ['*'];
+                document.getElementById('watchFolderPatterns').value = pats.join(', ');
+                const igns = Array.isArray(folder.ignore_patterns) ? folder.ignore_patterns : [];
+                document.getElementById('watchFolderIgnore').value = igns.join(', ');
+                document.getElementById('watchFolderRecursive').checked = !!folder.recursive;
+                document.getElementById('watchFolderInterval').value = folder.scan_interval || 300;
+                _currentBrowsePath = folder.folder_path;
+            }
+        } catch { /* fallthrough */ }
+    } else {
+        title.textContent = 'Watch Folder';
+        saveBtn.textContent = 'Watch';
+        pathInput.value = '';
+        document.getElementById('watchFolderLabel').value = '';
+        document.getElementById('watchFolderPatterns').value = '*';
+        document.getElementById('watchFolderIgnore').value = '.git, node_modules, __pycache__, build, dist, .DS_Store, Thumbs.db';
+        document.getElementById('watchFolderRecursive').checked = true;
+        document.getElementById('watchFolderInterval').value = 300;
+        _currentBrowsePath = null;
+    }
+
+    modal.classList.remove('hidden');
+    browseDirectory(_currentBrowsePath);
+}
+
+async function browseDirectory(path) {
+    const listEl = document.getElementById('dirBrowserList');
+    const pathEl = document.getElementById('dirBrowserPath');
+    listEl.innerHTML = '<div class="loading">Loading…</div>';
+
+    try {
+        const body = path ? { path } : {};
+        const res = await apiFetch('/documents/watched-folders/browse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            listEl.innerHTML = `<div class="dir-browser-empty">${escapeHtml(err.error || 'Cannot read directory')}</div>`;
+            return;
+        }
+        const data = await res.json();
+        _currentBrowsePath = data.current;
+        pathEl.textContent = data.current;
+
+        // Update the hidden path field and derive label
+        document.getElementById('watchFolderPath').value = data.current;
+        if (!document.getElementById('watchFolderEditId').value) {
+            const basename = data.current.split('/').filter(Boolean).pop() || '';
+            if (!document.getElementById('watchFolderLabel').value) {
+                document.getElementById('watchFolderLabel').value = basename;
+            }
+        }
+
+        // Set parent nav
+        const upBtn = document.getElementById('dirBrowserUp');
+        upBtn.onclick = data.parent ? () => browseDirectory(data.parent) : null;
+        upBtn.style.opacity = data.parent ? '1' : '0.3';
+
+        if (data.directories.length === 0) {
+            listEl.innerHTML = '<div class="dir-browser-empty">No subdirectories</div>';
+        } else {
+            listEl.innerHTML = data.directories.map(d =>
+                `<div class="dir-browser-item" onclick="browseDirectory('${escapeHtml(data.current)}/${escapeHtml(d)}')">${escapeHtml(d)}</div>`
+            ).join('');
+        }
+    } catch (e) {
+        listEl.innerHTML = '<div class="dir-browser-empty">Failed to browse directory</div>';
+    }
+}
+
+// Watch Folder form submit
+document.getElementById('watchFolderForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const editId = document.getElementById('watchFolderEditId').value;
+    const folderPath = document.getElementById('watchFolderPath').value;
+    if (!folderPath) {
+        showToast('Select a folder first', 'error');
+        return;
+    }
+
+    const patternsRaw = document.getElementById('watchFolderPatterns').value;
+    const ignoreRaw = document.getElementById('watchFolderIgnore').value;
+    const filePatterns = patternsRaw.split(',').map(s => s.trim()).filter(Boolean);
+    const ignorePatterns = ignoreRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+    const payload = {
+        folder_path: folderPath,
+        label: document.getElementById('watchFolderLabel').value.trim() || null,
+        file_patterns: filePatterns,
+        ignore_patterns: ignorePatterns,
+        recursive: document.getElementById('watchFolderRecursive').checked,
+        scan_interval: parseInt(document.getElementById('watchFolderInterval').value) || 300,
+    };
+
+    try {
+        const url = editId
+            ? `/documents/watched-folders/${editId}`
+            : '/documents/watched-folders';
+        const method = editId ? 'PUT' : 'POST';
+        const res = await apiFetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+            showToast(editId ? 'Watched folder updated' : 'Folder watch started', 'success');
+            document.getElementById('watchFolderModal').classList.add('hidden');
+            loadDocuments();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to save', 'error');
+        }
+    } catch { showToast('Failed to save watched folder', 'error'); }
+});
+
+// Close / cancel watch folder modal
+document.getElementById('closeWatchFolderModal')?.addEventListener('click', () => {
+    document.getElementById('watchFolderModal').classList.add('hidden');
+});
+document.getElementById('cancelWatchFolderBtn')?.addEventListener('click', () => {
+    document.getElementById('watchFolderModal').classList.add('hidden');
+});
+document.getElementById('watchFolderModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'watchFolderModal') e.target.classList.add('hidden');
+});
+
+async function toggleWatchFolder(id, enabled) {
+    try {
+        await apiFetch(`/documents/watched-folders/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+        });
+        loadWatchedFolders();
+    } catch { showToast('Failed to toggle folder', 'error'); }
+}
+
+async function triggerFolderScan(id) {
+    try {
+        const res = await apiFetch(`/documents/watched-folders/${id}/scan`, { method: 'POST' });
+        if (res.ok) {
+            showToast('Scan requested — results in next cycle', 'success');
+        } else {
+            showToast('Failed to trigger scan', 'error');
+        }
+    } catch { showToast('Failed to trigger scan', 'error'); }
+}
+
+async function deleteWatchFolder(id) {
+    if (!confirm('Remove this folder watch? Documents already indexed will remain.')) return;
+    try {
+        const res = await apiFetch(`/documents/watched-folders/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Folder watch removed', 'success');
+            loadDocuments();
+        } else {
+            showToast('Failed to remove folder watch', 'error');
+        }
+    } catch { showToast('Failed to remove folder watch', 'error'); }
+}
 
 // ==========================================
 // Start
