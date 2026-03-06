@@ -1076,6 +1076,36 @@ class ToolRegistryService:
             if tool["manifest"].get("trigger", {}).get("type") == "on_demand"
         ]
 
+    def get_ambient_tools(self) -> List[dict]:
+        """
+        Return on-demand tools eligible for ambient/proactive invocation.
+
+        All on-demand tools are ambient-eligible by default. Tools opt OUT via:
+          "ambient": {"enabled": false}
+
+        Tools can customize background scanning params via:
+          "ambient": {"default_params": {"limit": 3, ...}}
+
+        Returns:
+            List of {"name": str, "manifest": dict, "default_params": dict}
+        """
+        result = []
+        for name, tool in self.tools.items():
+            trigger_type = tool["manifest"].get("trigger", {}).get("type")
+            if trigger_type != "on_demand":
+                continue
+
+            ambient = tool["manifest"].get("ambient", {})
+            if not ambient.get("enabled", True):
+                continue
+
+            result.append({
+                "name": name,
+                "manifest": tool["manifest"],
+                "default_params": ambient.get("default_params", {}),
+            })
+        return result
+
     def get_cron_tools(self) -> List[dict]:
         """
         Return cron tools with schedule, prompt, image/runner, sandbox config, and tool directory.
