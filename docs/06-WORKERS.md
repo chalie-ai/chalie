@@ -1,9 +1,6 @@
-# Chalie Worker Processes Overview - Background Tasks & Service Management
+# Background Workers: 20+ Daemon Threads in a Single Process
 
-This comprehensive guide covers worker processes, background tasks, service management, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Tools](09-TOOLS.md) System Documentation](../docs/09-[TOOLS](09-TOOLS.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Chalie uses over 20 background daemon threads within a single Python process to handle asynchronous tasks without external message queues. See also [Architecture](04-ARCHITECTURE.md) and [Workflow](05-WORKFLOW.md).
 
 
 ## Queue Workers
@@ -112,12 +109,8 @@ On `SIGTERM` or `SIGINT`:
 - [Quick Start Guide](01-QUICK-START.md)
 - [LLM Providers Setup](02-PROVIDERS-SETUP.md)
 - [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+---
+## Related Documentation
+- [Architecture](04-ARCHITECTURE.md)
+- [Workflow](05-WORKFLOW.md)
 - [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)

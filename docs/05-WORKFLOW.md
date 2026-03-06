@@ -1,9 +1,6 @@
-# Chalie Request Workflow - Step-by-Step Prompt Processing Pipeline Guide
+# Message Pipeline: From User Input to Response in 15 Steps
 
-This comprehensive guide covers request workflow, prompt processing, step-by-step guide, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Message Flow](13-MESSAGE-FLOW.md) Diagrams](../docs/13-MESSAGE-FLOW.md) | [[Cognitive [Architecture](04-ARCHITECTURE.md)](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) Guide](../docs/07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Understand the end-to-end lifecycle of a message in Chalie, from initial input to final response across 15 distinct steps. See also [Message Flow](13-MESSAGE-FLOW.md) and [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md).
 
 
 ## Overview
@@ -117,13 +114,8 @@ The `/chat` endpoint uses Server-Sent Events for real-time streaming:
 - [Vision & Philosophy](00-VISION.md)
 - [Quick Start Guide](01-QUICK-START.md)
 - [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+---
+## Related Documentation
+- [Message Flow](13-MESSAGE-FLOW.md)
+- [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md)
+- [Architecture](04-ARCHITECTURE.md)

@@ -1,9 +1,6 @@
-# Chalie LLM Providers Setup - Configure Ollama, Anthropic, OpenAI, Gemini API
+# LLM Provider Setup: Ollama, OpenAI, Anthropic, Gemini
 
-This comprehensive guide covers LLM provider configuration, Ollama setup, Anthropic API, providing essential information for developers and users. For related topics, see: [[Quick Start](01-QUICK-START.md) Guide](../docs/01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Tools](09-TOOLS.md) System Documentation](../docs/09-[TOOLS](09-TOOLS.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Chalie supports multiple LLM providers including local Ollama models and cloud APIs from OpenAI, Anthropic, and Google Gemini. This guide walks through configuring each provider. See also [Quick Start](01-QUICK-START.md) and [Architecture](04-ARCHITECTURE.md).
 
 
 After deploying the application, you can configure LLM providers through the [web interface](03-WEB-INTERFACE.md).
@@ -167,11 +164,8 @@ If you need to use embedding models (e.g., `embeddinggemma` from Ollama):
 - [Web Interface](03-WEB-INTERFACE.md)
 - [System Architecture](04-ARCHITECTURE.md)
 - [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+---
+## Related Documentation
+- [Quick Start](01-QUICK-START.md)
+- [Architecture](04-ARCHITECTURE.md)
 - [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)

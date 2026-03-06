@@ -1,9 +1,6 @@
-# Chalie Web Interface Documentation - UI Requirements & Frontend [Architecture](04-ARCHITECTURE.md)
+# Radiant Design System: Cinematic Dark UI for AI
 
-This comprehensive guide covers Chalie web UI, frontend interface, user dashboard, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [[Quick Start](01-QUICK-START.md) Guide](../docs/01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+The Radiant Design System provides a cinematic, attention-first dark user interface for Chalie. See also [Vision](00-VISION.md) and [Architecture](04-ARCHITECTURE.md).
 
 
 The Chalie web interface is a collection of three single-page applications: the main chat interface, the cognitive dashboard ("Brain"), and the onboarding wizard. All follow the **Radiant design system** for a cinematic, restrained dark UI.
@@ -232,9 +229,8 @@ See `CLAUDE.md` "Design [Philosophy](00-[VISION](00-VISION.md).md): Radiant" for
 - [Workflow Guide](05-WORKFLOW.md)
 - [Workers Overview](06-WORKERS.md)
 - [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+---
+## Related Documentation
+- [Architecture](04-ARCHITECTURE.md)
+- [Message Flow](13-MESSAGE-FLOW.md)
+- [Vision](00-VISION.md)
