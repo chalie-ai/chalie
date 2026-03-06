@@ -1,6 +1,6 @@
 # Chalie Context Relevance Pre-parser - Token Optimization & Selective Injection
 
-This comprehensive guide covers context relevance, token optimization, selective context injection, providing essential information for developers and users. For related topics, see: [Request Processing Workflow](../docs/05-WORKFLOW.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Testing Documentation](../docs/12-TESTING.md)
+This comprehensive guide covers context relevance, token optimization, selective context injection, providing essential information for developers and users. For related topics, see: [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Testing](12-TESTING.md) Documentation](../docs/12-[TESTING](12-TESTING.md).md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -12,12 +12,12 @@ The **Context Relevance Pre-Parser** is a deterministic, rule-based service that
 
 ## Motivation
 
-Previously, **every response generation** retrieved and injected ALL context nodes (episodic memory, identity, user traits, facts, gists, focus, tools, skills, etc.) into every prompt — regardless of whether the mode-specific template even referenced them.
+Previously, **every response generation** retrieved and injected ALL context nodes (episodic memory, identity, user traits, facts, gists, focus, [tools](09-TOOLS.md), skills, etc.) into every prompt — regardless of whether the mode-specific template even referenced them.
 
 ### Example Waste
 An ACKNOWLEDGE for "Hey!" would trigger:
 - sqlite-vec vector search for episodic memory
-- MemoryStore reads for facts, gists, working memory
+- [MemoryStore](08-DATA-SCHEMAS.md) reads for facts, gists, working memory
 - Skill registry queries
 
 None of which the ACKNOWLEDGE template even uses.
@@ -25,14 +25,14 @@ None of which the ACKNOWLEDGE template even uses.
 ### Expected Savings
 | Mode | I/O Skipped | Token Savings |
 |------|-------------|---------------|
-| ACKNOWLEDGE | 5 MemoryStore reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
+| ACKNOWLEDGE | 5 [MemoryStore](08-DATA-SCHEMAS.md) reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
 | CLARIFY (warm) | 1 PG vector search, skill queries | ~500-1500 |
 | RESPOND (greeting) | 1 PG vector search, focus queries | ~800-2000 |
 | ACT | Identity/trait lookups | ~300-800 |
 
 **Pre-parser execution**: < 0.5ms (pure dict lookups).
 
-## Architecture
+## [Architecture](04-ARCHITECTURE.md)
 
 ### Seven-Layer Pipeline
 
@@ -191,7 +191,7 @@ Force-include under specific conditions:
 The service is invoked in `digest_worker.py` before response generation:
 
 ```python
-from services.context_relevance_service import ContextRelevanceService
+from [services](04-ARCHITECTURE.md).context_relevance_service import ContextRelevanceService
 
 # Compute inclusion map
 context_relevance_service = ContextRelevanceService()
@@ -265,7 +265,7 @@ Fields:
 - **Circular dependencies**: Raises `ConfigError` at config load time
 - **Config load failure**: Falls back to "include all" with warning
 
-## Testing
+## [Testing](12-TESTING.md)
 
 Comprehensive unit tests cover:
 - Template mask correctness per mode
@@ -343,7 +343,7 @@ Define new dependency relationships:
 ## Implementation Details
 
 ### Service Class
-- `backend/services/context_relevance_service.py`
+- `backend/[services](04-ARCHITECTURE.md)/context_relevance_service.py`
 - `ContextRelevanceService` — Main service class
 - `compute_inclusion_map()` — Core method (returns `{node: True/False}`)
 
@@ -351,8 +351,8 @@ Define new dependency relationships:
 - `backend/configs/agents/context-relevance.json` — Configuration
 
 ### Integration Points
-- `backend/workers/digest_worker.py` — Calls service before `generate_for_mode()`
-- `backend/services/frontal_cortex_service.py` — Uses `inclusion_map` in `_inject_parameters()`
+- `backend/[workers](06-WORKERS.md)/digest_worker.py` — Calls service before `generate_for_mode()`
+- `backend/[services](04-ARCHITECTURE.md)/frontal_cortex_service.py` — Uses `inclusion_map` in `_inject_parameters()`
 
 ## Disabling the Feature
 
@@ -371,4 +371,19 @@ All context nodes will be included (current behavior). Useful for debugging or w
 - **Machine learning-based rules** — Learn signal-to-exclusion mappings from interaction data
 - **Per-user config** — Different rules per user based on communication patterns
 - **Dynamic token budget** — Estimate remaining tokens from prompt + mode
-- **A/B testing framework** — Compare responses with/without context relevance pre-parsing
+- **A/B [testing](12-TESTING.md) framework** — Compare responses with/without context relevance pre-parsing
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

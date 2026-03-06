@@ -1,6 +1,6 @@
-# Chalie Cognitive Architecture - Mode Router, Decision Flow & AI Cognition
+# Chalie Cognitive [Architecture](04-ARCHITECTURE.md) - Mode Router, Decision Flow & AI Cognition
 
-This comprehensive guide covers cognitive architecture, mode router, decision flow, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Request Processing Workflow](../docs/05-WORKFLOW.md) | [Message Flow Diagrams](../docs/13-MESSAGE-FLOW.md)
+This comprehensive guide covers cognitive [architecture](04-ARCHITECTURE.md), mode router, decision flow, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Message Flow](13-MESSAGE-FLOW.md) Diagrams](../docs/13-MESSAGE-FLOW.md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -8,7 +8,7 @@ This comprehensive guide covers Chalie documentation, technical guide, providing
 
 ## Overview
 
-This document defines the cognitive architecture for mode routing and response generation. User input flows through classification, **deterministic mode routing** (~5ms), and mode-specific LLM generation.
+This document defines the cognitive [architecture](04-ARCHITECTURE.md) for mode routing and response generation. User input flows through classification, **deterministic mode routing** (~5ms), and mode-specific LLM generation.
 
 Mode selection is decoupled from response generation. A mathematical router selects the engagement mode using observable signals, then a mode-specific prompt drives the LLM to generate the response. A small LLM tie-breaker handles ambiguous cases.
 
@@ -153,9 +153,9 @@ Otherwise → generate_for_mode(selected_mode)
 
 ### Signal Collection
 
-The router collects signals from existing services (all MemoryStore reads, ~5ms total) plus NLP regex patterns (<1ms):
+The router collects signals from existing [services](04-ARCHITECTURE.md) (all [MemoryStore](08-DATA-SCHEMAS.md) reads, ~5ms total) plus NLP regex patterns (<1ms):
 
-**Context Signals (from MemoryStore):**
+**Context Signals (from [MemoryStore](08-DATA-SCHEMAS.md)):**
 - `context_warmth` (float 0-1)
 - `working_memory_turns` (int 0-4)
 - `gist_count` (int, excluding cold_start type)
@@ -420,7 +420,7 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 ## Adaptive Layer
 
-The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
+The **Adaptive Layer** (`[services](04-ARCHITECTURE.md)/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
 
 ### Style Detection (9 dimensions)
 
@@ -468,7 +468,7 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 
 - **Mode Router:** Deterministic mathematical function that selects engagement mode from observable signals
 - **Tie-Breaker:** Small LLM (qwen3:4b) consulted when top 2 modes are within effective margin
-- **Routing Signals:** Observable features collected from MemoryStore and NLP analysis (~5ms)
+- **Routing Signals:** Observable features collected from [MemoryStore](08-DATA-SCHEMAS.md) and NLP analysis (~5ms)
 - **Effective Margin:** Dynamic threshold for tie-breaker invocation (narrows with context warmth)
 - **Router Confidence:** Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal:** Metric logged by monitors, consumed by the single regulator
@@ -477,3 +477,18 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 - **Context Warmth:** Signal (0.0-1.0) measuring how much context is available for the current topic
 - **Anti-Oscillation Guard:** Per-request ephemeral score adjustment to prevent mode flip-flopping
 - **Hysteresis:** Stabilization mechanism that widens tie-breaker margin on low-confidence streaks
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

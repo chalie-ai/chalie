@@ -1,6 +1,6 @@
 # Chalie Data Schemas Documentation - MemoryStore & SQLite Database Structures
 
-This comprehensive guide covers data schemas, MemoryStore structure, SQLite database, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Testing Documentation](../docs/12-TESTING.md) | [Documentation Index](../docs/INDEX.md)
+This comprehensive guide covers data schemas, MemoryStore structure, SQLite database, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Testing](12-TESTING.md) Documentation](../docs/12-[TESTING](12-TESTING.md).md) | [Documentation Index](../docs/INDEX.md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -24,7 +24,7 @@ Queue topic names are defined in `configs/connections.json`.  Current topic queu
     "episodic_memory": "episodic-memory-queue"
 }
 ```
-Each key maps to a queue name that the worker services consume from.
+Each key maps to a queue name that the worker [services](04-ARCHITECTURE.md) consume from.
 
 ## SQLite – Episodes Table
 The `episodic_storage_service.py` inserts rows into the `episodes` table. The table schema (partial) is:
@@ -263,7 +263,7 @@ CREATE TABLE providers (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    type TEXT NOT NULL,  -- ollama, openai, anthropic, gemini
+    type TEXT NOT NULL,  -- [ollama](02-PROVIDERS-SETUP.md), [openai](02-PROVIDERS-SETUP.md), [anthropic](02-PROVIDERS-SETUP.md), [gemini](02-PROVIDERS-SETUP.md)
     endpoint TEXT,
     config JSONB,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -309,3 +309,18 @@ CREATE TABLE triage_calibration (
     created_at TIMESTAMP DEFAULT NOW()
 );
 ```
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

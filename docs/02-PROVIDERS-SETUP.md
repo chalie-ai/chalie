@@ -1,18 +1,18 @@
 # Chalie LLM Providers Setup - Configure Ollama, Anthropic, OpenAI, Gemini API
 
-This comprehensive guide covers LLM provider configuration, Ollama setup, Anthropic API, providing essential information for developers and users. For related topics, see: [Quick Start Guide](../docs/01-QUICK-START.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Tools System Documentation](../docs/09-TOOLS.md)
+This comprehensive guide covers LLM provider configuration, Ollama setup, Anthropic API, providing essential information for developers and users. For related topics, see: [[Quick Start](01-QUICK-START.md) Guide](../docs/01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Tools](09-TOOLS.md) System Documentation](../docs/09-[TOOLS](09-TOOLS.md).md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 
 
-After deploying the application, you can configure LLM providers through the web interface.
+After deploying the application, you can configure LLM providers through the [web interface](03-WEB-INTERFACE.md).
 
 ## Overview
 
 Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, etc.) are available to the system. All provider configuration is stored in the SQLite database.
 
-## Quick Start
+## [Quick Start](01-QUICK-START.md)
 
 ### 1. Start the Application
 
@@ -20,7 +20,7 @@ Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, etc.) ar
 python backend/run.py
 ```
 
-The web interface will be available at `http://localhost:8080`.
+The [web interface](03-WEB-INTERFACE.md) will be available at `http://localhost:8080`.
 
 ### 2. Access Provider Settings
 
@@ -150,7 +150,7 @@ curl -X PUT http://localhost:8080/providers/jobs/frontal-cortex \
 - Keep Ollama instances local or behind a firewall
 - Use HTTPS/TLS for remote API connections
 - Restrict file access to the SQLite database
-- Enable CORS appropriately for your deployment
+- Enable CORS appropriately for your [deployment](01-QUICK-START.md)
 
 ## Embedding Models
 
@@ -160,3 +160,18 @@ If you need to use embedding models (e.g., `embeddinggemma` from Ollama):
 2. Set the model name (e.g., `embeddinggemma:latest`)
 3. Set dimensions to match the model's output (usually 768)
 4. Ensure the system is configured to use this provider for embeddings
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

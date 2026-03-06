@@ -1,6 +1,6 @@
-# Chalie Web Interface Documentation - UI Requirements & Frontend Architecture
+# Chalie Web Interface Documentation - UI Requirements & Frontend [Architecture](04-ARCHITECTURE.md)
 
-This comprehensive guide covers Chalie web UI, frontend interface, user dashboard, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [Quick Start Guide](../docs/01-QUICK-START.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md)
+This comprehensive guide covers Chalie web UI, frontend interface, user dashboard, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [[Quick Start](01-QUICK-START.md) Guide](../docs/01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -222,4 +222,19 @@ All three sizes maintain Radiant design fidelity.
 
 ## References
 
-See `CLAUDE.md` "Design Philosophy: Radiant" for the authoritative design specification. This document is a UI-specific interpretation of that design system.
+See `CLAUDE.md` "Design [Philosophy](00-[VISION](00-VISION.md).md): Radiant" for the authoritative design specification. This document is a UI-specific interpretation of that design system.
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

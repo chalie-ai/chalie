@@ -1,6 +1,6 @@
-# Chalie Message Flow Diagrams - Visual Paths, MemoryStore Hits & LLM Calls
+# Chalie Message Flow Diagrams - Visual Paths, [MemoryStore](08-DATA-SCHEMAS.md) Hits & LLM Calls
 
-This comprehensive guide covers message flow diagrams, visual paths, MemoryStore hits, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Request Processing Workflow](../docs/05-WORKFLOW.md) | [Cognitive Architecture Guide](../docs/07-COGNITIVE-ARCHITECTURE.md)
+This comprehensive guide covers message flow diagrams, visual paths, [MemoryStore](08-DATA-SCHEMAS.md) hits, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Cognitive [Architecture](04-ARCHITECTURE.md)](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) Guide](../docs/07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -12,8 +12,8 @@ This document is the single authoritative visual map of how a user message trave
 ```
 ⚡ DET   — Deterministic (no LLM, <10ms)
 🧠 LLM   — LLM inference call
-📥 M     — MemoryStore READ
-📤 M     — MemoryStore WRITE
+📥 M     — [MemoryStore](08-DATA-SCHEMAS.md) READ
+📤 M     — [MemoryStore](08-DATA-SCHEMAS.md) WRITE
 📥 DB    — SQLite READ
 📤 DB    — SQLite WRITE
 ⏱ ~Xms  — Typical latency
@@ -176,7 +176,7 @@ This phase produces the routing decision in two separate layers.
 │  │                                                             │   │
 │  │  Context sent to LLM:                                      │   │
 │  │    • User text                                             │   │
-│  │    • Previous mode + tools used                            │   │
+│  │    • Previous mode + [tools](09-TOOLS.md) used                            │   │
 │  │    • Tool summaries (from profile service)                 │   │
 │  │    • Working memory summary (last 2 turns)                 │   │
 │  │    • context_warmth, memory_confidence, gist_count         │   │
@@ -184,7 +184,7 @@ This phase produces the routing decision in two separate layers.
 │  │  LLM output (JSON):                                        │   │
 │  │    branch:             respond | clarify | act             │   │
 │  │    mode:               RESPOND|CLARIFY|ACT|ACKNOWLEDGE…    │   │
-│  │    tools:              ["tool1", …]     (up to 3)          │   │
+│  │    [tools](09-TOOLS.md):              ["tool1", …]     (up to 3)          │   │
 │  │    skills:             ["recall", …]                       │   │
 │  │    confidence_internal: 0.0–1.0                            │   │
 │  │    confidence_tool_need: 0.0–1.0                           │   │
@@ -264,7 +264,7 @@ This phase produces the routing decision in two separate layers.
 │    • Chat history                                                   │
 │    • Assembled context (semantic retrieval)                         │
 │    • Drift gists (if idle thoughts exist)                           │
-│    • Context relevance inclusion map (computed dynamically)         │
+│    • [Context relevance](10-CONTEXT-RELEVANCE.md) inclusion map (computed dynamically)         │
 │                                                                     │
 │  Config files:                                                      │
 │    RESPOND      → frontal-cortex-respond.json                      │
@@ -308,7 +308,7 @@ Triggered when triage `branch=respond` but mode router selects ACT, **or** direc
 │  │     Action types:                                            │  │
 │  │       recall, memorize, introspect, associate               │  │
 │  │       schedule, list, focus, persistent_task                │  │
-│  │       (+ external tools via tool_worker thread)             │  │
+│  │       (+ external [tools](09-TOOLS.md) via tool_worker thread)             │  │
 │  │                                                              │  │
 │  │  4. Accumulate fatigue               ⚡ DET                 │  │
 │  │     cost *= (1.0 + fatigue_growth_rate × iteration)         │  │
@@ -336,7 +336,7 @@ Triggered when triage `branch=respond` but mode router selects ACT, **or** direc
 
 ## 5. Path B — ACT → Tool Worker (PromptQueue)
 
-Triggered when `CognitiveTriageService` selects `branch=act` and specific tools are named.
+Triggered when `CognitiveTriageService` selects `branch=act` and specific [tools](09-TOOLS.md) are named.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -366,7 +366,7 @@ Triggered when `CognitiveTriageService` selects `branch=act` and specific tools 
 │                                                                     │
 │  1. Dequeue from tool-queue                     📥 M  (Queue)      │
 │                                                                     │
-│  2. Get relevant tools                          📥 DB              │
+│  2. Get relevant [tools](09-TOOLS.md)                          📥 DB              │
 │     From triage_selected_tools, or compute via relevance           │
 │                                                                     │
 │  3. Dispatch each tool                                              │
@@ -561,7 +561,7 @@ Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Networ
 
 ## 9. Complete Storage Access Map
 
-### MemoryStore Keys Reference
+### [MemoryStore](08-DATA-SCHEMAS.md) Keys Reference
 
 ```
 Key Pattern                        TTL        Read    Written by
@@ -654,7 +654,7 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 Path              P50 Latency    Bottleneck
 ────────────────────────────────────────────────────────────
 A — Social Exit   ~400ms         Topic classifier LLM
-B — ACT + Tools   5s – 30s+      Tool execution (external)
+B — ACT + [Tools](09-TOOLS.md)   5s – 30s+      Tool execution (external)
 C — RESPOND       1s – 3s        Frontal cortex (primary LLM)
 C — CLARIFY       1s – 2s        Frontal cortex (primary LLM)
 C — ACT Loop      2s – 30s       N × frontal-cortex-act LLMs
@@ -662,15 +662,15 @@ D — Task Worker   30min cycle    Background, no user wait
 E — Drift         300s cycle     Background, no user wait
 
 Component latency breakdown (Path C RESPOND, typical):
-  Context assembly     <10ms   ── MemoryStore reads (all cached)
+  Context assembly     <10ms   ── [MemoryStore](08-DATA-SCHEMAS.md) reads (all cached)
   Intent classify      ~5ms    ── Deterministic
   Triage LLM           ~200ms  ── qwen3:4b
   Social filter        ~1ms    ── Regex
   Mode router          ~5ms    ── Math, no LLM
   Frontal cortex LLM   ~800ms  ── Primary model (varies by provider)
-  Working memory write <5ms    ── MemoryStore append
+  Working memory write <5ms    ── [MemoryStore](08-DATA-SCHEMAS.md) append
   DB event log         ~10ms   ── SQLite WAL write
-  WS publish           ~1ms    ── MemoryStore pub/sub
+  WS publish           ~1ms    ── [MemoryStore](08-DATA-SCHEMAS.md) pub/sub
   ─────────────────────────────────────────────────────────
   Total (typical)      ~1.1s
 ```
@@ -683,10 +683,25 @@ Component latency breakdown (Path C RESPOND, typical):
 |-----------|-------------------------------|
 | **Attention is sacred** | Social filter exits in <1ms — never wastes LLM for greetings; ACT fatigue model prevents runaway tool chains |
 | **Judgment over activity** | Two-layer routing: fast social filter first, then LLM triage only if needed; mode router is deterministic not generative |
-| **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
+| **Tool agnosticism** | `ActDispatcherService` routes all [tools](09-TOOLS.md) generically — no tool names anywhere in the Phase B/C infrastructure |
 | **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
 | **Single authority** | `RoutingStabilityRegulator` is the only process that mutates router weights (24h cycle); no tug-of-war possible |
 
 ---
 
 *Last updated: 2026-02-27. See `docs/INDEX.md` for the full documentation map.*
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

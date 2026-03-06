@@ -1,6 +1,6 @@
 # Chalie Documentation Index - Complete Guide & Reference
 
-This comprehensive guide covers Chalie documentation, cognitive assistant guide, AI system reference, providing essential information for developers and users. For related topics, see: [Quick Start Guide](01-QUICK-START.md) | [System Architecture Overview](04-ARCHITECTURE.md) | [Chalie Vision & Philosophy](00-VISION.md)
+This comprehensive guide covers Chalie documentation, cognitive assistant guide, AI system reference, providing essential information for developers and users. For related topics, see: [[Quick Start](01-QUICK-START.md) Guide](01-QUICK-START.md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Chalie [Vision](00-VISION.md) & [Philosophy](00-[VISION](00-VISION.md).md)](00-[VISION](00-VISION.md).md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -8,57 +8,57 @@ This comprehensive guide covers Chalie documentation, technical guide, providing
 
 Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
 
-## Vision & Philosophy
+## [Vision](00-VISION.md) & [Philosophy](00-[VISION](00-VISION.md).md)
 
 **Understand what Chalie is and why it exists:**
-- **[00-VISION.md](00-VISION.md)** — Product vision, design principles, delegation boundary, feature decision filter
+- **[00-[VISION](00-VISION.md).md](00-[VISION](00-VISION.md).md)** — Product [vision](00-VISION.md), design principles, delegation boundary, feature decision filter
 
 ## Getting Started
 
 **New to Chalie?** Start here:
-1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, deployment instructions
+1. **[01-QUICK-START.md](01-QUICK-START.md)** — [Quick start](01-QUICK-START.md) guide, prerequisites, [deployment](01-QUICK-START.md) instructions
 
 ## Setup & Configuration
 
 **Setting up Chalie for the first time?** Follow these guides in order:
-1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini)
+1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure [LLM providers](02-PROVIDERS-SETUP.md) ([Ollama](02-PROVIDERS-SETUP.md), [Anthropic](02-PROVIDERS-SETUP.md), [OpenAI](02-PROVIDERS-SETUP.md), [Gemini](02-PROVIDERS-SETUP.md))
 
 ## Understanding the System
 
 **Want to understand how Chalie works?** Read these in order:
-1. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — Complete system architecture, services, workers, data flow
-2. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual flow diagrams: every path, every MemoryStore/DB hit, every LLM call
-3. **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed step-by-step flow of prompt processing
-4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Deterministic mode router and decision flow
-5. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
-6. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for MemoryStore and SQLite
+1. **[04-[ARCHITECTURE](04-ARCHITECTURE.md).md](04-[ARCHITECTURE](04-ARCHITECTURE.md).md)** — Complete [system [architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md), [services](04-ARCHITECTURE.md), [workers](06-WORKERS.md), data flow
+2. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — [Visual flow diagrams](13-MESSAGE-FLOW.md): every path, every [MemoryStore](08-DATA-SCHEMAS.md)/DB hit, every LLM call
+3. **[05-[WORKFLOW](05-WORKFLOW.md).md](05-[WORKFLOW](05-WORKFLOW.md).md)** — Detailed step-by-step flow of [prompt processing](05-[WORKFLOW](05-WORKFLOW.md).md)
+4. **[07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md)** — [Deterministic mode](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) router and [decision flow](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md)
+5. **[06-[WORKERS](06-WORKERS.md).md](06-[WORKERS](06-WORKERS.md).md)** — [Worker processes](06-[WORKERS](06-WORKERS.md).md) and [services](04-ARCHITECTURE.md) overview
+6. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — [Data schemas](08-DATA-SCHEMAS.md) for [MemoryStore](08-DATA-SCHEMAS.md) and SQLite
 
 ## If You're a Developer Exploring the Codebase
 
 Recommended reading order for engineers:
-0. **[00-VISION.md](00-VISION.md)** — Start with why: product vision, design principles, and feature decision filter
+0. **[00-[VISION](00-VISION.md).md](00-[VISION](00-VISION.md).md)** — Start with why: product [vision](00-VISION.md), design principles, and feature decision filter
 1. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual map of every path, storage hit, and LLM call; fastest way to build a mental model
 
-2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; narrative explanation
-3. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
-4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
-5. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with sandboxed tools
-6. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Token optimization and selective context injection
+2. **[05-[WORKFLOW](05-WORKFLOW.md).md](05-[WORKFLOW](05-WORKFLOW.md).md)** — The full [request pipeline](05-[WORKFLOW](05-WORKFLOW.md).md) in 15 steps; narrative explanation
+3. **[04-[ARCHITECTURE](04-ARCHITECTURE.md).md](04-[ARCHITECTURE](04-ARCHITECTURE.md).md)** — All [services](04-ARCHITECTURE.md), [workers](06-WORKERS.md), and data flow in one place
+4. **[07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md)** — The [deterministic mode](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) router and decision logic
+5. **[09-[TOOLS](09-TOOLS.md).md](09-[TOOLS](09-TOOLS.md).md)** — How to extend Chalie with [sandboxed [tools](09-TOOLS.md)](09-[TOOLS](09-TOOLS.md).md)
+6. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — [Token optimization](10-CONTEXT-RELEVANCE.md) and [selective context injection](10-CONTEXT-RELEVANCE.md)
 
-## Tools & Extensions
+## [Tools](09-TOOLS.md) & Extensions
 
-**Building tools to extend Chalie's capabilities?**
-- **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, sandbox constraints, examples
-- **[14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md)** — First-party default tools installed on first startup, auto-install behavior, `--disable-default-tools`
+**Building [tools](09-TOOLS.md) to extend Chalie's capabilities?**
+- **[09-[TOOLS](09-TOOLS.md).md](09-[TOOLS](09-TOOLS.md).md)** — [Tools](09-TOOLS.md) [architecture](04-ARCHITECTURE.md), creating [tools](09-TOOLS.md), sandbox constraints, examples
+- **[14-DEFAULT-[TOOLS](09-TOOLS.md).md](14-DEFAULT-[TOOLS](09-TOOLS.md).md)** — First-party [default [tools](09-TOOLS.md)](14-DEFAULT-[TOOLS](09-TOOLS.md).md) installed on first startup, auto-install behavior, `--disable-default-[tools](09-TOOLS.md)`
 
 ## Performance & Optimization
 
 **Optimizing Chalie's performance?**
-- **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Context relevance pre-parser, selective context injection, configuration tuning
+- **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — [Context relevance](10-CONTEXT-RELEVANCE.md) pre-parser, [selective context injection](10-CONTEXT-RELEVANCE.md), configuration tuning
 
 ## User Interface
 
-**Building or modifying the web interface?**
+**Building or modifying the [web interface](03-WEB-INTERFACE.md)?**
 - **[03-WEB-INTERFACE.md](03-WEB-INTERFACE.md)** — Web UI requirements, layout, functionality
 
 ## Quick Reference
@@ -67,20 +67,20 @@ Recommended reading order for engineers:
 ```
 docs/
 ├── INDEX.md                          ← You are here
-├── 00-VISION.md                      ← Product vision & design compass
+├── 00-[VISION](00-VISION.md).md                      ← Product [vision](00-VISION.md) & design compass
 ├── 01-QUICK-START.md                 ← Getting started
 ├── 02-PROVIDERS-SETUP.md             ← LLM provider configuration
 ├── 03-WEB-INTERFACE.md               ← Web UI specification
-├── 04-ARCHITECTURE.md                ← System architecture
-├── 05-WORKFLOW.md                    ← Request processing pipeline
-├── 06-WORKERS.md                     ← Worker processes overview
-├── 07-COGNITIVE-ARCHITECTURE.md      ← Mode router & cognition
+├── 04-[ARCHITECTURE](04-ARCHITECTURE.md).md                ← [System [architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md)
+├── 05-[WORKFLOW](05-WORKFLOW.md).md                    ← Request processing pipeline
+├── 06-[WORKERS](06-WORKERS.md).md                     ← [Worker processes](06-[WORKERS](06-WORKERS.md).md) overview
+├── 07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md      ← Mode router & cognition
 ├── 08-DATA-SCHEMAS.md                ← Data structures
-├── 09-TOOLS.md                       ← Tools system & creation guide
-├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
-├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
-├── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
-└── 14-DEFAULT-TOOLS.md               ← Default tools installed on first startup
+├── 09-[TOOLS](09-TOOLS.md).md                       ← [Tools](09-TOOLS.md) system & creation guide
+├── 10-CONTEXT-RELEVANCE.md           ← [Context relevance](10-CONTEXT-RELEVANCE.md) pre-parser & optimization
+├── 12-[TESTING](12-TESTING.md).md                     ← Test conventions, fixtures, mock strategies
+├── 13-MESSAGE-FLOW.md                ← [Visual flow diagrams](13-MESSAGE-FLOW.md): all paths, [MemoryStore](08-DATA-SCHEMAS.md)/DB, LLM calls
+└── 14-DEFAULT-[TOOLS](09-TOOLS.md).md               ← [Default [tools](09-TOOLS.md)](14-DEFAULT-[TOOLS](09-TOOLS.md).md) installed on first startup
 ```
 
 ### Important Project Files (Not in docs/)
@@ -90,7 +90,7 @@ docs/
 - **`.env.example`** — Configuration template (PORT — all secrets auto-generate)
 
 ### Key Directories
-- **`backend/`** — Python backend (services, workers, API, configs, migrations)
+- **`backend/`** — Python backend ([services](04-ARCHITECTURE.md), [workers](06-WORKERS.md), API, configs, migrations)
 - **`frontend/interface/`** — Main chat web UI (HTML, CSS, JavaScript)
 - **`frontend/brain/`** — Admin/cognitive dashboard
 - **`frontend/on-boarding/`** — Account setup wizard
@@ -106,13 +106,13 @@ docs/
 3. Complete onboarding to configure your LLM provider (see 02-PROVIDERS-SETUP.md)
 
 ### Understanding a Specific Component
-- **Product philosophy?** → See 00-VISION.md — core principles, delegation boundary, behavioral guidelines
-- **Should we build this feature?** → See 00-VISION.md "Decision Filter" — 7 yes/no questions
-- **Memory system?** → See 04-ARCHITECTURE.md "Memory Hierarchy"
-- **How routing works?** → See 07-COGNITIVE-ARCHITECTURE.md
-- **Data flow?** → See 05-WORKFLOW.md or 04-ARCHITECTURE.md "Data Flow Pipeline"
-- **Worker responsibilities?** → See 06-WORKERS.md
-- **Tools & extensions?** → See 09-TOOLS.md
+- **Product [philosophy](00-[VISION](00-VISION.md).md)?** → See 00-[VISION](00-VISION.md).md — core principles, delegation boundary, behavioral guidelines
+- **Should we build this feature?** → See 00-[VISION](00-VISION.md).md "Decision Filter" — 7 yes/no questions
+- **Memory system?** → See 04-[ARCHITECTURE](04-ARCHITECTURE.md).md "Memory Hierarchy"
+- **How routing works?** → See 07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md
+- **Data flow?** → See 05-[WORKFLOW](05-WORKFLOW.md).md or 04-[ARCHITECTURE](04-ARCHITECTURE.md).md "Data Flow Pipeline"
+- **Worker responsibilities?** → See 06-[WORKERS](06-WORKERS.md).md
+- **[Tools](09-TOOLS.md) & extensions?** → See 09-[TOOLS](09-TOOLS.md).md
 
 ### Configuring a New LLM Provider
 1. Read 02-PROVIDERS-SETUP.md
@@ -124,26 +124,26 @@ docs/
 2. All code goes in `frontend/interface/` (HTML, CSS, JS)
 3. UI communicates with backend via REST API at `/chat`
 
-### Adding New Services or Workers
-1. Create file in `backend/services/` or `backend/workers/`
+### Adding New [Services](04-ARCHITECTURE.md) or [Workers](06-WORKERS.md)
+1. Create file in `backend/[services](04-ARCHITECTURE.md)/` or `backend/[workers](06-WORKERS.md)/`
 2. Register in `backend/run.py`
-3. Document in 06-WORKERS.md
+3. Document in 06-[WORKERS](06-WORKERS.md).md
 4. Add tests in `backend/tests/`
 
 ### Creating a New Tool
-1. Read 09-TOOLS.md for architecture and requirements
-2. Create `backend/tools/tool_name/` directory
+1. Read 09-[TOOLS](09-TOOLS.md).md for [architecture](04-ARCHITECTURE.md) and requirements
+2. Create `backend/[tools](09-TOOLS.md)/tool_name/` directory
 3. Add `manifest.json` (metadata, parameters, trigger type)
 4. Add `Dockerfile` (container image definition)
 5. Implement tool logic in your language of choice
-6. Configure via REST API (`PUT /tools/<name>/config`)
+6. Configure via REST API (`PUT /[tools](09-TOOLS.md)/<name>/config`)
 
-## Architecture Quick Facts
+## [Architecture](04-ARCHITECTURE.md) Quick Facts
 
 - **Language**: Python 3.9+
-- **Databases**: SQLite (WAL mode + sqlite-vec + FTS5), MemoryStore (in-memory)
+- **Databases**: SQLite (WAL mode + sqlite-vec + FTS5), [MemoryStore](08-DATA-SCHEMAS.md) (in-memory)
 - **Frontend**: Vanilla JavaScript (Radiant design system)
-- **LLM Support**: Ollama, Anthropic, OpenAI, Google Gemini
+- **LLM Support**: [Ollama](02-PROVIDERS-SETUP.md), [Anthropic](02-PROVIDERS-SETUP.md), [OpenAI](02-PROVIDERS-SETUP.md), Google [Gemini](02-PROVIDERS-SETUP.md)
 - **Port**: 8081 (configurable via `--port=N`)
 - **Configuration**: env vars > .env file > JSON files > hardcoded defaults
 - **Worker Pattern**: Thread-based (PromptQueue) with daemon worker threads
@@ -201,18 +201,18 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 - **Not a surveillance system** — memory decays by design; old facts fade unless reinforced
 - **Not a productivity robot** — it is a thinking aid, not a task manager
 - **Not a cloud service** — every byte stays local unless you configure an external LLM provider
-- **Not a general automation platform** — tools are sandboxed, audited, and bounded by hard limits
+- **Not a general automation platform** — [tools](09-TOOLS.md) are sandboxed, audited, and bounded by hard limits
 
 ## Support & Development
 
 - **Issues**: Check GitHub issues or project backlog
 - **Contributing**: Create feature branch, add tests, follow existing patterns
-- **Questions**: Review relevant documentation section, check `docs/04-ARCHITECTURE.md` for recent work
+- **Questions**: Review relevant documentation section, check `docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md` for recent work
 
-## Testing
+## [Testing](12-TESTING.md)
 
 **Writing or reviewing tests?**
-- **[12-TESTING.md](12-TESTING.md)** — Test conventions, fixture catalog, mock strategies, how to add tests
+- **[12-[TESTING](12-TESTING.md).md](12-[TESTING](12-TESTING.md).md)** — Test conventions, fixture catalog, mock strategies, how to add tests
 
 ## Document Status
 
@@ -221,11 +221,27 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
 
 **Recent Additions**:
-- Testing guide: `12-TESTING.md` — conventions, fixtures, mock strategies
+- [Testing](12-TESTING.md) guide: `12-[TESTING](12-TESTING.md).md` — conventions, fixtures, mock strategies
 - Observability endpoints: `/system/observability/*` for cognitive legibility
 - Moments API: Pin, list, search, and forget meaningful exchanges
 - Task strip: Persistent background tasks visible in the UI
 - Understanding tab: Brain dashboard cognitive transparency
 - Curiosity Threads: Self-directed exploration threads seeded from cognitive drift
-- 09-TOOLS.md: Comprehensive tools system documentation
+- 09-[TOOLS](09-TOOLS.md).md: Comprehensive [tools](09-TOOLS.md) system documentation
 - Document skill: Upload, extract, chunk, embed, and hybrid-search documents (warranties, contracts, manuals) via ACT loop innate skill
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

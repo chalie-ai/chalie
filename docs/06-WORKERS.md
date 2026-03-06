@@ -1,6 +1,6 @@
 # Chalie Worker Processes Overview - Background Tasks & Service Management
 
-This comprehensive guide covers worker processes, background tasks, service management, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Request Processing Workflow](../docs/05-WORKFLOW.md) | [Tools System Documentation](../docs/09-TOOLS.md)
+This comprehensive guide covers worker processes, background tasks, service management, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Tools](09-TOOLS.md) System Documentation](../docs/09-[TOOLS](09-TOOLS.md).md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -10,45 +10,45 @@ This comprehensive guide covers Chalie documentation, technical guide, providing
 
 | Worker | Type | Entry Point | Responsibilities | Notes |
 |---|---|---|---|---|
-| **Digest Worker** (`workers/digest_worker.py`) | `idle-busy` | `run.py` | Load configs, classify prompt, deterministic mode routing, mode-specific LLM generation, enqueue memory chunk job | Uses `ModeRouterService` for routing (~5ms), `FrontalCortexService` for generation. ACT mode triggers action loop then re-routes. |
+| **Digest Worker** (`workers/digest_worker.py`) | `idle-busy` | `run.py` | Load configs, classify prompt, [deterministic mode](07-COGNITIVE-[ARCHITECTURE](04-ARCHITECTURE.md).md) routing, mode-specific LLM generation, enqueue memory chunk job | Uses `ModeRouterService` for routing (~5ms), `FrontalCortexService` for generation. ACT mode triggers action loop then re-routes. |
 | **Memory Chunker Worker** (`workers/memory_chunker_worker.py`) | `idle-busy` | Enqueued by Digest Worker | Enriches a single exchange with a memory chunk via the **memory-chunker** LLM and stores it back into the conversation file. | Handles JSON decoding errors gracefully. |
 | **Episodic Memory Worker** (`workers/episodic_memory_worker.py`) | `idle-busy` | Enqueued by Digest Worker | Builds episodes from a sequence of exchanges, waits for memory chunks, generates via LLM, stores in SQLite. Triggers semantic consolidation. | |
 | **Semantic Consolidation Worker** (`workers/semantic_consolidation_worker.py`) | `idle-busy` | Enqueued by Episodic Memory Worker | Extracts concepts + relationships from episodes. Matches existing (similarity > 0.85) or creates new. | |
 | **Tool Worker** (`workers/tool_worker.py`) | `idle-busy` | Enqueued by ACT Loop | Background ACT loop execution via PromptQueue thread. Manages tool invocation and result handling. | |
 
-## Services
+## [Services](04-ARCHITECTURE.md)
 
 | Service | Entry Point | Responsibilities | Notes |
 |---|---|---|---|
 | **REST API** (`workers/rest_api_worker.py`) | `run.py` | Flask REST API on port 8080. | |
-| **Cognitive Drift Engine** (`services/cognitive_drift_engine.py`) | `run.py` | Default Mode Network — generates spontaneous thoughts during idle. Selects seed concepts, runs spreading activation, synthesizes via LLM, stores as drift gists. | Requires all queues idle + recent episodes. Fatigue budget prevents runaway drift. |
-| **Idle Consolidation** (`services/idle_consolidation_service.py`) | `run.py` | Triggers semantic consolidation during idle periods. | |
-| **Decay Engine** (`services/decay_engine_service.py`) | `run.py` | Periodic decay: episodic (0.05/hr), semantic (0.03/hr). Runs every 30min. | High-salience decays slower. |
-| **Growth Pattern Service** (`services/growth_pattern_service.py`) | `run.py` | Tracks longitudinal communication style shifts. Compares current style against a slowly-updated EMA baseline to detect persistent changes in certainty, depth, challenge appetite, verbosity, and formality. Stores `growth_signal:{dim}` traits (category=core) when a shift persists 3+ consecutive cycles (90min+). 30min cycle. | Growth signals surface via `AdaptiveLayerService` as optional growth reflections in the response prompt (24h cooldown). |
-| **Topic Stability Regulator** (`services/topic_stability_regulator_service.py`) | `run.py` | Adaptive tuning of topic switching parameters. 24h cycle. | |
-| **Routing Stability Regulator** (`services/routing_stability_regulator_service.py`) | `run.py` | Single authority for mode router weight mutation. 24h cycle. Reads pressure signals, applies bounded corrections (max ±0.02/day), 48h cooldown per parameter. Closed-loop control (reverts ineffective adjustments). | Persists to `configs/generated/mode_router_config.json`. |
-| **Routing Reflection** (`services/routing_reflection_service.py`) | `run.py` | Idle-time peer review of routing decisions via strong LLM (qwen3:14b). Stratified sampling, dimensional ambiguity analysis, anti-authority safeguards. | Consultant, not authority. Feeds pressure signals to regulator. |
-| **Experience Assimilation** (`services/experience_assimilation_service.py`) | `run.py` | Converts tool results into episodic memory. 60s poll cycle. | |
-| **Thread Expiry Service** (`services/thread_expiry_service.py`) | `run.py` | Expires stale conversation threads. 5min poll cycle. | |
-| **Scheduler Service** (`services/scheduler_service.py`) | `run.py` | Fires due reminders and scheduled tasks. 60s poll cycle. | |
-| **Autobiography Synthesis Service** (`services/autobiography_synthesis_service.py`) | `run.py` | Synthesizes user narrative from interactions. 6h cycle. | |
-| **Triage Calibration Service** (`services/triage_calibration_service.py`) | `run.py` | Scores triage/routing correctness and provides learning signals. 24h cycle. | |
-| **Profile Enrichment Service** (`services/profile_enrichment_service.py`) | `run.py` | Enriches tool capability profiles from execution data. 6h cycle. | |
-| **Temporal Pattern Service** (`services/temporal_pattern_service.py`) | `run.py` | Mines behavioral patterns from interaction timestamps — hour-of-day peaks, day-of-week peaks, topic-time clusters. Stores as `behavioral_pattern` user traits. 24h cycle, 5min startup warmup. | Uses generalized time labels ("evenings" not "10-11pm") for privacy. |
+| **Cognitive Drift Engine** (`[services](04-ARCHITECTURE.md)/cognitive_drift_engine.py`) | `run.py` | Default Mode Network — generates spontaneous thoughts during idle. Selects seed concepts, runs spreading activation, synthesizes via LLM, stores as drift gists. | Requires all queues idle + recent episodes. Fatigue budget prevents runaway drift. |
+| **Idle Consolidation** (`[services](04-ARCHITECTURE.md)/idle_consolidation_service.py`) | `run.py` | Triggers semantic consolidation during idle periods. | |
+| **Decay Engine** (`[services](04-ARCHITECTURE.md)/decay_engine_service.py`) | `run.py` | Periodic decay: episodic (0.05/hr), semantic (0.03/hr). Runs every 30min. | High-salience decays slower. |
+| **Growth Pattern Service** (`[services](04-ARCHITECTURE.md)/growth_pattern_service.py`) | `run.py` | Tracks longitudinal communication style shifts. Compares current style against a slowly-updated EMA baseline to detect persistent changes in certainty, depth, challenge appetite, verbosity, and formality. Stores `growth_signal:{dim}` traits (category=core) when a shift persists 3+ consecutive cycles (90min+). 30min cycle. | Growth signals surface via `AdaptiveLayerService` as optional growth reflections in the response prompt (24h cooldown). |
+| **Topic Stability Regulator** (`[services](04-ARCHITECTURE.md)/topic_stability_regulator_service.py`) | `run.py` | Adaptive tuning of topic switching parameters. 24h cycle. | |
+| **Routing Stability Regulator** (`[services](04-ARCHITECTURE.md)/routing_stability_regulator_service.py`) | `run.py` | Single authority for mode router weight mutation. 24h cycle. Reads pressure signals, applies bounded corrections (max ±0.02/day), 48h cooldown per parameter. Closed-loop control (reverts ineffective adjustments). | Persists to `configs/generated/mode_router_config.json`. |
+| **Routing Reflection** (`[services](04-ARCHITECTURE.md)/routing_reflection_service.py`) | `run.py` | Idle-time peer review of routing decisions via strong LLM (qwen3:14b). Stratified sampling, dimensional ambiguity analysis, anti-authority safeguards. | Consultant, not authority. Feeds pressure signals to regulator. |
+| **Experience Assimilation** (`[services](04-ARCHITECTURE.md)/experience_assimilation_service.py`) | `run.py` | Converts tool results into episodic memory. 60s poll cycle. | |
+| **Thread Expiry Service** (`[services](04-ARCHITECTURE.md)/thread_expiry_service.py`) | `run.py` | Expires stale conversation threads. 5min poll cycle. | |
+| **Scheduler Service** (`[services](04-ARCHITECTURE.md)/scheduler_service.py`) | `run.py` | Fires due reminders and scheduled tasks. 60s poll cycle. | |
+| **Autobiography Synthesis Service** (`[services](04-ARCHITECTURE.md)/autobiography_synthesis_service.py`) | `run.py` | Synthesizes user narrative from interactions. 6h cycle. | |
+| **Triage Calibration Service** (`[services](04-ARCHITECTURE.md)/triage_calibration_service.py`) | `run.py` | Scores triage/routing correctness and provides learning signals. 24h cycle. | |
+| **Profile Enrichment Service** (`[services](04-ARCHITECTURE.md)/profile_enrichment_service.py`) | `run.py` | Enriches tool capability profiles from execution data. 6h cycle. | |
+| **Temporal Pattern Service** (`[services](04-ARCHITECTURE.md)/temporal_pattern_service.py`) | `run.py` | Mines behavioral patterns from interaction timestamps — hour-of-day peaks, day-of-week peaks, topic-time clusters. Stores as `behavioral_pattern` user traits. 24h cycle, 5min startup warmup. | Uses generalized time labels ("evenings" not "10-11pm") for privacy. |
 
 ## Worker Base
 
-**Worker Base** (`services/worker_base.py`) — Base class for all workers. Provides `_update_shared_state` helper to merge state into shared dict; manages `state`, `job_count`, `pid`.
+**Worker Base** (`[services](04-ARCHITECTURE.md)/worker_base.py`) — Base class for all workers. Provides `_update_shared_state` helper to merge state into shared dict; manages `state`, `job_count`, `pid`.
 
 ## Registration
 
-Each worker is registered in `run.py` via `WorkerManager.register_worker` (queue workers) or `WorkerManager.register_service` (services). Queue names correspond to key prefixes defined in `configs/connections.json`.
+Each worker is registered in `run.py` via `WorkerManager.register_worker` (queue workers) or `WorkerManager.register_service` ([services](04-ARCHITECTURE.md)). Queue names correspond to key prefixes defined in `configs/connections.json`.
 
 ## Worker Lifecycle
 
 ```
 [run.py] → spawn thread → [WorkerBase.__init__]
-    → create MemoryStore/DB connections
+    → create [MemoryStore](08-DATA-SCHEMAS.md)/DB connections
     → enter main loop
         → poll queue / sleep interval
         → process job
@@ -65,7 +65,7 @@ Each worker is registered in `run.py` via `WorkerManager.register_worker` (queue
 ### Health Check & Restart
 
 The `WorkerManager` in `run.py` runs a health check loop every 30 seconds:
-- Iterates all registered workers and services
+- Iterates all registered workers and [services](04-ARCHITECTURE.md)
 - Dead processes are respawned with the same configuration
 - Restart count is tracked per worker; excessive restarts trigger a warning log
 - On `SIGTERM`/`SIGINT`, the manager sends shutdown signals to all children and waits for graceful exit
@@ -94,9 +94,9 @@ The `WorkerManager` in `run.py` runs a health check loop every 30 seconds:
 ### Failure Handling
 
 - **Queue workers** (digest, memory chunker, episodic): Catch exceptions per-job, log, and continue polling. A single bad job never takes down the worker.
-- **Polling services** (scheduler, thread expiry, decay): Catch exceptions per-cycle, log, and sleep until the next interval.
+- **Polling [services](04-ARCHITECTURE.md)** (scheduler, thread expiry, decay): Catch exceptions per-cycle, log, and sleep until the next interval.
 - **LLM-dependent workers**: If the LLM returns invalid JSON, the worker logs the raw response and moves on. No retry — the next cycle will pick up any missed work.
-- **Fatal errors** (SQLite/MemoryStore error): The worker crashes. `run.py` detects the dead thread and respawns it.
+- **Fatal errors** (SQLite/[MemoryStore](08-DATA-SCHEMAS.md) error): The worker crashes. `run.py` detects the dead thread and respawns it.
 
 ### Graceful Shutdown
 
@@ -106,3 +106,18 @@ On `SIGTERM` or `SIGINT`:
 3. Queue workers finish processing their current job, then exit
 4. Service workers complete their current cycle, then exit
 5. `run.py` waits up to 10s for all children, then sends `SIGKILL` to stragglers
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

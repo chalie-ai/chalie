@@ -1,6 +1,6 @@
 # Chalie Tools System Guide - Create Custom Tools & Sandbox Extensions
 
-This comprehensive guide covers Chalie tools, custom tool creation, sandbox extensions, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Default Tools Reference](../docs/14-DEFAULT-TOOLS.md) | [LLM Providers Configuration](../docs/02-PROVIDERS-SETUP.md)
+This comprehensive guide covers Chalie tools, custom tool creation, sandbox extensions, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Default Tools](14-DEFAULT-TOOLS.md) Reference](../docs/14-DEFAULT-TOOLS.md) | [[LLM Providers](02-PROVIDERS-SETUP.md) Configuration](../docs/02-PROVIDERS-SETUP.md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -28,7 +28,7 @@ Trust is determined by Chalie's internal `configs/embodiment_library.json` catal
 
 Trusted tools must include a `runner.py` entry point. Sandboxed tools must include a `Dockerfile`.
 
-## Architecture
+## [Architecture](04-ARCHITECTURE.md)
 
 ### Components
 
@@ -645,3 +645,18 @@ Placeholder for future external event triggers (e.g., email received, calendar e
 - **Data Scope**: All tool invocations scoped to topic (no cross-topic leakage)
 - **Audit Trail**: Every invocation logged with topic, success/failure, execution time
 
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [Quick Start Guide](01-QUICK-START.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)

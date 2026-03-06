@@ -1,6 +1,6 @@
 # Chalie Quick Start Guide - Installation, Setup & Deployment Instructions
 
-This comprehensive guide covers Chalie installation, quick start tutorial, deployment guide, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [LLM Providers Configuration](../docs/02-PROVIDERS-SETUP.md) | [Web Interface Setup](../docs/03-WEB-INTERFACE.md)
+This comprehensive guide covers Chalie installation, quick start tutorial, deployment guide, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [[LLM Providers](02-PROVIDERS-SETUP.md) Configuration](../docs/02-PROVIDERS-SETUP.md) | [[Web Interface](03-WEB-INTERFACE.md) Setup](../docs/03-WEB-INTERFACE.md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -45,39 +45,39 @@ Open **http://localhost:8081/on-boarding/** and:
 
 ---
 
-## LLM Providers
+## [LLM Providers](02-PROVIDERS-SETUP.md)
 
-### Ollama (local, recommended)
+### [Ollama](02-PROVIDERS-SETUP.md) (local, recommended)
 
 Free, private, runs entirely on your machine.
 
 ```bash
-# Install from https://ollama.ai, then:
-ollama pull qwen:8b
+# Install from https://[ollama](02-PROVIDERS-SETUP.md).ai, then:
+[ollama](02-PROVIDERS-SETUP.md) pull qwen:8b
 ```
 
-In onboarding, select **Ollama** and set the endpoint to `http://localhost:11434`.
+In onboarding, select **[Ollama](02-PROVIDERS-SETUP.md)** and set the endpoint to `http://localhost:11434`.
 
-### OpenAI
+### [OpenAI](02-PROVIDERS-SETUP.md)
 
-1. Get an API key from [platform.openai.com](https://platform.openai.com)
-2. In onboarding, select **OpenAI** and paste your key
+1. Get an API key from [platform.[openai](02-PROVIDERS-SETUP.md).com](https://platform.[openai](02-PROVIDERS-SETUP.md).com)
+2. In onboarding, select **[OpenAI](02-PROVIDERS-SETUP.md)** and paste your key
 
-### Anthropic
+### [Anthropic](02-PROVIDERS-SETUP.md)
 
-1. Get an API key from [console.anthropic.com](https://console.anthropic.com)
-2. In onboarding, select **Anthropic** and paste your key
+1. Get an API key from [console.[anthropic](02-PROVIDERS-SETUP.md).com](https://console.[anthropic](02-PROVIDERS-SETUP.md).com)
+2. In onboarding, select **[Anthropic](02-PROVIDERS-SETUP.md)** and paste your key
 
-### Google Gemini
+### Google [Gemini](02-PROVIDERS-SETUP.md)
 
 1. Get an API key from [ai.google.dev](https://ai.google.dev)
-2. In onboarding, select **Gemini** and paste your key
+2. In onboarding, select **[Gemini](02-PROVIDERS-SETUP.md)** and paste your key
 
 ---
 
 ## Configuration
 
-All configuration (LLM providers, API keys, settings) is done via the web UI after first run. The only runtime option is the port:
+All configuration ([LLM providers](02-PROVIDERS-SETUP.md), API keys, settings) is done via the web UI after first run. The only runtime option is the port:
 
 ```bash
 chalie --port=9000     # Start on a custom port (default: 8081)
@@ -146,6 +146,21 @@ cd backend && pytest
 python backend/run.py --port=9000
 ```
 
-All other configuration (LLM providers, API keys) is done via the web UI after first run. Voice auto-detects native dependencies (no Docker needed).
+All other configuration ([LLM providers](02-PROVIDERS-SETUP.md), API keys) is done via the web UI after first run. Voice auto-detects native dependencies (no Docker needed).
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
+
+## Related Documentation
+- [Vision & Philosophy](00-VISION.md)
+- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
+- [Web Interface](03-WEB-INTERFACE.md)
+- [System Architecture](04-ARCHITECTURE.md)
+- [Workflow Guide](05-WORKFLOW.md)
+- [Workers Overview](06-WORKERS.md)
+- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
+- [Data Schemas](08-DATA-SCHEMAS.md)
+- [Tools & Extensions](09-TOOLS.md)
+- [Context Relevance](10-CONTEXT-RELEVANCE.md)
+- [Testing Guide](12-TESTING.md)
+- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
+- [Default Tools](14-DEFAULT-TOOLS.md)
