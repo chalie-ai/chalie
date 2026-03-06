@@ -20,14 +20,11 @@ app_update_bp = Blueprint('app_update', __name__, url_prefix='/api/update')
 def _run_update_in_background():
     """Run the update process in a background thread."""
     try:
-        from services.app_update_service import AppUpdateService
+        from ..services.app_update_service import AppUpdateService
         
         service = AppUpdateService()
         
-        # Get current version from environment or default
-        current_version = request.environ.get('CURRENT_VERSION', '0.0.0')
-        
-        result = service.perform_update(current_version)
+        result = service.perform_update()
         
         if result.get('success'):
             logger.info(f"[UPDATE] Update completed successfully: {result}")
@@ -54,19 +51,16 @@ def check_for_updates():
         }
     """
     try:
-        from services.app_update_service import AppUpdateService
+        from ..services.app_update_service import AppUpdateService
         
         service = AppUpdateService()
         
-        # Get current version from environment or default
-        current_version = request.environ.get('CURRENT_VERSION', '0.0.0')
-        
-        result = service.check_for_updates(current_version)
+        result = service.check_for_updates()
         
         return jsonify({
             "update_available": result.get("update_available", False),
-            "latest_version": result.get("latest_version", current_version),
-            "current_version": current_version,
+            "latest_version": result.get("latest_version", service.app_version),
+            "current_version": service.app_version,
             "deployment_mode": service.get_deployment_mode()
         }), 200
         
@@ -75,7 +69,7 @@ def check_for_updates():
         return jsonify({
             "error": str(e),
             "update_available": False,
-            "current_version": request.environ.get('CURRENT_VERSION', 'unknown')
+            "current_version": service.app_version if 'service' in locals() else 'unknown'
         }), 500
 
 
