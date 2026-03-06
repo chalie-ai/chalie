@@ -58,6 +58,7 @@ class DocumentService:
         file_path: str,
         file_hash: str,
         source_type: str = 'upload',
+        watched_folder_id: str = None,
     ) -> str:
         """Create a new document record. Returns doc_id (8-char hex)."""
         doc_id = secrets.token_hex(4)
@@ -68,10 +69,10 @@ class DocumentService:
                 cursor.execute("""
                     INSERT INTO documents
                         (id, original_name, mime_type, file_size_bytes, file_path,
-                         file_hash, source_type, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                         file_hash, source_type, watched_folder_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """, (doc_id, original_name, mime_type, file_size, file_path,
-                      file_hash, source_type))
+                      file_hash, source_type, watched_folder_id))
                 cursor.close()
 
             logger.info(f"[DOCS] Created document '{original_name}' (id={doc_id})")
@@ -91,6 +92,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents WHERE id = ?
                 """, (doc_id,))
@@ -116,6 +118,7 @@ class DocumentService:
                                file_hash, page_count, status, error_message, chunk_count,
                                source_type, tags, summary, extracted_metadata, supersedes_id,
                                clean_text, language, fingerprint,
+                               watched_folder_id,
                                created_at, updated_at, deleted_at, purge_after
                         FROM documents
                         ORDER BY created_at DESC
@@ -126,6 +129,7 @@ class DocumentService:
                                file_hash, page_count, status, error_message, chunk_count,
                                source_type, tags, summary, extracted_metadata, supersedes_id,
                                clean_text, language, fingerprint,
+                               watched_folder_id,
                                created_at, updated_at, deleted_at, purge_after
                         FROM documents
                         WHERE deleted_at IS NULL
@@ -151,6 +155,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
                     WHERE deleted_at IS NULL
@@ -455,11 +460,12 @@ class DocumentService:
                 deleted = cursor.rowcount > 0
                 cursor.close()
 
-            # Delete file from disk
-            if deleted and doc.get('file_path'):
+            # Delete file from disk (skip for watched folder docs — source files are not ours)
+            if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
                 file_dir = os.path.join(DOCUMENTS_ROOT, doc_id)
                 if os.path.exists(file_dir):
                     shutil.rmtree(file_dir, ignore_errors=True)
+            if deleted:
                 logger.info(f"[DOCS] Hard-deleted document {doc_id}")
 
             return deleted
@@ -508,12 +514,12 @@ class DocumentService:
                 cursor = conn.cursor()
                 for chunk in chunks:
                     chunk_id = str(uuid.uuid4())
-                    embedding = chunk['embedding']
+                    embedding = chunk.get('embedding')
                     cursor.execute("""
                         INSERT INTO document_chunks
                             (id, document_id, chunk_index, content, page_number,
-                             section_title, token_count, embedding)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             section_title, token_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         chunk_id,
                         doc_id,
@@ -522,7 +528,6 @@ class DocumentService:
                         chunk.get('page_number'),
                         chunk.get('section_title'),
                         chunk.get('token_count'),
-                        embedding,
                     ))
 
                     # Store embedding in the sqlite-vec virtual table
@@ -752,6 +757,7 @@ class DocumentService:
                            file_hash, page_count, status, error_message, chunk_count,
                            source_type, tags, summary, extracted_metadata, supersedes_id,
                            clean_text, language, fingerprint,
+                           watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
                     WHERE {where}
@@ -765,6 +771,83 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] search_by_metadata failed: {e}")
             return []
+
+    # ─────────────────────────────────────────────
+    # Watched folder helpers
+    # ─────────────────────────────────────────────
+
+    def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, Any]]:
+        """Get all documents (including soft-deleted) for a watched folder."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
+                           file_hash, page_count, status, error_message, chunk_count,
+                           source_type, tags, summary, extracted_metadata, supersedes_id,
+                           clean_text, language, fingerprint,
+                           watched_folder_id,
+                           created_at, updated_at, deleted_at, purge_after
+                    FROM documents
+                    WHERE watched_folder_id = ?
+                    ORDER BY created_at DESC
+                """, (folder_id,))
+                rows = cursor.fetchall()
+                cursor.close()
+            return [self._row_to_dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
+            return []
+
+    def get_document_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get a non-deleted document by its file_path."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
+                           file_hash, page_count, status, error_message, chunk_count,
+                           source_type, tags, summary, extracted_metadata, supersedes_id,
+                           clean_text, language, fingerprint,
+                           watched_folder_id,
+                           created_at, updated_at, deleted_at, purge_after
+                    FROM documents
+                    WHERE file_path = ? AND deleted_at IS NULL
+                """, (file_path,))
+                row = cursor.fetchone()
+                cursor.close()
+            if not row:
+                return None
+            return self._row_to_dict(row)
+        except Exception as e:
+            logger.error(f"[DOCS] get_document_by_path failed: {e}")
+            return None
+
+    def update_tags(self, doc_id: str, tags: list) -> None:
+        """Update the tags JSON array for a document."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE documents SET tags = ?, updated_at = datetime('now')
+                    WHERE id = ?
+                """, (json.dumps(tags), doc_id))
+                cursor.close()
+        except Exception as e:
+            logger.error(f"[DOCS] update_tags failed: {e}")
+
+    def update_file_path(self, doc_id: str, new_path: str) -> None:
+        """Update the file_path for a document (e.g., rename detection)."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE documents SET file_path = ?, updated_at = datetime('now')
+                    WHERE id = ?
+                """, (new_path, doc_id))
+                cursor.close()
+        except Exception as e:
+            logger.error(f"[DOCS] update_file_path failed: {e}")
 
     # ─────────────────────────────────────────────
     # Internal helpers
@@ -791,8 +874,9 @@ class DocumentService:
             'clean_text': row[15],
             'language': row[16],
             'fingerprint': row[17],
-            'created_at': row[18],
-            'updated_at': row[19],
-            'deleted_at': row[20],
-            'purge_after': row[21],
+            'watched_folder_id': row[18],
+            'created_at': row[19],
+            'updated_at': row[20],
+            'deleted_at': row[21],
+            'purge_after': row[22],
         }

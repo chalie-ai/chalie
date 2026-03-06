@@ -198,7 +198,7 @@ class SemanticConsolidationWorker:
                         with self.db_service.connection() as conn:
                             cursor = conn.cursor()
                             cursor.execute(
-                                "UPDATE episodes SET semantic_consolidation_status = %s WHERE id = %s",
+                                "UPDATE episodes SET semantic_consolidation_status = ? WHERE id = ?",
                                 (status, episode.get('id'))
                             )
                             cursor.close()
@@ -213,7 +213,7 @@ class SemanticConsolidationWorker:
                         with self.db_service.connection() as conn:
                             cursor = conn.cursor()
                             cursor.execute(
-                                "UPDATE episodes SET semantic_consolidation_status = 'failed' WHERE id = %s",
+                                "UPDATE episodes SET semantic_consolidation_status = 'failed' WHERE id = ?",
                                 (episode.get('id'),)
                             )
                             cursor.close()

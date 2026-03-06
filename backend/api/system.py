@@ -592,3 +592,42 @@ def activity_feed():
     except Exception as e:
         logger.error(f"[REST API] activity feed error: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve activity feed"}), 500
+
+
+# ──────────────────────────────────────────────
+# Settings endpoints
+# ──────────────────────────────────────────────
+
+@system_bp.route('/system/settings/<key>', methods=['GET'])
+@require_session
+def get_setting(key):
+    """Get a single setting value."""
+    from services.settings_service import SettingsService
+    from services.database_service import get_shared_db_service
+    try:
+        svc = SettingsService(get_shared_db_service())
+        value = svc.get(key)
+        return jsonify({"key": key, "value": value})
+    except Exception as e:
+        logger.error(f"[REST API] get setting error: {e}")
+        return jsonify({"error": "Failed to get setting"}), 500
+
+
+@system_bp.route('/system/settings/<key>', methods=['PUT'])
+@require_session
+def set_setting(key):
+    """Set a single setting value."""
+    from services.settings_service import SettingsService
+    from services.database_service import get_shared_db_service
+    data = request.get_json(silent=True) or {}
+    value = data.get('value', '')
+    try:
+        svc = SettingsService(get_shared_db_service())
+        if not value:
+            svc.delete(key)
+        else:
+            svc.set(key, str(value))
+        return jsonify({"key": key, "value": value or None})
+    except Exception as e:
+        logger.error(f"[REST API] set setting error: {e}")
+        return jsonify({"error": "Failed to save setting"}), 500

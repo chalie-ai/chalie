@@ -47,6 +47,7 @@ def _make_doc(
         "clean_text": "warranty coverage text",
         "language": "en",
         "fingerprint": "aabb",
+        "watched_folder_id": None,
         "created_at": now,
         "updated_at": now,
         "deleted_at": deleted_at,

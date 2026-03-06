@@ -498,6 +498,9 @@ class EpisodicRetrievalService:
         try:
             # Time since last access in hours
             reference_time = last_accessed_at if last_accessed_at else created_at
+            # SQLite returns datetime columns as ISO strings — parse if needed
+            if isinstance(reference_time, str):
+                reference_time = datetime.fromisoformat(reference_time)
             delta_hours = (datetime.now() - reference_time).total_seconds() / 3600.0
 
             # Salience slows decay (high salience = slower decay)

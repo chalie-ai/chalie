@@ -13,6 +13,13 @@ Routes (all require session auth):
   GET    /documents/search         — semantic search across chunks
   POST   /documents/<id>/confirm  — confirm document after synthesis review
   POST   /documents/<id>/augment  — add user context and confirm
+
+  GET    /documents/watched-folders           — list watched folders
+  POST   /documents/watched-folders           — add watched folder
+  PUT    /documents/watched-folders/<id>      — update watched folder
+  DELETE /documents/watched-folders/<id>      — remove watched folder
+  POST   /documents/watched-folders/<id>/scan — trigger immediate scan
+  POST   /documents/watched-folders/browse    — browse host directories
 """
 
 import hashlib
@@ -121,14 +128,8 @@ def _validate_file_path(full_path: str) -> bool:
 
 def _enqueue_processing(doc_id: str):
     """Enqueue document for background processing."""
-    try:
-        from services import PromptQueue
-        from workers.document_worker import process_document_job
-        queue = PromptQueue(queue_name="document-queue", worker_func=process_document_job)
-        queue.enqueue({'doc_id': doc_id})
-        logger.info(f"[DOCS API] Enqueued processing for {doc_id}")
-    except Exception as e:
-        logger.error(f"[DOCS API] Failed to enqueue processing: {e}")
+    from services.document_queue import enqueue_document_processing
+    enqueue_document_processing(doc_id)
 
 
 # ---------------------------------------------------------------------------
@@ -302,9 +303,15 @@ def download_document(doc_id):
         if not doc:
             return jsonify({"error": "Not found"}), 404
 
-        full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
-        if not _validate_file_path(full_path) or not os.path.exists(full_path):
-            return jsonify({"error": "File not found on disk"}), 404
+        # Watched folder docs store absolute paths; uploaded docs are relative to DOCUMENTS_ROOT
+        if doc.get('watched_folder_id'):
+            full_path = doc['file_path']
+            if not os.path.isfile(os.path.realpath(full_path)):
+                return jsonify({"error": "File not found on disk"}), 404
+        else:
+            full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
+            if not _validate_file_path(full_path) or not os.path.exists(full_path):
+                return jsonify({"error": "File not found on disk"}), 404
 
         return send_file(
             full_path,
@@ -425,8 +432,8 @@ def augment_document(doc_id):
         if not doc:
             return jsonify({"error": "Not found"}), 404
 
-        if doc['status'] != 'awaiting_confirmation':
-            return jsonify({"error": "Document is not awaiting confirmation"}), 400
+        if doc['status'] not in ('awaiting_confirmation', 'ready'):
+            return jsonify({"error": "Document cannot be augmented in its current state"}), 400
 
         data = request.get_json(silent=True) or {}
         context = (data.get('context') or '').strip()
@@ -445,7 +452,8 @@ def augment_document(doc_id):
             summary_embedding=doc.get('summary_embedding'),
         )
 
-        svc.update_status(doc_id, 'ready', chunk_count=doc.get('chunk_count', 0))
+        if doc['status'] != 'ready':
+            svc.update_status(doc_id, 'ready', chunk_count=doc.get('chunk_count', 0))
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] augment error: {e}")
@@ -532,6 +540,134 @@ def supersede_document(doc_id):
         return jsonify({"ok": True, "supersedes_id": old_id})
     except Exception as e:
         logger.error(f"[DOCS API] supersede error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Watched Folders
+# ---------------------------------------------------------------------------
+
+def _get_watcher_service():
+    from services.database_service import get_shared_db_service
+    from services.folder_watcher_service import FolderWatcherService
+    return FolderWatcherService(get_shared_db_service())
+
+
+@documents_bp.route("/documents/watched-folders", methods=["GET"])
+@require_session
+def list_watched_folders():
+    """List all watched folders."""
+    try:
+        svc = _get_watcher_service()
+        folders = svc.get_all_folders()
+        return jsonify({"items": folders})
+    except Exception as e:
+        logger.error(f"[DOCS API] list watched folders error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/watched-folders", methods=["POST"])
+@require_session
+def create_watched_folder():
+    """Add a new watched folder."""
+    data = request.get_json(silent=True) or {}
+    folder_path = (data.get('folder_path') or '').strip()
+
+    if not folder_path:
+        return jsonify({"error": "Field 'folder_path' is required"}), 400
+
+    try:
+        svc = _get_watcher_service()
+        folder = svc.create_folder(
+            folder_path=folder_path,
+            label=data.get('label'),
+            file_patterns=data.get('file_patterns'),
+            ignore_patterns=data.get('ignore_patterns'),
+            recursive=data.get('recursive', True),
+            scan_interval=data.get('scan_interval', 300),
+        )
+        return jsonify({"item": folder}), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        if 'UNIQUE constraint' in str(e):
+            return jsonify({"error": "This folder is already being watched"}), 409
+        logger.error(f"[DOCS API] create watched folder error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/watched-folders/<folder_id>", methods=["PUT"])
+@require_session
+def update_watched_folder(folder_id):
+    """Update watched folder settings."""
+    data = request.get_json(silent=True) or {}
+    try:
+        svc = _get_watcher_service()
+        folder = svc.get_folder(folder_id)
+        if not folder:
+            return jsonify({"error": "Not found"}), 404
+
+        updated = svc.update_folder(folder_id, **data)
+        return jsonify({"item": updated})
+    except (ValueError, PermissionError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"[DOCS API] update watched folder error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/watched-folders/<folder_id>", methods=["DELETE"])
+@require_session
+def delete_watched_folder(folder_id):
+    """Remove a watched folder."""
+    delete_documents = request.args.get('delete_documents', 'false').lower() == 'true'
+    try:
+        svc = _get_watcher_service()
+        ok = svc.delete_folder(folder_id, delete_documents=delete_documents)
+        if not ok:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"[DOCS API] delete watched folder error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/watched-folders/<folder_id>/scan", methods=["POST"])
+@require_session
+def trigger_scan(folder_id):
+    """Trigger an immediate scan for a watched folder."""
+    try:
+        svc = _get_watcher_service()
+        folder = svc.get_folder(folder_id)
+        if not folder:
+            return jsonify({"error": "Not found"}), 404
+
+        svc.trigger_scan(folder_id)
+        return jsonify({"ok": True, "message": "Scan requested"})
+    except Exception as e:
+        logger.error(f"[DOCS API] trigger scan error: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@documents_bp.route("/documents/watched-folders/browse", methods=["POST"])
+@require_session
+def browse_directories():
+    """Browse host filesystem directories for folder selection."""
+    data = request.get_json(silent=True) or {}
+    path = data.get('path')
+
+    try:
+        svc = _get_watcher_service()
+        result = svc.browse_directory(path)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        logger.error(f"[DOCS API] browse error: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
 
