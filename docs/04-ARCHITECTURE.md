@@ -1,4 +1,7 @@
-# Chalie System Architecture Guide
+# Chalie System Architecture - Services, Workers, Data Flow & Memory Hierarchy
+
+This comprehensive guide covers system architecture, service overview, data flow pipeline, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [Request Processing Workflow](../docs/05-WORKFLOW.md) | [Cognitive Architecture Guide](../docs/07-COGNITIVE-ARCHITECTURE.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

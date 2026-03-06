@@ -1,4 +1,7 @@
-# Chalie Data Schemas Guide
+# Chalie Data Schemas Documentation - MemoryStore & SQLite Database Structures
+
+This comprehensive guide covers data schemas, MemoryStore structure, SQLite database, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Testing Documentation](../docs/12-TESTING.md) | [Documentation Index](../docs/INDEX.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

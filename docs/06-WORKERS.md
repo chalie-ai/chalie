@@ -1,4 +1,7 @@
-# Chalie Workers & Services Overview Guide
+# Chalie Worker Processes Overview - Background Tasks & Service Management
+
+This comprehensive guide covers worker processes, background tasks, service management, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Request Processing Workflow](../docs/05-WORKFLOW.md) | [Tools System Documentation](../docs/09-TOOLS.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

@@ -1,4 +1,7 @@
-# Chalie Documentation Index Guide
+# Chalie Documentation Index - Complete Guide & Reference
+
+This comprehensive guide covers Chalie documentation, cognitive assistant guide, AI system reference, providing essential information for developers and users. For related topics, see: [Quick Start Guide](01-QUICK-START.md) | [System Architecture Overview](04-ARCHITECTURE.md) | [Chalie Vision & Philosophy](00-VISION.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

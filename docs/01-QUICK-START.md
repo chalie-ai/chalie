@@ -1,4 +1,7 @@
-# Chalie Quick Start Guide
+# Chalie Quick Start Guide - Installation, Setup & Deployment Instructions
+
+This comprehensive guide covers Chalie installation, quick start tutorial, deployment guide, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [LLM Providers Configuration](../docs/02-PROVIDERS-SETUP.md) | [Web Interface Setup](../docs/03-WEB-INTERFACE.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

@@ -1,4 +1,7 @@
-# Chalie Context Relevance Pre-Parser Guide
+# Chalie Context Relevance Pre-parser - Token Optimization & Selective Injection
+
+This comprehensive guide covers context relevance, token optimization, selective context injection, providing essential information for developers and users. For related topics, see: [Request Processing Workflow](../docs/05-WORKFLOW.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Testing Documentation](../docs/12-TESTING.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

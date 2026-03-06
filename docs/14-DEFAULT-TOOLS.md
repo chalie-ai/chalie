@@ -1,4 +1,7 @@
-# Chalie Default Tools Guide
+# Chalie Default Tools Reference - Auto-install Behavior & Built-in Toolset
+
+This comprehensive guide covers default tools, built-in toolset, auto-install behavior, providing essential information for developers and users. For related topics, see: [Tools System Documentation](../docs/09-TOOLS.md) | [Documentation Index](../docs/INDEX.md) | [LLM Providers Configuration](../docs/02-PROVIDERS-SETUP.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

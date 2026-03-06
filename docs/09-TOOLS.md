@@ -1,4 +1,7 @@
-# Chalie Tools System Guide
+# Chalie Tools System Guide - Create Custom Tools & Sandbox Extensions
+
+This comprehensive guide covers Chalie tools, custom tool creation, sandbox extensions, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Default Tools Reference](../docs/14-DEFAULT-TOOLS.md) | [LLM Providers Configuration](../docs/02-PROVIDERS-SETUP.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

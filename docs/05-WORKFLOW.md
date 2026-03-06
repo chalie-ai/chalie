@@ -1,4 +1,7 @@
-# Chalie System Workflow Guide
+# Chalie Request Workflow - Step-by-Step Prompt Processing Pipeline Guide
+
+This comprehensive guide covers request workflow, prompt processing, step-by-step guide, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Message Flow Diagrams](../docs/13-MESSAGE-FLOW.md) | [Cognitive Architecture Guide](../docs/07-COGNITIVE-ARCHITECTURE.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

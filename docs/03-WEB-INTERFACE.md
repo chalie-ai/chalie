@@ -1,4 +1,7 @@
-# Chalie Web Interface Specification Guide
+# Chalie Web Interface Documentation - UI Requirements & Frontend Architecture
+
+This comprehensive guide covers Chalie web UI, frontend interface, user dashboard, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [Quick Start Guide](../docs/01-QUICK-START.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

@@ -1,4 +1,7 @@
-# Chalie Testing Guide
+# Chalie Testing Documentation - Test Conventions, Fixtures & Mock Strategies
+
+This comprehensive guide covers testing guide, test conventions, mock strategies, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [Data Schemas Reference](../docs/08-DATA-SCHEMAS.md) | [Tools System Documentation](../docs/09-TOOLS.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

@@ -1,4 +1,7 @@
-# Chalie Provider Configuration Setup Guide
+# Chalie LLM Providers Setup - Configure Ollama, Anthropic, OpenAI, Gemini API
+
+This comprehensive guide covers LLM provider configuration, Ollama setup, Anthropic API, providing essential information for developers and users. For related topics, see: [Quick Start Guide](../docs/01-QUICK-START.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Tools System Documentation](../docs/09-TOOLS.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

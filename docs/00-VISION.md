@@ -1,4 +1,7 @@
-# Chalie Product Vision & Design Compass Guide
+# Chalie Vision & Philosophy - Product Design Principles & Cognitive Assistant Goals
+
+This comprehensive guide covers Chalie vision, product philosophy, design principles, providing essential information for developers and users. For related topics, see: [Documentation Index](../docs/INDEX.md) | [Quick Start Guide](../docs/01-QUICK-START.md) | [System Architecture Overview](../docs/04-ARCHITECTURE.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 

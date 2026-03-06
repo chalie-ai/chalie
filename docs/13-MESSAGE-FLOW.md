@@ -1,4 +1,7 @@
-# Chalie Message Flow — Complete Routing Reference Guide
+# Chalie Message Flow Diagrams - Visual Paths, MemoryStore Hits & LLM Calls
+
+This comprehensive guide covers message flow diagrams, visual paths, MemoryStore hits, providing essential information for developers and users. For related topics, see: [System Architecture Overview](../docs/04-ARCHITECTURE.md) | [Request Processing Workflow](../docs/05-WORKFLOW.md) | [Cognitive Architecture Guide](../docs/07-COGNITIVE-ARCHITECTURE.md)
+
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
 
