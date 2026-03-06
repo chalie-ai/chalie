@@ -105,9 +105,62 @@ def get_relative_path(current_file: str, target_file: str) -> str:
     return target_file
 
 
+def protect_content(content: str) -> tuple[str, dict]:
+    """
+    Protect existing markdown elements by replacing them with placeholders.
+    
+    Returns the protected content and a dictionary mapping placeholder IDs to original text.
+    This prevents cross-link injection from modifying links, code blocks, or URLs.
+    """
+    protected = {}
+    counter = [0]  # Use list for mutable closure
+    
+    def make_placeholder():
+        counter[0] += 1
+        return f"\x00PROTECTED_{counter[0]}_END\x00"
+    
+    result = content
+    
+    # Protect fenced code blocks first (```...```) - multiline
+    code_block_pattern = r'(```[\s\S]*?```)'
+    for match in re.finditer(code_block_pattern, result):
+        placeholder = make_placeholder()
+        protected[placeholder] = match.group(0)
+    
+    # Protect inline links [text](url)
+    link_pattern = r'\[[^\]]+\]\([^)]+\)'
+    for match in re.finditer(link_pattern, result):
+        placeholder = make_placeholder()
+        protected[placeholder] = match.group(0)
+    
+    # Protect inline code `...` (but not inside already-protected regions)
+    inline_code_pattern = r'(?<!`)`[^`]+`(?!`)'
+    for match in re.finditer(inline_code_pattern, result):
+        placeholder = make_placeholder()
+        protected[placeholder] = match.group(0)
+    
+    # Protect raw URLs (http:// or https://)
+    url_pattern = r'https?://[^\s<>"\]]+'
+    for match in re.finditer(url_pattern, result):
+        placeholder = make_placeholder()
+        protected[placeholder] = match.group(0)
+    
+    return result, protected
+
+
+def restore_content(content: str, protected: dict) -> str:
+    """Restore original content from placeholders."""
+    for placeholder, original in protected.items():
+        content = content.replace(placeholder, original)
+    return content
+
+
 def inject_inline_links(content: str, current_filename: str) -> str:
     """Inject inline links for concept keywords in the content."""
-    result = content
+    # Protect existing markdown elements first
+    protected_content, placeholders = protect_content(content)
+    
+    result = protected_content
     
     # Sort concepts by length (longest first) to avoid partial replacements
     sorted_concepts = sorted(CONCEPT_LINKS.items(), key=lambda x: len(x[0]), reverse=True)
@@ -126,6 +179,9 @@ def inject_inline_links(content: str, current_filename: str) -> str:
             return f"[{original_text}]({get_relative_path(current_filename, target_file)})"
         
         result = re.sub(pattern, replace_func, result, flags=re.IGNORECASE)
+    
+    # Restore protected content (links, code blocks, URLs)
+    result = restore_content(result, placeholders)
     
     return result
 
