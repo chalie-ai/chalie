@@ -1,6 +1,12 @@
-# Chalie Documentation Index
+# Chalie Documentation: Guides, Architecture, and API Reference
 
-Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
+Welcome to the Chalie documentation. Explore guides, architecture deep-dives, and API references. See also [Quick Start](01-QUICK-START.md).
+
+## Popular Pages
+- [Architecture](04-ARCHITECTURE.md) — How Chalie works under the hood
+- [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md) — 5ms deterministic mode selection
+- [Tools System](09-TOOLS.md) — Build and extend with custom tools
+- [Quick Start](01-QUICK-START.md) — Get running in 2 minutes
 
 ## Vision & Philosophy
 
@@ -11,6 +17,7 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 
 **New to Chalie?** Start here:
 1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, deployment instructions
+2. **[FAQ](15-FAQ.md) — Common questions answered**
 
 ## Setup & Configuration
 
