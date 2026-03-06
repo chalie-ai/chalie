@@ -1,9 +1,6 @@
-# Chalie Data Schemas Documentation - MemoryStore & SQLite Database Structures
+# Data Schema Reference: SQLite Tables, MemoryStore, and Vectors
 
-This comprehensive guide covers data schemas, MemoryStore structure, SQLite database, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Testing](12-TESTING.md) Documentation](../docs/12-[TESTING](12-TESTING.md).md) | [Documentation Index](../docs/INDEX.md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Comprehensive reference for Chalie's local SQLite database schema, including hierarchical memory and vector storage. See also [Architecture](04-ARCHITECTURE.md) and [Context Optimization](10-CONTEXT-RELEVANCE.md).
 
 
 ## MemoryStore Queue Topics (configurations)
@@ -311,16 +308,6 @@ CREATE TABLE triage_calibration (
 ```
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+- [Architecture](04-ARCHITECTURE.md)
+- [Tools](09-TOOLS.md)
+- [Context Optimization](10-CONTEXT-RELEVANCE.md)

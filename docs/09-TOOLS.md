@@ -1,9 +1,6 @@
-# Chalie Tools System Guide - Create Custom Tools & Sandbox Extensions
+# Building Tools: Chalie's Tool-Agnostic Extension Framework
 
-This comprehensive guide covers Chalie tools, custom tool creation, sandbox extensions, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Default Tools](14-DEFAULT-TOOLS.md) Reference](../docs/14-DEFAULT-TOOLS.md) | [[LLM Providers](02-PROVIDERS-SETUP.md) Configuration](../docs/02-PROVIDERS-SETUP.md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Extend Chalie's capabilities using the tool-agnostic framework, allowing seamless integration of new external functions. See also [Default Tools](14-DEFAULT-TOOLS.md) and [Architecture](04-ARCHITECTURE.md).
 
 
 Tools extend Chalie's capabilities by allowing execution of external code. Tools can run as **sandboxed** (Docker container) or **trusted** (Python subprocess), and can be triggered on-demand or on a schedule.

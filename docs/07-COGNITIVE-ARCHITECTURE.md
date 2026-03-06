@@ -1,9 +1,6 @@
-# Chalie Cognitive [Architecture](04-ARCHITECTURE.md) - Mode Router, Decision Flow & AI Cognition
+# Cognitive Router: 5ms Deterministic Mode Selection
 
-This comprehensive guide covers cognitive [architecture](04-ARCHITECTURE.md), mode router, decision flow, providing essential information for developers and users. For related topics, see: [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[Message Flow](13-MESSAGE-FLOW.md) Diagrams](../docs/13-MESSAGE-FLOW.md)
-
-
-This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+Chalie's cognitive router deterministically selects the optimal execution mode in under 5ms without requiring an LLM call. See also [Workflow](05-WORKFLOW.md) and [Architecture](04-ARCHITECTURE.md).
 
 
 ## Overview
@@ -479,16 +476,6 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 - **Hysteresis:** Stabilization mechanism that widens tie-breaker margin on low-confidence streaks
 
 ## Related Documentation
-- [Vision & Philosophy](00-VISION.md)
-- [Quick Start Guide](01-QUICK-START.md)
-- [LLM Providers Setup](02-PROVIDERS-SETUP.md)
-- [Web Interface](03-WEB-INTERFACE.md)
-- [System Architecture](04-ARCHITECTURE.md)
-- [Workflow Guide](05-WORKFLOW.md)
-- [Workers Overview](06-WORKERS.md)
-- [Data Schemas](08-DATA-SCHEMAS.md)
-- [Tools & Extensions](09-TOOLS.md)
-- [Context Relevance](10-CONTEXT-RELEVANCE.md)
-- [Testing Guide](12-TESTING.md)
-- [Message Flow Diagrams](13-MESSAGE-FLOW.md)
-- [Default Tools](14-DEFAULT-TOOLS.md)
+- [Workflow](05-WORKFLOW.md)
+- [Architecture](04-ARCHITECTURE.md)
+- [Message Flow](13-MESSAGE-FLOW.md)
