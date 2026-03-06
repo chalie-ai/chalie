@@ -221,6 +221,7 @@ All three sizes maintain Radiant design fidelity.
 
 See `CLAUDE.md` "Design Philosophy: Radiant" for the authoritative design specification. This document is a UI-specific interpretation of that design system.
 
+---
 ## Related Documentation
 - [Vision & Philosophy](00-VISION.md)
 - [Quick Start Guide](01-QUICK-START.md)
@@ -229,8 +230,6 @@ See `CLAUDE.md` "Design Philosophy: Radiant" for the authoritative design specif
 - [Workflow Guide](05-WORKFLOW.md)
 - [Workers Overview](06-WORKERS.md)
 - [Cognitive Architecture](07-COGNITIVE-ARCHITECTURE.md)
----
-## Related Documentation
 - [Architecture](04-ARCHITECTURE.md)
 - [Message Flow](13-MESSAGE-FLOW.md)
 - [Vision](00-VISION.md)

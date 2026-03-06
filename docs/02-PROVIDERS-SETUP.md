@@ -158,14 +158,11 @@ If you need to use embedding models (e.g., `embeddinggemma` from Ollama):
 3. Set dimensions to match the model's output (usually 768)
 4. Ensure the system is configured to use this provider for embeddings
 
+---
 ## Related Documentation
 - [Vision & Philosophy](00-VISION.md)
 - [Quick Start Guide](01-QUICK-START.md)
 - [Web Interface](03-WEB-INTERFACE.md)
 - [System Architecture](04-ARCHITECTURE.md)
 - [Workflow Guide](05-WORKFLOW.md)
----
-## Related Documentation
-- [Quick Start](01-QUICK-START.md)
-- [Architecture](04-ARCHITECTURE.md)
 - [Testing Guide](12-TESTING.md)

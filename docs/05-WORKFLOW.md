@@ -110,12 +110,11 @@ The `/chat` endpoint uses Server-Sent Events for real-time streaming:
     → writes routing_decisions.reflection → feeds pressure to regulator
 ```
 
+---
 ## Related Documentation
 - [Vision & Philosophy](00-VISION.md)
 - [Quick Start Guide](01-QUICK-START.md)
 - [LLM Providers Setup](02-PROVIDERS-SETUP.md)
----
-## Related Documentation
 - [Message Flow](13-MESSAGE-FLOW.md)
 - [Cognitive Router](07-COGNITIVE-ARCHITECTURE.md)
 - [Architecture](04-ARCHITECTURE.md)

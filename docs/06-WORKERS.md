@@ -104,13 +104,12 @@ On `SIGTERM` or `SIGINT`:
 4. Service workers complete their current cycle, then exit
 5. `run.py` waits up to 10s for all children, then sends `SIGKILL` to stragglers
 
+---
 ## Related Documentation
 - [Vision & Philosophy](00-VISION.md)
 - [Quick Start Guide](01-QUICK-START.md)
 - [LLM Providers Setup](02-PROVIDERS-SETUP.md)
 - [Web Interface](03-WEB-INTERFACE.md)
----
-## Related Documentation
 - [Architecture](04-ARCHITECTURE.md)
 - [Workflow](05-WORKFLOW.md)
 - [Data Schemas](08-DATA-SCHEMAS.md)
