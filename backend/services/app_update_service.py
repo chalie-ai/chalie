@@ -6,6 +6,7 @@ and performs tarball overlay updates for installed deployments.
 """
 
 import os
+import subprocess
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
