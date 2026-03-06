@@ -47,7 +47,7 @@ def generate_keyword_rich_title(original_title, filename):
         "14-DEFAULT-TOOLS.md": "Chalie Default Tools Reference - Auto-install Behavior & Built-in Toolset"
     }
     
-    filename_upper = filename.upper()
+    filename_upper = filename
     if filename_upper in seo_keywords:
         return f"# {seo_keywords[filename_upper]}"
     
@@ -162,7 +162,7 @@ def generate_seo_intro_paragraph(filename, all_doc_files):
         "14-DEFAULT-TOOLS.md": ["default tools", "built-in toolset", "auto-install behavior", "pre-installed tools"]
     }
     
-    filename_upper = filename.upper()
+    filename_upper = filename
     keywords = seo_keywords_map.get(filename_upper, ["Chalie documentation", "technical guide"])
     links = related_docs.get(filename_upper, [])
     
@@ -174,7 +174,7 @@ def generate_seo_intro_paragraph(filename, all_doc_files):
     for i, (link_file, link_label) in enumerate(links):
         if i > 0:
             link_text += " | "
-        link_text += f"[{link_link}](../docs/{link_file})" if not filename_upper == "INDEX.md" else f"[{link_label}]({link_file})"
+        link_text += f"[{link_label}](../docs/{link_file})" if not filename_upper == "INDEX.md" else f"[{link_label}]({link_file})"
     
     # Generate intro paragraph
     intro = (f"This comprehensive guide covers {keyword_phrase}, providing essential information for developers and users. "
