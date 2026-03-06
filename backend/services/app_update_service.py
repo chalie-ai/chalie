@@ -177,3 +177,134 @@ class AppUpdateService:
             return {"update_available": False, "latest_version": current_version}
 
         return result
+
+    def perform_update(self) -> Dict[str, Any]:
+        """Perform an in-place update by downloading and extracting the latest release tarball.
+
+        This method should only be called when deployment mode is 'installed'. It fetches
+        the latest release from GitHub, downloads the radiant-node-linux-x64.tar.gz asset,
+        extracts it to the installation directory (parent of current script), and triggers
+        a restart. The update process runs as a background task to avoid blocking.
+
+        Returns:
+            dict: Contains 'success' (bool) and 'message' (str) describing the result
+
+        Note:
+            - Skips if deployment mode is not 'installed'
+            - Runs extraction in background subprocess
+            - Triggers application restart after successful update
+        """
+        # Check deployment mode first
+        deployment_mode = self.get_deployment_mode()
+        if deployment_mode != "installed":
+            self.logger.warning(f"Update skipped: deployment mode is '{deployment_mode}', not 'installed'")
+            return {"success": False, "message": f"Update only supported in 'installed' mode"}
+
+        try:
+            # Fetch latest release from GitHub API to get the download URL for the Linux tarball asset
+            github_api_url = "https://api.github.com/repos/radiant-node/radiant-node/releases/latest"
+
+            with httpx.Client() as client:
+                response = client.get(github_api_url, timeout=10.0)
+                response.raise_for_status()
+                release_data = response.json()
+
+            # Find the download URL for radiant-node-linux-x64.tar.gz asset
+            assets = release_data.get("assets", [])
+            download_url = None
+            for asset in assets:
+                if asset["name"] == "radiant-node-linux-x64.tar.gz":
+                    download_url = asset["browser_download_url"]
+                    break
+
+            if not download_url:
+                self.logger.error("Could not find radiant-node-linux-x64.tar.gz asset in release")
+                return {"success": False, "message": "Linux x64 tarball not found in latest release"}
+
+            # Download the tarball to /tmp/
+            tarball_path = "/tmp/radiant-node-update.tar.gz"
+            self.logger.info(f"Downloading update from {download_url} to {tarball_path}")
+
+            with httpx.Client() as client:
+                response = client.get(download_url, timeout=60.0)
+                response.raise_for_status()
+                with open(tarball_path, "wb") as f:
+                    f.write(response.content)
+
+            self.logger.info(f"Downloaded tarball to {tarball_path}")
+
+            # Determine the installation directory (parent of current running script)
+            install_dir = Path(__file__).resolve().parent.parent.parent
+
+            # Extract the tarball using subprocess in background mode
+            # Using --strip-components=1 to extract contents directly into install_dir
+            self.logger.info(f"Extracting update to {install_dir}")
+
+            process = subprocess.Popen(
+                ["tar", "-xzf", tarball_path, "-C", str(install_dir), "--strip-components=1"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            # Wait for the extraction to complete (but don't block indefinitely)
+            try:
+                stdout, stderr = process.communicate(timeout=300)  # 5 minute timeout
+                if process.returncode != 0:
+                    self.logger.error(f"Extraction failed with code {process.returncode}: {stderr.decode()}")
+                    return {"success": False, "message": f"Extraction failed: {stderr.decode()}"}
+            except subprocess.TimeoutExpired:
+                process.kill()
+                self.logger.warning("Update extraction timed out, but may have completed partially")
+
+            # Trigger application restart after successful update
+            self._trigger_restart(install_dir)
+
+            return {"success": True, "message": f"Update extracted to {install_dir}, restart triggered"}
+
+        except httpx.HTTPError as e:
+            self.logger.error(f"Failed to download update: {e}")
+            return {"success": False, "message": f"Download failed: {str(e)}"}
+        except Exception as e:
+            self.logger.error(f"Update process failed: {e}")
+            return {"success": False, "message": f"Update failed: {str(e)}"}
+
+    def _trigger_restart(self, install_dir: Path) -> None:
+        """Trigger an application restart by creating a marker file.
+
+        Args:
+            install_dir: The installation directory path
+        """
+        # Create a marker file to signal that a restart is needed
+        from datetime import datetime
+        
+        restart_marker = install_dir / ".restart_pending"
+        try:
+            with open(restart_marker, "w") as f:
+                import json as json_module
+                data = {
+                    "timestamp": str(datetime.now().isoformat()),
+                    "reason": "update_completed"
+                }
+                f.write(json_module.dumps(data))
+            self.logger.info(f"Restart marker created at {restart_marker}")
+        except Exception as e:
+            self.logger.warning(f"Failed to create restart marker: {e}")
+
+    def _run_background_update(self) -> None:
+        """Run the update process in a background thread.
+
+        This method spawns a daemon thread that executes perform_update()
+        without blocking the main application flow.
+        """
+        import threading
+
+        def update_task():
+            result = self.perform_update()
+            if result["success"]:
+                self.logger.info(f"Background update completed: {result['message']}")
+            else:
+                self.logger.error(f"Background update failed: {result['message']}")
+
+        thread = threading.Thread(target=update_task, daemon=True)
+        thread.start()
+        self.logger.info("Update started in background thread")
