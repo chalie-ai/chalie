@@ -1,4 +1,7 @@
-# Cognitive Architecture - Deterministic Mode Router & Decision Flow
+# Chalie Cognitive Architecture - Deterministic Mode Router & Decision Flow Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 ## Overview
 

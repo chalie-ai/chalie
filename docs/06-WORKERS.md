@@ -1,4 +1,7 @@
-# Workers & Services Overview
+# Chalie Workers & Services Overview Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 ## Queue Workers
 

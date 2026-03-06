@@ -1,4 +1,7 @@
-# Tools System
+# Chalie Tools System Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 Tools extend Chalie's capabilities by allowing execution of external code. Tools can run as **sandboxed** (Docker container) or **trusted** (Python subprocess), and can be triggered on-demand or on a schedule.
 

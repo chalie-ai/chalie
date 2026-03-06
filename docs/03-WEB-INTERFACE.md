@@ -1,4 +1,7 @@
-# Chalie Web Interface Specification
+# Chalie Web Interface Specification Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 The Chalie web interface is a collection of three single-page applications: the main chat interface, the cognitive dashboard ("Brain"), and the onboarding wizard. All follow the **Radiant design system** for a cinematic, restrained dark UI.
 

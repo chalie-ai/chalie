@@ -1,4 +1,7 @@
-# Default Tools
+# Chalie Default Tools Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 Chalie ships with a curated set of **default tools** that are installed automatically on first startup. These tools are listed in `backend/configs/embodiment_library.json` with `"installs_by_default": true`.
 

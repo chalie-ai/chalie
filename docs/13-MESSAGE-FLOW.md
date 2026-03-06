@@ -1,4 +1,7 @@
-# Message Flow — Complete Routing Reference
+# Chalie Message Flow — Complete Routing Reference Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 This document is the single authoritative visual map of how a user message travels through Chalie. Every branch, every storage hit, every LLM call, and every background cycle is shown here.
 

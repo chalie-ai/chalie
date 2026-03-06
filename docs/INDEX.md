@@ -1,4 +1,7 @@
-# Chalie Documentation Index
+# Chalie Documentation Index Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
 

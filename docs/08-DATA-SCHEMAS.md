@@ -1,4 +1,7 @@
-# Data Schemas
+# Chalie Data Schemas Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 ## MemoryStore Queue Topics (configurations)
 Queue topic names are defined in `configs/connections.json`.  Current topic queue names:

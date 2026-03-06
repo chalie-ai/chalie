@@ -1,4 +1,7 @@
-# Product Vision & Design Compass
+# Chalie Product Vision & Design Compass Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 This document defines what Chalie is, why it exists, and how every design decision should be evaluated. It is the source of truth for product philosophy.
 

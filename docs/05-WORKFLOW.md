@@ -1,4 +1,7 @@
-# System Workflow
+# Chalie System Workflow Guide
+
+This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
+
 
 ## Overview
 The application processes user prompts through a pipeline of workers, queues, and services. Each component is responsible for a single concern, following the **Single Responsibility Principle**.
