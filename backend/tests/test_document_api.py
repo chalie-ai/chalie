@@ -46,6 +46,7 @@ def _make_doc_dict(
         "clean_text": "warranty coverage text",
         "language": "en",
         "fingerprint": "aabb",
+        "watched_folder_id": None,
         "created_at": now,
         "updated_at": now,
         "deleted_at": deleted_at,
@@ -351,7 +352,7 @@ class TestDocumentsAPI:
         assert "context" in resp.get_json()["error"].lower()
 
     def test_augment_wrong_status(self, client):
-        doc = _make_doc_dict(status="ready")
+        doc = _make_doc_dict(status="processing")
         with patch(_P_SVC) as mock_get:
             mock_svc = MagicMock()
             mock_get.return_value = mock_svc
@@ -363,6 +364,21 @@ class TestDocumentsAPI:
             )
 
         assert resp.status_code == 400
+
+    def test_augment_ready_document_succeeds(self, client):
+        """Post-hoc augmentation of ready documents (e.g., watched folder docs)."""
+        doc = _make_doc_dict(status="ready")
+        with patch(_P_SVC) as mock_get:
+            mock_svc = MagicMock()
+            mock_get.return_value = mock_svc
+            mock_svc.get_document.return_value = doc
+
+            resp = client.post(
+                "/documents/doc00001/augment",
+                json={"context": "extra info"},
+            )
+
+        assert resp.status_code == 200
 
     # ------------------------------------------------------------------
     # GET /documents/search

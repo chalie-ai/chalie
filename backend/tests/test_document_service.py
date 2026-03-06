@@ -77,6 +77,7 @@ class TestGetDocument:
             'hash', 5, 'ready', None, 10,
             'upload', ['tag1'], 'summary text', {'key': 'val'}, None,
             'clean text', 'en', 'fingerprint123',
+            None,  # watched_folder_id
             now, now, None, None,
         )
         service = DocumentService(db)

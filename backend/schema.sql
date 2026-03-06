@@ -745,6 +745,30 @@ CREATE TABLE IF NOT EXISTS cognitive_reflexes (
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- WATCHED FOLDERS — monitored filesystem directories
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS watched_folders (
+    id TEXT PRIMARY KEY,
+    folder_path TEXT NOT NULL UNIQUE,
+    label TEXT,
+    source_type TEXT DEFAULT 'filesystem',
+    enabled INTEGER DEFAULT 1,
+    file_patterns TEXT DEFAULT '["*"]',
+    ignore_patterns TEXT DEFAULT '[".git","node_modules","__pycache__","build","dist",".DS_Store","Thumbs.db"]',
+    recursive INTEGER DEFAULT 1,
+    scan_interval INTEGER DEFAULT 300,
+    last_scan_at TEXT,
+    last_scan_files INTEGER DEFAULT 0,
+    last_scan_error TEXT,
+    source_config TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_watched_folders_enabled
+    ON watched_folders(enabled) WHERE enabled = 1;
+
+-- ────────────────────────────────────────────────────────────────
 -- DOCUMENTS — document metadata + chunks
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS documents (
@@ -759,6 +783,7 @@ CREATE TABLE IF NOT EXISTS documents (
     error_message TEXT,
     chunk_count INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'upload',
+    watched_folder_id TEXT REFERENCES watched_folders(id),
     tags TEXT DEFAULT '[]',                  -- JSON array (was TEXT[])
     summary TEXT,
     extracted_metadata TEXT DEFAULT '{}',    -- JSONB
@@ -776,6 +801,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_deleted ON documents(deleted_at) WHERE deleted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_purge ON documents(purge_after) WHERE purge_after IS NOT NULL;
+-- idx_documents_watched_folder created by migration 001_watched_folders.sql
 
 -- FTS5 for document search
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
