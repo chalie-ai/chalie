@@ -161,6 +161,12 @@ class CognitiveDriftEngine:
         if plan_config.get('enabled', True):
             router.register(PlanAction(config=plan_config))
 
+        # Register AMBIENT_TOOL if enabled (priority 6, below SEED_THREAD)
+        from services.autonomous_actions.ambient_tool_action import AmbientToolAction
+        ambient_config = action_config.get('ambient_tool', {})
+        if ambient_config.get('enabled', True):
+            router.register(AmbientToolAction(config=ambient_config))
+
         # Register COMMUNICATE if enabled
         communicate_config = action_config.get('communicate', {})
         if communicate_config.get('enabled', True):

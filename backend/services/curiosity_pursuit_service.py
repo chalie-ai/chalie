@@ -170,6 +170,17 @@ class CuriosityPursuitService:
             else:
                 selected_skills = ['recall', 'introspect', 'associate']
 
+            # Include ambient-capable external tools for richer exploration
+            try:
+                from services.tool_registry_service import ToolRegistryService
+                registry = ToolRegistryService()
+                for tool in registry.get_ambient_tools():
+                    tool_name = tool['name']
+                    if tool_name not in selected_skills:
+                        selected_skills.append(tool_name)
+            except Exception:
+                pass  # Graceful degradation — pursue with innate skills only
+
             # Run ACT loop iterations
             for _ in range(act_loop.max_iterations):
                 can_continue, reason = act_loop.can_continue()
