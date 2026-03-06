@@ -1,0 +1,77 @@
+{
+  "getting-started.md": {
+    "keyword_rich_h1": "Getting Started with CloudSync: Quick Start Guide",
+    "target_keywords": ["cloud sync setup", "quick start guide", "initial configuration"],
+    "related_docs": ["installation.md", "authentication.md"]
+  },
+  "installation.md": {
+    "keyword_rich_h1": "CloudSync Installation Instructions for Linux and Windows",
+    "target_keywords": ["install cloudsync", "linux installation", "windows setup"],
+    "related_docs": ["getting-started.md", "troubleshooting.md"]
+  },
+  "authentication.md": {
+    "keyword_rich_h1": "Secure Authentication Methods for CloudSync Users",
+    "target_keywords": ["oauth integration", "api key management", "two factor auth"],
+    "related_docs": ["getting-started.md", "security-best-practices.md"]
+  },
+  "configuration.md": {
+    "keyword_rich_h1": "Advanced Configuration Options for CloudSync Services",
+    "target_keywords": ["config file settings", "environment variables", "custom parameters"],
+    "related_docs": ["installation.md", "api-reference.md"]
+  },
+  "api-reference.md": {
+    "keyword_rich_h1": "Complete API Reference Documentation for CloudSync Developers",
+    "target_keywords": ["rest api endpoints", "json response format", "developer documentation"],
+    "related_docs": ["authentication.md", "configuration.md"]
+  },
+  "deployment.md": {
+    "keyword_rich_h1": "Production Deployment Strategies for CloudSync Applications",
+    "target_keywords": ["docker deployment", "kubernetes setup", "production environment"],
+    "related_docs": ["installation.md", "monitoring.md"]
+  },
+  "troubleshooting.md": {
+    "keyword_rich_h1": "Common Troubleshooting Solutions for CloudSync Errors",
+    "target_keywords": ["error logs", "debug mode", "connection issues"],
+    "related_docs": ["installation.md", "monitoring.md"]
+  },
+  "security-best-practices.md": {
+    "keyword_rich_h1": "Security Best Practices Guide for CloudSync Infrastructure",
+    "target_keywords": ["data encryption", "access control", "vulnerability scanning"],
+    "related_docs": ["authentication.md", "deployment.md"]
+  },
+  "monitoring.md": {
+    "keyword_rich_h1": "System Monitoring and Logging with CloudSync Tools",
+    "target_keywords": ["performance metrics", "log aggregation", "alert configuration"],
+    "related_docs": ["deployment.md", "troubleshooting.md"]
+  },
+  "migrations.md": {
+    "keyword_rich_h1": "Database Migration Procedures for CloudSync Upgrades",
+    "target_keywords": ["schema migration", "data backup", "version upgrade"],
+    "related_docs": ["installation.md", "deployment.md"]
+  },
+  "cli-reference.md": {
+    "keyword_rich_h1": "Command Line Interface Reference for CloudSync Operations",
+    "target_keywords": ["cli commands", "terminal usage", "script automation"],
+    "related_docs": ["api-reference.md", "configuration.md"]
+  },
+  "plugins.md": {
+    "keyword_rich_h1": "Extending Functionality with CloudSync Plugins and Extensions",
+    "target_keywords": ["plugin development", "third party integrations", "custom modules"],
+    "related_docs": ["api-reference.md", "configuration.md"]
+  },
+  "faq.md": {
+    "keyword_rich_h1": "Frequently Asked Questions About CloudSync Features",
+    "target_keywords": ["common questions", "user support", "feature overview"],
+    "related_docs": ["getting-started.md", "troubleshooting.md"]
+  },
+  "changelog.md": {
+    "keyword_rich_h1": "CloudSync Version History and Release Changelog Updates",
+    "target_keywords": ["release notes", "version history", "new features"],
+    "related_docs": ["migrations.md", "installation.md"]
+  },
+  "contributing.md": {
+    "keyword_rich_h1": "Contributing to CloudSync: Developer Guidelines and Workflow",
+    "target_keywords": ["open source contribution", "code review process", "pull requests"],
+    "related_docs": ["api-reference.md", "cli-reference.md"]
+  }
+}
