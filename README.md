@@ -225,8 +225,14 @@ Explore our comprehensive documentation to learn more about Chalie's features, a
 | **Web Interface** | UI specification, component library, and the Radiant design system documentation | [03-WEB-INTERFACE.md](docs/03-WEB-INTERFACE.md) |
 | **System Architecture** | Deep dive into services, database schema, memory layers, and technical implementation details | [04-ARCHITECTURE.md](docs/04-ARCHITECTURE.md) |
 | **Request Workflow** | Step-by-step breakdown of how Chalie processes requests from input to response generation | [05-WORKFLOW.md](docs/05-WORKFLOW.md) |
+| **Worker Management** | Background task execution, worker lifecycle, and concurrent job processing architecture | [06-WORKERS.md](docs/06-WORKERS.md) |
 | **Cognitive Architecture** | Mode router logic, decision flow diagrams, and the five cognitive modes explained | [07-COGNITIVE-ARCHITECTURE.md](docs/07-COGNITIVE-ARCHITECTURE.md) |
+| **Data Schemas** | Database schema definitions, table structures, and data model relationships for persistence | [08-DATA-SCHEMAS.md](docs/08-DATA-SCHEMAS.md) |
 | **Tools & Extensions** | How to create custom tools, sandbox vs trusted execution, and official tool documentation | [09-TOOLS.md](docs/09-TOOLS.md) |
+| **Context Relevance** | Semantic search strategies, context retrieval algorithms, and relevance scoring mechanisms | [10-CONTEXT-RELEVANCE.md](docs/10-CONTEXT-RELEVANCE.md) |
+| **Testing Guide** | Testing methodologies, test coverage requirements, and quality assurance practices | [12-TESTING.md](docs/12-TESTING.md) |
+| **Message Flow** | End-to-end message processing pipeline, routing logic, and response generation flow | [13-MESSAGE-FLOW.md](docs/13-MESSAGE-FLOW.md) |
+| **Default Tools** | Built-in tool implementations including weather, YouTube search, and standard utilities | [14-DEFAULT-TOOLS.md](docs/14-DEFAULT-TOOLS.md) |
 
 ---
 
