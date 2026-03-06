@@ -8,7 +8,7 @@
   "max_gists": 8,
   "_comment_act_loop": "ACT loop safety limits and cost model",
   "act_cumulative_timeout": 60.0,
-  "act_per_action_timeout": 10.0,
+  "act_per_action_timeout": 30.0,
   "max_act_iterations": 5,
   "cost_base": 1.0,
   "cost_growth_factor": 1.5,

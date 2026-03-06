@@ -75,8 +75,7 @@ class ToolSubprocessService:
             stderr_text = result.stderr.decode("utf-8", errors="replace")[:300]
             raise RuntimeError(f"Tool exited {result.returncode}: {stderr_text}")
 
-        # Cap output at 20KB (same as ToolContainerService)
-        raw = result.stdout[:20000]
+        raw = result.stdout
 
         try:
             return json.loads(raw)

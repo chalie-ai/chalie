@@ -359,6 +359,10 @@ class DatabaseService:
             _optional_columns = [
                 ("documents", "watched_folder_id", "TEXT REFERENCES watched_folders(id)",
                  "CREATE INDEX IF NOT EXISTS idx_documents_watched_folder ON documents(watched_folder_id) WHERE watched_folder_id IS NOT NULL"),
+                ("documents", "doc_category", "TEXT", None),
+                ("documents", "doc_project", "TEXT", None),
+                ("documents", "doc_date", "TEXT", None),
+                ("documents", "meta_locked", "INTEGER DEFAULT 0", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

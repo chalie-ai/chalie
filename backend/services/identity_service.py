@@ -13,6 +13,7 @@ import statistics
 from datetime import datetime, timedelta
 
 from .config_service import ConfigService
+from .time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -254,8 +255,8 @@ class IdentityService:
                     return
 
                 # Gate 4: daily drift budget
-                now = datetime.now()
-                if drift_window_start and (now - drift_window_start) > timedelta(hours=24):
+                now = utc_now()
+                if drift_window_start and (now - parse_utc(drift_window_start)) > timedelta(hours=24):
                     baseline_drift_today = 0.0
                     drift_window_start = now
 

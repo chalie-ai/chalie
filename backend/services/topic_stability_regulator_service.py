@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from services.database_service import DatabaseService, get_shared_db_service
+from services.time_utils import utc_now, parse_utc
 
 
 logger = logging.getLogger(__name__)
@@ -244,7 +245,7 @@ class TopicStabilityRegulator:
             adjustment: Applied adjustment value
         """
         # Update last_adjusted timestamp
-        config['last_adjusted'][parameter] = datetime.now().isoformat()
+        config['last_adjusted'][parameter] = utc_now().isoformat()
 
         # Save to disk (atomic write via temp file)
         temp_file = CONFIG_FILE + ".tmp"
@@ -504,8 +505,8 @@ class TopicStabilityRegulator:
         if not last_adjusted_str:
             return False  # Never adjusted, not on cooldown
 
-        last_adjusted = datetime.fromisoformat(last_adjusted_str)
-        elapsed = datetime.now(timezone.utc) - last_adjusted
+        last_adjusted = parse_utc(last_adjusted_str)
+        elapsed = utc_now() - last_adjusted
         on_cooldown = elapsed.total_seconds() < (self.COOLDOWN_HOURS * 3600)
 
         if on_cooldown:
