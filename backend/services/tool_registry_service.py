@@ -1083,11 +1083,8 @@ class ToolRegistryService:
         All on-demand tools are ambient-eligible by default. Tools opt OUT via:
           "ambient": {"enabled": false}
 
-        Tools can customize background scanning params via:
-          "ambient": {"default_params": {"limit": 3, ...}}
-
         Returns:
-            List of {"name": str, "manifest": dict, "default_params": dict}
+            List of {"name": str, "manifest": dict}
         """
         result = []
         for name, tool in self.tools.items():
@@ -1102,7 +1099,6 @@ class ToolRegistryService:
             result.append({
                 "name": name,
                 "manifest": tool["manifest"],
-                "default_params": ambient.get("default_params", {}),
             })
         return result
 
