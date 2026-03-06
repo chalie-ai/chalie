@@ -1,6 +1,6 @@
 # Chalie Context Relevance Pre-parser - Token Optimization & Selective Injection
 
-This comprehensive guide covers context relevance, token optimization, selective context injection, providing essential information for developers and users. For related topics, see: [Request Processing [Workflow](05-WORKFLOW.md)](../docs/05-[WORKFLOW](05-WORKFLOW.md).md) | [[System [Architecture](04-ARCHITECTURE.md)](04-[ARCHITECTURE](04-ARCHITECTURE.md).md) Overview](../docs/04-[ARCHITECTURE](04-ARCHITECTURE.md).md) | [[Testing](12-TESTING.md) Documentation](../docs/12-[TESTING](12-TESTING.md).md)
+This comprehensive guide covers context relevance, token optimization, selective context injection, providing essential information for developers and users. For related topics, see: [Request Processing Workflow](05-WORKFLOW.md) | [System Architecture Overview](04-ARCHITECTURE.md) | [Testing Documentation](12-TESTING.md)
 
 
 This comprehensive guide covers Chalie documentation, technical guide, providing essential information for developers and users. For related topics, see: 
@@ -12,12 +12,12 @@ The **Context Relevance Pre-Parser** is a deterministic, rule-based service that
 
 ## Motivation
 
-Previously, **every response generation** retrieved and injected ALL context nodes (episodic memory, identity, user traits, facts, gists, focus, [tools](09-TOOLS.md), skills, etc.) into every prompt — regardless of whether the mode-specific template even referenced them.
+Previously, **every response generation** retrieved and injected ALL context nodes (episodic memory, identity, user traits, facts, gists, focus, tools, skills, etc.) into every prompt — regardless of whether the mode-specific template even referenced them.
 
 ### Example Waste
 An ACKNOWLEDGE for "Hey!" would trigger:
 - sqlite-vec vector search for episodic memory
-- [MemoryStore](08-DATA-SCHEMAS.md) reads for facts, gists, working memory
+- MemoryStore reads for facts, gists, working memory
 - Skill registry queries
 
 None of which the ACKNOWLEDGE template even uses.
@@ -25,14 +25,14 @@ None of which the ACKNOWLEDGE template even uses.
 ### Expected Savings
 | Mode | I/O Skipped | Token Savings |
 |------|-------------|---------------|
-| ACKNOWLEDGE | 5 [MemoryStore](08-DATA-SCHEMAS.md) reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
+| ACKNOWLEDGE | 5 MemoryStore reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
 | CLARIFY (warm) | 1 PG vector search, skill queries | ~500-1500 |
 | RESPOND (greeting) | 1 PG vector search, focus queries | ~800-2000 |
 | ACT | Identity/trait lookups | ~300-800 |
 
 **Pre-parser execution**: < 0.5ms (pure dict lookups).
 
-## [Architecture](04-ARCHITECTURE.md)
+## Architecture
 
 ### Seven-Layer Pipeline
 
@@ -191,7 +191,7 @@ Force-include under specific conditions:
 The service is invoked in `digest_worker.py` before response generation:
 
 ```python
-from [services](04-ARCHITECTURE.md).context_relevance_service import ContextRelevanceService
+from services.context_relevance_service import ContextRelevanceService
 
 # Compute inclusion map
 context_relevance_service = ContextRelevanceService()
