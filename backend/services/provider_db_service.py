@@ -151,7 +151,7 @@ class ProviderDbService:
             cursor.execute(
                 "SELECT id, name, platform, model, host, api_key, "
                 "dimensions, timeout, is_active "
-                "FROM providers WHERE id = ?",
+                "FROM providers WHERE id = ? AND is_active = 1",
                 (provider_id,)
             )
             row = cursor.fetchone()
