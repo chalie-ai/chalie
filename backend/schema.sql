@@ -547,6 +547,7 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     cost_tier TEXT DEFAULT 'free',
     reliability_score REAL DEFAULT 1.0,
     domain TEXT DEFAULT 'Other',
+    effort TEXT DEFAULT 'moderate',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

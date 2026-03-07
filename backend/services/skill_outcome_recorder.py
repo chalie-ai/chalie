@@ -53,3 +53,40 @@ def record_skill_outcomes(actions_executed: list, topic: str):
             )
     except Exception as e:
         logger.debug(f"[SKILL OUTCOMES] Procedural memory recording failed: {e}")
+
+
+def record_effort_feedback(tool_name: str, classified_effort: str,
+                           latency_ms: float, had_correction: bool,
+                           had_confusion: bool):
+    """Record effort-proportionality feedback to procedural memory context_stats.
+
+    This creates a closed loop: LLM infers effort during profile building →
+    system observes actual outcomes → procedural memory records feedback →
+    next profile rebuild incorporates the accumulated feedback.
+    """
+    try:
+        import json as _json
+        from services.procedural_memory_service import ProceduralMemoryService
+        from services.database_service import get_shared_db_service
+        from services.config_service import ConfigService
+
+        db = get_shared_db_service()
+        proc_config = ConfigService.get_agent_config("procedural-memory")
+        proc_memory = ProceduralMemoryService(db, proc_config)
+
+        # Determine if effort classification was proportional
+        proportional = True
+        if classified_effort == 'trivial' and (had_correction or had_confusion):
+            proportional = False  # underestimated effort
+        if classified_effort == 'deep' and latency_ms < 500 and not had_correction:
+            proportional = False  # overestimated effort
+
+        reward = 0.1 if proportional else -0.2
+        proc_memory.record_action_outcome(
+            action_name=f"effort:{tool_name}",
+            success=proportional,
+            reward=reward,
+            topic='_effort_calibration',
+        )
+    except Exception as e:
+        logger.debug(f"[EFFORT FEEDBACK] Recording failed: {e}")

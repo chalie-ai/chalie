@@ -57,8 +57,18 @@ class DecayEngineService:
             try:
                 time.sleep(self.decay_interval)
 
+                # Self-regulation: check memory richness before decaying
+                try:
+                    from services.self_model_service import SelfModelService
+                    richness = SelfModelService().get_memory_richness()
+                    if richness < 0.1:
+                        logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.1, skipping cycle")
+                        continue
+                except Exception:
+                    richness = 1.0  # fail-open: run decay if telemetry unavailable
+
                 logger.info("[DECAY ENGINE] Running decay cycle...")
-                self.run_decay_cycle()
+                self.run_decay_cycle(richness=richness)
 
             except KeyboardInterrupt:
                 logger.info("[DECAY ENGINE] Service shutting down...")
@@ -68,14 +78,24 @@ class DecayEngineService:
                 logger.info("[DECAY ENGINE] Waiting 1 minute before retry...")
                 time.sleep(60)
 
-    def run_decay_cycle(self):
-        """Run one full decay cycle across all memory types."""
+    def run_decay_cycle(self, richness: float = 1.0):
+        """Run one full decay cycle across all memory types.
+
+        When richness < 0.3, only essential sub-cycles run (episodic + traits).
+        """
         episodic_count = self._decay_episodic()
-        semantic_count = self._decay_semantic()
-        identity_count = self._apply_identity_inertia()
-        external_count = self._decay_external_knowledge()
         trait_stats = self._decay_user_traits()
-        thread_dormancy = self._apply_thread_dormancy()
+
+        # Non-essential sub-cycles gated on sufficient memory richness
+        if richness >= 0.3:
+            semantic_count = self._decay_semantic()
+            identity_count = self._apply_identity_inertia()
+            external_count = self._decay_external_knowledge()
+            thread_dormancy = self._apply_thread_dormancy()
+        else:
+            semantic_count = identity_count = external_count = 0
+            thread_dormancy = {}
+            logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "

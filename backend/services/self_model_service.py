@@ -89,6 +89,33 @@ class SelfModelService:
         snapshot = self.get_snapshot()
         return len(snapshot.get("noteworthy", [])) > 0
 
+    def get_memory_richness(self) -> float:
+        """0.0 (empty system) to 1.0 (rich memory), from cached snapshot.
+
+        Composite score from episode count, concept count, trait count,
+        and epistemic warmth. Workers use this to self-regulate: skip
+        expensive cycles when memory is too thin to produce useful results.
+        """
+        snapshot = self.get_snapshot()
+
+        # Extract counts from operational.memory_pressure
+        pressure = snapshot.get("operational", {}).get("memory_pressure", {})
+        episode_count = pressure.get("episode_count", 0)
+        concept_count = pressure.get("concept_count", 0)
+        trait_count = pressure.get("trait_count", 0)
+
+        # Epistemic warmth (current conversation context)
+        context_warmth = snapshot.get("epistemic", {}).get("context_warmth", 0.0)
+
+        # Weighted composite — saturate at reasonable ceilings
+        score = (
+            0.35 * min(1.0, episode_count / 50)
+            + 0.25 * min(1.0, concept_count / 30)
+            + 0.20 * min(1.0, trait_count / 10)
+            + 0.20 * context_warmth
+        )
+        return round(score, 3)
+
     def format_for_prompt(self) -> str:
         """
         Format self-awareness as a prompt section with behavioral guidance.
@@ -372,7 +399,7 @@ class SelfModelService:
         return {"bg_llm": bg_llm, "prompt_queue": prompt_queue}
 
     def _get_memory_pressure(self) -> dict:
-        """Episode/concept counts and average activation from SQLite."""
+        """Episode/concept/trait counts and average activation from SQLite."""
         try:
             db = self._get_db()
             with db.connection() as conn:
@@ -383,6 +410,9 @@ class SelfModelService:
 
                 cursor.execute("SELECT COUNT(*) FROM semantic_concepts")
                 concept_count = cursor.fetchone()[0]
+
+                cursor.execute("SELECT COUNT(*) FROM user_traits")
+                trait_count = cursor.fetchone()[0]
 
                 cursor.execute(
                     "SELECT AVG(activation_score) FROM episodes "
@@ -396,10 +426,11 @@ class SelfModelService:
             return {
                 "episode_count": episode_count,
                 "concept_count": concept_count,
+                "trait_count": trait_count,
                 "avg_activation": avg_activation,
             }
         except Exception:
-            return {"episode_count": 0, "concept_count": 0, "avg_activation": 1.0}
+            return {"episode_count": 0, "concept_count": 0, "trait_count": 0, "avg_activation": 1.0}
 
     def _is_bg_llm_stale(self) -> bool:
         """Check if background LLM worker heartbeat is stale (>30s)."""

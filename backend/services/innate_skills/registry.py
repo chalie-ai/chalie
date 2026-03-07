@@ -64,3 +64,37 @@ SKILL_DESCRIPTIONS: dict = {
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
 }
+
+# ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
+SKILL_EFFORT: dict = {
+    'recall': 'trivial',
+    'memorize': 'trivial',
+    'introspect': 'trivial',
+    'associate': 'light',
+    'list': 'trivial',
+    'schedule': 'light',
+    'focus': 'trivial',
+    'autobiography': 'light',
+    'persistent_task': 'deep',
+    'moment': 'trivial',
+    'emit_card': 'trivial',
+    'document': 'light',
+    'read': 'light',
+}
+
+# ── Skill categories ───────────────────────────────────────────────────────────
+SKILL_CATEGORIES: dict = {
+    'recall': 'memory',
+    'memorize': 'memory',
+    'introspect': 'cognition',
+    'associate': 'cognition',
+    'list': 'productivity',
+    'schedule': 'productivity',
+    'focus': 'productivity',
+    'autobiography': 'identity',
+    'persistent_task': 'task_management',
+    'moment': 'context',
+    'emit_card': 'output',
+    'document': 'knowledge',
+    'read': 'research',
+}

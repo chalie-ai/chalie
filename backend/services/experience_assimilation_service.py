@@ -80,6 +80,10 @@ class ExperienceAssimilationService:
                 if self._daily_sessions_exceeded():
                     continue
 
+                # Self-regulation: skip when pending list is empty
+                if self.store.llen(PENDING_LIST_KEY) == 0:
+                    continue
+
                 self._run_cycle()
 
             except KeyboardInterrupt:

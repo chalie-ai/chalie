@@ -213,6 +213,16 @@ class CognitiveDriftEngine:
                     logger.debug(f"{LOG_PREFIX} No recent episodes, skipping drift")
                     continue
 
+                # Self-regulation: skip when memory is nearly empty
+                try:
+                    from services.self_model_service import SelfModelService
+                    richness = SelfModelService().get_memory_richness()
+                    if richness < 0.1:
+                        logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.1, skipping drift")
+                        continue
+                except Exception:
+                    pass  # fail-open
+
                 self._run_drift_cycle()
 
             except KeyboardInterrupt:
