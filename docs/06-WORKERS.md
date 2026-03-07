@@ -1,5 +1,28 @@
 # Workers & Services Overview
 
+---
+
+### Quick Facts: Chalie Workers at a Glance
+
+| Category | Count | Examples | Notes |
+|----------|-------|----------|-------|
+| **Queue Workers** | 5 | Digest, Memory Chunker, Episodic Memory, Semantic Consolidation, Tool Worker | Process jobs from queues; idle-busy lifecycle |
+| **Background Services** | 12+ | Cognitive Drift, Decay Engine, Scheduler, Routing Regulator | Run on fixed cycles (30s to 24h) |
+| **Entry Point** | `run.py` | WorkerManager spawns all workers/services | Single-process architecture with daemon threads |
+| **State Management** | Shared dict via `_update_shared_state` | No global locks; lightweight worker pool | |
+
+---
+
+### Decision Guide: Queue Workers vs Background Services
+
+> ⚙️ **Choose the right pattern based on trigger and timing:**
+>
+> - **Queue Worker (idle-busy)** → Use when work arrives as discrete jobs from a queue. Examples: Digest Worker processes incoming prompts, Memory Chunker enriches exchanges, Episodic Memory builds episodes. Workers sleep when queues are empty.
+> - **Background Service (fixed cycle)** → Use for periodic maintenance or monitoring tasks. Examples: Decay Engine runs every 30min to decay memory salience, Scheduler fires reminders every 60s, Routing Stability Regulator adjusts weights daily. Services run on their own schedule regardless of queue state.
+> - **Idle-Triggered Service** → Use when work should only happen during system idle time. Examples: Cognitive Drift Engine generates spontaneous thoughts only when all queues are empty and fatigue budget allows; Routing Reflection performs peer review during idle periods.
+
+---
+
 ## Queue Workers
 
 | Worker | Type | Entry Point | Responsibilities | Notes |
