@@ -119,6 +119,7 @@ class DocumentService:
                                file_hash, page_count, status, error_message, chunk_count,
                                source_type, tags, summary, extracted_metadata, supersedes_id,
                                clean_text, language, fingerprint,
+                               doc_category, doc_project, doc_date, meta_locked,
                                watched_folder_id,
                                created_at, updated_at, deleted_at, purge_after
                         FROM documents
@@ -130,6 +131,7 @@ class DocumentService:
                                file_hash, page_count, status, error_message, chunk_count,
                                source_type, tags, summary, extracted_metadata, supersedes_id,
                                clean_text, language, fingerprint,
+                               doc_category, doc_project, doc_date, meta_locked,
                                watched_folder_id,
                                created_at, updated_at, deleted_at, purge_after
                         FROM documents

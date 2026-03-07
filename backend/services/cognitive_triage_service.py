@@ -265,6 +265,7 @@ class CognitiveTriageService:
                 .replace('{{previous_mode}}', context.previous_mode or 'RESPOND')
                 .replace('{{working_memory_summary}}', context.working_memory_summary or 'None')
                 .replace('{{tool_summaries_grouped}}', context.tool_summaries or 'No tools registered.')
+                .replace('{{active_tasks_summary}}', self._get_active_tasks_summary())
             )
 
             llm = self._get_llm()
@@ -505,6 +506,35 @@ class CognitiveTriageService:
                 result.self_eval_reason = 'anti_oscillation_same_tool'
 
         return result
+
+    @staticmethod
+    def _get_active_tasks_summary() -> str:
+        """Get a brief summary of active persistent tasks for triage context."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.persistent_task_service import PersistentTaskService
+
+            db = get_shared_db_service()
+            service = PersistentTaskService(db)
+            # Get account_id
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM master_account LIMIT 1")
+                row = cursor.fetchone()
+                account_id = row[0] if row else 1
+
+            active = service.get_active_tasks(account_id)
+            if not active:
+                return 'None'
+
+            lines = []
+            for t in active:
+                progress = t.get('progress', {}) or {}
+                coverage = progress.get('coverage_estimate', 0)
+                lines.append(f'- [{t["status"]}] "{t["goal"][:60]}" ({coverage:.0%})')
+            return '\n'.join(lines)
+        except Exception:
+            return 'None'
 
     def _load_prompt(self) -> str:
         import os

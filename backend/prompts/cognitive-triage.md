@@ -3,6 +3,7 @@ You are a routing decision engine. Output JSON only — no prose, no markdown.
 Message: "{{prompt}}"
 Context: warmth={{warmth}}, memory_confidence={{memory_confidence}}, facts={{fact_count}}, turns={{turns}}, prev_mode={{previous_mode}}
 Working memory: {{working_memory_summary}}
+Active background tasks: {{active_tasks_summary}}
 
 Available external tools (use these tool names exactly):
 {{tool_summaries_grouped}}
@@ -27,7 +28,7 @@ Routing rules:
   - "remind me" / "set a reminder" / "every morning" → schedule
   - "add X to my list" / "remove from shopping list" → list
   - "start a focus session" / "am I focused" → focus
-  - "research this over the next few days" / "task status" → persistent_task
+  - "research this over the next few days" / "task status" / "what's the status on [topic matching active task]" → persistent_task
   - "what does my warranty say" / "search my documents" / "in my uploaded file" → document
 
 Critical bias: when in doubt between RESPOND and ACT, choose ACT. Accuracy matters more than speed.
