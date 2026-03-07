@@ -15,7 +15,7 @@ from services.memory_client import MemoryClientService
 class WorkingMemoryService:
     """Manages a rolling buffer of raw conversation turns in MemoryStore."""
 
-    def __init__(self, max_turns: int = 4):
+    def __init__(self, max_turns: int = 12):
         """
         Initialize working memory service.
 
