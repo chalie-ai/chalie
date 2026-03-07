@@ -1566,6 +1566,16 @@ def _handle_social_triage(
             'generation_time': 0.0,
         }
 
+    # Should not be reached — dispatch condition guards CANCEL/IGNORE only.
+    # If called with any other mode, log and return None so callers can detect
+    # the gap rather than silently delivering an empty response.
+    import logging as _log
+    _log.warning(
+        f"[SOCIAL TRIAGE] Unexpected mode={triage_result.mode!r} for social branch — "
+        "caller should route through generate_for_mode instead."
+    )
+    return None
+
 
 from services.innate_skills.registry import (
     CONTEXTUAL_SKILLS as _CONTEXTUAL_SKILLS,
@@ -2655,7 +2665,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
         # ── Branch dispatch ──
-        if triage_result.branch == 'social' and triage_result.mode != 'ACKNOWLEDGE':
+        if triage_result.branch == 'social' and triage_result.mode in ('CANCEL', 'IGNORE'):
             # Social branch — CANCEL/IGNORE fast exits only
             response_data = _handle_social_triage(
                 triage_result, text, topic, thread_id, metadata,
