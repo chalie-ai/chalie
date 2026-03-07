@@ -25,14 +25,14 @@ LOG_PREFIX = "[PERSISTENT TASK]"
 
 # Valid state transitions
 VALID_TRANSITIONS = {
-    'proposed': {'accepted', 'cancelled'},
-    'accepted': {'in_progress', 'cancelled'},
+    'proposed': {'accepted', 'cancelled', 'expired'},
+    'accepted': {'in_progress', 'cancelled', 'expired'},
     'in_progress': {'completed', 'paused', 'cancelled', 'expired'},
     'paused': {'in_progress', 'cancelled', 'expired'},
 }
 
 # States eligible for auto-expiry
-EXPIRABLE_STATES = {'accepted', 'in_progress', 'paused'}
+EXPIRABLE_STATES = {'proposed', 'accepted', 'in_progress', 'paused'}
 
 # Limits
 MAX_ACTIVE_TASKS = 5
