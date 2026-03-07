@@ -1031,7 +1031,7 @@ body {
   max-width: 680px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--space-sm);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -1099,6 +1099,7 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  line-height: 1;
   transition: all var(--duration-fast);
   flex-shrink: 0;
 }
@@ -1157,7 +1158,6 @@ body {
   background: transparent;
   color: var(--text-secondary);
   transition: all 220ms ease;
-  margin-left: -4px;
 }
 .btn-action--upload:hover {
   color: var(--accent-tertiary);
