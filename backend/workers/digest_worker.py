@@ -13,7 +13,6 @@ import time
 import logging
 from services import ConfigService, FrontalCortexService, OrchestratorService, PromptQueue, SessionService
 from services.llm_service import create_llm_service
-from services.prompt_queue import enqueue_episodic_memory
 from services.recent_topic_service import RecentTopicService
 from services.gist_storage_service import GistStorageService
 from services.world_state_service import WorldStateService
@@ -2019,6 +2018,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     thread_id = thread_resolution.thread_id
     metadata['thread_id'] = thread_id
 
+    # Mark thread as busy — prevents observer from trimming WM mid-response
+    from services.memory_client import MemoryClientService
+    _busy_store = MemoryClientService.create_connection()
+    _busy_store.setex(f"thread_busy:{thread_id}", 30, "1")
+
     # Step 2a: Initialize services
     thread_conv_service = ThreadConversationService()
     recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
@@ -2475,13 +2479,25 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     }
 
     if session_service.check_topic_switch(topic):
-        should_generate, reason = session_service.should_generate_episode()
-        if should_generate:
-            logging.info(f"Episode generation triggered: {reason}")
-            session_data = session_service.get_session_data()
-            enqueue_episodic_memory(session_data)
-            session_service.reset_session()
+        # Episodic consolidation handled by EpisodicMemoryObserver (signal density scan)
+        session_service.reset_session()
         session_service.mark_topic_switch(topic)
+
+        # Conditional WM reset: full clear if old topic consolidated, else keep 2-turn bridge
+        try:
+            from services.memory_client import MemoryClientService
+            _wm_store = MemoryClientService.create_connection()
+            wm_identifier = thread_id or topic
+            consolidation_ts = _wm_store.get(f"last_consolidation:{wm_identifier}")
+            if consolidation_ts is not None:
+                working_memory.clear(wm_identifier)
+                logging.info(f"[DIGEST] Full WM clear on topic switch (consolidated) for '{wm_identifier}'")
+            else:
+                wm_key = working_memory._get_memory_key(wm_identifier)
+                working_memory.store.ltrim(wm_key, -4, -1)  # Keep last 2 turns (4 entries)
+                logging.info(f"[DIGEST] WM trimmed to 2-turn bridge on topic switch for '{wm_identifier}'")
+        except Exception as _wm_e:
+            logging.debug(f"[DIGEST] WM topic-switch reset failed (non-fatal): {_wm_e}")
 
     # Tool relevance scoring removed — handled by CognitiveTriageService
 
@@ -2908,13 +2924,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # PHASE E: ASYNC FOLLOW-UP
     # ═══════════════════════════════════════════════════════════
 
-    # Step 12: Check for inactivity-based episode generation
-    should_generate, reason = session_service.should_generate_episode()
-    if should_generate:
-        logging.info(f"Episode generation triggered: {reason}")
-        session_data = session_service.get_session_data()
-        enqueue_episodic_memory(session_data)
-        session_service.reset_session()
+    # Step 12: Episodic consolidation handled by EpisodicMemoryObserver (60s scan)
 
     # Print the actual response to stdout for the user
     logging.info(f"\n{'='*60}")
@@ -2929,5 +2939,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     metrics.record_timing(trace_id, 'response_generation', response_data['generation_time'] * 1000)
     metrics.record_timing(trace_id, 'total_request', (time.time() - request_start_time) * 1000)
     metrics.record_counter('responses_total')
+
+    # Clear thread-busy flag — observer can now safely scan this thread
+    try:
+        _busy_store.delete(f"thread_busy:{thread_id}")
+    except Exception:
+        pass
 
     return f"Topic '{topic}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"
