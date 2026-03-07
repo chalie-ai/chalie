@@ -2661,7 +2661,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 intent, intent_classifier, working_memory, thread_conv_service,
             )
             is_fast_path_ack = True
-            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage'}
+            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms}
 
         elif triage_result.branch == 'act' and _is_innate_skill_only(triage_result):
             # Direct dispatch: fire-and-done skills bypass the full ACT loop
@@ -2693,7 +2693,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         topic, text, classification, thread_conv_service,
                         cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
                         metadata=metadata, context_warmth=context_warmth,
-                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'},
+                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms},
                         selected_tools=triage_result.tools if triage_result.tools else None,
                         selected_skills=triage_result.skills if triage_result.skills else None,
                         thread_id=thread_id,
@@ -2714,7 +2714,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 )
             is_fast_path_ack = True
             if routing_result is None:
-                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'}
+                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms}
 
         elif triage_result.branch == 'act':
             # Full ACT loop — complex multi-step tasks with external tools
@@ -2740,7 +2740,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     topic, text, classification, thread_conv_service,
                     cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
                     metadata=metadata, context_warmth=context_warmth,
-                    pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'},
+                    pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms},
                     selected_tools=triage_result.tools if triage_result.tools else None,
                     selected_skills=triage_result.skills if triage_result.skills else None,
                     thread_id=thread_id,
@@ -2752,7 +2752,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     intent, intent_classifier, working_memory, thread_conv_service,
                     context_warmth, exchange_id,
                 )
-                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage'}
+                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms}
             is_fast_path_ack = True
 
         else:
@@ -2786,7 +2786,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 topic, text, classification, thread_conv_service,
                 cortex_config, cortex_prompt_map, mode_router, _forced_signals, fact_store,
                 metadata=metadata, context_warmth=context_warmth,
-                pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal},
+                pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal, 'routing_time_ms': triage_result.triage_time_ms},
                 selected_tools=triage_result.tools if triage_result.tools else None,
                 selected_skills=triage_result.skills if triage_result.skills else None,
                 thread_id=thread_id,
