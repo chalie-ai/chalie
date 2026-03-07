@@ -113,6 +113,9 @@ class ThreadExpiryService:
         if current_pointer == thread_id:
             store.delete(pointer_key)
 
+        # Clear working memory — expired thread's WM is stale
+        store.delete(f"working_memory:{thread_id}")
+
         # Persist to SQLite
         try:
             from services.database_service import get_shared_db_service

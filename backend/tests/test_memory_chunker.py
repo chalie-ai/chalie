@@ -32,7 +32,6 @@ def _make_llm_mock(response_text: str):
 
 class TestMemoryChunker:
 
-    @patch('workers.memory_chunker_worker.enqueue_episodic_memory')
     @patch('workers.memory_chunker_worker.ThreadConversationService')
     @patch('workers.memory_chunker_worker.create_llm_service')
     @patch('workers.memory_chunker_worker.WorldStateService')
@@ -41,7 +40,7 @@ class TestMemoryChunker:
     @patch('workers.memory_chunker_worker.FactStoreService')
     def test_gists_stored_after_extraction(
         self, mock_fact_cls, mock_gist_cls, mock_config_cls,
-        mock_ws_cls, mock_llm_factory, mock_conv_cls, mock_enqueue,
+        mock_ws_cls, mock_llm_factory, mock_conv_cls,
     ):
         """Valid LLM JSON response → gists stored via GistStorageService."""
         # Config
@@ -89,7 +88,6 @@ class TestMemoryChunker:
         assert 'Memory chunk generated' in result
         gist_instance.store_gists.assert_called_once()
 
-    @patch('workers.memory_chunker_worker.enqueue_episodic_memory')
     @patch('workers.memory_chunker_worker.ThreadConversationService')
     @patch('workers.memory_chunker_worker.create_llm_service')
     @patch('workers.memory_chunker_worker.WorldStateService')
@@ -98,7 +96,7 @@ class TestMemoryChunker:
     @patch('workers.memory_chunker_worker.FactStoreService')
     def test_facts_extracted_and_stored(
         self, mock_fact_cls, mock_gist_cls, mock_config_cls,
-        mock_ws_cls, mock_llm_factory, mock_conv_cls, mock_enqueue,
+        mock_ws_cls, mock_llm_factory, mock_conv_cls,
     ):
         """Facts extracted and stored via FactStoreService."""
         mock_config_cls.resolve_agent_config.return_value = {
@@ -146,16 +144,15 @@ class TestMemoryChunker:
             source=_make_job_data()['exchange_id'],
         )
 
-    @patch('workers.memory_chunker_worker.enqueue_episodic_memory')
     @patch('workers.memory_chunker_worker.ThreadConversationService')
     @patch('workers.memory_chunker_worker.create_llm_service')
     @patch('workers.memory_chunker_worker.WorldStateService')
     @patch('workers.memory_chunker_worker.ConfigService')
-    def test_episodic_job_enqueued(
+    def test_no_episodic_enqueue_after_processing(
         self, mock_config_cls, mock_ws_cls, mock_llm_factory,
-        mock_conv_cls, mock_enqueue,
+        mock_conv_cls,
     ):
-        """Episodic memory job enqueued after processing."""
+        """Memory chunker no longer enqueues episodic jobs — observer handles consolidation."""
         mock_config_cls.resolve_agent_config.return_value = {
             'model': 'test', 'attention_span_minutes': 30,
             'min_gist_confidence': 7, 'max_gists': 8,
@@ -176,9 +173,10 @@ class TestMemoryChunker:
 
         mock_llm_factory.return_value = _make_llm_mock(json.dumps({'gists': [], 'scope': 'test'}))
 
-        memory_chunker_worker(_make_job_data())
+        result = memory_chunker_worker(_make_job_data())
 
-        mock_enqueue.assert_called_once_with({'topic': 'test-topic', 'thread_id': 'test:user1:chan1:1'})
+        # Verify processing succeeded — episodic consolidation handled by EpisodicMemoryObserver
+        assert 'Memory chunk generated' in result
 
     @patch('workers.memory_chunker_worker.ThreadConversationService')
     @patch('workers.memory_chunker_worker.create_llm_service')

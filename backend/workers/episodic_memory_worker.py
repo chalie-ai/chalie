@@ -6,7 +6,6 @@ Responsibility: Episode generation only (SRP).
 import json
 import time
 import re
-import threading
 from datetime import datetime, timezone
 from services.time_utils import utc_now
 from services import ConfigService, DatabaseService, EpisodicStorageService, SalienceService
@@ -70,36 +69,6 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     return False, f"Not ready: {len(enriched)} exchanges, waiting for more or timeout", []
 
 
-def are_other_workers_idle() -> tuple[bool, str]:
-    """
-    Check if other worker queues are idle (empty).
-
-    Returns:
-        Tuple of (idle: bool, reason: str)
-    """
-    store = MemoryClientService.create_connection(decode_responses=False)
-    config = ConfigService.connections().get("memory", {})
-
-    # Check prompt queue (digest worker)
-    prompt_queue_name = config.get("topics", {}).get("prompt_queue", "prompt-queue")
-    prompt_queue = Queue(prompt_queue_name, connection=store)
-
-    # Check memory chunker queue
-    chunker_queue_name = config.get("topics", {}).get("memory_chunker", "memory-chunker-queue")
-    chunker_queue = Queue(chunker_queue_name, connection=store)
-
-    prompt_count = len(prompt_queue)
-    chunker_count = len(chunker_queue)
-
-    if prompt_count > 0 or chunker_count > 0:
-        return False, f"Other workers busy: prompt={prompt_count}, chunker={chunker_count}"
-
-    return True, "All workers idle"
-
-
-MAX_REQUEUE_RETRIES = 10
-
-
 def _extract_json(text: str) -> str:
     """
     Extract JSON from text, handling markdown code fences.
@@ -140,76 +109,33 @@ def _safe_json_load(text: str) -> dict | None:
         return None
 
 
-def requeue_episodic_memory(job_data: dict, delay_seconds: int = 2, reason: str = ""):
-    """
-    Requeue episodic memory job with exponential backoff.
-
-    Tracks retry count in job_data. Backs off exponentially:
-    min(300, 2 ** retry_count) seconds. Drops the job after MAX_REQUEUE_RETRIES
-    (the next encode_event will create a new one).
-
-    Args:
-        job_data: The original job data (retry_count is tracked internally)
-        delay_seconds: Base delay (overridden by backoff calculation)
-        reason: Reason for requeue
-    """
-    retry_count = job_data.get('retry_count', 0)
-
-    if retry_count >= MAX_REQUEUE_RETRIES:
-        logging.warning(
-            f"Episodic memory job for topic '{job_data.get('topic')}' "
-            f"exceeded max retries ({MAX_REQUEUE_RETRIES}), dropping. "
-            f"Reason: {reason}"
-        )
-        return
-
-    # Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s, 300s
-    backoff = min(300, 2 ** retry_count)
-    job_data['retry_count'] = retry_count + 1
-
-    def _delayed_enqueue():
-        from services.prompt_queue import enqueue_episodic_memory
-        enqueue_episodic_memory(job_data)
-
-    t = threading.Timer(backoff, _delayed_enqueue)
-    t.daemon = True
-    t.start()
-    logging.info(
-        f"Requeued episodic memory job after {backoff}s delay "
-        f"(retry {retry_count + 1}/{MAX_REQUEUE_RETRIES}): {reason}"
-    )
-
-
 def episodic_memory_worker(job_data: dict) -> str:
     """
     Generate episodic memory from a conversation topic.
 
-    Checks readiness conditions:
-    - 3+ enriched exchanges OR 10+ minutes since first exchange
-    - All other workers idle
-
-    If not ready, requeues with 2 second delay.
-    If ready, processes all exchanges and consolidates into episodic memory.
+    Called by EpisodicMemoryObserver (primary) or thread_expiry_service (fallback).
+    The caller has already verified readiness via signal density or timeout.
+    The worker still runs check_readiness() as a safety check but does not requeue.
 
     Args:
         job_data: {
-            'topic': str
+            'topic': str,
+            'thread_id': str (optional)
         }
 
     Returns:
-        Result string with episode ID or defer reason
+        Result string with episode ID or skip reason
     """
     topic = job_data['topic']
     thread_id = job_data.get('thread_id') or None
-    logging.info(f"Episodic memory worker: Checking readiness for topic '{topic}' (thread: {thread_id})")
+    logging.info(f"Episodic memory worker: Processing topic '{topic}' (thread: {thread_id})")
 
     try:
-        # Step 1: Check if topic is ready for consolidation
+        # Safety check — caller should have verified, but guard against edge cases
         ready, reason, exchanges = check_readiness(topic, thread_id=thread_id)
         if not ready:
-            logging.info(f"Topic '{topic}' not ready: {reason}")
-            requeue_episodic_memory(job_data, delay_seconds=2, reason=reason)
-            return f"Deferred - {reason}"
+            logging.info(f"Topic '{topic}' not ready (safety check): {reason}")
+            return f"Skipped - {reason}"
 
         logging.info(f"Topic '{topic}' ready for consolidation: {reason}, {len(exchanges)} exchanges")
 
@@ -343,6 +269,17 @@ def episodic_memory_worker(job_data: dict) -> str:
             exchange_ids = [eid for eid in exchange_ids if eid]
             conversation_service.remove_exchanges(thread_id, exchange_ids)
             logging.info(f"Removed {len(exchange_ids)} consolidated exchanges from thread '{thread_id}'")
+
+            # Trim working memory — consolidated turns now captured in episode
+            try:
+                from services.working_memory_service import WorkingMemoryService
+                WM_BASELINE = 4  # Keep last 4 turns post-consolidation
+                wm = WorkingMemoryService()
+                wm_key = wm._get_memory_key(thread_id)
+                wm.store.ltrim(wm_key, -(WM_BASELINE * 2), -1)
+                logging.info(f"Trimmed working memory for thread '{thread_id}' after consolidation")
+            except Exception as wm_err:
+                logging.debug(f"[EPISODIC] WM trim after consolidation failed (non-fatal): {wm_err}")
 
         # Close database pool
         database_service.close_pool()

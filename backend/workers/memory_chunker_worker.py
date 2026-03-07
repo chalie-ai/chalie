@@ -5,7 +5,6 @@ from services import ConfigService
 from services.llm_service import create_llm_service
 from services.world_state_service import WorldStateService
 from services.thread_conversation_service import ThreadConversationService
-from services.prompt_queue import enqueue_episodic_memory
 from services.gist_storage_service import GistStorageService
 from services.fact_store_service import FactStoreService
 import logging
@@ -563,9 +562,8 @@ def memory_chunker_worker(job_data: dict) -> str:
             except Exception as e:
                 logging.warning(f"[memory_chunker] Identity reinforcement failed: {e}")
 
-            # Enqueue episodic memory job for this topic (will check readiness in worker)
-            logging.info(f"log [memory_chunker]: Enqueueing episodic memory job for topic '{topic}'")
-            enqueue_episodic_memory({'topic': topic, 'thread_id': thread_id or ''})
+            # Episodic consolidation handled by EpisodicMemoryObserver (60s scan cycle)
+            # — no need to enqueue here; observer detects signal density and triggers
 
             # Extract and store facts from memory chunk (same LLM call, no second LLM needed)
             try:
