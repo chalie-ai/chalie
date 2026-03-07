@@ -373,6 +373,9 @@ class FrontalCortexService:
             mode = response_data.get('mode', 'RESPOND')
             modifiers = response_data.get('modifiers', [])
             user_response = response_data.get('response', '')
+            # Guard: ensure response is always a string (LLM may return nested object)
+            if not isinstance(user_response, str):
+                user_response = str(user_response)
             actions = response_data.get('actions')
             confidence = response_data.get('confidence', 0.5)
             alternative_paths = response_data.get('alternative_paths', [])
