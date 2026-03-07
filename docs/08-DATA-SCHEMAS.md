@@ -1,5 +1,30 @@
 # Data Schemas
 
+---
+
+### Quick Facts: Chalie Storage at a Glance
+
+| Storage Type | Technology | Use Case | Retention |
+|------------|-----------|----------|----------|
+| **MemoryStore** | In-memory (Redis-like API) | Queue topics, conversation threads, runtime state | 24h TTL for threads; volatile otherwise |
+| **SQLite + sqlite-vec** | Vector database extension | Episodic memories with semantic search | Permanent until soft-deleted |
+| **SQLite + FTS5** | Full-text search | Episode text indexing and retrieval | Permanent until soft-deleted |
+| **JSONB Columns** | PostgreSQL-style JSON storage | Flexible metadata (intent, emotion, salience_factors) | Tied to parent record lifecycle |
+
+---
+
+### Decision Guide: Where Should This Data Live?
+
+> 💾 **Choose the right storage based on access patterns and retention needs:**
+>
+> - **MemoryStore** → Use for transient runtime state with TTL. Examples: Conversation threads (24h expiry), queue topics, gists (30min TTL). Fast in-memory access but not durable across restarts.
+> - **SQLite Episodes Table** → Use for long-term episodic memories requiring semantic search. Includes 768-dim vector embeddings, salience scoring, and soft-delete support. Retrieved via hybrid vector + FTS5 search.
+> - **SQLite Concepts/Relationships Tables** → Use for semantic graph nodes with spreading activation. Supports associative reasoning across the knowledge base.
+> - **SQLite Lists Tables** → Use for deterministic CRUD operations requiring perfect recall (shopping lists, to-dos). Includes full audit history via `list_events` table; soft-deletes preserve temporal reasoning capability.
+> - **SQLite User Traits Table** → Use for categorized user attributes with decay (core, preference, behavioral_pattern). Supports personalization and adaptive behavior.
+
+---
+
 ## MemoryStore Queue Topics (configurations)
 Queue topic names are defined in `configs/connections.json`.  Current topic queue names:
 ```json

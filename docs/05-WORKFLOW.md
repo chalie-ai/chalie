@@ -3,6 +3,38 @@
 ## Overview
 The application processes user prompts through a pipeline of workers, queues, and services. Each component is responsible for a single concern, following the **Single Responsibility Principle**.
 
+---
+
+### Quick Facts: Chalie Workflow at a Glance
+
+| Aspect | Detail |
+|--------|--------|
+| **Entry Point** | `run.py` — REST API receives prompts via `/chat` endpoint |
+| **Queue System** | MemoryStore-backed (thread-safe, Redis-like API) |
+| **Primary Worker** | Digest Worker — classification, routing, generation |
+| **Routing Latency** | ~5ms deterministic mode selection (no LLM involved) |
+| **Response Modes** | ACT → loop + re-route; IGNORE → 0ms; RESPOND/CLARIFY/ACKNOWLEDGE → single LLM call |
+| **Memory Pipeline** | Memory Chunker Worker → Episodic Memory Worker → Semantic Consolidation |
+| **Background Services** | Cognitive Drift, Decay Engine, Scheduler, Thread Expiry (various cycles) |
+
+---
+
+### Decision Guide: Which Service Handles What?
+
+> 🔄 **Follow the data flow to understand component responsibilities:**
+>
+> - **REST API (`/chat`)** → Entry point for all user messages; enqueues to `prompt-queue`
+> - **Digest Worker** → Classifies topic, runs deterministic routing (~5ms), generates mode-specific response via LLM
+> - **Memory Chunker Worker** → Enriches individual exchanges with memory chunks (LLM-based)
+> - **Episodic Memory Worker** → Builds episodes from sequences of enriched exchanges; stores to SQLite
+> - **Semantic Consolidation Worker** → Extracts concepts + relationships from episodes into semantic graph
+> - **Cognitive Drift Engine** → Generates spontaneous thoughts during idle periods via spreading activation
+> - **Routing Stability Regulator** → Single authority for mode router weight mutation (24h cycle, ±0.02/day max)
+> - **Scheduler Service** → Fires due reminders and scheduled tasks (60s poll cycle)
+> - **Thread Expiry Service** → Expires stale conversation threads (5min poll cycle)
+
+---
+
 1. **Consumer (`run.py`)** – Supervises worker processes and tracks shared state. Receives raw prompts via REST API entry point and enqueues them into the `prompt-queue`.
 2. **Prompt Queue (`services/prompt_queue.py`)** – A Thread-based queue that holds prompt jobs. Workers consume jobs from this queue.
 3. **Digest Worker (`workers/digest_worker.py`)** – Primary worker that:

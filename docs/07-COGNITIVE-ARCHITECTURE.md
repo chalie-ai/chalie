@@ -6,6 +6,34 @@ This document defines the cognitive architecture for mode routing and response g
 
 Mode selection is decoupled from response generation. A mathematical router selects the engagement mode using observable signals, then a mode-specific prompt drives the LLM to generate the response. A small LLM tie-breaker handles ambiguous cases.
 
+---
+
+### Quick Facts: Mode Router Performance & Latency
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Router Decision Time** | ~5ms | Deterministic scoring, no LLM involved |
+| **ACKNOWLEDGE Response** | ~2s | Uses qwen3:4b (lightweight model) |
+| **RESPOND/CLARIFY Response** | 2-15s | Uses qwen3:8b with soul.md context |
+| **ACT Loop Execution** | Variable | Depends on tool execution time |
+| **IGNORE Path** | 0ms | No LLM call, immediate empty response |
+
+---
+
+### Decision Guide: Which Mode Should Handle This Input?
+
+> 🧭 **The router scores all modes and picks the highest. Here's what drives each decision:**
+>
+> - **ACT**: User mentions a tool explicitly OR tools exist but none named → triggers ACT loop for internal reasoning before response
+> - **RESPOND**: Warm context (established topic, facts present) + clear question/statement → provides substantive answer with soul.md personality layer
+> - **CLARIFY**: Cold context (new topic, no facts) + ambiguous input → asks clarifying question to gather more information
+> - **ACKNOWLEDGE**: Social signals detected (greetings, thanks, confirmations) → brief response without full LLM overhead
+> - **IGNORE**: Empty or nonsense input detected → returns immediately with no processing
+>
+> **Key Insight**: Context warmth naturally shifts behavior — cold contexts favor CLARIFY, warm contexts favor RESPOND. This happens through signal-weighted scoring, not explicit rules.
+
+---
+
 ### Why Deterministic Routing Matters
 
 Most systems route through an LLM — asking it "what should I do?" before asking it "what should I say?" This doubles latency and introduces unpredictability. Chalie separates the two: a fast mathematical router selects the engagement mode from observable conversation signals in ~5ms. The LLM only enters the loop for response generation, shaped by the mode the router already decided. The result is predictable, auditable, and fast — and routing decisions are logged to a SQLite audit trail for inspection and improvement.

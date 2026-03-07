@@ -4,6 +4,36 @@
 
 Chalie is a human-in-the-loop cognitive assistant that combines memory consolidation, semantic reasoning, and proactive assistance. The system processes user prompts through a chain of workers and services, enriching conversations with memory chunks and generating episodic memories for future use.
 
+---
+
+### Quick Facts: Chalie at a Glance
+
+| Aspect | Detail |
+|--------|--------|
+| **Architecture Type** | Single-process with daemon threads + service-oriented design |
+| **Database** | SQLite (WAL mode) + sqlite-vec + FTS5 |
+| **In-Memory Cache** | MemoryStore (thread-safe, Redis-like API) |
+| **LLM Backend** | Ollama (configurable models: qwen3:4b, qwen3:8b) |
+| **Frontend** | Vanilla JavaScript + Radiant design system |
+| **Auth Method** | Session cookie-based (`@require_session` decorator) |
+| **Response Delivery** | WebSocket streaming (status → message → done events) |
+
+---
+
+### Decision Guide: When to Use Which Memory Layer?
+
+> 💡 **Choose your memory layer based on retention needs and access patterns:**
+>
+> - **Working Memory** (`wm:{thread_id}`): Last 4 turns, 24h TTL — use for immediate conversation context
+> - **Gists**: Short-term summaries with 30min TTL — use for transient topic state
+> - **Facts**: Medium-term key-value pairs with 24h TTL — use for user preferences and discovered information
+> - **Episodes**: Long-term semantic memories via sqlite-vec — use for relationship history and narrative building
+> - **Concepts**: Semantic graph nodes with spreading activation — use for associative reasoning
+> - **User Traits**: Categorized traits (core, preference, behavioral_pattern) with decay — use for personalization
+> - **Lists**: Deterministic CRUD operations — use for shopping lists, to-dos, chores requiring perfect recall
+
+---
+
 ## Core Architecture
 
 ### System Type
