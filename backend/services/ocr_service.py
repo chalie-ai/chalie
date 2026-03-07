@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # Max pages to OCR per document (cost control)
 MAX_OCR_PAGES = 20
 
+# Hard timeout for each vision LLM OCR call (seconds).
+# Prevents the document processing pipeline from hanging indefinitely on
+# slow or unresponsive providers (observed 310s+ hangs without this).
+_OCR_TIMEOUT = 60
+
 
 def ocr_pdf(path: str, max_pages: int = MAX_OCR_PAGES) -> str:
     """
@@ -179,7 +184,7 @@ def _ocr_gemini(config: dict, images: list) -> str:
 
     from services.llm_service import _resolve_api_key
     api_key = _resolve_api_key(config)
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": _OCR_TIMEOUT * 1000})
     model = config.get('model', 'gemini-2.5-flash')
 
     pages = []
@@ -214,6 +219,7 @@ def _ocr_anthropic(config: dict, images: list) -> str:
         response = client.messages.create(
             model=model,
             max_tokens=4096,
+            timeout=_OCR_TIMEOUT,
             messages=[{
                 'role': 'user',
                 'content': [
@@ -244,6 +250,7 @@ def _ocr_openai(config: dict, images: list) -> str:
         response = client.chat.completions.create(
             model=model,
             max_tokens=4096,
+            timeout=_OCR_TIMEOUT,
             messages=[{
                 'role': 'user',
                 'content': [
