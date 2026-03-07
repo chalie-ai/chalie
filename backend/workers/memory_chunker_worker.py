@@ -169,7 +169,7 @@ def _extract_and_store_traits(memory_chunk: dict, metadata: dict):
 
     Args:
         memory_chunk: The LLM-generated memory chunk (may contain user_traits)
-        metadata: Job metadata (may contain user_id for speaker detection)
+        metadata: Job metadata (may contain speaker detection info)
     """
     traits = memory_chunk.get('user_traits', [])
     if not traits or not isinstance(traits, list):
