@@ -30,6 +30,28 @@ from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
 
 
+_SKILL_HANDLERS = {
+    'recall': handle_recall,
+    'memorize': handle_memorize,
+    'introspect': handle_introspect,
+    'associate': handle_associate,
+    'schedule': handle_scheduler,
+    'autobiography': handle_autobiography,
+    'focus': handle_focus,
+    'list': handle_list,
+    'moment': handle_moment,
+    'persistent_task': handle_persistent_task,
+    'emit_card': handle_emit_card,
+    'document': handle_document,
+    'read': handle_read,
+}
+
+
+def get_skill_handler(skill_name: str):
+    """Get an innate skill handler by name. Returns None if not found."""
+    return _SKILL_HANDLERS.get(skill_name)
+
+
 def register_innate_skills(dispatcher) -> None:
     """
     Register all innate skills with the ACT dispatcher.

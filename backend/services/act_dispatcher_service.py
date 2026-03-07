@@ -133,10 +133,17 @@ class ActDispatcherService:
                 }
 
             raw_result = result_container['result']
+
+            # Handle structured skill results (dict with text + reply_actions)
+            reply_actions = None
+            if isinstance(raw_result, dict) and 'text' in raw_result:
+                reply_actions = raw_result.get('reply_actions')
+                raw_result = raw_result['text']
+
             confidence = _estimate_confidence(action_type, raw_result)
             notes = _extract_notes(action_type, action, raw_result)
 
-            return {
+            dispatch_result = {
                 'action_type': action_type,
                 'status': 'success',
                 'result': raw_result,
@@ -144,6 +151,9 @@ class ActDispatcherService:
                 'confidence': confidence,
                 'notes': notes,
             }
+            if reply_actions:
+                dispatch_result['reply_actions'] = reply_actions
+            return dispatch_result
 
         except Exception as e:
             execution_time = time.time() - start_time

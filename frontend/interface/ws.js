@@ -188,6 +188,30 @@ export class WSClient {
   }
 
   /**
+   * Send a deterministic action (button click) — bypasses LLM routing.
+   *
+   * @param {object} payload — action payload from the button
+   * @param {{
+   *   onMessage?: (data: object) => void,
+   *   onError?:   (data: object) => void,
+   *   onDone?:    (data: object) => void,
+   * }} callbacks
+   */
+  sendAction(payload, callbacks = {}) {
+    this.abort();
+    this._chatCallbacks = callbacks;
+
+    if (!this.isConnected) {
+      callbacks.onError?.({ message: 'Not connected.', recoverable: true });
+      callbacks.onDone?.({ duration_ms: 0 });
+      this._chatCallbacks = null;
+      return;
+    }
+
+    this._send({ type: 'action', payload });
+  }
+
+  /**
    * Dispatch incoming messages to appropriate handlers.
    */
   _dispatch(data) {

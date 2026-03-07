@@ -57,13 +57,17 @@ export class Renderer {
   /**
    * Append a Chalie speech form.
    * @param {string} text
-   * @param {{topic?: string, duration_ms?: number}} [meta]
+   * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
    */
   appendChalieForm(text, meta = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.innerHTML = parseMarkdown(text);
     el.appendChild(textEl);
+
+    if (meta.actions?.length) {
+      el.appendChild(this._buildActionButtons(meta.actions));
+    }
 
     const metaRow = this._buildMetaRow(text, meta);
     el.appendChild(metaRow);
@@ -98,6 +102,10 @@ export class Renderer {
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.innerHTML = parseMarkdown(text);
     form.appendChild(textEl);
+
+    if (meta.actions?.length) {
+      form.appendChild(this._buildActionButtons(meta.actions));
+    }
 
     const metaRow = this._buildMetaRow(text, meta);
     form.appendChild(metaRow);
@@ -158,6 +166,27 @@ export class Renderer {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  _buildActionButtons(actions) {
+    const row = this._createEl('div', 'speech-form__actions');
+    for (const action of actions) {
+      const btn = this._createEl('button', 'speech-form__action-btn');
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        // Disable all buttons in this row (one-time use)
+        for (const b of row.querySelectorAll('button')) {
+          b.disabled = true;
+          b.classList.add('speech-form__action-btn--used');
+        }
+        btn.classList.add('speech-form__action-btn--selected');
+        document.dispatchEvent(new CustomEvent('chalie:action', {
+          detail: { payload: action.payload },
+        }));
+      });
+      row.appendChild(btn);
+    }
+    return row;
+  }
 
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };
