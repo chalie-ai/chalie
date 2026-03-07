@@ -135,3 +135,98 @@ def install_update():
             "error": str(e),
             "status": "failed"
         }), 500
+
+
+@app_update_bp.route('/status', methods=['GET'])
+@require_session
+def get_update_status():
+    """Get current update status and deployment mode.
+
+    Alias for /check endpoint - returns the same information about available updates,
+    current version, latest version, and deployment mode.
+    
+    Returns:
+        JSON response with:
+            - update_available (bool): True if a newer version exists
+            - latest_version (str): The latest release version tag
+            - current_version (str): The currently running version
+            - deployment_mode (str): Current deployment mode ('docker', 'installed', or 'dev')
+    
+    Status Codes:
+        200: Success
+        500: Internal server error during status check
+    """
+    try:
+        from ..services.app_update_service import AppUpdateService
+        
+        service = AppUpdateService()
+        
+        result = service.check_for_updates()
+        
+        return jsonify({
+            "update_available": result.get("update_available", False),
+            "latest_version": result.get("latest_version", service.app_version),
+            "current_version": service.app_version,
+            "deployment_mode": service.get_deployment_mode()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"[UPDATE] Get update status error: {e}")
+        return jsonify({
+            "error": str(e),
+            "update_available": False,
+            "current_version": 'unknown'
+        }), 500
+
+
+@app_update_bp.route('/trigger', methods=['POST'])
+@require_session
+def trigger_update():
+    """Trigger an update installation.
+
+    Alias for /install endpoint - initiates the update process as a background task.
+    
+    Returns:
+        JSON response with:
+            - status (str): 'accepted' if update initiated, 'no_update' if none available
+            - message (str): Descriptive message about the operation
+    
+    Status Codes:
+        200: No update available or success
+        202: Update accepted and running in background
+        500: Internal server error during trigger request
+    """
+    try:
+        from ..services.app_update_service import AppUpdateService
+        
+        service = AppUpdateService()
+        
+        # Check if update is available first
+        check_result = service.check_for_updates()
+        
+        if not check_result.get("update_available", False):
+            return jsonify({
+                "status": "no_update",
+                "message": "No update available"
+            }), 200
+        
+        # Start background thread for the update
+        update_thread = threading.Thread(
+            target=_run_update_in_background,
+            daemon=True
+        )
+        update_thread.start()
+        
+        logger.info(f"[UPDATE] Update triggered in background thread")
+        
+        return jsonify({
+            "status": "accepted",
+            "message": "Update initiated"
+        }), 202
+        
+    except Exception as e:
+        logger.error(f"[UPDATE] Trigger update error: {e}")
+        return jsonify({
+            "error": str(e),
+            "status": "failed"
+        }), 500

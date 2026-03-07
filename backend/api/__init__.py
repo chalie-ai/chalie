@@ -90,6 +90,7 @@ def create_app():
     from .moments import moments_bp
     from .documents import documents_bp
     from .voice import voice_bp
+    # App update blueprint - provides /api/v1/update/status and /api/v1/update/trigger endpoints
     from .app_update import app_update_bp
 
     app.register_blueprint(user_auth_bp)
