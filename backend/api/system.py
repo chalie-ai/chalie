@@ -40,7 +40,7 @@ def health_check():
 @system_bp.route('/ready', methods=['GET'])
 def readiness_check():
     """Readiness probe — true only when SQLite, MemoryStore, and prompt-queue worker are all available."""
-    checks = {'database': False, 'memory_store': False, 'workers': False}
+    components = {}
 
     # SQLite
     try:
@@ -50,30 +50,33 @@ def readiness_check():
             cursor = conn.cursor()
             cursor.execute('SELECT 1')
             cursor.close()
-        checks['database'] = True
+        components['database'] = {'status': 'ok', 'connected': True}
     except Exception as e:
         logger.debug(f'[READY] database not ready: {e}')
+        components['database'] = {'status': 'error', 'connected': False, 'message': str(e)}
 
     # MemoryStore
     try:
         from services.memory_client import MemoryClientService
         store = MemoryClientService.create_connection()
         store.ping()
-        checks['memory_store'] = True
+        components['memory_store'] = {'status': 'ok'}
     except Exception as e:
         logger.debug(f'[READY] memory store not ready: {e}')
+        components['memory_store'] = {'status': 'error', 'message': str(e)}
 
     # prompt-queue worker (PromptQueue is an in-process thread dispatcher — always available
     # once the module is importable; _locks is lazily populated on first enqueue so checking
     # it causes a false 503 on every cold boot before the first message arrives)
     try:
         from services.prompt_queue import PromptQueue  # noqa: F401 — import-only check
-        checks['workers'] = True
+        components['workers'] = {'status': 'ok'}
     except Exception as e:
         logger.debug(f'[READY] worker check failed: {e}')
+        components['workers'] = {'status': 'error', 'message': str(e)}
 
-    ready = all(checks.values())
-    return jsonify({'ready': ready, 'checks': checks}), (200 if ready else 503)
+    ready = all(c['status'] == 'ok' for c in components.values())
+    return jsonify({'ready': ready, **components}), (200 if ready else 503)
 
 
 @system_bp.route('/metrics', methods=['GET'])
