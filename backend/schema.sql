@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     activation_score REAL DEFAULT 1.0,
     salience_factors TEXT DEFAULT '{}',       -- JSONB
     open_loops TEXT DEFAULT '[]',             -- JSONB
-    semantic_consolidation_status TEXT
+    semantic_consolidation_status TEXT,
+    reliability TEXT DEFAULT 'reliable'       -- epistemic confidence: reliable|uncertain|contradicted|superseded
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_topic ON episodes(topic) WHERE deleted_at IS NULL;
@@ -118,7 +119,8 @@ CREATE TABLE IF NOT EXISTS semantic_concepts (
     decay_resistance REAL DEFAULT 0.5,
     deleted_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    reliability TEXT DEFAULT 'reliable'       -- epistemic confidence: reliable|uncertain|contradicted|superseded
 );
 
 CREATE INDEX IF NOT EXISTS idx_concepts_name ON semantic_concepts(concept_name);
@@ -277,12 +279,16 @@ CREATE TABLE IF NOT EXISTS identity_vectors (
 -- Seed default archetype
 INSERT OR IGNORE INTO identity_vectors (id, vector_name, baseline_weight, current_activation, plasticity_rate, inertia_rate, min_cap, max_cap)
 VALUES
-    ('iv-curiosity',           'curiosity',           0.7, 0.7, 0.05, 0.10, 0.3, 0.9),
-    ('iv-assertiveness',       'assertiveness',       0.6, 0.6, 0.04, 0.10, 0.3, 0.8),
-    ('iv-warmth',              'warmth',              0.6, 0.6, 0.05, 0.10, 0.3, 0.8),
-    ('iv-playfulness',         'playfulness',         0.4, 0.4, 0.04, 0.10, 0.2, 0.7),
-    ('iv-skepticism',          'skepticism',          0.5, 0.5, 0.03, 0.10, 0.2, 0.7),
-    ('iv-emotional_intensity', 'emotional_intensity', 0.4, 0.4, 0.02, 0.15, 0.2, 0.6);
+    ('iv-curiosity',             'curiosity',             0.7, 0.7, 0.05, 0.10, 0.3, 0.9),
+    ('iv-assertiveness',         'assertiveness',         0.6, 0.6, 0.04, 0.10, 0.3, 0.8),
+    ('iv-warmth',                'warmth',                0.6, 0.6, 0.05, 0.10, 0.3, 0.8),
+    ('iv-playfulness',           'playfulness',           0.4, 0.4, 0.04, 0.10, 0.2, 0.7),
+    ('iv-skepticism',            'skepticism',            0.5, 0.5, 0.03, 0.10, 0.2, 0.7),
+    ('iv-emotional_intensity',   'emotional_intensity',   0.4, 0.4, 0.02, 0.15, 0.2, 0.6),
+    -- Uncertainty tolerance: how willing Chalie is to sit with unresolved contradictions.
+    -- High = surface less, resolve more silently. Low = surface sooner, clarify more.
+    -- Self-tunes: user corrections lower it; user ignoring surfacings raises it.
+    ('iv-uncertainty_tolerance', 'uncertainty_tolerance', 0.5, 0.5, 0.02, 0.20, 0.2, 0.8);
 
 -- Identity event log
 CREATE TABLE IF NOT EXISTS identity_events (
@@ -315,6 +321,7 @@ CREATE TABLE IF NOT EXISTS user_traits (
     last_conflict_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
+    reliability TEXT DEFAULT 'reliable',      -- epistemic confidence: reliable|uncertain|contradicted|superseded
     UNIQUE(trait_key)
 );
 
@@ -645,37 +652,9 @@ CREATE INDEX IF NOT EXISTS idx_curiosity_threads_explore
     ON curiosity_threads(status, last_explored_at)
     WHERE status = 'active';
 
--- ────────────────────────────────────────────────────────────────
--- MOMENTS — pinned message bookmarks
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS moments (
-    id TEXT PRIMARY KEY,
-    title TEXT,
-    message_text TEXT NOT NULL,
-    exchange_id TEXT,
-    topic TEXT,
-    thread_id TEXT,
-    gists TEXT NOT NULL DEFAULT '[]',         -- JSONB
-    summary TEXT,
-    status TEXT NOT NULL DEFAULT 'enriching'
-        CHECK (status IN ('enriching', 'sealed', 'forgotten')),
-    pinned_at TEXT NOT NULL DEFAULT (datetime('now')),
-    sealed_at TEXT,
-    last_enriched_at TEXT,
-    metadata TEXT NOT NULL DEFAULT '{}',      -- JSONB
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    deleted_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_moments_active
-    ON moments(pinned_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_moments_enriching
-    ON moments(status, pinned_at) WHERE status = 'enriching' AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_moments_topic
-    ON moments(topic, pinned_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_moments_exchange
-    ON moments(exchange_id) WHERE exchange_id IS NOT NULL;
+-- NOTE: moments were previously stored in a dedicated `moments` table.
+-- They are now stored as documents with source_type='moment' in the documents
+-- table. The moments table and its indices have been removed (migration 004).
 
 -- ────────────────────────────────────────────────────────────────
 -- PLACE FINGERPRINTS — learned place patterns
@@ -895,3 +874,32 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     filename TEXT UNIQUE NOT NULL,
     applied_at TEXT DEFAULT (datetime('now'))
 );
+
+-- ────────────────────────────────────────────────────────────────
+-- UNCERTAINTIES — epistemic confidence tracking
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS uncertainties (
+    id TEXT PRIMARY KEY,
+    memory_a_type TEXT NOT NULL,              -- 'trait' | 'episode' | 'concept'
+    memory_a_id TEXT NOT NULL,
+    memory_b_type TEXT,                       -- NULL for solo uncertainties
+    memory_b_id TEXT,
+    uncertainty_type TEXT NOT NULL,           -- 'contradiction' | 'unverified' | 'stale' | 'ambiguous'
+    severity TEXT NOT NULL,                   -- 'critical' | 'high' | 'medium' | 'low'
+    detection_context TEXT NOT NULL,          -- which service detected it
+    reasoning TEXT,
+    temporal_signal INTEGER DEFAULT 0,        -- BOOLEAN: 1 if uncertainty is time-sensitive
+    surface_context TEXT,                     -- optional text to surface alongside the uncertainty
+    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'surfaced' | 'resolved'
+    resolution_strategy TEXT,                 -- 'accepted' | 'rejected' | 'merged' | 'superseded'
+    resolution_detail TEXT,
+    resolved_at TEXT,
+    surfaced_count INTEGER DEFAULT 0,
+    last_surfaced_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_uncertainties_state ON uncertainties(state);
+CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_a ON uncertainties(memory_a_type, memory_a_id);
+CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_b ON uncertainties(memory_b_type, memory_b_id);
+CREATE INDEX IF NOT EXISTS idx_uncertainties_severity ON uncertainties(severity, state);
