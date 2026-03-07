@@ -10,12 +10,14 @@ Welcome to the Chalie documentation. This is your guide to understanding, deploy
 ## Getting Started
 
 **New to Chalie?** Start here:
-1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, deployment instructions
+1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, basic setup
+2. **[20-DEPLOYMENT.md](20-DEPLOYMENT.md)** — Deployment options: local dev, systemd service, Docker Compose, reverse proxy configuration
 
 ## Setup & Configuration
 
 **Setting up Chalie for the first time?** Follow these guides in order:
 1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini)
+2. **[20-DEPLOYMENT.md](20-DEPLOYMENT.md)** — Production deployment: systemd service, Docker Compose, Nginx reverse proxy
 
 ## Understanding the System
 
@@ -202,6 +204,11 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 - **Issues**: Check GitHub issues or project backlog
 - **Contributing**: Create feature branch, add tests, follow existing patterns
 - **Questions**: Review relevant documentation section, check `docs/04-ARCHITECTURE.md` for recent work
+
+## API Reference
+
+**Building integrations with Chalie's REST API?**
+- **[21-API-REFERENCE.md](21-API-REFERENCE.md)** — Complete REST API documentation: endpoints, request/response schemas, authentication, examples
 
 ## Testing
 
