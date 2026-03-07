@@ -88,6 +88,10 @@ class TestExtractHtml:
             result = te.extract_html(html, url='https://example.com')
         assert 'Real article content' in result
 
+    @pytest.mark.skipif(
+        __import__('importlib').util.find_spec('bs4') is None,
+        reason="beautifulsoup4 not installed",
+    )
     def test_trafilatura_returns_none_falls_to_bs4(self):
         html = (
             "<html><body>"
@@ -108,6 +112,10 @@ class TestExtractHtml:
         assert 'Nav noise' not in result
         assert 'Footer noise' not in result
 
+    @pytest.mark.skipif(
+        __import__('importlib').util.find_spec('bs4') is None,
+        reason="beautifulsoup4 not installed",
+    )
     def test_bs4_strips_ad_classes(self):
         html = (
             "<html><body>"

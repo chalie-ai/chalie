@@ -78,12 +78,9 @@ class AutobiographyDeltaService:
         """
         self.db = db_service
 
-    def get_changed_sections(self, user_id: str = "primary") -> Optional[Dict[str, Any]]:
+    def get_changed_sections(self) -> Optional[Dict[str, Any]]:
         """
         Compare section_hashes between the latest two autobiography versions.
-
-        Args:
-            user_id: User identifier
 
         Returns:
             Dict with from_version, to_version, changed: [...], unchanged: [...]
@@ -95,11 +92,11 @@ class AutobiographyDeltaService:
                     text("""
                     SELECT id, version, section_hashes
                     FROM autobiography
-                    WHERE user_id = :user_id AND section_hashes IS NOT NULL
+                    WHERE section_hashes IS NOT NULL
                     ORDER BY version DESC
                     LIMIT 2
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 rows = result.fetchall()
 
@@ -134,14 +131,11 @@ class AutobiographyDeltaService:
             logger.error(f"[AUTOBIOGRAPHY DELTA] get_changed_sections failed: {e}")
             return None
 
-    def compute_growth_delta(self, user_id: str = "primary") -> Optional[Dict[str, Any]]:
+    def compute_growth_delta(self) -> Optional[Dict[str, Any]]:
         """
         For each changed section, produce a one-sentence delta summary via LLM.
 
         Uses the same lightweight model as autobiography synthesis.
-
-        Args:
-            user_id: User identifier
 
         Returns:
             Dict with from_version, to_version, section_deltas: {section: summary}
@@ -154,11 +148,10 @@ class AutobiographyDeltaService:
                     text("""
                     SELECT version, narrative, section_hashes
                     FROM autobiography
-                    WHERE user_id = :user_id
                     ORDER BY version DESC
                     LIMIT 2
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 rows = result.fetchall()
 
@@ -208,16 +201,13 @@ class AutobiographyDeltaService:
             logger.error(f"[AUTOBIOGRAPHY DELTA] compute_growth_delta failed: {e}", exc_info=True)
             return None
 
-    def reinforce_stable_traits(self, user_id: str = "primary") -> int:
+    def reinforce_stable_traits(self) -> int:
         """
         Reinforce traits mentioned in stable (unchanged) sections.
 
         When Identity or Long Term Themes remain unchanged across 3+ consecutive
         versions, traits mentioned in those sections receive a reinforcement signal.
         Uses asymptotic stabilization: confidence += (1 - confidence) * 0.05
-
-        Args:
-            user_id: User identifier
 
         Returns:
             Number of traits reinforced
@@ -229,11 +219,11 @@ class AutobiographyDeltaService:
                     text("""
                     SELECT version, section_hashes
                     FROM autobiography
-                    WHERE user_id = :user_id AND section_hashes IS NOT NULL
+                    WHERE section_hashes IS NOT NULL
                     ORDER BY version DESC
                     LIMIT 5
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 rows = result.fetchall()
 
@@ -263,15 +253,13 @@ class AutobiographyDeltaService:
                     return 0
 
                 # Get narrative text for stable sections
-                latest_narrative = rows[0]  # version, section_hashes (need narrative)
                 result = session.execute(
                     text("""
                     SELECT narrative FROM autobiography
-                    WHERE user_id = :user_id
                     ORDER BY version DESC
                     LIMIT 1
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 narrative_row = result.fetchone()
                 if not narrative_row or not narrative_row[0]:
@@ -294,9 +282,8 @@ class AutobiographyDeltaService:
                         text("""
                         SELECT id, trait_key, trait_value, confidence
                         FROM user_traits
-                        WHERE user_id = :user_id
                         """),
-                        {"user_id": user_id}
+                        {}
                     )
                     traits = result.fetchall()
 

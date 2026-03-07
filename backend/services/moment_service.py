@@ -46,7 +46,6 @@ class MomentService:
         topic: Optional[str] = None,
         thread_id: Optional[str] = None,
         title: Optional[str] = None,
-        user_id: str = "primary",
     ) -> Dict[str, Any]:
         """
         Pin a message as a moment (stored as a document).
@@ -102,7 +101,6 @@ class MomentService:
             'moment_exchange_id': exchange_id,
             'moment_topic': topic,
             'moment_thread_id': thread_id,
-            'moment_user_id': user_id,
             'boosted_episodes': [],
         }
         doc_service.update_extracted_metadata(
@@ -138,7 +136,7 @@ class MomentService:
             return None
         return self._doc_to_moment(doc)
 
-    def get_all_moments(self, user_id: str = "primary") -> List[Dict[str, Any]]:
+    def get_all_moments(self) -> List[Dict[str, Any]]:
         """Get all active moment documents ordered by creation date DESC."""
         try:
             with self.db.connection() as conn:
@@ -247,12 +245,7 @@ class MomentService:
     # Search
     # ─────────────────────────────────────────────
 
-    def search_moments(
-        self,
-        query: str,
-        limit: int = 3,
-        user_id: str = "primary",
-    ) -> List[Dict[str, Any]]:
+    def search_moments(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
         """Semantic search over moment documents via document_chunks_vec."""
         try:
             from services.embedding_service import get_embedding_service

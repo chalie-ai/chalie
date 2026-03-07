@@ -170,15 +170,15 @@ class TestIdentityStateServiceSetField:
 
         assert result is False
 
-    def test_set_field_store_key_is_user_scoped(self):
-        """MemoryStore key uses identity_state:{user_id} format."""
+    def test_set_field_store_key_is_fixed(self):
+        """MemoryStore key is fixed as 'identity_state'."""
         svc, mock_store, mock_cls = _make_service()
 
         with patch('services.identity_state_service.MemoryClientService', mock_cls):
             svc.set_field('name', 'Dylan', 0.95)
 
         call_args = mock_store.setex.call_args[0]
-        assert call_args[0] == 'identity_state:primary'
+        assert call_args[0] == 'identity_state'
 
 
 class TestIdentityStateServiceGetAll:

@@ -6,7 +6,7 @@ makes an explicit identity statement (e.g., "call me Dylan"). Read by
 FrontalCortexService before user_traits so identity is available immediately,
 before the async memory-chunker pipeline has run.
 
-MemoryStore key: identity_state:{user_id}
+MemoryStore key: identity_state
 TTL: 7 days, refreshed on every write.
 Schema per field:
     {
@@ -39,9 +39,8 @@ class IdentityStateService:
     STORE_TTL = 604800          # 7 days
     MAX_PREVIOUS_HISTORY = 5
 
-    def __init__(self, user_id: str = 'primary'):
-        self._user_id = user_id
-        self._store_key = f"{self._STORE_KEY_PREFIX}:{user_id}"
+    def __init__(self):
+        self._store_key = self._STORE_KEY_PREFIX
 
     def set_field(
         self,
@@ -96,10 +95,7 @@ class IdentityStateService:
             }
 
             r.setex(self._store_key, self.STORE_TTL, json.dumps(blob))
-            logger.debug(
-                f"[IDENTITY STATE] Stored {field_name}='{display}' "
-                f"for user '{self._user_id}'"
-            )
+            logger.debug(f"[IDENTITY STATE] Stored {field_name}='{display}'")
             return True
 
         except Exception as e:

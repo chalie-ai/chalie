@@ -71,16 +71,17 @@ class TestOnboardingNudge:
                      'previous': []}
         }
 
-        with _mock_identity_and_store(identity, exchange_count=10):
+        # exchange_count=4: only name (min_turn=3) is eligible, but it's set → no nudge
+        with _mock_identity_and_store(identity, exchange_count=4):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
 
     def test_first_nudge_at_min_turn(self):
-        """Nudge emitted at exchange_count == min_turn (5) with no name set."""
+        """Nudge emitted at exchange_count == min_turn (3) with no name set."""
         svc = _make_service_instance()
 
-        with _mock_identity_and_store({}, exchange_count=5) as (mock_id, _):
+        with _mock_identity_and_store({}, exchange_count=3) as (mock_id, _):
             result = svc._get_onboarding_nudge("t1")
 
         assert result != ""
@@ -91,26 +92,33 @@ class TestOnboardingNudge:
         assert call_arg['name']['attempts'] == 1
 
     def test_no_nudge_during_cooldown(self):
-        """No nudge at exchange_count=6 when last nudge was at turn 5 (cooldown=8)."""
+        """No nudge at exchange_count=4 when last nudge was at turn 3 (cooldown=6, age_range min_turn=5 not yet eligible)."""
         svc = _make_service_instance()
+        # name nudged at turn 3; cooldown=6 so next eligible at turn 9.
+        # age_range has min_turn=5, so at turn 4 it isn't eligible yet either.
         identity = {
-            '_onboarding': {'name': {'nudged_at_turn': 5, 'attempts': 1}},
+            '_onboarding': {'name': {'nudged_at_turn': 3, 'attempts': 1}},
         }
 
-        with _mock_identity_and_store(identity, exchange_count=6):
+        with _mock_identity_and_store(identity, exchange_count=4):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
 
     def test_second_nudge_after_cooldown(self):
-        """Second nudge fires when cooldown (8 turns) has elapsed."""
+        """Second nudge fires when cooldown (6 turns) has elapsed."""
         svc = _make_service_instance()
-        # Last nudge at turn 5, cooldown=8, so turn 13 should work
+        # name nudged at turn 3, cooldown=6, so turn 9 is the earliest eligible.
+        # age_range (min_turn=5) is also not yet set → it fires first at turn 9.
+        # Mark age_range as already nudged so name gets a chance.
         identity = {
-            '_onboarding': {'name': {'nudged_at_turn': 5, 'attempts': 1}},
+            '_onboarding': {
+                'name': {'nudged_at_turn': 3, 'attempts': 1},
+                'age_range': {'nudged_at_turn': 5, 'attempts': 1},
+            },
         }
 
-        with _mock_identity_and_store(identity, exchange_count=13) as (mock_id, _):
+        with _mock_identity_and_store(identity, exchange_count=9) as (mock_id, _):
             result = svc._get_onboarding_nudge("t1")
 
         assert result != ""
@@ -120,15 +128,22 @@ class TestOnboardingNudge:
     def test_no_nudge_after_max_attempts(self):
         """No nudge after max_attempts reached for all scheduled traits."""
         svc = _make_service_instance()
+        # All 9 traits in _ONBOARDING_SCHEDULE must be exhausted (attempts >= max_attempts).
         identity = {
             '_onboarding': {
-                'name': {'nudged_at_turn': 13, 'attempts': 2},
-                'timezone': {'nudged_at_turn': 20, 'attempts': 1},
-                'interests': {'nudged_at_turn': 30, 'attempts': 1},
+                'name':                    {'nudged_at_turn': 9,  'attempts': 2},
+                'age_range':               {'nudged_at_turn': 11, 'attempts': 1},
+                'occupation':              {'nudged_at_turn': 14, 'attempts': 1},
+                'timezone':                {'nudged_at_turn': 21, 'attempts': 1},
+                'communication_preference':{'nudged_at_turn': 24, 'attempts': 1},
+                'interests':               {'nudged_at_turn': 26, 'attempts': 1},
+                'work_schedule':           {'nudged_at_turn': 28, 'attempts': 1},
+                'primary_goal':            {'nudged_at_turn': 31, 'attempts': 1},
+                'learning_style':          {'nudged_at_turn': 36, 'attempts': 1},
             },
         }
 
-        with _mock_identity_and_store(identity, exchange_count=50):
+        with _mock_identity_and_store(identity, exchange_count=80):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""

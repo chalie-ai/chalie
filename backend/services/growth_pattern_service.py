@@ -81,7 +81,7 @@ class GrowthPatternService:
                 logger.error(f"[GROWTH PATTERN] Error: {e}", exc_info=True)
                 time.sleep(60)
 
-    def run_growth_cycle(self, user_id: str = 'primary') -> dict:
+    def run_growth_cycle(self) -> dict:
         """
         Run one full growth detection cycle.
 
@@ -97,7 +97,7 @@ class GrowthPatternService:
             db_service = get_shared_db_service()
             trait_service = UserTraitService(db_service)
 
-            current_style = trait_service.get_communication_style(user_id=user_id)
+            current_style = trait_service.get_communication_style()
             if not current_style:
                 logger.debug("[GROWTH PATTERN] No communication style found, skipping cycle")
                 return result
@@ -108,11 +108,11 @@ class GrowthPatternService:
                 logger.debug(f"[GROWTH PATTERN] Only {obs_count} observations, waiting for more data")
                 return result
 
-            baseline = self._get_baseline(user_id, db_service)
+            baseline = self._get_baseline(db_service)
 
             if not baseline:
                 # First cycle — store current style as baseline and exit
-                self._store_baseline(user_id, current_style, db_service)
+                self._store_baseline(current_style, db_service)
                 logger.info("[GROWTH PATTERN] Baseline initialized")
                 return result
 
@@ -122,16 +122,16 @@ class GrowthPatternService:
 
             # Update or create growth signals
             for delta in significant:
-                stored = self._update_growth_signal(delta, user_id, db_service)
+                stored = self._update_growth_signal(delta, db_service)
                 if stored:
                     result['signals_detected'] += 1
-                    self._log_growth_signal(delta, user_id)
+                    self._log_growth_signal(delta)
 
             # Prune weak growth signals (those that reversed direction)
-            self._prune_reversed_signals(deltas, user_id, db_service)
+            self._prune_reversed_signals(deltas, db_service)
 
             # Slowly update baseline
-            updated = self._update_baseline_slowly(current_style, baseline, user_id, db_service)
+            updated = self._update_baseline_slowly(current_style, baseline, db_service)
             result['baseline_updated'] = updated
 
             logger.info(
@@ -146,15 +146,14 @@ class GrowthPatternService:
 
         return result
 
-    def _get_baseline(self, user_id: str, db_service) -> Optional[dict]:
+    def _get_baseline(self, db_service) -> Optional[dict]:
         """Read stored style baseline from user_traits."""
         try:
             with db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_value FROM user_traits "
-                    "WHERE user_id = ? AND trait_key = 'style_baseline' LIMIT 1",
-                    (user_id,)
+                    "WHERE trait_key = 'style_baseline' LIMIT 1"
                 )
                 row = cursor.fetchone()
                 cursor.close()
@@ -165,7 +164,7 @@ class GrowthPatternService:
             logger.warning(f"[GROWTH PATTERN] Failed to read baseline: {e}")
             return None
 
-    def _store_baseline(self, user_id: str, style: dict, db_service) -> None:
+    def _store_baseline(self, style: dict, db_service) -> None:
         """Store communication style as the initial baseline."""
         try:
             from services.user_trait_service import UserTraitService
@@ -182,7 +181,6 @@ class GrowthPatternService:
                 category='core',
                 source='inferred',
                 is_literal=True,
-                user_id=user_id,
             )
         except Exception as e:
             logger.warning(f"[GROWTH PATTERN] Failed to store baseline: {e}")
@@ -208,7 +206,7 @@ class GrowthPatternService:
             })
         return deltas
 
-    def _update_growth_signal(self, delta: dict, user_id: str, db_service) -> bool:
+    def _update_growth_signal(self, delta: dict, db_service) -> bool:
         """
         Create or update a growth signal trait for a significant dimension shift.
 
@@ -225,8 +223,8 @@ class GrowthPatternService:
                     cursor = conn.cursor()
                     cursor.execute(
                         "SELECT trait_value FROM user_traits "
-                        "WHERE user_id = ? AND trait_key = ? LIMIT 1",
-                        (user_id, trait_key)
+                        "WHERE trait_key = ? LIMIT 1",
+                        (trait_key,)
                     )
                     row = cursor.fetchone()
                     cursor.close()
@@ -276,7 +274,6 @@ class GrowthPatternService:
                 category='core',
                 source='inferred',
                 is_literal=True,
-                user_id=user_id,
             )
             return True
 
@@ -284,7 +281,7 @@ class GrowthPatternService:
             logger.warning(f"[GROWTH PATTERN] Failed to update growth signal: {e}")
             return False
 
-    def _prune_reversed_signals(self, current_deltas: list, user_id: str, db_service) -> None:
+    def _prune_reversed_signals(self, current_deltas: list, db_service) -> None:
         """
         Remove growth signals for dimensions that are no longer showing a significant shift
         (magnitude has dropped below threshold, indicating the user reverted).
@@ -296,8 +293,7 @@ class GrowthPatternService:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_key FROM user_traits "
-                    "WHERE user_id = ? AND trait_key LIKE 'growth_signal:%' AND category = 'core'",
-                    (user_id,)
+                    "WHERE trait_key LIKE 'growth_signal:%' AND category = 'core'"
                 )
                 rows = cursor.fetchall()
                 cursor.close()
@@ -313,7 +309,7 @@ class GrowthPatternService:
             logger.debug(f"[GROWTH PATTERN] Prune check failed: {e}")
 
     def _update_baseline_slowly(
-        self, current: dict, baseline: dict, user_id: str, db_service
+        self, current: dict, baseline: dict, db_service
     ) -> bool:
         """Slowly move baseline toward current style using a very slow EMA."""
         try:
@@ -339,14 +335,13 @@ class GrowthPatternService:
                 category='core',
                 source='inferred',
                 is_literal=True,
-                user_id=user_id,
             )
             return True
         except Exception as e:
             logger.warning(f"[GROWTH PATTERN] Failed to update baseline: {e}")
             return False
 
-    def _log_growth_signal(self, delta: dict, user_id: str) -> None:
+    def _log_growth_signal(self, delta: dict) -> None:
         """Log growth signal detection to interaction_log for observability."""
         try:
             from services.interaction_log_service import InteractionLogService
@@ -357,7 +352,6 @@ class GrowthPatternService:
                     'dimension': delta['dimension'],
                     'direction': delta['direction'],
                     'magnitude': delta['magnitude'],
-                    'user_id': user_id,
                 },
                 topic='general',
                 source='growth_pattern_service',

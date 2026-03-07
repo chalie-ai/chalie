@@ -41,16 +41,15 @@ _FALLBACK_VARIANTS = {
 }
 
 # Lock key for cross-tab dedup
-_WELCOME_LOCK_KEY = "spark_welcome_lock:{user_id}"
+_WELCOME_LOCK_KEY = "spark_welcome_lock"
 _WELCOME_LOCK_TTL = 30  # seconds
 
 
 class SparkWelcomeService:
     """Generates and delivers the first-contact welcome message."""
 
-    def __init__(self, user_id: str = 'primary'):
-        self._user_id = user_id
-        self._spark_state = SparkStateService(user_id=user_id)
+    def __init__(self):
+        self._spark_state = SparkStateService()
 
     def maybe_send_welcome(self) -> bool:
         """
@@ -67,7 +66,7 @@ class SparkWelcomeService:
 
         # Atomic lock: only one tab/process should generate the welcome
         store = MemoryClientService.create_connection()
-        lock_key = _WELCOME_LOCK_KEY.format(user_id=self._user_id)
+        lock_key = _WELCOME_LOCK_KEY
 
         if not store.setnx(lock_key, '1'):
             logger.debug(f"{LOG_PREFIX} Lock already held, skipping")

@@ -435,7 +435,7 @@ class TestGrowthReflection:
         with patch(self._STORE_PATCH) as mock_cls, \
              patch(self._DB_PATCH):
             mock_cls.create_connection.return_value = mock_store
-            result = svc._get_growth_reflection('primary')
+            result = svc._get_growth_reflection()
 
         assert result == ""
 
@@ -448,7 +448,7 @@ class TestGrowthReflection:
              patch(self._DB_PATCH) as mock_db_fn:
             mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals([])
-            result = svc._get_growth_reflection('primary')
+            result = svc._get_growth_reflection()
 
         assert result == ""
 
@@ -465,7 +465,7 @@ class TestGrowthReflection:
              patch(self._DB_PATCH) as mock_db_fn:
             mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection('primary')
+            result = svc._get_growth_reflection()
 
         assert result == ""
 
@@ -483,7 +483,7 @@ class TestGrowthReflection:
              patch(self._DB_PATCH) as mock_db_fn:
             mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection('primary')
+            result = svc._get_growth_reflection()
 
         assert result in GROWTH_REFLECTIONS['certainty_level']
         mock_store.set.assert_called_once()
@@ -503,7 +503,7 @@ class TestGrowthReflection:
              patch(self._DB_PATCH) as mock_db_fn:
             mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection('primary')
+            result = svc._get_growth_reflection()
 
         assert result in GROWTH_REFLECTIONS['depth_preference']
 
@@ -520,7 +520,7 @@ class TestGrowthReflection:
              patch(self._DB_PATCH) as mock_db_fn:
             mock_cls.create_connection.return_value = mock_store
             mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection('primary')
+            result = svc._get_growth_reflection()
 
         assert result == ""
 
@@ -552,7 +552,7 @@ class TestMicroPreferences:
         mock_db.connection.return_value = mock_conn
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_micro_preferences('primary')
+            result = svc._get_micro_preferences()
 
         assert PREF_LABELS['prefers_bullet_format'] in result
         assert PREF_LABELS['prefers_concise'] in result

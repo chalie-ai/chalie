@@ -423,21 +423,20 @@ class CuriosityPursuitService:
 
             # Track pending response for engagement scoring
             store = MemoryClientService.create_connection()
-            user_id = 'default'
-            store.set(f"proactive:{user_id}:pending_response", proactive_id)
-            store.set(f"proactive:{user_id}:last_sent_ts", str(time.time()))
+            store.set("proactive:pending_response", proactive_id)
+            store.set("proactive:last_sent_ts", str(time.time()))
 
             # Store content for engagement scoring
             try:
                 embedding = EmbeddingService().generate_embedding(message)
-                tracker = EngagementTracker(config={'user_id': user_id})
+                tracker = EngagementTracker(config={})
                 tracker.store_pending_content(proactive_id, message, embedding=embedding)
             except Exception:
                 pass
 
             # Store thread_id in MemoryStore for feedback routing
             store.setex(
-                f"proactive:{user_id}:pending_thread_id",
+                "proactive:pending_thread_id",
                 14400,  # 4h TTL
                 thread['id'],
             )

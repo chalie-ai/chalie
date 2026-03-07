@@ -109,17 +109,6 @@
                 </div>
             </div>
 
-            <!-- Recommended Section -->
-            <div class="embodiment-section" id="recommendedSection">
-                <div class="section-header">
-                    <span class="section-title">Recommended</span>
-                    <a href="#" class="section-link" id="browseMarketplaceBtn">Browse marketplace →</a>
-                </div>
-                <div class="tools-grid tools-grid--recommended" id="recommendedGrid">
-                    <div class="loading">Loading catalog…</div>
-                </div>
-            </div>
-
             <!-- Installed Tools Section -->
             <div class="embodiment-section">
                 <div class="section-header">
@@ -393,16 +382,8 @@
                     <button class="btn-close" id="closeInstallModal">✕</button>
                 </div>
             </div>
-            <div class="platform-tabs" id="installMethodTabs">
-                <button class="platform-tab active" data-install-method="library">From Library</button>
-                <button class="platform-tab" data-install-method="custom">Custom URL</button>
-            </div>
-            <!-- Library Panel -->
-            <div id="installLibraryPanel">
-                <div id="installCatalogGrid" class="tools-grid tools-grid--modal"></div>
-            </div>
             <!-- Custom URL Panel -->
-            <div id="installCustomPanel" class="hidden">
+            <div id="installCustomPanel">
                 <div class="form-group" style="margin-top: 16px;">
                     <label>Repository URL</label>
                     <input type="url" id="installGitUrl" placeholder="https://github.com/user/tool-repo">

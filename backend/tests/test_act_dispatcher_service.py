@@ -13,9 +13,10 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def service():
     """Create an ActDispatcherService with innate-skill registration mocked out."""
-    with patch('services.innate_skills.register_innate_skills'):
+    with patch('services.innate_skills.register_innate_skills'), \
+         patch('services.self_model_service.SelfModelService.log_capability_gap'):
         svc = ActDispatcherService(timeout=2.0)
-    return svc
+        yield svc
 
 
 # ── Unknown / Missing Handler ─────────────────────────────────
@@ -92,7 +93,8 @@ class TestTimeout:
 
     def test_slow_handler_returns_timeout(self):
         """A handler that exceeds the timeout produces status=timeout."""
-        with patch('services.innate_skills.register_innate_skills'):
+        with patch('services.innate_skills.register_innate_skills'), \
+             patch('services.self_model_service.SelfModelService.log_capability_gap'):
             svc = ActDispatcherService(timeout=0.1)
 
         def slow_handler(topic, action):
