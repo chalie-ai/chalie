@@ -2,10 +2,11 @@
 
 import math
 import pytest
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import patch, MagicMock
 
 from services.episodic_retrieval_service import EpisodicRetrievalService
+from services.time_utils import utc_now
 
 
 pytestmark = pytest.mark.unit
@@ -80,7 +81,7 @@ class TestEpisodicRetrievalService:
                 'salience': 5,
                 'freshness': 0.8,
                 'topic': 'test',
-                'created_at': datetime.now() - timedelta(hours=i),
+                'created_at': utc_now() - timedelta(hours=i),
                 'activation_score': 5.0,
                 'last_accessed_at': None,
                 'salience_factors': {},
@@ -151,7 +152,7 @@ class TestEpisodicRetrievalService:
         svc = EpisodicRetrievalService(db, config={})
         freshness = svc._calculate_effective_freshness(
             salience=0.5,
-            created_at=datetime.now(),
+            created_at=utc_now(),
         )
         assert freshness > 0.9
 
@@ -159,7 +160,7 @@ class TestEpisodicRetrievalService:
         """High salience should slow decay, resulting in higher freshness."""
         db, _ = mock_db_rows
         svc = EpisodicRetrievalService(db, config={})
-        created = datetime.now() - timedelta(hours=48)
+        created = utc_now() - timedelta(hours=48)
 
         fresh_high = svc._calculate_effective_freshness(salience=0.9, created_at=created)
         fresh_low = svc._calculate_effective_freshness(salience=0.1, created_at=created)

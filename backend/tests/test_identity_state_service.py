@@ -178,7 +178,7 @@ class TestIdentityStateServiceSetField:
             svc.set_field('name', 'Dylan', 0.95)
 
         call_args = mock_store.setex.call_args[0]
-        assert call_args[0] == 'identity_state:primary'
+        assert call_args[0] == 'identity_state'
 
 
 class TestIdentityStateServiceGetAll:

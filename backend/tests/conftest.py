@@ -14,6 +14,19 @@ from io import BytesIO
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_capability_gap_writes():
+    """Prevent any test from writing capability_gap rows to the real SQLite DB.
+
+    log_capability_gap() falls back to get_shared_db_service() (the file-based
+    production DB) when no db is injected.  Tests that trigger the code path
+    (e.g. cognitive triage with no tools) would otherwise pollute the DB and
+    cause unrelated self-model tests to fail.
+    """
+    with patch('services.self_model_service.SelfModelService.log_capability_gap'):
+        yield
+
+
 @pytest.fixture
 def mock_store():
     """Isolated MemoryStore — same implementation used in production."""

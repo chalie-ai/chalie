@@ -72,7 +72,7 @@ class TestRankCandidates:
             }.get(tool_name, {'success_rate': 0.5, 'avg_latency': 0, 'avg_cost': 0})
 
         svc.get_tool_stats = mock_stats
-        svc._get_user_preference = lambda tool, user: 0.0
+        svc._get_user_preference = lambda tool: 0.0
         svc._get_reliability = lambda tool: 1.0
 
         result = svc.rank_candidates(['weather', 'duckduckgo_search'])
@@ -90,7 +90,7 @@ class TestRankCandidates:
         svc = ToolPerformanceService()
 
         svc.get_tool_stats = lambda tool, days=30: {'success_rate': 0.7, 'avg_latency': 400, 'avg_cost': 0}
-        svc._get_user_preference = lambda tool, user: 0.0
+        svc._get_user_preference = lambda tool: 0.0
         svc._get_reliability = lambda tool: 0.8
 
         result = svc.rank_candidates(['weather'])
@@ -103,7 +103,7 @@ class TestRankCandidates:
         svc = ToolPerformanceService()
 
         svc.get_tool_stats = lambda tool, days=30: {'success_rate': 1.0, 'avg_latency': 0, 'avg_cost': 0}
-        svc._get_user_preference = lambda tool, user: 1.0
+        svc._get_user_preference = lambda tool: 1.0
         svc._get_reliability = lambda tool: 1.0
 
         result = svc.rank_candidates(['perfect_tool'])
@@ -145,7 +145,7 @@ class TestPreferenceDecay:
         mock_db = MagicMock()
         svc._db = mock_db
 
-        svc.apply_preference_decay('default')
+        svc.apply_preference_decay()
         mock_db.execute.assert_called_once()
         call_sql = mock_db.execute.call_args[0][0]
         assert 'implicit_preference' in call_sql
