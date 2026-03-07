@@ -2,6 +2,45 @@
 
 This document is the single authoritative visual map of how a user message travels through Chalie. Every branch, every storage hit, every LLM call, and every background cycle is shown here.
 
+---
+
+### Quick Facts: Message Processing Pipeline
+
+| Phase | Operation | Latency | Storage Access |
+|-------|-----------|--|-|--------------|
+| **Ingestion** | POST /chat → WebSocket channel setup | <10ms | 📤 M (ws_pending) |
+| **Phase A** | Context Assembly (6 memory layers) | 5-20ms | 📥 M ×6, 📥 DB (episodes/concepts) |
+| **Phase B** | Signal Collection & Triage | ~5ms | 📤 DB (routing_decision_log) |
+| **Phase C** | Mode Router + Generation | 2-15s | 📤 M/DB (episodic storage, gist updates) |
+| **Phase D** | Post-Response Commit | <50ms | 📤 M (pub/sub), WS → Client |
+
+---
+
+### Decision Guide: Understanding the Triage Branch Points
+
+> 🔀 **After Phase B, CognitiveTriageService routes to one of three paths:**
+>
+> - **PATH A — Social Exit**: For CANCEL/IGNORE/ACKNOWLEDGE decisions
+>   - *When*: Empty input, social greetings, or explicit cancellation
+>   - *Outcome*: Immediate response with minimal processing (0-2s)
+>   - *Storage*: Working memory append only
+>
+> - **PATH B — ACT Loop**: For tool execution and internal reasoning
+>   - *When*: User mentions tools OR tools exist but none named in input
+>   - *Outcome*: Background worker via PromptQueue, then re-routes to terminal mode
+>   - *Storage*: Full context assembly + episodic memory updates after completion
+>
+> - **PATH C — Terminal Generation**: For RESPOND/CLARIFY/ACKNOWLEDGE
+>   - *When*: Clear question (RESPOND), ambiguous input (CLARIFY), or social acknowledgment
+>   - *Outcome*: Mode-specific LLM generation with deterministic routing decision already made
+>   - *Storage*: Episodic memory commit, gist updates, interaction log entry
+>
+> **Background Paths** run independently:
+> - **PATH D**: Persistent Task Worker (30min ± jitter) — scheduled reminders and recurring actions
+> - **PATH E**: Cognitive Drift Engine (300s, idle-only) — spontaneous thoughts during user inactivity
+
+---
+
 **Legend**
 ```
 ⚡ DET   — Deterministic (no LLM, <10ms)
