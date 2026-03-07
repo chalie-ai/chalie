@@ -147,22 +147,71 @@ class AppUpdateService:
     def _version_greater(self, v1: str, v2: str) -> bool:
         """Compare two version strings.
 
+        Splits version strings by '.' and compares each numeric component as integers.
+        Handles versions with different numbers of components (e.g., "1.0" vs "1.0.0").
+
         Args:
-            v1: First version string (e.g., "0.3.0")
-            v2: Second version string (e.g., "0.2.0")
+            v1: First version string to compare
+            v2: Second version string to compare
 
         Returns:
-            bool: True if v1 > v2, False otherwise
+            bool: True if v1 is greater than v2, False otherwise
         """
-        def parse_version(v):
-            parts = re.split(r'[.-]', v)
-            return [int(p) if p.isdigit() else 0 for p in parts]
+        parts1 = [int(x) for x in re.sub(r'^v', '', v1).split('.')]
+        parts2 = [int(x) for x in re.sub(r'^v', '', v2).split('.')]
 
-        try:
-            return tuple(parse_version(v1)) > tuple(parse_version(v2))
-        except (ValueError, TypeError):
-            logger.warning(f"[UPDATE] Could not parse versions: {v1}, {v2}")
-            return False
+        # Pad shorter version with zeros
+        max_len = max(len(parts1), len(parts2))
+        parts1.extend([0] * (max_len - len(parts1)))
+        parts2.extend([0] * (max_len - len(parts2)))
+
+        return tuple(parts1) > tuple(parts2)
+
+
+def app_update_check_worker(shared_state: Dict):
+    """Background worker that periodically checks for application updates.
+
+    Runs as a daemon thread in the WorkerManager, checking for new releases every 6 hours.
+    This keeps the cached update status fresh without requiring manual user triggers.
+
+    The worker gracefully handles errors and continues running even if individual check
+    attempts fail (e.g., network issues, API rate limits).
+
+    Args:
+        shared_state: Dictionary of shared application state (unused in this worker)
+
+    Raises:
+        Exception: Any unhandled exceptions are logged by the WorkerManager's exception handler
+    """
+    CHECK_INTERVAL_SECONDS = 6 * 3600  # 6 hours
+
+    logger.info("[AppUpdateCheck] Starting periodic update check worker")
+
+    try:
+        service = AppUpdateService()
+
+        # Initial check on startup (with a small delay to avoid blocking startup)
+        time.sleep(5)
+        logger.debug("[AppUpdateCheck] Performing initial update check")
+        result = service.check_for_updates()
+        if result.get("update_available"):
+            logger.info(f"[AppUpdateCheck] Update available: {result['current_version']} → {result['latest_version']}")
+
+        # Main loop - check every 6 hours
+        while True:
+            time.sleep(CHECK_INTERVAL_SECONDS)
+            try:
+                logger.debug("[AppUpdateCheck] Performing scheduled update check")
+                result = service.check_for_updates()
+                if result.get("update_available"):
+                    logger.info(f"[AppUpdateCheck] Update available: {result['current_version']} → {result['latest_version']}")
+                else:
+                    logger.debug("[AppUpdateCheck] No update available (cached or current)")
+            except Exception as e:
+                logger.error(f"[AppUpdateCheck] Scheduled check failed: {e}")
+
+    except Exception as e:
+        logger.exception(f"[AppUpdateCheck] Worker crashed: {e}")
 
     def perform_update(self, asset_url: Optional[str] = None) -> Dict[str, any]:
         """Download and apply the latest update via tarball overlay.

@@ -370,6 +370,13 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
+    # App update periodic checker (runs every 6 hours in background)
+    try:
+        from services.app_update_service import app_update_check_worker
+        manager.register_service("app-update-checker", app_update_check_worker)
+    except Exception as e:
+        logging.warning(f"[Consumer] App update checker registration failed: {e}")
+
     # Tool update checker
     try:
         from services.tool_update_service import tool_update_worker
