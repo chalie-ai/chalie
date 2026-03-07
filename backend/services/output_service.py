@@ -191,8 +191,17 @@ class OutputService:
             original_metadata: Optional original metadata from the request
 
         Returns:
-            str: UUID of the enqueued output
+            str: UUID of the enqueued output, or empty string if suppressed
         """
+        # Suppress cards from background persistent task execution — these are
+        # internal thinking, not user-facing output.
+        if topic and topic.startswith('persistent_task_'):
+            logger.debug(
+                f"[OutputService] Suppressed card for background task topic '{topic}' "
+                f"(tool={card_data.get('tool_name')})"
+            )
+            return ''
+
         output_id = str(uuid.uuid4())
 
         event_payload = {

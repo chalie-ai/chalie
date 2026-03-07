@@ -28,3 +28,5 @@ plans/
 
 # Frontend build artifacts (none currently, vanilla JS)
 node_modules/
+
+docker-compose.yml
