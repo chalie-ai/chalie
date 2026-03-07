@@ -32,6 +32,7 @@ class TestContextAssemblyService:
         expected_keys = {
             'working_memory', 'moments', 'facts', 'gists',
             'episodes', 'procedural', 'concepts', 'previous_session', 'total_tokens_est',
+            'self_awareness',
         }
         assert expected_keys == set(result.keys())
 

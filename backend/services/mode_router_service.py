@@ -197,6 +197,18 @@ def collect_routing_signals(
     # Merge NLP signals
     signals.update(nlp)
 
+    # Self-constraint from self-model (severity-weighted)
+    self_constraint = 0.0
+    try:
+        from services.self_model_service import SelfModelService
+        snapshot = SelfModelService().get_snapshot()
+        noteworthy = snapshot.get("noteworthy", [])
+        if noteworthy:
+            self_constraint = max(item["severity"] for item in noteworthy)
+    except Exception:
+        pass
+    signals['self_constraint'] = self_constraint
+
     return signals
 
 
@@ -406,6 +418,11 @@ class ModeRouterService:
             clarify += w.get('clarify.new_topic_question', 0.10)
         if is_warm:
             clarify -= w.get('clarify.warm_penalty', 0.20)
+        # Self-constraint: degraded state or capability gaps nudge toward CLARIFY
+        self_constraint = signals.get('self_constraint', 0.0)
+        if self_constraint > 0:
+            clarify += self_constraint * w.get('clarify.self_constraint', 0.10)
+            respond -= self_constraint * w.get('respond.self_constraint_penalty', 0.05)
 
         # ── ACT ──────────────────────────────────────────────────
         act = self.bases['ACT']

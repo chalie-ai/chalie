@@ -451,6 +451,16 @@ class CognitiveTriageService:
                 result.mode = 'RESPOND'
                 result.self_eval_override = True
                 result.self_eval_reason = 'act_no_tools_available'
+                # Log capability gap — user wanted ACT but no tools matched
+                try:
+                    from services.self_model_service import SelfModelService
+                    SelfModelService().log_capability_gap(
+                        request_summary=text[:200],
+                        detection_source="triage",
+                        confidence=0.5,
+                    )
+                except Exception:
+                    pass
 
         # Rule 2: RESPOND on high-freshness question → escalate to ACT
         # Freshness risk alone is sufficient — if the answer requires live data, use tools.
