@@ -86,5 +86,36 @@
     "trigger": "on_demand",
     "trust": "trusted",
     "installs_by_default": true
+  },
+  {
+    "name": "youtube",
+    "title": "YouTube",
+    "icon": "https://www.youtube.com/favicon.ico",
+    "repo": "chalie-ai/youtube-tool",
+    "summary": "Search YouTube for videos or retrieve trending content. Optional API key for better reliability.",
+    "category": "research",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "searxng",
+    "title": "SearXNG",
+    "icon": "https://www.vectorlogo.zone/logos/google/google-icon.svg",
+    "repo": "chalie-ai/searxng-tool",
+    "summary": "Privacy-focused metasearch aggregating Google, Bing, DuckDuckGo, Brave, and more. Requires Docker.",
+    "category": "research",
+    "trigger": "on_demand",
+    "installs_by_default": false
+  },
+  {
+    "name": "google_account",
+    "title": "Google",
+    "icon": "fa-brands fa-google",
+    "repo": "chalie-ai/google-tool",
+    "summary": "Gmail, Google Calendar, and Google Tasks integration. Requires Google OAuth credentials and Docker.",
+    "category": "productivity",
+    "trigger": "on_demand",
+    "installs_by_default": false
   }
 ]
