@@ -674,6 +674,8 @@ CREATE INDEX IF NOT EXISTS idx_moments_enriching
     ON moments(status, pinned_at) WHERE status = 'enriching' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_moments_topic
     ON moments(topic, pinned_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_moments_exchange
+    ON moments(exchange_id) WHERE exchange_id IS NOT NULL;
 
 -- ────────────────────────────────────────────────────────────────
 -- PLACE FINGERPRINTS — learned place patterns

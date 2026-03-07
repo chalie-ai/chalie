@@ -110,6 +110,7 @@ class ACTOrchestrator:
         on_iteration_complete: Optional[Callable] = None,
         context_extras: Optional[dict] = None,
         session_id: str = 'orchestrator',
+        exchange_id: str = 'unknown',
     ) -> ACTResult:
         """
         Execute the unified ACT loop.
@@ -132,6 +133,7 @@ class ACTOrchestrator:
                 custom termination logic.
             context_extras: Extra params merged into every action dispatch
             session_id: Session identifier for iteration logging
+            exchange_id: Exchange correlation ID for iteration logging
 
         Returns:
             ACTResult with full loop outcome
@@ -156,7 +158,6 @@ class ACTOrchestrator:
         # ── Iteration logging ───────────────────────────────────────────
         iteration_service = None
         loop_id = None
-        exchange_id = 'unknown'
         try:
             from services.database_service import get_shared_db_service
             from services.cortex_iteration_service import CortexIterationService

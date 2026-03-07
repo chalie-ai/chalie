@@ -241,6 +241,7 @@ def _tool_worker_orchestrator(
             'triage_tools': context_snapshot.get('triage_selected_tools', []),
         },
         session_id='tool_worker',
+        exchange_id=exchange_id,
     )
 
     # Complete cycle

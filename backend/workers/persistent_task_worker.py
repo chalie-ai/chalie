@@ -380,6 +380,7 @@ def _flat_loop_orchestrator(task, cortex_config, cortex_service, prompt_filled, 
         classification={'topic': f"task_{task['id']}", 'confidence': 10},
         chat_history=[],
         session_id='persistent_task',
+        exchange_id=f"ptask_{task['id']}",
     )
 
     # The orchestrator stores all responses internally. We need the last
