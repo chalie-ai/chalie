@@ -29,7 +29,8 @@ Generate JSON with exactly these fields:
   "usage_scenarios": ["50 specific user messages where this tool is the right choice"],
   "anti_scenarios": ["Specific examples of when NOT to use this tool"],
   "complementary_skills": ["skill names that work well alongside this tool"],
-  "triage_triggers": ["5-10 short action verbs or phrases that should activate this tool in triage routing"]
+  "triage_triggers": ["5-10 short action verbs or phrases that should activate this tool in triage routing"],
+  "effort_tier": "trivial | light | moderate | deep"
 }
 
 Think exhaustively about usage_scenarios. Include:
@@ -45,6 +46,13 @@ For triage_triggers: extract 5-10 short action verbs or noun phrases that a user
 would say when they need this tool. These are injected into the compact triage
 prompt, so keep them short (1-3 words each). Examples: "open", "visit", "URL",
 "link", "search", "weather", "remind me".
+
+For effort_tier: judge from the SOURCE CODE, not the description or manifest.
+- trivial: single API call, minimal processing, instant answer (e.g., weather lookup, simple dictionary query)
+- light: moderate processing, single data source, browsing/filtering (e.g., news fetch, wiki lookup, search with ranking)
+- moderate: multi-step logic, state management, or multi-API orchestration (e.g., OAuth flows, multi-action dispatch, filtered aggregation across sources)
+- deep: multi-session, requires planning/decomposition, expensive computation (e.g., persistent research, deep analysis pipelines)
+A tool with 1 parameter but 15 internal API calls is moderate, not trivial. Count the actual operations in the code.
 
 IMPORTANT for full_profile:
 - Describe capabilities as ready-to-use (e.g., "reads your Gmail inbox" not "can read Gmail if connected")

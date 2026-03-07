@@ -125,6 +125,16 @@ class RoutingReflectionService:
 
     def _run_reflection_batch(self):
         """Execute one reflection batch."""
+        # Self-regulation: skip when memory is too thin for quality assessments
+        try:
+            from services.self_model_service import SelfModelService
+            richness = SelfModelService().get_memory_richness()
+            if richness < 0.2:
+                logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.2, skipping batch")
+                return
+        except Exception:
+            pass  # fail-open
+
         logger.info(f"{LOG_PREFIX} Starting reflection batch...")
 
         # Select decisions using stratified sampling

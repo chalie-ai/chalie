@@ -127,6 +127,7 @@ class TriageResult:
     fast_filtered: bool           # True if regex path, no LLM
     self_eval_override: bool
     self_eval_reason: str
+    effort_estimate: str = 'moderate'  # trivial | light | moderate | deep
 
 
 def social_filter(text: str) -> 'Optional[TriageResult]':
@@ -151,6 +152,7 @@ def social_filter(text: str) -> 'Optional[TriageResult]':
             freshness_risk=0.0, decision_entropy=0.0,
             reasoning='social_precheck_empty', triage_time_ms=0.0,
             fast_filtered=True, self_eval_override=False, self_eval_reason='',
+            effort_estimate='trivial',
         )
 
     words = stripped.split()
@@ -169,6 +171,7 @@ def social_filter(text: str) -> 'Optional[TriageResult]':
                 freshness_risk=0.0, decision_entropy=0.0,
                 reasoning='social_precheck_cancel', triage_time_ms=0.0,
                 fast_filtered=True, self_eval_override=False, self_eval_reason='',
+                effort_estimate='trivial',
             )
 
     for pattern in _SELF_RESOLVED_PATTERNS:
@@ -179,6 +182,7 @@ def social_filter(text: str) -> 'Optional[TriageResult]':
                 freshness_risk=0.0, decision_entropy=0.0,
                 reasoning='social_precheck_self_resolved', triage_time_ms=0.0,
                 fast_filtered=True, self_eval_override=False, self_eval_reason='',
+                effort_estimate='trivial',
             )
 
     return None
@@ -247,6 +251,7 @@ class CognitiveTriageService:
             fast_filtered=True,
             self_eval_override=False,
             self_eval_reason='',
+            effort_estimate='trivial',
         )
 
     def _cognitive_triage(self, text: str, context: TriageContext) -> TriageResult:
@@ -305,7 +310,12 @@ class CognitiveTriageService:
             contextual = sorted(s for s in skills if s not in _PRIMITIVES)[:MAX_CONTEXTUAL_SKILLS]
             skills = primitives_in + contextual
 
-            logger.info(f"{LOG_PREFIX} mode={mode} tools={[t for t in tools if isinstance(t, str)]} skills={skills}")
+            # Extract and validate effort estimate
+            effort_estimate = data.get('effort_estimate', 'moderate')
+            if effort_estimate not in ('trivial', 'light', 'moderate', 'deep'):
+                effort_estimate = 'moderate'
+
+            logger.info(f"{LOG_PREFIX} mode={mode} tools={[t for t in tools if isinstance(t, str)]} skills={skills} effort={effort_estimate}")
 
             return TriageResult(
                 branch=branch,
@@ -321,6 +331,7 @@ class CognitiveTriageService:
                 fast_filtered=False,
                 self_eval_override=False,
                 self_eval_reason='',
+                effort_estimate=effort_estimate,
             )
 
         except Exception as e:
@@ -504,6 +515,34 @@ class CognitiveTriageService:
                 result.mode = 'RESPOND'
                 result.self_eval_override = True
                 result.self_eval_reason = 'anti_oscillation_same_tool'
+
+        # Rule 6: Bidirectional effort proportionality
+        if result.branch == 'act' and not result.self_eval_override:
+            from services.innate_skills.registry import SKILL_EFFORT
+            _EFFORT_RANK = {'trivial': 0, 'light': 1, 'moderate': 2, 'deep': 3}
+            request_rank = _EFFORT_RANK.get(result.effort_estimate, 2)
+
+            # Direction A: Overpowered — deep tools/skills for trivial request
+            if request_rank <= 1:  # trivial or light request
+                deep_skills = [s for s in result.skills
+                               if s in _CONTEXTUAL_SKILLS
+                               and _EFFORT_RANK.get(SKILL_EFFORT.get(s, 'moderate'), 2) >= 3]
+                if deep_skills:
+                    result.skills = [s for s in result.skills if s not in deep_skills]
+                    result.self_eval_override = True
+                    result.self_eval_reason = 'effort_proportionality_overpowered'
+
+            # Direction B: Underpowered — only trivial/light tools for deep request
+            if request_rank >= 3:  # deep request
+                max_skill_rank = max(
+                    (_EFFORT_RANK.get(SKILL_EFFORT.get(s, 'moderate'), 2)
+                     for s in result.skills if s in _CONTEXTUAL_SKILLS),
+                    default=0,
+                )
+                if max_skill_rank <= 1 and 'persistent_task' not in result.skills:
+                    result.skills.append('persistent_task')
+                    result.self_eval_override = True
+                    result.self_eval_reason = 'effort_proportionality_underpowered'
 
         return result
 

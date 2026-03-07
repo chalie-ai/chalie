@@ -35,4 +35,11 @@ Critical bias: when in doubt between RESPOND and ACT, choose ACT. Accuracy matte
 freshness_risk scale: 0.0 = timeless/opinion → 1.0 = live event results, today's data, current status.
 High freshness_risk + available search tool = ACT, always.
 
-{"mode":"ACT|RESPOND|CLARIFY","tools":[],"skills":[],"confidence_internal":0.0,"confidence_tool_need":0.0,"freshness_risk":0.0,"reasoning":"one short phrase"}
+Effort estimation — match effort to the user's actual request complexity:
+- trivial: single lookup, instant answer (weather, simple search, memory recall)
+- light: moderate processing, browsing (news, reddit, document search)
+- moderate: multi-step or stateful (messaging, calendar ops, multi-tool chains)
+- deep: multi-session, expensive (persistent research, deep analysis over days)
+Use the (effort: X) annotations on tools above to match request effort to tool effort.
+
+{"mode":"ACT|RESPOND|CLARIFY","tools":[],"skills":[],"confidence_internal":0.0,"confidence_tool_need":0.0,"freshness_risk":0.0,"effort_estimate":"trivial|light|moderate|deep","reasoning":"one short phrase"}

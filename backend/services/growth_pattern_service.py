@@ -108,6 +108,16 @@ class GrowthPatternService:
                 logger.debug(f"[GROWTH PATTERN] Only {obs_count} observations, waiting for more data")
                 return result
 
+            # Self-regulation: skip when memory is too thin for meaningful growth detection
+            try:
+                from services.self_model_service import SelfModelService
+                richness = SelfModelService().get_memory_richness()
+                if richness < 0.2:
+                    logger.debug(f"[GROWTH PATTERN] Richness {richness:.2f} < 0.2, skipping cycle")
+                    return result
+            except Exception:
+                pass  # fail-open
+
             baseline = self._get_baseline(db_service)
 
             if not baseline:

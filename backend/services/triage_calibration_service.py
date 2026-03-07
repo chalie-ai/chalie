@@ -88,7 +88,7 @@ class TriageCalibrationService:
                     tool_selected,
                     result.confidence_internal,
                     result.confidence_tool_need,
-                    result.reasoning or '',
+                    f"{result.reasoning or ''} [effort:{getattr(result, 'effort_estimate', 'moderate')}]",
                     result.freshness_risk,
                     result.decision_entropy,
                     1 if result.self_eval_override else 0,
