@@ -1089,7 +1089,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     except Exception as e:
         logging.warning(f"[PROACTIVE] Routing failed, defaulting to RESPOND: {e}")
         selected_mode = 'RESPOND'
-        routing_result = {'mode': 'RESPOND', 'router_confidence': 0.5}
+        routing_result = {'mode': 'RESPOND', 'router_confidence': 0.5, 'routing_time_ms': 0.0}
 
     # If router says IGNORE, respect it — the thought wasn't worth sharing
     if selected_mode == 'IGNORE':
@@ -2241,7 +2241,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 'confidence': 1.0,
                 'generation_time': 0.0,
             }
-            routing_result = {'mode': _social_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage'}
+            routing_result = {'mode': _social_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage', 'routing_time_ms': _social_result.triage_time_ms}
             is_fast_path_ack = True
 
             # Minimal post-response commit for social pre-check
@@ -2277,7 +2277,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         # Check for pending validation from previous fast-path response
         _reflex_service.check_pending_validation(thread_id, text)
 
+        _reflex_start = time.time()
         reflex_result = _reflex_service.check(text, context_warmth)
+        _reflex_time_ms = (time.time() - _reflex_start) * 1000
         _reflex_candidate = reflex_result.is_candidate
         _reflex_embedding = reflex_result.embedding  # Reusable downstream
 
@@ -2294,6 +2296,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 'mode': 'RESPOND',
                 'router_confidence': reflex_result.confidence,
                 'routing_source': 'reflex',
+                'routing_time_ms': _reflex_time_ms,
             }
             is_fast_path_ack = True
 
