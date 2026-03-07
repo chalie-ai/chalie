@@ -278,6 +278,10 @@ def main():
     from services.moment_enrichment_service import moment_enrichment_worker
     manager.register_service("moment-enrichment-service", moment_enrichment_worker)
 
+    # Self-model service (interoception — epistemic, operational, capability awareness)
+    from services.self_model_service import self_model_worker
+    manager.register_service("self-model-service", self_model_worker)
+
     # Background LLM worker
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)

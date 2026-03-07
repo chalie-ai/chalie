@@ -1020,6 +1020,30 @@ class ToolRegistryService:
             except Exception as profile_err:
                 logger.warning(f"[TOOL REGISTRY] Profile build failed for {tool_name}: {profile_err}")
 
+            # Auto-resolve capability gaps when new tool's docs overlap
+            try:
+                from services.self_model_service import SelfModelService
+                sm = SelfModelService()
+                gaps = sm.get_frequent_gaps(min_occurrences=1, limit=20)
+                if gaps:
+                    doc_text = (manifest.get('documentation', '') + ' ' +
+                                manifest.get('description', '') + ' ' +
+                                tool_name).lower()
+                    doc_words = set(doc_text.split())
+                    for gap in gaps:
+                        gap_words = set(gap['request_summary'].lower().split())
+                        if not gap_words:
+                            continue
+                        overlap = len(doc_words & gap_words) / len(gap_words)
+                        if overlap >= 0.30:
+                            sm.resolve_gap(gap['id'], resolved_by=f"tool:{tool_name}")
+                            logger.info(
+                                f"[TOOL REGISTRY] Auto-resolved capability gap "
+                                f"'{gap['request_summary'][:60]}' via tool '{tool_name}'"
+                            )
+            except Exception as gap_err:
+                logger.debug(f"[TOOL REGISTRY] Gap auto-resolve failed: {gap_err}")
+
             # Notify consumer so it can spawn cron workers for newly registered tools
             if self._on_tool_registered:
                 try:
