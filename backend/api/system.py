@@ -568,6 +568,37 @@ def observability_temporal_mine():
         return jsonify({"error": "Mining failed"}), 500
 
 
+@system_bp.route('/system/observability/self-model', methods=['GET'])
+@require_session
+def observability_self_model():
+    """Self-model snapshot: epistemic, operational, capability state."""
+    try:
+        from services.self_model_service import SelfModelService
+        snapshot = SelfModelService().get_snapshot()
+        return jsonify(snapshot), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/self-model error: {e}")
+        return jsonify({"error": "Failed to retrieve self-model"}), 500
+
+
+@system_bp.route('/system/observability/capability-gaps', methods=['GET'])
+@require_session
+def observability_capability_gaps():
+    """Capability gaps — things users ask for that Chalie cannot do."""
+    try:
+        from services.self_model_service import SelfModelService
+        service = SelfModelService()
+        gaps = service.get_frequent_gaps(min_occurrences=1, limit=20)
+        return jsonify({
+            'generated_at': datetime.now(timezone.utc).isoformat(),
+            'total_unresolved': len(gaps),
+            'gaps': gaps,
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/capability-gaps error: {e}")
+        return jsonify({"error": "Failed to retrieve capability gaps"}), 500
+
+
 @system_bp.route('/system/activity', methods=['GET'])
 @require_session
 def activity_feed():
