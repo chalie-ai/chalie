@@ -11,7 +11,7 @@ Mode selection is decoupled from response generation. A mathematical router sele
 ### Quick Facts: Mode Router Performance & Latency
 
 | Metric | Value | Notes |
-|--------|--|-|-----|----|
+|--------|-------|-------|
 | **Router Decision Time** | ~5ms | Deterministic scoring, no LLM involved |
 | **ACKNOWLEDGE Response** | ~2s | Uses qwen3:4b (lightweight model) |
 | **RESPOND/CLARIFY Response** | 2-15s | Uses qwen3:8b with soul.md context |
