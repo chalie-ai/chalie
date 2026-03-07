@@ -126,6 +126,44 @@ class ProviderCacheService:
 
 
     @staticmethod
+    def resolve_for_job(job_name: str, platforms: Optional[set] = None) -> Optional[Dict[str, Any]]:
+        """
+        Resolve a provider config for a given job.
+
+        Resolution order:
+          1. Job-specific assignment (set via /api/providers/jobs)
+          2. First available provider, optionally filtered by platform
+
+        Args:
+            job_name:  Job identifier (e.g. 'document-ocr', 'frontal-cortex')
+            platforms: Optional set of platform names to restrict the fallback
+                       (e.g. {'gemini', 'anthropic', 'openai'}). Has no effect
+                       on the job-assigned provider — that is always returned as-is.
+
+        Returns:
+            Provider config dict {platform, model, api_key, host, ...} or None.
+        """
+        providers = ProviderCacheService.get_providers()
+        if not providers:
+            return None
+
+        # 1. Job-specific assignment
+        assigned_name = ProviderCacheService.get_job_assignment(job_name)
+        if assigned_name and assigned_name in providers:
+            logger.debug(f"[ProviderCache] Resolved job '{job_name}' → assigned provider '{assigned_name}'")
+            return providers[assigned_name]
+
+        # 2. Fallback: first provider matching the platform filter (or any provider)
+        for name, config in providers.items():
+            if platforms is None or config.get('platform') in platforms:
+                logger.debug(f"[ProviderCache] No assignment for '{job_name}', falling back to '{name}'")
+                return config
+
+        logger.warning(f"[ProviderCache] No provider found for job '{job_name}' (platforms={platforms})")
+        return None
+
+
+    @staticmethod
     def invalidate() -> None:
         """
         Invalidate provider cache across all processes.
