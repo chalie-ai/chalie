@@ -90,7 +90,7 @@ def create_app():
     from .moments import moments_bp
     from .documents import documents_bp
     from .voice import voice_bp
-    from .app_update_api import app_update_bp
+    from .app_update import app_update_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
