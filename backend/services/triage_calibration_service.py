@@ -272,7 +272,25 @@ class TriageCalibrationService:
                     f"false_neg={stats['false_negative_rate']:.1%}"
                 )
 
-                # 4b. Wire correction signals to tool performance preferences
+                # 4b. Wire correction signals to capability gap tracking
+                try:
+                    from services.self_model_service import SelfModelService
+                    sm = SelfModelService()
+                    for row in rows:
+                        if not row.get('signal_correction'):
+                            continue
+                        # Extract request summary from the triage reasoning
+                        summary = (row.get('reasoning') or '')[:200]
+                        if summary:
+                            sm.log_capability_gap(
+                                request_summary=summary,
+                                detection_source='user_correction',
+                                confidence=0.7,
+                            )
+                except Exception as _gap_err:
+                    logger.debug(f"{LOG_PREFIX} Capability gap logging failed: {_gap_err}")
+
+                # 4c. Wire correction signals to tool performance preferences
                 try:
                     from services.tool_performance_service import ToolPerformanceService
                     perf_svc = ToolPerformanceService()
@@ -294,7 +312,7 @@ class TriageCalibrationService:
                 except Exception as _corr_err:
                     logger.debug(f"{LOG_PREFIX} User correction wiring failed: {_corr_err}")
 
-                # 4c. Learn from clarification -> tool resolution chains
+                # 4d. Learn from clarification -> tool resolution chains
                 try:
                     from services.tool_profile_service import ToolProfileService
                     profile_svc = ToolProfileService()

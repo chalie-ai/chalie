@@ -328,38 +328,47 @@ class TestGetRecentAutonomousActions:
 
 
 @pytest.mark.unit
-class TestFormatStateWithNewFields:
-    """Verify _format_state() renders decision_explanations and recent_autonomous_actions."""
+class TestFormatSnapshotWithNewFields:
+    """Verify _format_snapshot() renders decision_explanations and recent_autonomous_actions."""
 
-    def _build_state(self):
-        """Minimal state dict with all required keys."""
-        return {
-            'context_warmth': 0.5,
-            'gist_count': 2,
-            'fact_count': 3,
-            'working_memory_depth': 4,
-            'topic_age': '5min',
-            'partial_match_signal': 1,
-            'recall_failure_rate': 0.1,
-            'focus_active': False,
+    def _build_snapshot_and_extra(self):
+        """Minimal snapshot + extra dicts matching self-model structure."""
+        snapshot = {
+            'epistemic': {
+                'context_warmth': 0.5,
+                'gist_count': 2,
+                'fact_count': 3,
+                'working_memory_depth': 4,
+                'topic_age': '5min',
+                'partial_match_signal': 1,
+                'recall_failure_rate': 0.1,
+                'focus_active': False,
+                'recent_modes': ['RESPOND'],
+                'skill_reliability': {},
+            },
+            'operational': {'thread_health': {}, 'provider_status': {}, 'queue_depth': {}, 'memory_pressure': {}},
+            'capability': {'tool_count': 0, 'capability_categories': {}},
+            'noteworthy': [],
+        }
+        extra = {
             'communication_style': {},
-            'recent_modes': ['RESPOND'],
             'skill_stats': {},
             'world_state': '',
             'decision_explanations': [],
             'recent_autonomous_actions': [],
         }
+        return snapshot, extra
 
     def test_empty_decision_explanations_renders_none_message(self):
-        from services.innate_skills.introspect_skill import _format_state
-        state = self._build_state()
-        output = _format_state(state, 'test_topic')
+        from services.innate_skills.introspect_skill import _format_snapshot
+        snapshot, extra = self._build_snapshot_and_extra()
+        output = _format_snapshot(snapshot, extra, 'test_topic')
         assert 'none in last hour' in output
 
     def test_decision_explanation_renders_mode(self):
-        from services.innate_skills.introspect_skill import _format_state
-        state = self._build_state()
-        state['decision_explanations'] = [{
+        from services.innate_skills.introspect_skill import _format_snapshot
+        snapshot, extra = self._build_snapshot_and_extra()
+        extra['decision_explanations'] = [{
             'mode': 'RESPOND',
             'confidence': 0.82,
             'margin': 0.28,
@@ -368,14 +377,14 @@ class TestFormatStateWithNewFields:
             'tiebreaker_used': False,
             'tiebreaker_candidates': None,
         }]
-        output = _format_state(state, 'test_topic')
+        output = _format_snapshot(snapshot, extra, 'test_topic')
         assert 'mode=RESPOND' in output
         assert 'confidence=0.82' in output
 
     def test_tiebreaker_info_rendered_when_used(self):
-        from services.innate_skills.introspect_skill import _format_state
-        state = self._build_state()
-        state['decision_explanations'] = [{
+        from services.innate_skills.introspect_skill import _format_snapshot
+        snapshot, extra = self._build_snapshot_and_extra()
+        extra['decision_explanations'] = [{
             'mode': 'ACT',
             'confidence': 0.45,
             'margin': 0.02,
@@ -384,23 +393,23 @@ class TestFormatStateWithNewFields:
             'tiebreaker_used': True,
             'tiebreaker_candidates': ['ACT', 'RESPOND'],
         }]
-        output = _format_state(state, 'test_topic')
+        output = _format_snapshot(snapshot, extra, 'test_topic')
         assert 'tiebreaker between' in output
 
     def test_empty_autonomous_actions_renders_none_message(self):
-        from services.innate_skills.introspect_skill import _format_state
-        state = self._build_state()
-        output = _format_state(state, 'test_topic')
+        from services.innate_skills.introspect_skill import _format_snapshot
+        snapshot, extra = self._build_snapshot_and_extra()
+        output = _format_snapshot(snapshot, extra, 'test_topic')
         assert 'none recently' in output
 
     def test_autonomous_action_rendered(self):
-        from services.innate_skills.introspect_skill import _format_state
-        state = self._build_state()
-        state['recent_autonomous_actions'] = [{
+        from services.innate_skills.introspect_skill import _format_snapshot
+        snapshot, extra = self._build_snapshot_and_extra()
+        extra['recent_autonomous_actions'] = [{
             'event_type': 'proactive_sent',
             'payload_summary': '{"message": "hello"}',
             'created_at': '2024-01-01 10:00:00',
         }]
-        output = _format_state(state, 'test_topic')
+        output = _format_snapshot(snapshot, extra, 'test_topic')
         assert 'proactive_sent' in output
         assert '2024-01-01 10:00:00' in output

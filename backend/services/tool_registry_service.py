@@ -1058,6 +1058,30 @@ class ToolRegistryService:
             except Exception as profile_err:
                 logger.warning(f"[TOOL REGISTRY] Profile build failed for {tool_name}: {profile_err}")
 
+            # Auto-resolve capability gaps when new tool's docs overlap
+            try:
+                from services.self_model_service import SelfModelService
+                sm = SelfModelService()
+                gaps = sm.get_frequent_gaps(min_occurrences=1, limit=20)
+                if gaps:
+                    doc_text = (manifest.get('documentation', '') + ' ' +
+                                manifest.get('description', '') + ' ' +
+                                tool_name).lower()
+                    doc_words = set(doc_text.split())
+                    for gap in gaps:
+                        gap_words = set(gap['request_summary'].lower().split())
+                        if not gap_words:
+                            continue
+                        overlap = len(doc_words & gap_words) / len(gap_words)
+                        if overlap >= 0.30:
+                            sm.resolve_gap(gap['id'], resolved_by=f"tool:{tool_name}")
+                            logger.info(
+                                f"[TOOL REGISTRY] Auto-resolved capability gap "
+                                f"'{gap['request_summary'][:60]}' via tool '{tool_name}'"
+                            )
+            except Exception as gap_err:
+                logger.debug(f"[TOOL REGISTRY] Gap auto-resolve failed: {gap_err}")
+
             # Notify consumer so it can spawn cron workers for newly registered tools
             if self._on_tool_registered:
                 try:
@@ -1113,6 +1137,32 @@ class ToolRegistryService:
             name for name, tool in self.tools.items()
             if tool["manifest"].get("trigger", {}).get("type") == "on_demand"
         ]
+
+    def get_ambient_tools(self) -> List[dict]:
+        """
+        Return on-demand tools eligible for ambient/proactive invocation.
+
+        All on-demand tools are ambient-eligible by default. Tools opt OUT via:
+          "ambient": {"enabled": false}
+
+        Returns:
+            List of {"name": str, "manifest": dict}
+        """
+        result = []
+        for name, tool in self.tools.items():
+            trigger_type = tool["manifest"].get("trigger", {}).get("type")
+            if trigger_type != "on_demand":
+                continue
+
+            ambient = tool["manifest"].get("ambient", {})
+            if not ambient.get("enabled", True):
+                continue
+
+            result.append({
+                "name": name,
+                "manifest": tool["manifest"],
+            })
+        return result
 
     def get_cron_tools(self) -> List[dict]:
         """

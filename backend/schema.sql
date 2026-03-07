@@ -744,7 +744,6 @@ CREATE TABLE IF NOT EXISTS cognitive_reflexes (
     last_activated TEXT
 );
 
--- ────────────────────────────────────────────────────────────────
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS watched_folders (
@@ -767,6 +766,28 @@ CREATE TABLE IF NOT EXISTS watched_folders (
 
 CREATE INDEX IF NOT EXISTS idx_watched_folders_enabled
     ON watched_folders(enabled) WHERE enabled = 1;
+
+-- ────────────────────────────────────────────────────────────────
+-- CAPABILITY GAPS — user requests Chalie could not fulfill
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS capability_gaps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_summary TEXT NOT NULL,
+    detected_category TEXT,
+    detection_source TEXT NOT NULL,
+    confidence REAL DEFAULT 0.5,
+    occurrences INTEGER DEFAULT 1,
+    first_seen_at TEXT DEFAULT (datetime('now')),
+    last_seen_at TEXT DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    resolved_by TEXT,
+    seeded_curiosity_thread_id TEXT REFERENCES curiosity_threads(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_capability_gaps_category
+    ON capability_gaps(detected_category) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_capability_gaps_occurrences
+    ON capability_gaps(occurrences DESC) WHERE resolved_at IS NULL;
 
 -- ────────────────────────────────────────────────────────────────
 -- DOCUMENTS — document metadata + chunks

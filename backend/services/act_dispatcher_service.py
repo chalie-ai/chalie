@@ -85,6 +85,16 @@ class ActDispatcherService:
         handler = self.handlers.get(action_type)
         if not handler:
             logging.error(f"[ACT DISPATCH] No handler for '{action_type}'. Registered: {list(self.handlers.keys())}")
+            # Log capability gap when no handler exists for requested action
+            try:
+                from services.self_model_service import SelfModelService
+                SelfModelService().log_capability_gap(
+                    request_summary=action.get('params', {}).get('query', action_type)[:200],
+                    detection_source="act_loop",
+                    confidence=0.6,
+                )
+            except Exception:
+                pass
             return {
                 'action_type': action_type,
                 'status': 'error',

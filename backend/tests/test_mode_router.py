@@ -189,6 +189,7 @@ class TestModeRouter:
             'interrogative_words', 'greeting_pattern', 'explicit_feedback',
             'information_density', 'implicit_reference',
             'intent_type', 'intent_confidence', 'intent_complexity',
+            'self_constraint',
         }
         assert expected_keys == set(signals.keys())
 
