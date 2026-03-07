@@ -247,7 +247,7 @@ class TestAddItems:
                     {'id': 'newid01', 'name': 'New List', 'updated_at': datetime.now(timezone.utc)},
                 ]
                 added = service.add_items("New List", ["item1"], auto_create=True)
-            mock_create.assert_called_once_with("New List", user_id='primary')
+            mock_create.assert_called_once_with("New List")
 
     def test_restores_soft_deleted_item(self, service, mock_db):
         _, conn, cursor = mock_db

@@ -48,7 +48,6 @@ class InMemoryDB:
                 ON temporal_observations(recorded_at);
 
             CREATE TABLE IF NOT EXISTS temporal_aggregate (
-                user_id TEXT NOT NULL DEFAULT 'primary',
                 observation_type TEXT NOT NULL,
                 observed_value TEXT NOT NULL,
                 day_of_week INTEGER NOT NULL,
@@ -56,7 +55,7 @@ class InMemoryDB:
                 device_class TEXT NOT NULL DEFAULT '',
                 count INTEGER DEFAULT 0,
                 last_seen TEXT,
-                PRIMARY KEY(user_id, observation_type, observed_value,
+                PRIMARY KEY(observation_type, observed_value,
                             day_of_week, hour_bucket, device_class)
             );
 
@@ -69,7 +68,6 @@ class InMemoryDB:
 
             CREATE TABLE IF NOT EXISTS user_traits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'primary',
                 trait_key TEXT,
                 trait_value TEXT,
                 confidence REAL DEFAULT 0.5,
@@ -114,9 +112,9 @@ def seed_aggregate(db, obs_type, value, day, hour, count, device_class=''):
     with db.connection() as conn:
         conn.execute(
             """INSERT INTO temporal_aggregate
-                (user_id, observation_type, observed_value, day_of_week,
+                (observation_type, observed_value, day_of_week,
                  hour_bucket, device_class, count, last_seen)
-            VALUES ('primary', ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
             (obs_type, value, day, hour, device_class, count)
         )
         conn.commit()
@@ -369,12 +367,12 @@ class TestRhythmSummary:
     def test_returns_summary_lines(self, memdb, svc):
         with memdb.connection() as conn:
             conn.execute(
-                """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
-                   VALUES ('primary', 'weekday_energy_rhythm', 'Typically high in the morning', 0.8, 'behavioral_pattern')"""
+                """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
+                   VALUES ('weekday_energy_rhythm', 'Typically high in the morning', 0.8, 'behavioral_pattern')"""
             )
             conn.execute(
-                """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
-                   VALUES ('primary', 'weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, 'behavioral_pattern')"""
+                """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
+                   VALUES ('weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, 'behavioral_pattern')"""
             )
             conn.commit()
 
@@ -386,8 +384,8 @@ class TestRhythmSummary:
         with memdb.connection() as conn:
             for i in range(5):
                 conn.execute(
-                    """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
-                       VALUES ('primary', ?, ?, 0.8, 'behavioral_pattern')""",
+                    """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
+                       VALUES (?, ?, 0.8, 'behavioral_pattern')""",
                     (f'pattern_{i}', f'Pattern line {i}')
                 )
             conn.commit()
@@ -400,8 +398,8 @@ class TestRhythmSummary:
         with memdb.connection() as conn:
             for key in ['weekday_energy_rhythm', 'weekday_attention_rhythm']:
                 conn.execute(
-                    """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
-                       VALUES ('primary', ?, ?, 0.8, 'behavioral_pattern')""",
+                    """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
+                       VALUES (?, ?, 0.8, 'behavioral_pattern')""",
                     (key, 'A' * 150)
                 )
             conn.commit()
@@ -411,8 +409,8 @@ class TestRhythmSummary:
     def test_sanitizes_non_printable(self, memdb, svc):
         with memdb.connection() as conn:
             conn.execute(
-                """INSERT INTO user_traits (user_id, trait_key, trait_value, confidence, category)
-                   VALUES ('primary', 'weekday_energy_rhythm', ?, 0.8, 'behavioral_pattern')""",
+                """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
+                   VALUES ('weekday_energy_rhythm', ?, 0.8, 'behavioral_pattern')""",
                 ('High energy \x00\x01\x02 mornings',)
             )
             conn.commit()
@@ -755,13 +753,12 @@ class TestStorePatternsAsTraits:
         patterns = [{'key': 'active_hours', 'value': 'Most active in the mornings', 'confidence': 0.7}]
 
         with patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
-            service._store_patterns_as_traits(patterns, 'primary')
+            service._store_patterns_as_traits(patterns)
 
         call_kwargs = mock_trait_svc.store_trait.call_args.kwargs
         assert call_kwargs['category'] == 'behavioral_pattern'
         assert call_kwargs['source'] == 'inferred'
         assert call_kwargs['trait_key'] == 'active_hours'
-        assert call_kwargs['user_id'] == 'primary'
 
     def test_empty_patterns_does_not_call_store(self):
         """No patterns → store_trait should never be called."""
@@ -772,7 +769,7 @@ class TestStorePatternsAsTraits:
         mock_trait_svc = MagicMock()
 
         with patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
-            service._store_patterns_as_traits([], 'primary')
+            service._store_patterns_as_traits([])
 
         mock_trait_svc.store_trait.assert_not_called()
 

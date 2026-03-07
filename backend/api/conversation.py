@@ -36,7 +36,7 @@ def conversation_recent():
         from services.thread_conversation_service import ThreadConversationService
 
         ts = get_thread_service()
-        thread_id = ts.get_active_thread_id("default", "default")
+        thread_id = ts.get_active_thread_id("default")
 
         if not thread_id:
             return jsonify({"thread_id": None, "exchanges": []}), 200
@@ -76,7 +76,7 @@ def conversation_summary():
         from services.config_service import ConfigService
 
         ts = get_thread_service()
-        thread_id = ts.get_active_thread_id("default", "default")
+        thread_id = ts.get_active_thread_id("default")
 
         result = {"today": [], "this_week": [], "older_highlights": []}
 

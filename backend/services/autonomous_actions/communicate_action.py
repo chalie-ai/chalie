@@ -30,13 +30,12 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[COMMUNICATE]"
 
-# MemoryStore key namespace — all keys are per-user
-# Current system is single-user; user_id defaults to 'default'
+# MemoryStore key namespace — single-user system
 _NS = "proactive"
 
 
-def _key(user_id: str, suffix: str) -> str:
-    return f"{_NS}:{user_id}:{suffix}"
+def _key(suffix: str) -> str:
+    return f"{_NS}:{suffix}"
 
 
 class CommunicateAction(AutonomousAction):
@@ -52,9 +51,6 @@ class CommunicateAction(AutonomousAction):
 
         config = config or {}
         self.store = MemoryClientService.create_connection()
-
-        # User ID (single-user for now, extensible via config)
-        self.user_id = config.get('user_id', 'default')
 
         # Quality gate config
         self.type_bonuses = config.get('type_bonuses', {
@@ -116,7 +112,7 @@ class CommunicateAction(AutonomousAction):
         details['type_bonus'] = type_bonus
 
         # 2. Activation energy threshold (self-calibrating or bootstrap)
-        drift_count = int(self.store.get(_key(self.user_id, 'drift_count')) or 0)
+        drift_count = int(self.store.get(_key('drift_count')) or 0)
         details['drift_count'] = drift_count
 
         if drift_count < self.bootstrap_cycles:
@@ -160,7 +156,7 @@ class CommunicateAction(AutonomousAction):
 
     def _get_median_activation_energy(self) -> float:
         """Get median activation energy from recent drift history."""
-        history_key = _key(self.user_id, 'activation_history')
+        history_key = _key('activation_history')
         values = self.store.lrange(history_key, 0, -1)
 
         if not values or len(values) < 5:
@@ -172,12 +168,12 @@ class CommunicateAction(AutonomousAction):
 
     def record_activation_energy(self, energy: float):
         """Record activation energy for self-calibration. Called by drift engine."""
-        history_key = _key(self.user_id, 'activation_history')
+        history_key = _key('activation_history')
         self.store.rpush(history_key, str(round(energy, 4)))
         self.store.ltrim(history_key, -100, -1)  # Keep last 100
 
         # Increment drift count
-        self.store.incr(_key(self.user_id, 'drift_count'))
+        self.store.incr(_key('drift_count'))
 
     def _compute_topic_relevance(self, thought: ThoughtContext) -> float:
         """Compute cosine similarity between thought and recent user messages."""
@@ -186,7 +182,7 @@ class CommunicateAction(AutonomousAction):
 
         # Get recent user message embeddings from MemoryStore
         lookback = self._get_lookback_hours()
-        embeddings_key = _key(self.user_id, 'recent_msg_embeddings')
+        embeddings_key = _key('recent_msg_embeddings')
         stored = self.store.lrange(embeddings_key, 0, -1)
 
         if not stored:
@@ -212,7 +208,7 @@ class CommunicateAction(AutonomousAction):
 
     def _get_lookback_hours(self) -> int:
         """Adaptive lookback: 24h for active users, 72h for infrequent."""
-        last_ts = self.store.get(_key(self.user_id, 'last_interaction_ts'))
+        last_ts = self.store.get(_key('last_interaction_ts'))
         if not last_ts:
             return self.lookback_hours_active
 
@@ -273,7 +269,7 @@ class CommunicateAction(AutonomousAction):
         now = time.time()
 
         # 1. Session requirement: at least one conversation in lookback window
-        last_interaction = self.store.get(_key(self.user_id, 'last_interaction_ts'))
+        last_interaction = self.store.get(_key('last_interaction_ts'))
         if not last_interaction:
             details['rejected'] = 'no_prior_interaction'
             return (False, details)
@@ -283,7 +279,7 @@ class CommunicateAction(AutonomousAction):
         details['idle_seconds'] = idle_seconds
 
         # 2. Minimum idle time (with backoff multiplier)
-        backoff = int(self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1)
+        backoff = int(self.store.get(_key('backoff_multiplier')) or 1)
         effective_min_idle = self.min_idle_seconds * backoff
         details['effective_min_idle'] = effective_min_idle
         details['backoff_multiplier'] = backoff
@@ -350,20 +346,20 @@ class CommunicateAction(AutonomousAction):
         now = time.time()
 
         # 1. Auto-pause check
-        paused = self.store.get(_key(self.user_id, 'paused'))
+        paused = self.store.get(_key('paused'))
         if paused == '1':
             # Check for suppression recovery
-            paused_since = float(self.store.get(_key(self.user_id, 'paused_since')) or 0)
+            paused_since = float(self.store.get(_key('paused_since')) or 0)
             days_paused = (now - paused_since) / 86400 if paused_since else 0
 
             if days_paused >= self.suppression_recovery_days:
                 # Check if user has been active during pause
-                last_ts = self.store.get(_key(self.user_id, 'last_interaction_ts'))
+                last_ts = self.store.get(_key('last_interaction_ts'))
                 if last_ts and float(last_ts) > paused_since:
                     # Recovery probe: reset backoff to 2x and unpause
-                    self.store.set(_key(self.user_id, 'backoff_multiplier'), 2)
-                    self.store.delete(_key(self.user_id, 'paused'))
-                    self.store.delete(_key(self.user_id, 'paused_since'))
+                    self.store.set(_key('backoff_multiplier'), 2)
+                    self.store.delete(_key('paused'))
+                    self.store.delete(_key('paused_since'))
                     details['suppression_recovery'] = True
                     logger.info(f"{LOG_PREFIX} Suppression recovery: resuming with 2x backoff")
                 else:
@@ -375,16 +371,16 @@ class CommunicateAction(AutonomousAction):
                 return (False, details)
 
         # 2. One-at-a-time rule
-        pending = self.store.get(_key(self.user_id, 'pending_response'))
+        pending = self.store.get(_key('pending_response'))
         if pending:
-            pending_ts = float(self.store.get(_key(self.user_id, 'last_sent_ts')) or 0)
+            pending_ts = float(self.store.get(_key('last_sent_ts')) or 0)
             if now - pending_ts < self.pending_timeout_seconds:
                 details['rejected'] = 'pending_response'
                 return (False, details)
             else:
                 # Timeout expired — treat as ignored
                 self._record_outcome(pending, -0.5)
-                self.store.delete(_key(self.user_id, 'pending_response'))
+                self.store.delete(_key('pending_response'))
                 details['timeout_expired'] = pending
 
         # 3. Circuit breaker check
@@ -393,13 +389,13 @@ class CommunicateAction(AutonomousAction):
             return (False, details)
 
         # 4. Check engagement score
-        engagement = float(self.store.get(_key(self.user_id, 'engagement_score')) or 1.0)
+        engagement = float(self.store.get(_key('engagement_score')) or 1.0)
         details['engagement_score'] = engagement
 
         if engagement < self.auto_pause_threshold:
             # Auto-pause
-            self.store.set(_key(self.user_id, 'paused'), '1')
-            self.store.set(_key(self.user_id, 'paused_since'), str(now))
+            self.store.set(_key('paused'), '1')
+            self.store.set(_key('paused_since'), str(now))
             details['rejected'] = 'engagement_too_low'
             logger.info(f"{LOG_PREFIX} Auto-paused: engagement {engagement:.2f} < {self.auto_pause_threshold}")
             return (False, details)
@@ -408,7 +404,7 @@ class CommunicateAction(AutonomousAction):
 
     def _circuit_breaker_tripped(self) -> bool:
         """Check if recent outcomes trigger the circuit breaker."""
-        outcomes_key = _key(self.user_id, 'recent_outcomes')
+        outcomes_key = _key('recent_outcomes')
         raw = self.store.lrange(outcomes_key, 0, 2)  # Last 3
 
         if len(raw) < 2:
@@ -428,11 +424,11 @@ class CommunicateAction(AutonomousAction):
 
         if failures >= self.circuit_breaker_threshold:
             # Pause for circuit_breaker_pause seconds
-            self.store.set(_key(self.user_id, 'paused'), '1')
-            self.store.set(_key(self.user_id, 'paused_since'), str(now))
+            self.store.set(_key('paused'), '1')
+            self.store.set(_key('paused_since'), str(now))
             # Auto-expire the pause after circuit_breaker_pause
-            self.store.expire(_key(self.user_id, 'paused'), self.circuit_breaker_pause)
-            self.store.expire(_key(self.user_id, 'paused_since'), self.circuit_breaker_pause)
+            self.store.expire(_key('paused'), self.circuit_breaker_pause)
+            self.store.expire(_key('paused_since'), self.circuit_breaker_pause)
             logger.info(
                 f"{LOG_PREFIX} Circuit breaker tripped: {failures} failures in window, "
                 f"pausing for {self.circuit_breaker_pause}s"
@@ -445,7 +441,7 @@ class CommunicateAction(AutonomousAction):
 
     def _add_candidate(self, thought: ThoughtContext, score: float):
         """Add thought to candidate queue (sorted set, max 3)."""
-        candidates_key = _key(self.user_id, 'candidates')
+        candidates_key = _key('candidates')
 
         candidate = {
             'id': str(uuid.uuid4()),
@@ -478,7 +474,7 @@ class CommunicateAction(AutonomousAction):
 
     def _get_best_candidate(self) -> Optional[Dict]:
         """Get the best candidate with age-decayed scoring."""
-        candidates_key = _key(self.user_id, 'candidates')
+        candidates_key = _key('candidates')
         raw_members = self.store.zrange(candidates_key, 0, -1, withscores=True)
 
         if not raw_members:
@@ -521,14 +517,14 @@ class CommunicateAction(AutonomousAction):
         if best:
             raw = best.pop('_raw', None)
             if raw:
-                self.store.zrem(_key(self.user_id, 'candidates'), raw)
+                self.store.zrem(_key('candidates'), raw)
         return best
 
     # ── Deferred queue (quiet hours) ──────────────────────────────
 
     def _add_deferred(self, thought: ThoughtContext, score: float):
         """Add thought to deferred queue for post-quiet-hours delivery."""
-        deferred_key = _key(self.user_id, 'deferred')
+        deferred_key = _key('deferred')
 
         deferred = {
             'id': str(uuid.uuid4()),
@@ -566,12 +562,12 @@ class CommunicateAction(AutonomousAction):
         if self._is_quiet_hours(current_hour):
             return None
 
-        deferred_key = _key(self.user_id, 'deferred')
+        deferred_key = _key('deferred')
         if not self.store.exists(deferred_key):
             return None
 
         # Check if we already processed deferred this quiet-hours cycle
-        processed_key = _key(self.user_id, 'deferred_processed')
+        processed_key = _key('deferred_processed')
         if self.store.get(processed_key):
             return None
 
@@ -595,7 +591,7 @@ class CommunicateAction(AutonomousAction):
             self.store.zrem(deferred_key, second_raw)
             try:
                 second = json.loads(second_raw)
-                candidates_key = _key(self.user_id, 'candidates')
+                candidates_key = _key('candidates')
                 self.store.zadd(candidates_key, {second_raw: second_score})
                 self.store.expire(candidates_key, 1800)
             except (json.JSONDecodeError, TypeError):
@@ -721,12 +717,12 @@ class CommunicateAction(AutonomousAction):
 
             # Track pending response
             now = time.time()
-            self.store.set(_key(self.user_id, 'pending_response'), proactive_id)
-            self.store.set(_key(self.user_id, 'last_sent_ts'), str(now))
+            self.store.set(_key('pending_response'), proactive_id)
+            self.store.set(_key('last_sent_ts'), str(now))
 
             # Store content for engagement scoring
             from .engagement_tracker import EngagementTracker
-            tracker = EngagementTracker(config={'user_id': self.user_id})
+            tracker = EngagementTracker(config={})
             tracker.store_pending_content(
                 proactive_id,
                 candidate['content'],
@@ -769,8 +765,8 @@ class CommunicateAction(AutonomousAction):
 
     def _record_outcome(self, proactive_id: str, score: float, outcome: str = None):
         """Record the outcome of a proactive message."""
-        outcomes_key = _key(self.user_id, 'recent_outcomes')
-        history_key = _key(self.user_id, 'engagement_history')
+        outcomes_key = _key('recent_outcomes')
+        history_key = _key('engagement_history')
 
         # Determine outcome label
         if outcome is None:
@@ -804,24 +800,24 @@ class CommunicateAction(AutonomousAction):
         # Adjust backoff
         if outcome in ('engaged', 'acknowledged'):
             # Reset backoff on positive engagement
-            self.store.set(_key(self.user_id, 'backoff_multiplier'), 1)
+            self.store.set(_key('backoff_multiplier'), 1)
         elif outcome in ('ignored', 'dismissed'):
             # Increase backoff
-            current = int(self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1)
+            current = int(self.store.get(_key('backoff_multiplier')) or 1)
             new_backoff = min(current * 2, self.max_backoff_multiplier)
-            self.store.set(_key(self.user_id, 'backoff_multiplier'), new_backoff)
+            self.store.set(_key('backoff_multiplier'), new_backoff)
             logger.info(f"{LOG_PREFIX} Backoff increased to {new_backoff}x")
 
         # Clear pending
-        self.store.delete(_key(self.user_id, 'pending_response'))
+        self.store.delete(_key('pending_response'))
 
     def _recompute_engagement_score(self):
         """Recompute rolling engagement score from history."""
-        history_key = _key(self.user_id, 'engagement_history')
+        history_key = _key('engagement_history')
         raw = self.store.lrange(history_key, 0, 9)
 
         if not raw:
-            self.store.set(_key(self.user_id, 'engagement_score'), '1.0')
+            self.store.set(_key('engagement_score'), '1.0')
             return
 
         total_score = 0.0
@@ -848,7 +844,7 @@ class CommunicateAction(AutonomousAction):
         else:
             engagement = 1.0
 
-        self.store.set(_key(self.user_id, 'engagement_score'), str(round(engagement, 3)))
+        self.store.set(_key('engagement_score'), str(round(engagement, 3)))
 
     # ── User interaction tracking ─────────────────────────────────
 
@@ -859,16 +855,16 @@ class CommunicateAction(AutonomousAction):
         Called by the digest worker on each user message.
         """
         now = time.time()
-        self.store.set(_key(self.user_id, 'last_interaction_ts'), str(now))
+        self.store.set(_key('last_interaction_ts'), str(now))
 
         # Update activity histogram (use client timezone)
         current_hour = self._get_user_hour()
-        hist_key = _key(self.user_id, 'activity_histogram')
+        hist_key = _key('activity_histogram')
         self.store.hincrby(hist_key, f'hour_{current_hour}', 1)
 
         # Store message embedding for topic relevance
         if message_embedding:
-            embeddings_key = _key(self.user_id, 'recent_msg_embeddings')
+            embeddings_key = _key('recent_msg_embeddings')
             entry = json.dumps({
                 'embedding': message_embedding,
                 'ts': now,
@@ -882,24 +878,24 @@ class CommunicateAction(AutonomousAction):
     def get_proactive_stats(self) -> Dict[str, Any]:
         """Get current proactive messaging state for governance/logging."""
         return {
-            'engagement_score': float(self.store.get(_key(self.user_id, 'engagement_score')) or 1.0),
-            'backoff_multiplier': int(self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1),
-            'paused': self.store.get(_key(self.user_id, 'paused')) == '1',
-            'pending_response': self.store.get(_key(self.user_id, 'pending_response')) or None,
-            'drift_count': int(self.store.get(_key(self.user_id, 'drift_count')) or 0),
-            'candidate_count': self.store.zcard(_key(self.user_id, 'candidates')),
-            'deferred_count': self.store.zcard(_key(self.user_id, 'deferred')),
+            'engagement_score': float(self.store.get(_key('engagement_score')) or 1.0),
+            'backoff_multiplier': int(self.store.get(_key('backoff_multiplier')) or 1),
+            'paused': self.store.get(_key('paused')) == '1',
+            'pending_response': self.store.get(_key('pending_response')) or None,
+            'drift_count': int(self.store.get(_key('drift_count')) or 0),
+            'candidate_count': self.store.zcard(_key('candidates')),
+            'deferred_count': self.store.zcard(_key('deferred')),
         }
 
     def get_weekly_engagement(self) -> List[float]:
         """Get weekly engagement trend (list of up to 8 weekly averages)."""
-        weekly_key = _key(self.user_id, 'weekly_engagement')
+        weekly_key = _key('weekly_engagement')
         raw = self.store.lrange(weekly_key, 0, 7)
         return [float(v) for v in raw] if raw else []
 
     def record_weekly_engagement(self):
         """Snapshot current engagement to weekly history. Called by governance."""
-        engagement = float(self.store.get(_key(self.user_id, 'engagement_score')) or 1.0)
-        weekly_key = _key(self.user_id, 'weekly_engagement')
+        engagement = float(self.store.get(_key('engagement_score')) or 1.0)
+        weekly_key = _key('weekly_engagement')
         self.store.rpush(weekly_key, str(round(engagement, 3)))
         self.store.ltrim(weekly_key, -8, -1)  # Keep last 8 weeks

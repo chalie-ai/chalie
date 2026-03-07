@@ -732,7 +732,7 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         topic = f'tool_dialog:{tool_name}'
 
         thread_service = get_thread_service()
-        resolution = thread_service.resolve_thread('default', 'default', f'tool_dialog:{tool_name}')
+        resolution = thread_service.resolve_thread('default',f'tool_dialog:{tool_name}')
         thread_id = resolution.thread_id
 
         thread_conv_service = get_thread_conv_service()
@@ -852,7 +852,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         thread_id = metadata.get('thread_id')
         if not thread_id:
             platform = metadata.get('source', 'cron_tool')
-            resolution = thread_service.resolve_thread('default', 'default', platform)
+            resolution = thread_service.resolve_thread('default',platform)
             thread_id = resolution.thread_id
 
         thread_conv_service = get_thread_conv_service()
@@ -1020,7 +1020,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     thread_id = metadata.get('thread_id')
     if not thread_id:
         platform = metadata.get('source', 'unknown')
-        resolution = get_thread_service().resolve_thread('default', 'default', platform)
+        resolution = get_thread_service().resolve_thread('default',platform)
         thread_id = resolution.thread_id
 
     working_memory = WorkingMemoryService(
@@ -1257,7 +1257,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
     thread_id = metadata.get('thread_id')
     if not thread_id:
         platform = metadata.get('source', 'unknown')
-        resolution = get_thread_service().resolve_thread('default', 'default', platform)
+        resolution = get_thread_service().resolve_thread('default',platform)
         thread_id = resolution.thread_id
 
     working_memory = WorkingMemoryService(
@@ -1266,7 +1266,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
 
     # ── Stale follow-up suppression ──────────────────────────
     # If the user changed topic since the original question, suppress
-    recent_topic_service = RecentTopicService(ttl_minutes=30, user_id='default', channel_id='default')
+    recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
     current_topic = recent_topic_service.get_recent_topic()
     if current_topic and current_topic != topic:
         # Check semantic similarity before suppressing
@@ -1299,7 +1299,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
 
     # ── Delivery deferral ────────────────────────────────────
     # If user is mid-conversation, defer
-    defer_result = _should_deliver_followup('default', tool_cycle_id)
+    defer_result = _should_deliver_followup(tool_cycle_id)
     if defer_result == 'suppress':
         gist_storage = GistStorageService(attention_span_minutes=30, min_confidence=5, max_gists=8)
         gist_storage.store_gists(
@@ -1441,7 +1441,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         return f"Topic '{topic}' | ERROR: tool result - {e}"
 
 
-def _should_deliver_followup(user_id: str, cycle_id: str) -> str:
+def _should_deliver_followup(cycle_id: str) -> str:
     """
     Check if a follow-up should be delivered now.
 
@@ -1793,7 +1793,6 @@ def _run_iip_hook(text: str, database_service) -> None:
             category='core',
             source='explicit',
             is_literal=True,
-            user_id='primary',
             speaker_confidence=1.0,
         )
         logging.info(f"[IIP] Promoted name='{matched_name}' → MemoryStore + SQLite")
@@ -2016,13 +2015,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 2: Resolve thread
     thread_service = get_thread_service()
     platform = metadata.get('source', 'unknown')
-    thread_resolution = thread_service.resolve_thread('default', 'default', platform)
+    thread_resolution = thread_service.resolve_thread('default',platform)
     thread_id = thread_resolution.thread_id
     metadata['thread_id'] = thread_id
 
     # Step 2a: Initialize services
     thread_conv_service = ThreadConversationService()
-    recent_topic_service = RecentTopicService(ttl_minutes=30, user_id='default', channel_id='default')
+    recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
     gist_storage = GistStorageService(
         attention_span_minutes=30,
         min_confidence=memory_chunker_config.get('min_gist_confidence', 7),

@@ -402,8 +402,8 @@ def _detect_challenge_reaction(prompt_message: str, response_message: str):
             with db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT trait_value FROM user_traits WHERE user_id = 'primary' "
-                    "AND trait_key = 'challenge_tolerance' LIMIT 1"
+                    "SELECT trait_value FROM user_traits "
+                    "WHERE trait_key = 'challenge_tolerance' LIMIT 1"
                 )
                 row = cursor.fetchone()
                 cursor.close()

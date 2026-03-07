@@ -28,7 +28,7 @@ class TestCorrectTrait:
         svc, cursor = self._make_service(existing=(1, 'preference'))
 
         with patch.object(svc, '_generate_embedding_raw', return_value='[0.1,0.2]'):
-            result = svc.correct_trait('favourite_food', 'ramen', user_id='primary')
+            result = svc.correct_trait('favourite_food', 'ramen')
 
         assert result is True
         # Should have called UPDATE (may not be the last call due to vec table ops)
@@ -44,7 +44,7 @@ class TestCorrectTrait:
         svc, cursor = self._make_service(existing=None)
 
         with patch.object(svc, '_generate_embedding_raw', return_value='[0.1,0.2]'):
-            result = svc.correct_trait('name', 'Dylan', user_id='primary')
+            result = svc.correct_trait('name', 'Dylan')
 
         assert result is True
         insert_sqls = [
@@ -59,7 +59,7 @@ class TestCorrectTrait:
         svc, cursor = self._make_service(existing=(1, 'core'))
 
         with patch.object(svc, '_generate_embedding_raw', return_value=None):
-            svc.correct_trait('name', 'Dylan', user_id='primary')
+            svc.correct_trait('name', 'Dylan')
 
         # Confidence 0.95 must appear in the UPDATE args
         update_calls = [
@@ -102,7 +102,7 @@ class TestCorrectTrait:
         svc, cursor = self._make_service(existing=(1, 'core'))
 
         with patch.object(svc, '_generate_embedding_raw', return_value=None):
-            result = svc.correct_trait('name', 'Dylan', user_id='primary')
+            result = svc.correct_trait('name', 'Dylan')
 
         assert result is True
         update_sqls = [
@@ -136,7 +136,7 @@ class TestDeleteTrait:
 
     def test_delete_trait_executes_correct_sql(self):
         svc, cursor = self._make_service(rowcount=1)
-        svc.delete_trait('favourite_food', user_id='primary')
+        svc.delete_trait('favourite_food')
         sql = cursor.execute.call_args[0][0]
         assert 'DELETE FROM user_traits' in sql
         assert 'trait_key' in sql

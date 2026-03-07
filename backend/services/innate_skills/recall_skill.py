@@ -306,7 +306,7 @@ def _search_user_traits(topic: str, query: str, limit: int) -> tuple:
 
         db_service = get_shared_db_service()
         service = UserTraitService(db_service)
-        all_traits = service.get_all_traits(user_id='primary')
+        all_traits = service.get_all_traits()
 
         if not all_traits:
             return [], "0 traits stored"

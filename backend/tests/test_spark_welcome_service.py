@@ -48,7 +48,7 @@ class TestMaybeSendWelcome:
 
             from services.spark_welcome_service import SparkWelcomeService
 
-            svc = SparkWelcomeService(user_id='test')
+            svc = SparkWelcomeService()
 
             # Pre-set state with welcome already sent
             state = {
@@ -59,7 +59,7 @@ class TestMaybeSendWelcome:
                 'last_active_at': 1000.0, 'last_scored_at': 1000.0,
                 'first_suggestion_seeded': False, 'topics_discussed': [],
             }
-            mock_store.setex('spark_state:test', 2592000, json.dumps(state))
+            mock_store.setex('spark_state', 2592000, json.dumps(state))
 
             result = svc.maybe_send_welcome()
             assert result is False
@@ -72,7 +72,7 @@ class TestMaybeSendWelcome:
 
             from services.spark_welcome_service import SparkWelcomeService
 
-            svc = SparkWelcomeService(user_id='test')
+            svc = SparkWelcomeService()
             # Mock the generate and deliver methods
             svc._generate_welcome = MagicMock(return_value=("Hello there", "A"))
             svc._deliver_welcome = MagicMock()
@@ -95,9 +95,9 @@ class TestMaybeSendWelcome:
             from services.spark_welcome_service import SparkWelcomeService
 
             # Pre-set the lock
-            mock_store.setnx('spark_welcome_lock:test', '1')
+            mock_store.setnx('spark_welcome_lock', '1')
 
-            svc = SparkWelcomeService(user_id='test')
+            svc = SparkWelcomeService()
             svc._spark_state._has_established_traits = MagicMock(return_value=False)
             svc._generate_welcome = MagicMock(return_value=("Hello", "A"))
             svc._deliver_welcome = MagicMock()
@@ -116,7 +116,7 @@ class TestGenerateWelcome:
 
             from services.spark_welcome_service import SparkWelcomeService, _FALLBACK_VARIANTS
 
-            svc = SparkWelcomeService(user_id='test')
+            svc = SparkWelcomeService()
 
             # Patch the LLM to fail
             with patch('services.spark_welcome_service.SparkWelcomeService._generate_welcome') as mock_gen:
@@ -143,7 +143,7 @@ class TestIdempotency:
 
             from services.spark_welcome_service import SparkWelcomeService
 
-            svc = SparkWelcomeService(user_id='test')
+            svc = SparkWelcomeService()
             svc._generate_welcome = MagicMock(return_value=("Welcome", "llm"))
             svc._deliver_welcome = MagicMock()
             svc._log_welcome_event = MagicMock()
