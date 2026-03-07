@@ -14,6 +14,7 @@ import json
 import logging
 import time
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -74,13 +75,13 @@ class TriageCalibrationService:
             db.execute(
                 """
                 INSERT INTO triage_calibration_events
-                    (exchange_id, topic, triage_branch, triage_mode, tool_selected,
+                    (id, exchange_id, topic, triage_branch, triage_mode, tool_selected,
                      confidence_internal, confidence_tool_need, reasoning,
                      freshness_risk, decision_entropy, self_eval_override, self_eval_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT DO NOTHING
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    str(uuid.uuid4()),
                     exchange_id or '',
                     topic or '',
                     result.branch,
