@@ -22,8 +22,8 @@ LOG_PREFIX = "[ENGAGEMENT]"
 _NS = "proactive"
 
 
-def _key(user_id: str, suffix: str) -> str:
-    return f"{_NS}:{user_id}:{suffix}"
+def _key(suffix: str) -> str:
+    return f"{_NS}:{suffix}"
 
 
 class EngagementTracker:
@@ -32,7 +32,6 @@ class EngagementTracker:
     def __init__(self, config: dict = None):
         config = config or {}
         self.store = MemoryClientService.create_connection()
-        self.user_id = config.get('user_id', 'default')
 
         # Similarity thresholds
         self.engaged_similarity = config.get('engaged_similarity', 0.35)
@@ -66,12 +65,12 @@ class EngagementTracker:
         Returns:
             Engagement result dict if a proactive response was correlated, else None.
         """
-        pending_id = self.store.get(_key(self.user_id, 'pending_response'))
+        pending_id = self.store.get(_key('pending_response'))
         if not pending_id:
             return None
 
         # Get the proactive thought content for comparison
-        pending_content = self.store.get(_key(self.user_id, 'pending_content'))
+        pending_content = self.store.get(_key('pending_content'))
         pending_embedding = None
         if pending_content:
             try:
@@ -137,7 +136,7 @@ class EngagementTracker:
         now = time.time()
 
         # Recent outcomes (circuit breaker)
-        outcomes_key = _key(self.user_id, 'recent_outcomes')
+        outcomes_key = _key('recent_outcomes')
         entry = json.dumps({
             'id': proactive_id,
             'outcome': outcome,
@@ -148,7 +147,7 @@ class EngagementTracker:
         self.store.ltrim(outcomes_key, 0, 2)
 
         # Engagement history (rolling 10)
-        history_key = _key(self.user_id, 'engagement_history')
+        history_key = _key('engagement_history')
         self.store.lpush(history_key, entry)
         self.store.ltrim(history_key, 0, 9)
 
@@ -157,31 +156,31 @@ class EngagementTracker:
 
         # Adjust backoff
         if outcome in ('engaged', 'acknowledged'):
-            self.store.set(_key(self.user_id, 'backoff_multiplier'), 1)
+            self.store.set(_key('backoff_multiplier'), 1)
 
             # If auto-paused, check if engagement is high enough to resume
-            if self.store.get(_key(self.user_id, 'paused')) == '1':
-                engagement = float(self.store.get(_key(self.user_id, 'engagement_score')) or 0)
+            if self.store.get(_key('paused')) == '1':
+                engagement = float(self.store.get(_key('engagement_score')) or 0)
                 if engagement >= 0.5:
-                    self.store.delete(_key(self.user_id, 'paused'))
-                    self.store.delete(_key(self.user_id, 'paused_since'))
+                    self.store.delete(_key('paused'))
+                    self.store.delete(_key('paused_since'))
                     logger.info(f"{LOG_PREFIX} Auto-pause lifted via positive engagement")
         elif outcome in ('ignored', 'dismissed'):
-            current = int(self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1)
+            current = int(self.store.get(_key('backoff_multiplier')) or 1)
             new_backoff = min(current * 2, 16)
-            self.store.set(_key(self.user_id, 'backoff_multiplier'), new_backoff)
+            self.store.set(_key('backoff_multiplier'), new_backoff)
 
         # Clear pending
-        self.store.delete(_key(self.user_id, 'pending_response'))
-        self.store.delete(_key(self.user_id, 'pending_content'))
+        self.store.delete(_key('pending_response'))
+        self.store.delete(_key('pending_content'))
 
     def _recompute_engagement_score(self):
         """Recompute rolling engagement score from history."""
-        history_key = _key(self.user_id, 'engagement_history')
+        history_key = _key('engagement_history')
         raw = self.store.lrange(history_key, 0, 9)
 
         if not raw:
-            self.store.set(_key(self.user_id, 'engagement_score'), '1.0')
+            self.store.set(_key('engagement_score'), '1.0')
             return
 
         total = 0.0
@@ -207,7 +206,7 @@ class EngagementTracker:
         else:
             engagement = 1.0
 
-        self.store.set(_key(self.user_id, 'engagement_score'), str(round(engagement, 3)))
+        self.store.set(_key('engagement_score'), str(round(engagement, 3)))
 
     def _route_thread_feedback(self, outcome: str, score: float):
         """
@@ -221,7 +220,7 @@ class EngagementTracker:
           - ignored → 0.0 (neutral, not punitive)
         """
         try:
-            thread_id = self.store.get(_key(self.user_id, 'pending_thread_id'))
+            thread_id = self.store.get(_key('pending_thread_id'))
             if not thread_id:
                 return
 
@@ -239,7 +238,7 @@ class EngagementTracker:
             CuriosityThreadService().update_engagement(thread_id, mapped)
 
             # Clean up
-            self.store.delete(_key(self.user_id, 'pending_thread_id'))
+            self.store.delete(_key('pending_thread_id'))
 
             logger.info(
                 f"{LOG_PREFIX} Routed feedback to thread {thread_id}: "
@@ -261,7 +260,7 @@ class EngagementTracker:
             'ts': time.time(),
         }
         self.store.setex(
-            _key(self.user_id, 'pending_content'),
+            _key('pending_content'),
             14400,  # 4h TTL (same as pending timeout)
             json.dumps(data)
         )

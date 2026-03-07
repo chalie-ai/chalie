@@ -31,8 +31,8 @@ LOG_PREFIX = "[NURTURE]"
 _NS = "spark_nurture"
 
 
-def _key(user_id: str, suffix: str) -> str:
-    return f"{_NS}:{user_id}:{suffix}"
+def _key(suffix: str) -> str:
+    return f"{_NS}:{suffix}"
 
 
 class NurtureAction(AutonomousAction):
@@ -47,7 +47,6 @@ class NurtureAction(AutonomousAction):
 
         config = config or {}
         self.store = MemoryClientService.create_connection()
-        self.user_id = config.get('user_id', 'default')
 
         # Phase-specific minimum idle (seconds)
         self.min_idle_surface = config.get('min_idle_surface', 21600)        # 6h
@@ -76,7 +75,7 @@ class NurtureAction(AutonomousAction):
         """Phase must be surface or exploratory. Self-disables at connected+."""
         try:
             from services.spark_state_service import SparkStateService
-            phase = SparkStateService(user_id=self.user_id).get_phase()
+            phase = SparkStateService().get_phase()
             if phase in ('surface', 'exploratory'):
                 return (True, phase)
             return (False, phase)
@@ -96,7 +95,7 @@ class NurtureAction(AutonomousAction):
             return (False, details)
 
         # 2. Must have prior interaction history (reuse COMMUNICATE's key)
-        last_interaction = self.store.get(f"proactive:{self.user_id}:last_interaction_ts")
+        last_interaction = self.store.get(f"proactive:last_interaction_ts")
         if not last_interaction:
             details['rejected'] = 'no_interaction_history'
             return (False, details)
@@ -112,12 +111,12 @@ class NurtureAction(AutonomousAction):
             return (False, details)
 
         # 4. Daily cooldown (multiplied by backoff)
-        backoff = int(self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1)
+        backoff = int(self.store.get(_key('backoff_multiplier')) or 1)
         effective_cooldown = self.daily_cooldown_seconds * backoff
         details['backoff'] = backoff
         details['effective_cooldown'] = effective_cooldown
 
-        last_sent = self.store.get(_key(self.user_id, 'last_sent_ts'))
+        last_sent = self.store.get(_key('last_sent_ts'))
         if last_sent and (now - float(last_sent)) < effective_cooldown:
             details['rejected'] = 'daily_cooldown'
             return (False, details)
@@ -129,15 +128,15 @@ class NurtureAction(AutonomousAction):
         details: Dict[str, Any] = {}
 
         # Paused?
-        if self.store.get(_key(self.user_id, 'paused')) == '1':
+        if self.store.get(_key('paused')) == '1':
             details['rejected'] = 'paused'
             return (False, details)
 
         # Too many unanswered?
-        unanswered = int(self.store.get(_key(self.user_id, 'unanswered_count')) or 0)
+        unanswered = int(self.store.get(_key('unanswered_count')) or 0)
         details['unanswered'] = unanswered
         if unanswered >= self.max_unanswered:
-            self.store.set(_key(self.user_id, 'paused'), '1')
+            self.store.set(_key('paused'), '1')
             logger.info(f"{LOG_PREFIX} Paused — {unanswered} unanswered nurtures")
             details['rejected'] = 'max_unanswered'
             return (False, details)
@@ -222,16 +221,16 @@ class NurtureAction(AutonomousAction):
 
         # 4. Update tracking
         now = time.time()
-        self.store.set(_key(self.user_id, 'last_sent_ts'), str(now))
-        self.store.incr(_key(self.user_id, 'unanswered_count'))
-        self.store.incr(_key(self.user_id, 'total_sent'))
+        self.store.set(_key('last_sent_ts'), str(now))
+        self.store.incr(_key('unanswered_count'))
+        self.store.incr(_key('total_sent'))
 
         # Increase backoff (capped)
         current_backoff = int(
-            self.store.get(_key(self.user_id, 'backoff_multiplier')) or 1
+            self.store.get(_key('backoff_multiplier')) or 1
         )
         new_backoff = min(current_backoff * 2, self.backoff_multiplier_cap)
-        self.store.set(_key(self.user_id, 'backoff_multiplier'), str(new_backoff))
+        self.store.set(_key('backoff_multiplier'), str(new_backoff))
 
         # 5. Log event
         self._log_nurture_event(phase, thought)
@@ -266,7 +265,7 @@ class NurtureAction(AutonomousAction):
         # Spark state: topics and timing
         try:
             from services.spark_state_service import SparkStateService
-            state = SparkStateService(user_id=self.user_id).get_state()
+            state = SparkStateService().get_state()
             context['topics_discussed'] = state.get('topics_discussed', [])
             welcome_sent_at = state.get('welcome_sent_at')
             if welcome_sent_at:
@@ -394,11 +393,11 @@ class NurtureAction(AutonomousAction):
     def _track_llm_failure(self) -> None:
         """Track silent LLM failures for observability."""
         try:
-            fail_key = _key(self.user_id, 'llm_fail_count')
+            fail_key = _key('llm_fail_count')
             self.store.incr(fail_key)
             self.store.expire(fail_key, 604800)  # 7-day window
             self.store.set(
-                _key(self.user_id, 'last_llm_fail_ts'), str(time.time())
+                _key('last_llm_fail_ts'), str(time.time())
             )
         except Exception:
             pass
@@ -427,7 +426,7 @@ class NurtureAction(AutonomousAction):
     # ── User activity reset (called from digest worker) ───────────
 
     @staticmethod
-    def record_user_activity(user_id: str = 'default') -> None:
+    def record_user_activity() -> None:
         """
         Reset unanswered count, backoff, and pause when the user sends a message.
 
@@ -435,8 +434,8 @@ class NurtureAction(AutonomousAction):
         """
         try:
             store = MemoryClientService.create_connection()
-            store.set(f"{_NS}:{user_id}:unanswered_count", '0')
-            store.set(f"{_NS}:{user_id}:backoff_multiplier", '1')
-            store.delete(f"{_NS}:{user_id}:paused")
+            store.set(f"{_NS}:unanswered_count", '0')
+            store.set(f"{_NS}:backoff_multiplier", '1')
+            store.delete(f"{_NS}:paused")
         except Exception:
             pass
