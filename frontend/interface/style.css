@@ -1116,7 +1116,6 @@ body {
 }
 
 .btn-action--mic:hover {
-  background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
 }
 
@@ -1131,22 +1130,19 @@ body {
 }
 
 .btn-action--send {
-  background: var(--accent-primary);
-  color: #ffffff;
-  box-shadow: 0 0 12px rgba(138, 92, 255, 0.25);
+  background: transparent;
+  color: var(--accent-primary);
   transition: all 220ms ease;
 }
 
 .btn-action--send:hover:not(:disabled) {
-  background: #9B6FFF;
+  color: #9B6FFF;
   transform: translateY(-1px);
-  box-shadow: 0 0 20px rgba(138, 92, 255, 0.40);
 }
 
 .btn-action--send:active:not(:disabled) {
   transform: translateY(0);
-  background: #7A4DE6;
-  box-shadow: 0 0 8px rgba(138, 92, 255, 0.30);
+  color: #7A4DE6;
 }
 
 .btn-action--send:disabled {
