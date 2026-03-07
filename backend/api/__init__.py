@@ -90,6 +90,8 @@ def create_app():
     from .moments import moments_bp
     from .documents import documents_bp
     from .voice import voice_bp
+    # App update blueprint - provides /api/v1/update/status and /api/v1/update/trigger endpoints
+    from .app_update import app_update_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -106,6 +108,7 @@ def create_app():
     app.register_blueprint(moments_bp)
     app.register_blueprint(documents_bp)
     app.register_blueprint(voice_bp)
+    app.register_blueprint(app_update_bp)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
