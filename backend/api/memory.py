@@ -34,8 +34,8 @@ def memory_context():
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_key, trait_value, confidence, category, source "
-                    "FROM user_traits WHERE user_id = 'primary' "
-                    "AND confidence >= 0.3 ORDER BY confidence DESC LIMIT 20"
+                    "FROM user_traits "
+                    "WHERE confidence >= 0.3 ORDER BY confidence DESC LIMIT 20"
                 )
                 rows = cursor.fetchall()
                 result["traits"] = [
@@ -44,7 +44,7 @@ def memory_context():
                     for r in rows
                 ]
             trait_service = UserTraitService(db)
-            traits_text = trait_service.get_traits_for_prompt(user_id="primary")
+            traits_text = trait_service.get_traits_for_prompt()
             if traits_text:
                 result["traits_summary"] = traits_text
         except Exception as e:
@@ -53,7 +53,7 @@ def memory_context():
         # Facts for active topic
         try:
             ts = get_thread_service()
-            thread_id = ts.get_active_thread_id("default", "default")
+            thread_id = ts.get_active_thread_id("default")
             if thread_id:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()

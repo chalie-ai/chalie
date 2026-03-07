@@ -72,7 +72,7 @@ def nurture(mock_store):
     ) as mock_cls:
         mock_cls.create_connection.return_value = mock_store
         from services.autonomous_actions.nurture_action import NurtureAction
-        action = NurtureAction(config={'user_id': 'test'})
+        action = NurtureAction(config={})
         action.store = mock_store
         yield action
 

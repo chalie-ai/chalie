@@ -4,7 +4,7 @@ Recent Topic Cache Service
 Maintains the most recently active topic in MemoryStore for recency bias in classification.
 This simulates working memory / topic activation in the neurological model.
 
-Supports per-user-channel scoping via constructor parameters.
+Supports per-channel scoping via constructor parameters.
 """
 
 from services.memory_client import MemoryClientService
@@ -13,22 +13,17 @@ from services.memory_client import MemoryClientService
 class RecentTopicService:
     """Manages the most recent topic cache in MemoryStore."""
 
-    def __init__(self, ttl_minutes: int = 30, user_id: str = None, channel_id: str = None):
+    def __init__(self, ttl_minutes: int = 30, channel_id: str = None):
         """
         Initialize recent topic service.
 
         Args:
             ttl_minutes: Time-to-live for recent topic cache (default 30 minutes)
-            user_id: Optional user ID for per-user scoping
             channel_id: Optional channel ID for per-channel scoping
         """
         self.store = MemoryClientService.create_connection()
         self.ttl_seconds = ttl_minutes * 60
-
-        if user_id and channel_id:
-            self.key = f"recent_topic:{user_id}:{channel_id}"
-        else:
-            self.key = "recent_topic"
+        self.key = f"recent_topic:{channel_id}" if channel_id else "recent_topic"
 
     def set_recent_topic(self, topic: str) -> None:
         """

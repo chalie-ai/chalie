@@ -443,7 +443,7 @@ def observability_traits():
             cursor.execute(
                 "SELECT trait_key, trait_value, confidence, category, source, "
                 "reinforcement_count, is_literal, updated_at "
-                "FROM user_traits WHERE user_id = 'primary' "
+                "FROM user_traits "
                 "ORDER BY category, confidence DESC"
             )
             rows = cursor.fetchall()
@@ -483,7 +483,7 @@ def observability_delete_trait(trait_key):
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "DELETE FROM user_traits WHERE user_id = 'primary' AND trait_key = ?",
+                "DELETE FROM user_traits WHERE trait_key = ?",
                 (trait_key,)
             )
             deleted = cursor.rowcount

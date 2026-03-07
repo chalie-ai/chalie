@@ -304,7 +304,6 @@ CREATE INDEX IF NOT EXISTS idx_identity_events_vector ON identity_events(vector_
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_traits (
     id TEXT PRIMARY KEY,
-    user_id TEXT DEFAULT 'primary',
     trait_key TEXT NOT NULL,
     trait_value TEXT NOT NULL,
     category TEXT DEFAULT 'general',
@@ -316,12 +315,11 @@ CREATE TABLE IF NOT EXISTS user_traits (
     last_conflict_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    UNIQUE(user_id, trait_key)
+    UNIQUE(trait_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_traits_user ON user_traits(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_traits_category ON user_traits(user_id, category);
-CREATE INDEX IF NOT EXISTS idx_user_traits_confidence ON user_traits(user_id, confidence);
+CREATE INDEX IF NOT EXISTS idx_user_traits_category ON user_traits(category);
+CREATE INDEX IF NOT EXISTS idx_user_traits_confidence ON user_traits(confidence);
 
 -- ────────────────────────────────────────────────────────────────
 -- MESSAGE CYCLES — processing unit tracking
@@ -352,7 +350,6 @@ CREATE INDEX IF NOT EXISTS idx_cycles_status_type ON message_cycles(status, cycl
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS threads (
     thread_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     channel_id TEXT NOT NULL,
     platform TEXT NOT NULL DEFAULT 'unknown',
     state TEXT NOT NULL DEFAULT 'active',
@@ -365,7 +362,7 @@ CREATE TABLE IF NOT EXISTS threads (
     summary TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_threads_user_channel ON threads(user_id, channel_id);
+CREATE INDEX IF NOT EXISTS idx_threads_channel ON threads(channel_id);
 CREATE INDEX IF NOT EXISTS idx_threads_state ON threads(state);
 
 -- ────────────────────────────────────────────────────────────────
@@ -471,7 +468,6 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS autobiography (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'primary',
     version INTEGER NOT NULL DEFAULT 1,
     narrative TEXT NOT NULL,
     section_hashes TEXT NOT NULL DEFAULT '{}',  -- JSONB
@@ -481,17 +477,16 @@ CREATE TABLE IF NOT EXISTS autobiography (
     synthesis_ms INTEGER,
     delta_summary TEXT,                        -- JSONB
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(user_id, version)
+    UNIQUE(version)
 );
 
-CREATE INDEX IF NOT EXISTS idx_autobiography_user_version ON autobiography(user_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_autobiography_version ON autobiography(version DESC);
 
 -- ────────────────────────────────────────────────────────────────
 -- LISTS
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lists (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'primary',
     name TEXT NOT NULL,
     list_type TEXT NOT NULL DEFAULT 'checklist',
     metadata TEXT NOT NULL DEFAULT '{}',      -- JSONB
@@ -500,11 +495,11 @@ CREATE TABLE IF NOT EXISTS lists (
     deleted_at TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_lists_user_name_unique
-    ON lists(user_id, name COLLATE NOCASE)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lists_name_unique
+    ON lists(name COLLATE NOCASE)
     WHERE deleted_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_lists_user_active ON lists(user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_lists_active ON lists(created_at DESC) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS list_items (
     id TEXT PRIMARY KEY,
@@ -615,18 +610,14 @@ CREATE INDEX IF NOT EXISTS idx_tpm_tool_created ON tool_performance_metrics(tool
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_tool_preferences (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'default',
-    tool_name TEXT NOT NULL,
+    tool_name TEXT NOT NULL UNIQUE,
     usage_count INTEGER DEFAULT 0,
     success_count INTEGER DEFAULT 0,
     explicit_preference REAL DEFAULT 0,
     implicit_preference REAL DEFAULT 0,
     last_used_at TEXT,
-    updated_at TEXT DEFAULT (datetime('now')),
-    UNIQUE(user_id, tool_name)
+    updated_at TEXT DEFAULT (datetime('now'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_utp_user ON user_tool_preferences(user_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- CURIOSITY THREADS
@@ -658,7 +649,6 @@ CREATE INDEX IF NOT EXISTS idx_curiosity_threads_explore
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS moments (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'primary',
     title TEXT,
     message_text TEXT NOT NULL,
     exchange_id TEXT,
@@ -677,8 +667,8 @@ CREATE TABLE IF NOT EXISTS moments (
     deleted_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_moments_user_active
-    ON moments(user_id, pinned_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_moments_active
+    ON moments(pinned_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_moments_enriching
     ON moments(status, pinned_at) WHERE status = 'enriching' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_moments_topic
@@ -874,7 +864,6 @@ CREATE INDEX IF NOT EXISTS idx_temporal_obs_recorded
 -- Precomputed aggregates — UPSERT on each write, mining reads this (not raw rows).
 -- Bounded by value space (~17k rows max), not by time.
 CREATE TABLE IF NOT EXISTS temporal_aggregate (
-    user_id TEXT NOT NULL DEFAULT 'primary',
     observation_type TEXT NOT NULL,
     observed_value TEXT NOT NULL,
     day_of_week INTEGER NOT NULL,      -- 0=Monday..6=Sunday
@@ -882,7 +871,7 @@ CREATE TABLE IF NOT EXISTS temporal_aggregate (
     device_class TEXT NOT NULL DEFAULT '',
     count INTEGER DEFAULT 0,
     last_seen TEXT,
-    PRIMARY KEY(user_id, observation_type, observed_value, day_of_week, hour_bucket, device_class)
+    PRIMARY KEY(observation_type, observed_value, day_of_week, hour_bucket, device_class)
 );
 
 -- ────────────────────────────────────────────────────────────────

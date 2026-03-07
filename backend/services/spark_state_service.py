@@ -5,7 +5,7 @@ Tracks the relationship phase between Chalie and a new user, from first contact
 through graduated (when normal systems take over). Uses effective exchanges
 (weighted scoring) to prevent spammy messages from accelerating progression.
 
-MemoryStore key: spark_state:{user_id}
+MemoryStore key: spark_state
 TTL: 30 days, refreshed on every write.
 
 Phases: first_contact → surface → exploratory → connected → graduated
@@ -65,9 +65,8 @@ class SparkStateService:
     _STORE_KEY_PREFIX = "spark_state"
     STORE_TTL = 2592000  # 30 days
 
-    def __init__(self, user_id: str = 'primary'):
-        self._user_id = user_id
-        self._store_key = f"{self._STORE_KEY_PREFIX}:{user_id}"
+    def __init__(self):
+        self._store_key = self._STORE_KEY_PREFIX
 
     def _default_state(self) -> dict:
         return {

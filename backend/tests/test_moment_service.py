@@ -29,7 +29,6 @@ def _make_moment_doc(doc_id='abc123', title='Test Moment', text='Some pinned tex
         'moment_exchange_id': None,
         'moment_topic': topic,
         'moment_thread_id': None,
-        'moment_user_id': 'primary',
         'boosted_episodes': [],
     }
     return {

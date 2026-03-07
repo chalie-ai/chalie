@@ -1,10 +1,10 @@
 """
 Thread Service - Thread resolution and lifecycle management.
 
-Provides user+channel scoped conversation threads with temporal lifecycle
-(soft/hard expiry), replacing the global topic-only scoping.
+Provides channel-scoped conversation threads with temporal lifecycle
+(soft/hard expiry). Single-user system — no user_id scoping.
 
-Thread ID format: {platform}:{user_id}:{channel_id}:{sequence}
+Thread ID format: {platform}:{channel_id}:{sequence}
 """
 
 import json
@@ -48,9 +48,9 @@ class ThreadService:
         except Exception:
             return cls()
 
-    def resolve_thread(self, user_id: str, channel_id: str, platform: str = "unknown") -> ThreadResolution:
+    def resolve_thread(self, channel_id: str, platform: str = "unknown") -> ThreadResolution:
         """
-        Resolve the active thread for a user+channel pair.
+        Resolve the active thread for a channel.
 
         Algorithm:
         1. Check for active thread pointer
@@ -60,7 +60,7 @@ class ThreadService:
         Returns:
             ThreadResolution with thread state information
         """
-        pointer_key = f"active_thread:{user_id}:{channel_id}"
+        pointer_key = f"active_thread:{channel_id}"
         active_thread_id = self.store.get(pointer_key)
 
         if active_thread_id:
@@ -97,21 +97,21 @@ class ThreadService:
                 previous_thread_id = active_thread_id
                 recent_context = self._get_recent_visible_context(active_thread_id)
                 self.expire_thread(active_thread_id)
-                new_resolution = self._create_new_thread(user_id, channel_id, platform)
+                new_resolution = self._create_new_thread(channel_id, platform)
                 new_resolution.previous_thread_id = previous_thread_id
                 new_resolution.recent_visible_context = recent_context
                 return new_resolution
 
         # No active thread — create new
-        return self._create_new_thread(user_id, channel_id, platform)
+        return self._create_new_thread(channel_id, platform)
 
-    def _create_new_thread(self, user_id: str, channel_id: str, platform: str) -> ThreadResolution:
+    def _create_new_thread(self, channel_id: str, platform: str) -> ThreadResolution:
         """Create a new thread with SETNX race condition protection."""
-        seq_key = f"thread_seq:{user_id}:{channel_id}"
+        seq_key = f"thread_seq:{channel_id}"
         sequence = self.store.incr(seq_key)
 
-        thread_id = f"{platform}:{user_id}:{channel_id}:{sequence}"
-        pointer_key = f"active_thread:{user_id}:{channel_id}"
+        thread_id = f"{platform}:{channel_id}:{sequence}"
+        pointer_key = f"active_thread:{channel_id}"
 
         # SETNX to prevent duplicate thread creation from concurrent messages
         was_set = self.store.setnx(pointer_key, thread_id)
@@ -133,7 +133,6 @@ class ThreadService:
         now = str(time.time())
         self.store.hset(f"thread:{thread_id}", mapping={
             "state": "active",
-            "user_id": user_id,
             "channel_id": channel_id,
             "platform": platform,
             "current_topic": "",
@@ -148,7 +147,7 @@ class ThreadService:
         self.store.expire(f"thread:{thread_id}", 86400)
 
         # Write to SQLite for durable tracking
-        self._persist_thread_created(thread_id, user_id, channel_id, platform)
+        self._persist_thread_created(thread_id, channel_id, platform)
 
         logging.info(f"[THREAD] Created new thread: {thread_id}")
         return ThreadResolution(
@@ -168,9 +167,8 @@ class ThreadService:
         # Also refresh the pointer TTL
         thread_data = self._get_thread_hash(thread_id)
         if thread_data:
-            user_id = thread_data.get("user_id", "")
             channel_id = thread_data.get("channel_id", "")
-            pointer_key = f"active_thread:{user_id}:{channel_id}"
+            pointer_key = f"active_thread:{channel_id}"
             self.store.expire(pointer_key, 86400)
 
     def update_activity(self, thread_id: str, topic: str = None):
@@ -222,9 +220,8 @@ class ThreadService:
         })
 
         # Clear the active pointer
-        user_id = thread_data.get("user_id", "")
         channel_id = thread_data.get("channel_id", "")
-        pointer_key = f"active_thread:{user_id}:{channel_id}"
+        pointer_key = f"active_thread:{channel_id}"
 
         # Only delete pointer if it still points to this thread
         current_pointer = self.store.get(pointer_key)
@@ -240,9 +237,9 @@ class ThreadService:
         """Get full thread data from MemoryStore hash."""
         return self._get_thread_hash(thread_id)
 
-    def get_active_thread_id(self, user_id: str, channel_id: str) -> Optional[str]:
-        """Get the active thread ID for a user+channel pair."""
-        pointer_key = f"active_thread:{user_id}:{channel_id}"
+    def get_active_thread_id(self, channel_id: str) -> Optional[str]:
+        """Get the active thread ID for a channel."""
+        pointer_key = f"active_thread:{channel_id}"
         return self.store.get(pointer_key)
 
     def _get_thread_hash(self, thread_id: str) -> Optional[dict]:
@@ -281,7 +278,7 @@ class ThreadService:
             logging.debug(f"[THREAD] Failed to get recent context for {thread_id}: {e}")
             return None
 
-    def _persist_thread_created(self, thread_id: str, user_id: str, channel_id: str, platform: str):
+    def _persist_thread_created(self, thread_id: str, channel_id: str, platform: str):
         """Write thread creation to SQLite."""
         try:
             from services.database_service import get_shared_db_service
@@ -289,10 +286,10 @@ class ThreadService:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO threads (thread_id, user_id, channel_id, platform, state)
-                    VALUES (?, ?, ?, ?, 'active')
+                    INSERT INTO threads (thread_id, channel_id, platform, state)
+                    VALUES (?, ?, ?, 'active')
                     ON CONFLICT (thread_id) DO NOTHING
-                """, (thread_id, user_id, channel_id, platform))
+                """, (thread_id, channel_id, platform))
                 cursor.close()
         except Exception as e:
             logging.debug(f"[THREAD] SQLite persist failed (non-critical): {e}")

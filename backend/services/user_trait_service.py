@@ -75,12 +75,12 @@ class UserTraitService:
         except Exception as e:
             logger.warning(f"[USER_TRAITS] Failed to store trait embedding: {e}")
 
-    def _get_rowid(self, conn, user_id: str, trait_key: str) -> Optional[int]:
-        """Get the rowid for a trait by user_id and trait_key."""
+    def _get_rowid(self, conn, trait_key: str) -> Optional[int]:
+        """Get the rowid for a trait by trait_key."""
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT rowid FROM user_traits WHERE user_id = ? AND trait_key = ?",
-            (user_id, trait_key)
+            "SELECT rowid FROM user_traits WHERE trait_key = ?",
+            (trait_key,)
         )
         row = cursor.fetchone()
         cursor.close()
@@ -94,7 +94,6 @@ class UserTraitService:
         category: str = 'general',
         source: str = 'inferred',
         is_literal: bool = True,
-        user_id: str = 'primary',
         speaker_confidence: float = 1.0,
     ) -> bool:
         """
@@ -112,7 +111,6 @@ class UserTraitService:
             category: One of: core, preference, physical, relationship, general
             source: 'explicit' or 'inferred'
             is_literal: False for humor/figurative statements
-            user_id: User identifier (default 'primary')
             speaker_confidence: How confident we are this is the known user (0.0-1.0)
 
         Returns:
@@ -142,8 +140,8 @@ class UserTraitService:
                 cursor.execute("""
                     SELECT trait_value, confidence, reinforcement_count
                     FROM user_traits
-                    WHERE user_id = ? AND trait_key = ?
-                """, (user_id, trait_key))
+                    WHERE trait_key = ?
+                """, (trait_key,))
                 existing = cursor.fetchone()
 
                 if existing:
@@ -162,8 +160,8 @@ class UserTraitService:
                                 reinforcement_count = ?,
                                 last_reinforced_at = datetime('now'),
                                 updated_at = datetime('now')
-                            WHERE user_id = ? AND trait_key = ?
-                        """, (new_confidence, new_count, user_id, trait_key))
+                            WHERE trait_key = ?
+                        """, (new_confidence, new_count, trait_key))
 
                         logger.info(
                             f"[USER_TRAITS] Reinforced '{trait_key}': "
@@ -181,12 +179,12 @@ class UserTraitService:
                                 last_reinforced_at = datetime('now'),
                                 last_conflict_at = datetime('now'),
                                 updated_at = datetime('now')
-                            WHERE user_id = ? AND trait_key = ?
+                            WHERE trait_key = ?
                         """, (trait_value, confidence, category, source,
-                              1 if is_literal else 0, user_id, trait_key))
+                              1 if is_literal else 0, trait_key))
 
                         # Update embedding in companion vec table
-                        trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                        trait_rowid = self._get_rowid(conn, trait_key)
                         if trait_rowid is not None:
                             self._store_embedding(conn, trait_rowid, embedding_blob)
 
@@ -200,8 +198,8 @@ class UserTraitService:
                         cursor.execute("""
                             UPDATE user_traits
                             SET last_conflict_at = datetime('now'), updated_at = datetime('now')
-                            WHERE user_id = ? AND trait_key = ?
-                        """, (user_id, trait_key))
+                            WHERE trait_key = ?
+                        """, (trait_key,))
 
                         logger.debug(
                             f"[USER_TRAITS] Conflict on '{trait_key}': "
@@ -214,14 +212,14 @@ class UserTraitService:
                     embedding_blob = self._generate_embedding_blob(trait_key, trait_value)
                     cursor.execute("""
                         INSERT INTO user_traits
-                            (id, user_id, trait_key, trait_value, category, confidence,
+                            (id, trait_key, trait_value, category, confidence,
                              source, is_literal)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (trait_id, user_id, trait_key, trait_value, category, confidence,
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (trait_id, trait_key, trait_value, category, confidence,
                           source, 1 if is_literal else 0))
 
                     # Store embedding in companion vec table
-                    trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                    trait_rowid = self._get_rowid(conn, trait_key)
                     if trait_rowid is not None:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
@@ -241,7 +239,6 @@ class UserTraitService:
     def get_traits_for_prompt(
         self,
         prompt: str = "",
-        user_id: str = 'primary',
         speaker_confidence: float = 1.0,
         injection_threshold: float = INJECTION_THRESHOLD,
     ) -> str:
@@ -259,7 +256,6 @@ class UserTraitService:
 
         Args:
             prompt: Current user message for contextual retrieval
-            user_id: User identifier
             speaker_confidence: Confidence this is the known user
 
         Returns:
@@ -273,12 +269,11 @@ class UserTraitService:
                 cursor.execute("""
                     SELECT trait_key, trait_value, confidence, category
                     FROM user_traits
-                    WHERE user_id = ?
-                      AND category = 'core'
+                    WHERE category = 'core'
                       AND confidence > ?
                       AND is_literal = 1
                     ORDER BY confidence DESC
-                """, (user_id, injection_threshold))
+                """, (injection_threshold,))
                 core_traits = cursor.fetchall()
 
                 remaining_slots = MAX_TRAITS_IN_PROMPT - len(core_traits)
@@ -313,13 +308,12 @@ class UserTraitService:
                     cursor.execute("""
                         SELECT trait_key, trait_value, confidence, category
                         FROM user_traits
-                        WHERE user_id = ?
-                          AND category != 'core'
+                        WHERE category != 'core'
                           AND confidence > ?
                           AND is_literal = 1
                         ORDER BY confidence DESC
                         LIMIT ?
-                    """, (user_id, injection_threshold, remaining_slots))
+                    """, (injection_threshold, remaining_slots))
                     contextual_traits = cursor.fetchall()
 
                 cursor.close()
@@ -348,11 +342,7 @@ class UserTraitService:
             logger.debug(f"[USER_TRAITS] Failed to get traits for prompt: {e}")
             return ""
 
-    def get_communication_style(
-        self,
-        user_id: str = 'primary',
-        threshold: float = 0.3,
-    ) -> dict:
+    def get_communication_style(self, threshold: float = 0.3) -> dict:
         """
         Get the user's detected communication style dimensions.
 
@@ -360,7 +350,6 @@ class UserTraitService:
         returning a dict of dimension → score.
 
         Args:
-            user_id: User identifier
             threshold: Minimum confidence to include
 
         Returns:
@@ -374,13 +363,12 @@ class UserTraitService:
                 cursor.execute("""
                     SELECT trait_value, confidence
                     FROM user_traits
-                    WHERE user_id = ?
-                      AND trait_key = 'communication_style'
+                    WHERE trait_key = 'communication_style'
                       AND category = 'communication_style'
                       AND confidence > ?
                     ORDER BY updated_at DESC
                     LIMIT 1
-                """, (user_id, threshold))
+                """, (threshold,))
                 row = cursor.fetchone()
                 cursor.close()
 
@@ -480,7 +468,7 @@ class UserTraitService:
 
         return stats
 
-    def correct_trait(self, trait_key: str, new_value: str, category: str = None, user_id: str = 'primary') -> bool:
+    def correct_trait(self, trait_key: str, new_value: str, category: str = None) -> bool:
         """
         Explicit user correction — overwrites regardless of confidence threshold.
         This is the conversational path for "that's wrong about me."
@@ -494,8 +482,8 @@ class UserTraitService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT id, category FROM user_traits WHERE user_id = ? AND trait_key = ?",
-                    (user_id, trait_key)
+                    "SELECT id, category FROM user_traits WHERE trait_key = ?",
+                    (trait_key,)
                 )
                 existing = cursor.fetchone()
 
@@ -507,12 +495,12 @@ class UserTraitService:
                         "source = 'explicit_correction', reinforcement_count = 1, "
                         "category = ?, is_literal = 1, "
                         "last_conflict_at = datetime('now'), updated_at = datetime('now') "
-                        "WHERE user_id = ? AND trait_key = ?",
-                        (new_value, 0.95, update_category, user_id, trait_key)
+                        "WHERE trait_key = ?",
+                        (new_value, 0.95, update_category, trait_key)
                     )
 
                     # Update embedding in companion vec table
-                    trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                    trait_rowid = self._get_rowid(conn, trait_key)
                     if trait_rowid is not None:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
@@ -521,14 +509,14 @@ class UserTraitService:
                     # New trait from explicit correction
                     trait_id = str(uuid.uuid4())
                     cursor.execute(
-                        "INSERT INTO user_traits (id, user_id, trait_key, trait_value, confidence, "
+                        "INSERT INTO user_traits (id, trait_key, trait_value, confidence, "
                         "category, source, is_literal, reinforcement_count) "
-                        "VALUES (?, ?, ?, ?, ?, ?, 'explicit_correction', 1, 1)",
-                        (trait_id, user_id, trait_key, new_value, 0.95, category or 'general')
+                        "VALUES (?, ?, ?, ?, ?, 'explicit_correction', 1, 1)",
+                        (trait_id, trait_key, new_value, 0.95, category or 'general')
                     )
 
                     # Store embedding in companion vec table
-                    trait_rowid = self._get_rowid(conn, user_id, trait_key)
+                    trait_rowid = self._get_rowid(conn, trait_key)
                     if trait_rowid is not None:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
@@ -538,14 +526,14 @@ class UserTraitService:
             logger.error(f"[TRAITS] Correction failed for {trait_key}: {e}")
             return False
 
-    def delete_trait(self, trait_key: str, user_id: str = 'primary') -> bool:
+    def delete_trait(self, trait_key: str) -> bool:
         """Delete a trait by key. Used for explicit negations ('I don't like X')."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM user_traits WHERE user_id = ? AND trait_key = ?",
-                    (user_id, trait_key)
+                    "DELETE FROM user_traits WHERE trait_key = ?",
+                    (trait_key,)
                 )
                 deleted = cursor.rowcount
             if deleted > 0:
@@ -555,15 +543,14 @@ class UserTraitService:
             logger.error(f"[TRAITS] Delete failed for {trait_key}: {e}")
             return False
 
-    def get_all_traits(self, user_id: str = 'primary') -> list:
-        """Return all stored traits for the given user."""
+    def get_all_traits(self) -> list:
+        """Return all stored traits."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_key, trait_value, confidence, category "
-                    "FROM user_traits WHERE user_id = ?",
-                    (user_id,)
+                    "FROM user_traits"
                 )
                 rows = cursor.fetchall()
                 return [
@@ -574,15 +561,15 @@ class UserTraitService:
             logger.debug(f"[USER_TRAITS] get_all_traits failed: {e}")
             return []
 
-    def get_traits_by_category(self, category: str, user_id: str = 'primary') -> list:
+    def get_traits_by_category(self, category: str) -> list:
         """Return all traits matching a specific category."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT trait_key, trait_value, confidence, category "
-                    "FROM user_traits WHERE user_id = ? AND category = ?",
-                    (user_id, category)
+                    "FROM user_traits WHERE category = ?",
+                    (category,)
                 )
                 rows = cursor.fetchall()
                 return [
