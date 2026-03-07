@@ -164,58 +164,71 @@ class AppUpdateService:
             logger.warning(f"[UPDATE] Could not parse versions: {v1}, {v2}")
             return False
 
-    def perform_update(self) -> Dict[str, any]:
+    def perform_update(self, asset_url: Optional[str] = None) -> Dict[str, any]:
         """Download and apply the latest update via tarball overlay.
 
-        For 'installed' mode: Downloads the release tarball from GitHub and extracts it
-        to the APP_HOME directory, overwriting existing files in place.
+        For 'installed' mode: Downloads the release tarball from GitHub (or provided URL) 
+        and extracts it to the APP_HOME directory, overwriting existing files in place.
 
         For 'docker' and 'dev' modes: Logs a message and returns without performing any action.
+
+        Args:
+            asset_url: Optional URL to the release tarball asset. If not provided, will fetch
+                      from GitHub releases API using the latest version.
 
         Returns:
             dict: A dictionary containing:
                 - success (bool): True if update completed successfully
                 - message (str): Description of the result or error
-                - latest_version (str, optional): The version that was installed
+                - requires_restart (bool): Whether application restart is required
         """
         deployment_mode = self.get_deployment_mode()
 
-        # For docker and dev modes, skip gracefully
-        if deployment_mode == "docker":
-            logger.info("[UPDATE] Docker mode detected — update must be performed via container rebuild")
-            return {
-                "success": False,
-                "message": "Updates in Docker mode require rebuilding the container"
-            }
+        # Check deployment mode and only proceed for 'installed' mode
+        logger.info(f"[UPDATE] perform_update called with deployment mode: {deployment_mode}")
 
-        if deployment_mode == "dev":
-            logger.info("[UPDATE] Development mode detected — skipping automatic update")
-            return {
-                "success": False,
-                "message": "Automatic updates are disabled in development mode"
-            }
+        if deployment_mode != "installed":
+            if deployment_mode == "docker":
+                logger.info("[UPDATE] Docker mode detected — update must be performed via container rebuild")
+                return {
+                    "success": False,
+                    "message": "Updates in Docker mode require rebuilding the container"
+                }
+            else:  # dev mode
+                logger.info("[UPDATE] Development mode detected — skipping automatic update")
+                return {
+                    "success": False,
+                    "message": "Automatic updates are disabled in development mode"
+                }
 
         # For installed mode, perform the tarball overlay update
         try:
-            latest_version = self._get_latest_release_info()
-            if not latest_version:
-                return {
-                    "success": False,
-                    "message": "Could not fetch release information from GitHub"
-                }
-
             app_home = os.environ.get("APP_HOME", "/opt/chalie")
-            logger.info(f"[UPDATE] Starting update to version {latest_version} at {app_home}")
+            logger.info(f"[UPDATE] Starting update process at {app_home}")
 
-            # Download the tarball
-            download_url = f"https://github.com/{self.GITHUB_REPO}/releases/download/v{latest_version}/chalie-{latest_version}.tar.gz"
+            # Get asset URL - use provided one or fetch from GitHub
+            if asset_url is None:
+                latest_version = self._get_latest_release_info()
+                if not latest_version:
+                    return {
+                        "success": False,
+                        "message": "Could not fetch release information from GitHub"
+                    }
+                # Construct download URL for the tarball
+                asset_url = f"https://github.com/{self.GITHUB_REPO}/releases/download/v{latest_version}/chalie-{latest_version}.tar.gz"
+                logger.info(f"[UPDATE] Using latest version {latest_version} to construct download URL")
+
             temp_dir = tempfile.mkdtemp(prefix="chalie_update_")
+            tarball_path = os.path.join(temp_dir, "update.tar.gz")
 
             try:
-                tarball_path = os.path.join(temp_dir, "update.tar.gz")
-                logger.info(f"[UPDATE] Downloading from {download_url}")
-
-                with urllib.request.urlopen(download_url, timeout=60) as response:
+                # Step 1: Download the tarball from the given URL
+                logger.info(f"[UPDATE] Downloading tarball from {asset_url}")
+                
+                with urllib.request.urlopen(asset_url, timeout=60) as response:
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded_size = 0
+                    
                     with open(tarball_path, 'wb') as f:
                         chunk_size = 8192
                         while True:
@@ -223,18 +236,32 @@ class AppUpdateService:
                             if not chunk:
                                 break
                             f.write(chunk)
+                            downloaded_size += len(chunk)
+                            
+                            # Log progress for large files
+                            if total_size > 0 and downloaded_size % (total_size // 10 + 1) == 0:
+                                progress = int((downloaded_size / total_size) * 100)
+                                logger.debug(f"[UPDATE] Download progress: {progress}%")
 
-                logger.info(f"[UPDATE] Download complete ({os.path.getsize(tarball_path)} bytes)")
+                download_size = os.path.getsize(tarball_path)
+                logger.info(f"[UPDATE] Download complete ({download_size} bytes)")
 
-                # Extract and overlay files
+                # Step 2: Extract the tarball to a temporary directory and overlay files
+                logger.info(f"[UPDATE] Extracting tarball and overlaying files to {app_home}")
+                
                 self._extract_and_overlay(tarball_path, app_home)
 
-                logger.info(f"[UPDATE] Update to {latest_version} completed successfully")
+                logger.info("[UPDATE] File extraction and overlay completed successfully")
+
+                # Step 3: Application restart (to be implemented later)
+                # TODO: Trigger application restart or signal parent process to reload
+                # Example: subprocess.run(['systemctl', 'restart', 'chalie']) for systemd services
+                logger.info("[UPDATE] Update applied. Application restart required to complete update.")
 
                 return {
                     "success": True,
-                    "message": f"Updated to version {latest_version}",
-                    "latest_version": latest_version
+                    "message": f"Update completed successfully. Restart application to apply changes.",
+                    "requires_restart": True
                 }
 
             finally:
@@ -242,11 +269,17 @@ class AppUpdateService:
                 import shutil
                 try:
                     shutil.rmtree(temp_dir)
+                    logger.debug(f"[UPDATE] Cleaned up temporary directory {temp_dir}")
                 except Exception as e:
-                    logger.warning(f"[UPDATE] Could not cleanup temp dir: {e}")
+                    logger.warning(f"[UPDATE] Could not cleanup temp dir {temp_dir}: {e}")
+
+        except urllib.error.URLError as e:
+            error_msg = f"Download failed: {str(e)}"
+            logger.error(f"[UPDATE] {error_msg}", exc_info=True)
+            return {"success": False, "message": error_msg}
 
         except subprocess.CalledProcessError as e:
-            error_msg = f"Update failed during extraction/overlay: {str(e)}"
+            error_msg = f"Extraction failed: {str(e)}"
             logger.error(f"[UPDATE] {error_msg}", exc_info=True)
             return {"success": False, "message": error_msg}
 
