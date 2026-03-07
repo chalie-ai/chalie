@@ -161,6 +161,12 @@ class CognitiveDriftEngine:
         if plan_config.get('enabled', True):
             router.register(PlanAction(config=plan_config))
 
+        # Register AMBIENT_TOOL if enabled (priority 6, below SEED_THREAD)
+        from services.autonomous_actions.ambient_tool_action import AmbientToolAction
+        ambient_config = action_config.get('ambient_tool', {})
+        if ambient_config.get('enabled', True):
+            router.register(AmbientToolAction(config=ambient_config))
+
         # Register COMMUNICATE if enabled
         communicate_config = action_config.get('communicate', {})
         if communicate_config.get('enabled', True):
@@ -839,6 +845,63 @@ class CognitiveDriftEngine:
             'last_seed_concept': seed['concept_name'],
         })
 
+    # -- Self-model reflection -------------------------------------------------
+
+    def _try_self_model_reflection(self) -> bool:
+        """
+        Occasionally generate a self-reflective thought from the self-model.
+
+        Fires ~20% of cycles when noteworthy items exist. Returns True if
+        a reflection was produced (consuming this drift cycle).
+        """
+        if random.random() > 0.20:
+            return False
+
+        try:
+            from services.self_model_service import SelfModelService
+            snapshot = SelfModelService().get_snapshot()
+            noteworthy = snapshot.get('noteworthy', [])
+            if not noteworthy:
+                return False
+
+            # Pick the highest-severity noteworthy item
+            item = max(noteworthy, key=lambda n: n.get('severity', 0))
+            signal = item.get('signal', '')
+
+            # Map signal patterns to reflective seed thoughts
+            if 'recall' in signal or 'activation' in signal:
+                reflection = (
+                    f"I notice my memory recall is struggling. "
+                    f"I should consolidate what I know into stronger semantic concepts."
+                )
+            elif 'capability_gap' in signal:
+                reflection = (
+                    f"Users keep asking me to do something I can't: {signal.split(':', 1)[-1].strip()}. "
+                    f"I should think about how to help them differently."
+                )
+            elif 'queue' in signal or 'congestion' in signal:
+                reflection = (
+                    "My background processing is congested. "
+                    "I should be more careful about what I commit to right now."
+                )
+            elif 'dead_thread' in signal or 'provider' in signal:
+                reflection = (
+                    f"Something in my infrastructure feels off: {signal}. "
+                    f"I should flag this if it affects my responses."
+                )
+            else:
+                reflection = f"Internal observation: {signal}"
+
+            # Store as a drift gist (same as normal thoughts)
+            self._store_drift('self-reflection', 'reflection', reflection)
+
+            logger.info(f"{LOG_PREFIX} Self-model reflection: '{reflection[:80]}...'")
+            return True
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Self-model reflection failed: {e}")
+            return False
+
     # -- Main drift cycle ------------------------------------------------------
 
     def _run_drift_cycle(self):
@@ -851,6 +914,10 @@ class CognitiveDriftEngine:
         if self._is_user_deep_focus():
             logger.info(f"{LOG_PREFIX} User in deep focus, skipping drift")
             return
+
+        # 1c. Self-model reflection — occasionally seed from internal state
+        if self._try_self_model_reflection():
+            return  # Self-reflection consumed this drift cycle
 
         # 2. Select seed
         seed = self._select_seed()

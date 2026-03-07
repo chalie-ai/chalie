@@ -91,6 +91,17 @@ class ContextAssemblyService:
         else:
             sections['previous_session'] = ""
 
+        # Self-awareness (interoception — only when noteworthy)
+        try:
+            from services.self_model_service import SelfModelService
+            service = SelfModelService()
+            if service.has_noteworthy_state():
+                sections['self_awareness'] = service.format_for_prompt()
+            else:
+                sections['self_awareness'] = ""
+        except Exception:
+            sections['self_awareness'] = ""
+
         # Estimate total tokens
         total_tokens = sum(self._estimate_tokens(s) for s in sections.values() if isinstance(s, str))
         sections['total_tokens_est'] = total_tokens

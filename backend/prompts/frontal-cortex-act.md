@@ -44,6 +44,8 @@ You do NOT:
 
 {{temporal_rhythm}}
 
+{{self_awareness}}
+
 {{communication_style}}
 
 {{active_lists}}

@@ -574,6 +574,25 @@ class UserTraitService:
             logger.debug(f"[USER_TRAITS] get_all_traits failed: {e}")
             return []
 
+    def get_traits_by_category(self, category: str, user_id: str = 'primary') -> list:
+        """Return all traits matching a specific category."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT trait_key, trait_value, confidence, category "
+                    "FROM user_traits WHERE user_id = ? AND category = ?",
+                    (user_id, category)
+                )
+                rows = cursor.fetchall()
+                return [
+                    {'trait_key': r[0], 'trait_value': r[1], 'confidence': r[2], 'category': r[3]}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.debug(f"[USER_TRAITS] get_traits_by_category failed: {e}")
+            return []
+
     def get_speaker_confidence(self, metadata: dict) -> float:
         """
         Single-user app — all authenticated requests are the primary user.

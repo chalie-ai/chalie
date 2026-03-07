@@ -579,6 +579,13 @@ class FrontalCortexService:
             temporal_rhythm = ''
         result = result.replace('{{temporal_rhythm}}', temporal_rhythm)
 
+        # Self-awareness (interoception — only injected when noteworthy)
+        if _include('self_awareness'):
+            self_awareness = self._get_self_awareness()
+        else:
+            self_awareness = ''
+        result = result.replace('{{self_awareness}}', self_awareness)
+
         return result
 
     def _get_identity_modulation(self) -> str:
@@ -936,6 +943,19 @@ class FrontalCortexService:
         except Exception as e:
             logging.debug(f"Temporal rhythm not available: {e}")
             return ''
+
+    def _get_self_awareness(self) -> str:
+        """Get self-awareness context from self-model (only when noteworthy).
+
+        Returns empty string when all systems are healthy (zero token cost).
+        When degraded, includes signals AND behavioral directives.
+        """
+        try:
+            from services.self_model_service import SelfModelService
+            return SelfModelService().format_for_prompt()
+        except Exception as e:
+            logging.debug(f"Self-awareness not available: {e}")
+            return ""
 
     def _get_spark_guidance(self) -> str:
         """

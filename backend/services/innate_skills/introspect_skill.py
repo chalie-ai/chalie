@@ -1,8 +1,12 @@
 """
-Introspect Skill — Self-examination of internal state and metacognitive signals.
+Introspect Skill — Thin view on the Self-Model Service.
 
-Perception directed inward. Returns context warmth, memory density, skill stats,
-FOK signals, and world state — all computed, no LLM.
+Delegates to SelfModelService for the always-fresh snapshot, then overlays
+topic-specific signals (FOK, recall failure rate) that require the current
+conversation topic. Falls back to legacy standalone gathering if the
+self-model is unavailable.
+
+Perception directed inward. All computed, no LLM.
 """
 
 import logging
@@ -22,101 +26,46 @@ def handle_introspect(topic: str, params: dict) -> str:
     Returns:
         Structured state report
     """
-    state = {}
-
-    # Gather signals from MemoryStore
-    state["gist_count"] = _get_gist_count(topic)
-    state["fact_count"] = _get_fact_count(topic)
-    state["working_memory_depth"] = _get_working_memory_depth(topic)
-    state["context_warmth"] = _compute_context_warmth(state)
-    state["partial_match_signal"] = _get_fok_signal(topic)
-    state["world_state"] = _get_world_state(topic)
-    state["topic_age"] = _get_topic_age(topic)
-
-    # Gather signals from SQLite
-    state["recent_modes"] = _get_recent_modes(topic)
-    state["skill_stats"] = _get_skill_stats(topic)
-    state["recall_failure_rate"] = _get_recall_failure_rate(topic)
-
-    # Cross-feature signals
-    state["focus_active"] = _get_focus_active(params.get('thread_id', topic))
-    state["communication_style"] = _get_communication_style()
-
-    # Decision transparency
-    state["decision_explanations"] = _get_recent_decision_explanations()
-    state["recent_autonomous_actions"] = _get_recent_autonomous_actions()
-
-    # Triage-filtered tool details (auto-injected via context_extras)
-    triage_tools = params.get('triage_tools', [])
-    if triage_tools:
-        state["tool_details"] = _get_filtered_tool_details(triage_tools)
-
-    return _format_state(state, topic)
-
-
-def _get_gist_count(topic: str) -> int:
-    """Count active gists for topic."""
     try:
-        from services.gist_storage_service import GistStorageService
+        from services.self_model_service import SelfModelService
+        service = SelfModelService()
+        snapshot = service.get_snapshot()
 
-        service = GistStorageService()
-        gists = service.get_latest_gists(topic)
-        return len(gists)
+        # Overlay topic-specific signals not in the base snapshot
+        # (base snapshot uses whatever topic was active at refresh time;
+        #  the introspect skill is called with the specific current topic)
+        ep = snapshot.get("epistemic", {})
+        ep["partial_match_signal"] = _get_fok_signal(topic)
+        ep["recall_failure_rate"] = _get_recall_failure_rate(topic)
+        ep["current_topic"] = topic
+
+        # Gather signals not in self-model (topic-bound, user-facing only)
+        extra = {}
+        extra["world_state"] = _get_world_state(topic)
+        extra["communication_style"] = _get_communication_style()
+        extra["decision_explanations"] = _get_recent_decision_explanations()
+        extra["recent_autonomous_actions"] = _get_recent_autonomous_actions()
+        extra["skill_stats"] = _get_skill_stats(topic)
+
+        # Triage-filtered tool details (context-dependent)
+        triage_tools = params.get('triage_tools', [])
+        if triage_tools:
+            extra["tool_details"] = _get_filtered_tool_details(triage_tools)
+
+        return _format_snapshot(snapshot, extra, topic)
+
     except Exception as e:
-        logger.warning(f"[INTROSPECT] gist count failed: {e}")
-        return 0
+        logger.warning(f"[INTROSPECT] Self-model unavailable, falling back: {e}")
+        return _legacy_handle_introspect(topic, params)
 
 
-def _get_fact_count(topic: str) -> int:
-    """Count active facts for topic."""
-    try:
-        from services.fact_store_service import FactStoreService
-
-        service = FactStoreService()
-        facts = service.get_all_facts(topic)
-        return len(facts)
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] fact count failed: {e}")
-        return 0
-
-
-def _get_working_memory_depth(topic: str) -> int:
-    """Count turns in working memory buffer."""
-    try:
-        from services.memory_client import MemoryClientService
-
-        store = MemoryClientService.create_connection()
-        key = f"working_memory:{topic}"
-        return store.llen(key)
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] working memory depth failed: {e}")
-        return 0
-
-
-def _compute_context_warmth(state: Dict) -> float:
-    """
-    Compute context warmth (0.0-1.0) from memory density signals.
-
-    context_warmth is a heuristic for "how much do I know about this topic?"
-    Higher = more memory resources available.
-    """
-    gist_score = min(1.0, state.get("gist_count", 0) / 5.0)
-    fact_score = min(1.0, state.get("fact_count", 0) / 10.0)
-    wm_score = min(1.0, state.get("working_memory_depth", 0) / 4.0)
-
-    # Weighted combination: gists most important for warmth
-    warmth = (gist_score * 0.4) + (fact_score * 0.3) + (wm_score * 0.3)
-    return round(warmth, 3)
+# ── Topic-specific signal helpers (kept here, not in self-model) ────
 
 
 def _get_fok_signal(topic: str) -> int:
-    """
-    Read Feeling-of-Knowing signal from last recall operation.
-    Stored by recall skill as partial match count.
-    """
+    """Read Feeling-of-Knowing signal from last recall operation."""
     try:
         from services.memory_client import MemoryClientService
-
         store = MemoryClientService.create_connection()
         value = store.get(f"fok:{topic}")
         return int(value) if value else 0
@@ -124,180 +73,55 @@ def _get_fok_signal(topic: str) -> int:
         return 0
 
 
-def _get_world_state(topic: str) -> str:
-    """Get current world state for topic."""
-    try:
-        from services.world_state_service import WorldStateService
-
-        service = WorldStateService()
-        return service.get_world_state(topic)
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] world state failed: {e}")
-        return "(unavailable)"
-
-
-def _get_topic_age(topic: str) -> str:
-    """Get how long the current topic has been active."""
-    try:
-        from services.memory_client import MemoryClientService
-
-        store = MemoryClientService.create_connection()
-        ttl = store.ttl(f"recent_topic")
-        if ttl and ttl > 0:
-            # recent_topic has 30min TTL, so age = 1800 - remaining TTL
-            age_seconds = 1800 - ttl
-            if age_seconds < 60:
-                return f"{age_seconds}s"
-            elif age_seconds < 3600:
-                return f"{age_seconds // 60}min"
-            else:
-                return f"{age_seconds // 3600}h {(age_seconds % 3600) // 60}min"
-        return "unknown"
-    except Exception:
-        return "unknown"
-
-
-def _get_recent_modes(topic: str) -> list:
-    """Get last N mode selections from routing decisions."""
-    try:
-        from services.routing_decision_service import RoutingDecisionService
-        from services.database_service import get_shared_db_service
-
-        db_service = get_shared_db_service()
-        service = RoutingDecisionService(db_service)
-
-        decisions = service.get_recent_decisions(hours=1, limit=5)
-        return [d["selected_mode"] for d in decisions]
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] recent modes failed: {e}")
-        return []
-
-
-def _get_skill_stats(topic: str) -> dict:
-    """
-    Get stats for all actions from procedural memory.
-
-    Dynamically queries all actions (innate skills + tools) instead of
-    hardcoding skill names. Includes trust metrics: weight, successes,
-    failures, avg_reward, and Bayesian-smoothed reliability.
-    """
+def _get_recall_failure_rate(topic: str) -> float:
+    """Per-topic recall failure rate from procedural memory."""
     try:
         from services.procedural_memory_service import ProceduralMemoryService
         from services.database_service import get_shared_db_service
-
         db_service = get_shared_db_service()
         service = ProceduralMemoryService(db_service)
-
-        stats = {}
-        # Query all actions dynamically
-        all_weights = service.get_all_policy_weights()
-        for action_name in all_weights:
-            action_stats = service.get_action_stats(action_name)
-            if action_stats:
-                attempts = action_stats.get('total_attempts', 0)
-                successes = action_stats.get('total_successes', 0)
-                failures = attempts - successes
-                avg_reward = action_stats.get('avg_reward', 0) or 0
-
-                # Bayesian smoothed reliability (Laplace smoothing)
-                smoothed_reliability = (successes + 1) / (attempts + 2) if attempts > 0 else 0.5
-
-                stats[action_name] = {
-                    "weight": round(action_stats.get('weight', 1.0), 3),
-                    "successes": successes,
-                    "failures": failures,
-                    "avg_reward": round(avg_reward, 2),
-                    "reliability": round(smoothed_reliability, 3),
-                }
-
-        return stats
-
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] skill stats failed: {e}")
-        return {}
+        action_stats = service.get_action_stats("recall")
+        context_stats = (action_stats or {}).get("context_stats") or {}
+        if context_stats and topic in context_stats:
+            topic_stats = context_stats[topic]
+            total = topic_stats.get("total", 0)
+            failures = topic_stats.get("failures", 0)
+            if total > 0:
+                return round(failures / total, 3)
+        return 0.0
+    except Exception:
+        return 0.0
 
 
-def _get_tool_details() -> dict:
-    """
-    Get full manifest details for all loaded tools.
-
-    Returns tips, examples, constraints from each tool's manifest.
-    Available via introspect for the ACT prompt to access on demand.
-    """
+def _get_world_state(topic: str) -> str:
     try:
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-
-        details = {}
-        for tool_name in registry.get_tool_names():
-            manifest = registry.get_tool_full_description(tool_name)
-            if manifest:
-                details[tool_name] = {
-                    "description": manifest.get("description", ""),
-                    "tips": manifest.get("tips", []),
-                    "examples": manifest.get("examples", []),
-                    "constraints": manifest.get("constraints", {}),
-                }
-        return details
-    except Exception as e:
-        logger.debug(f"[INTROSPECT] tool details unavailable: {e}")
-        return {}
-
-
-def _get_filtered_tool_details(tool_names: list) -> dict:
-    """Get manifest details for specific tools only (triage-selected)."""
-    all_details = _get_tool_details()
-    return {k: v for k, v in all_details.items() if k in tool_names}
-
-
-def _get_focus_active(thread_id: str) -> bool:
-    """Check if a focus session is active for this thread."""
-    try:
-        from services.focus_session_service import FocusSessionService
-        focus = FocusSessionService().get_focus(thread_id)
-        return focus is not None
-    except Exception as e:
-        logger.debug(f"[INTROSPECT] focus active check failed: {e}")
-        return False
+        from services.world_state_service import WorldStateService
+        return WorldStateService().get_world_state(topic)
+    except Exception:
+        return "(unavailable)"
 
 
 def _get_communication_style() -> dict:
-    """Get detected communication style dimensions."""
     try:
         from services.user_trait_service import UserTraitService
         from services.database_service import get_shared_db_service
-
-        db_service = get_shared_db_service()
-        service = UserTraitService(db_service)
-        return service.get_communication_style()
-    except Exception as e:
-        logger.debug(f"[INTROSPECT] communication style failed: {e}")
+        return UserTraitService(get_shared_db_service()).get_communication_style()
+    except Exception:
         return {}
 
 
 def _get_recent_decision_explanations(limit: int = 3) -> list:
-    """
-    Get full decision context for recent routing decisions.
-
-    Expands _get_recent_modes() to include scores, key signals, confidence,
-    and tiebreaker info — all the data needed for honest "why" explanations.
-    The LLM translates this into plain language; raw numbers are never shown
-    unless the user explicitly requests technical detail.
-    """
+    """Full decision context for recent routing decisions."""
     try:
         from services.routing_decision_service import RoutingDecisionService
         from services.database_service import get_shared_db_service
-
-        db_service = get_shared_db_service()
-        service = RoutingDecisionService(db_service)
+        service = RoutingDecisionService(get_shared_db_service())
         decisions = service.get_recent_decisions(hours=1, limit=limit)
 
         explanations = []
         for d in decisions:
             scores = d.get('scores') or {}
             signals = d.get('signal_snapshot') or {}
-
-            # Extract the most human-meaningful signals only
             key_signals = {}
             if signals.get('context_warmth') is not None:
                 key_signals['context_warmth'] = round(signals['context_warmth'], 2)
@@ -321,30 +145,18 @@ def _get_recent_decision_explanations(limit: int = 3) -> list:
                 'key_signals': key_signals,
                 'margin': round(d.get('margin', 0), 3),
             })
-
         return explanations
-
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] decision explanations failed: {e}")
+    except Exception:
         return []
 
 
 def _get_recent_autonomous_actions(limit: int = 5) -> list:
-    """
-    Get recent autonomous actions from interaction_log.
-
-    Only surfaces user-relevant actions (proactive_sent, cron_tool_executed,
-    plan_proposed). Telemetry and debug events are excluded to avoid noise.
-    """
-    # Only events the user would care about knowing happened
+    """Recent autonomous actions from interaction_log."""
     RELEVANT_TYPES = ('proactive_sent', 'cron_tool_executed', 'plan_proposed')
-
     try:
         from services.database_service import get_shared_db_service
-
         db_service = get_shared_db_service()
         placeholders = ','.join(['?'] * len(RELEVANT_TYPES))
-
         with db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -356,96 +168,129 @@ def _get_recent_autonomous_actions(limit: int = 5) -> list:
             )
             rows = cursor.fetchall()
             cursor.close()
-
-        actions = []
-        for row in rows:
-            event_type, payload, created_at = row
-            payload_dict = payload if isinstance(payload, dict) else {}
-            actions.append({
-                'event_type': event_type,
-                'payload_summary': str(payload_dict)[:200],
-                'created_at': str(created_at),
-            })
-
-        return actions
-
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] autonomous actions failed: {e}")
+        return [
+            {'event_type': r[0], 'payload_summary': str(r[1] if isinstance(r[1], dict) else {})[:200], 'created_at': str(r[2])}
+            for r in rows
+        ]
+    except Exception:
         return []
 
 
-def _get_recall_failure_rate(topic: str) -> float:
-    """
-    Get per-topic recall failure rate from procedural memory.
-
-    When high, signals ACT that internal retrieval is unreliable
-    for this topic and delegation may be appropriate.
-    """
+def _get_skill_stats(topic: str) -> dict:
+    """Full skill stats (weight, successes, failures, reliability) for all actions."""
     try:
         from services.procedural_memory_service import ProceduralMemoryService
         from services.database_service import get_shared_db_service
+        service = ProceduralMemoryService(get_shared_db_service())
+        stats = {}
+        for action_name in service.get_all_policy_weights():
+            action_stats = service.get_action_stats(action_name)
+            if action_stats:
+                attempts = action_stats.get('total_attempts', 0)
+                successes = action_stats.get('total_successes', 0)
+                avg_reward = action_stats.get('avg_reward', 0) or 0
+                smoothed = (successes + 1) / (attempts + 2) if attempts > 0 else 0.5
+                stats[action_name] = {
+                    "weight": round(action_stats.get('weight', 1.0), 3),
+                    "successes": successes,
+                    "failures": attempts - successes,
+                    "avg_reward": round(avg_reward, 2),
+                    "reliability": round(smoothed, 3),
+                }
+        return stats
+    except Exception:
+        return {}
 
-        db_service = get_shared_db_service()
-        service = ProceduralMemoryService(db_service)
 
-        # Get per-topic context stats from procedural memory's context_stats column
-        action_stats = service.get_action_stats("recall")
-        context_stats = (action_stats or {}).get("context_stats") or {}
-        if context_stats and topic in context_stats:
-            topic_stats = context_stats[topic]
-            total = topic_stats.get("total", 0)
-            failures = topic_stats.get("failures", 0)
-            if total > 0:
-                return round(failures / total, 3)
+def _get_tool_details() -> dict:
+    """Full manifest details for all loaded tools."""
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        registry = ToolRegistryService()
+        details = {}
+        for tool_name in registry.get_tool_names():
+            manifest = registry.get_tool_full_description(tool_name)
+            if manifest:
+                details[tool_name] = {
+                    "description": manifest.get("description", ""),
+                    "tips": manifest.get("tips", []),
+                    "examples": manifest.get("examples", []),
+                    "constraints": manifest.get("constraints", {}),
+                }
+        return details
+    except Exception:
+        return {}
 
-        return 0.0
 
-    except Exception as e:
-        logger.warning(f"[INTROSPECT] recall failure rate failed: {e}")
-        return 0.0
+def _get_filtered_tool_details(tool_names: list) -> dict:
+    """Get manifest details for specific tools only (triage-selected)."""
+    all_details = _get_tool_details()
+    return {k: v for k, v in all_details.items() if k in tool_names}
 
 
-def _format_state(state: Dict, topic: str) -> str:
-    """Format internal state as structured report."""
+# ── Formatting ──────────────────────────────────────────────────
+
+
+def _format_snapshot(snapshot: dict, extra: dict, topic: str) -> str:
+    """Format self-model snapshot + topic extras as structured report."""
+    ep = snapshot.get("epistemic", {})
+    op = snapshot.get("operational", {})
+    cap = snapshot.get("capability", {})
+    noteworthy = snapshot.get("noteworthy", [])
+
     lines = [f"[INTROSPECT] Internal state for topic '{topic}':"]
-    lines.append(f"  context_warmth: {state['context_warmth']}")
-    lines.append(f"  gist_count: {state['gist_count']}")
-    lines.append(f"  fact_count: {state['fact_count']}")
-    lines.append(f"  working_memory_depth: {state['working_memory_depth']}")
-    lines.append(f"  topic_age: {state['topic_age']}")
-    lines.append(f"  partial_match_signal: {state['partial_match_signal']}")
-    lines.append(f"  recall_failure_rate: {state['recall_failure_rate']}")
 
-    # Cross-feature signals
-    lines.append(f"  focus_active: {state.get('focus_active', False)}")
-    comm_style = state.get('communication_style', {})
+    # Epistemic
+    lines.append(f"  context_warmth: {ep.get('context_warmth', 0)}")
+    lines.append(f"  gist_count: {ep.get('gist_count', 0)}")
+    lines.append(f"  fact_count: {ep.get('fact_count', 0)}")
+    lines.append(f"  working_memory_depth: {ep.get('working_memory_depth', 0)}")
+    lines.append(f"  topic_age: {ep.get('topic_age', 'unknown')}")
+    lines.append(f"  partial_match_signal: {ep.get('partial_match_signal', 0)}")
+    lines.append(f"  recall_failure_rate: {ep.get('recall_failure_rate', 0)}")
+    lines.append(f"  focus_active: {ep.get('focus_active', False)}")
+
+    # Communication style
+    comm_style = extra.get('communication_style', {})
     if comm_style:
         style_str = ", ".join(f"{k}={v}" for k, v in comm_style.items())
         lines.append(f"  communication_style: {{{style_str}}}")
     else:
         lines.append("  communication_style: (not detected yet)")
 
-    if state["recent_modes"]:
-        lines.append(f"  recent_modes: {state['recent_modes']}")
-    else:
-        lines.append("  recent_modes: (none)")
+    # Recent modes
+    modes = ep.get('recent_modes', [])
+    lines.append(f"  recent_modes: {modes}" if modes else "  recent_modes: (none)")
 
-    if state["skill_stats"]:
+    # Skill stats (full detail from extra, not condensed)
+    skill_stats = extra.get('skill_stats', {})
+    if skill_stats:
         lines.append("  skill_stats:")
-        for skill, stats in state["skill_stats"].items():
+        for skill, stats in skill_stats.items():
             lines.append(f"    {skill}: {stats}")
     else:
         lines.append("  skill_stats: (no data yet)")
 
-    # World state (may be multiline)
-    ws = state.get("world_state", "")
-    if ws and ws.strip():
-        lines.append(f"  world_state: {ws.strip()}")
-    else:
-        lines.append("  world_state: (empty)")
+    # World state
+    ws = extra.get('world_state', '')
+    lines.append(f"  world_state: {ws.strip()}" if ws and ws.strip() else "  world_state: (empty)")
 
-    # Decision explanations (for "why" questions)
-    decision_exps = state.get("decision_explanations", [])
+    # Operational awareness (NEW — from self-model)
+    if noteworthy:
+        lines.append("  noteworthy_state:")
+        for item in noteworthy:
+            lines.append(f"    - [{item['severity']:.1f}] {item['signal']}")
+    else:
+        lines.append("  noteworthy_state: (all systems nominal)")
+
+    # Capability summary
+    lines.append(f"  tool_count: {cap.get('tool_count', 0)}")
+    cats = cap.get('capability_categories', {})
+    if cats:
+        lines.append("  capabilities: " + "; ".join(f"{c}: {', '.join(t)}" for c, t in cats.items()))
+
+    # Decision explanations
+    decision_exps = extra.get('decision_explanations', [])
     if decision_exps:
         lines.append("  recent_decision_explanations:")
         for i, exp in enumerate(decision_exps):
@@ -459,8 +304,8 @@ def _format_state(state: Dict, topic: str) -> str:
     else:
         lines.append("  recent_decision_explanations: (none in last hour)")
 
-    # Recent autonomous actions
-    auto_actions = state.get("recent_autonomous_actions", [])
+    # Autonomous actions
+    auto_actions = extra.get('recent_autonomous_actions', [])
     if auto_actions:
         lines.append("  recent_autonomous_actions:")
         for a in auto_actions:
@@ -468,8 +313,8 @@ def _format_state(state: Dict, topic: str) -> str:
     else:
         lines.append("  recent_autonomous_actions: (none recently)")
 
-    # Triage-filtered tool details (tips, constraints, examples)
-    tool_details = state.get("tool_details")
+    # Tool details (triage-selected)
+    tool_details = extra.get('tool_details')
     if tool_details:
         lines.append("  tool_details (triage-selected):")
         for tname, tinfo in tool_details.items():
@@ -482,4 +327,62 @@ def _format_state(state: Dict, topic: str) -> str:
                 examples_short = [str(e)[:120] for e in tinfo['examples'][:3]]
                 lines.append(f"      examples: {examples_short}")
 
+    return "\n".join(lines)
+
+
+# ── Legacy fallback ─────────────────────────────────────────────
+
+
+def _legacy_handle_introspect(topic: str, params: dict) -> str:
+    """Standalone introspect without self-model (fallback)."""
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection()
+
+    state = {}
+    try:
+        from services.gist_storage_service import GistStorageService
+        state["gist_count"] = len(GistStorageService().get_latest_gists(topic))
+    except Exception:
+        state["gist_count"] = 0
+
+    try:
+        from services.fact_store_service import FactStoreService
+        state["fact_count"] = len(FactStoreService().get_all_facts(topic))
+    except Exception:
+        state["fact_count"] = 0
+
+    state["working_memory_depth"] = store.llen(f"working_memory:{topic}")
+
+    gist_score = min(1.0, state["gist_count"] / 5.0)
+    fact_score = min(1.0, state["fact_count"] / 10.0)
+    wm_score = min(1.0, state["working_memory_depth"] / 4.0)
+    state["context_warmth"] = round(
+        (gist_score * 0.4) + (fact_score * 0.3) + (wm_score * 0.3), 3
+    )
+    state["partial_match_signal"] = _get_fok_signal(topic)
+    state["recall_failure_rate"] = _get_recall_failure_rate(topic)
+    state["world_state"] = _get_world_state(topic)
+    state["topic_age"] = "unknown"
+    state["recent_modes"] = []
+    state["skill_stats"] = _get_skill_stats(topic)
+    state["focus_active"] = False
+    state["communication_style"] = _get_communication_style()
+    state["decision_explanations"] = _get_recent_decision_explanations()
+    state["recent_autonomous_actions"] = _get_recent_autonomous_actions()
+
+    triage_tools = params.get('triage_tools', [])
+    if triage_tools:
+        state["tool_details"] = _get_filtered_tool_details(triage_tools)
+
+    return _legacy_format(state, topic)
+
+
+def _legacy_format(state: Dict, topic: str) -> str:
+    """Format state dict in legacy format."""
+    lines = [f"[INTROSPECT] Internal state for topic '{topic}':"]
+    for key in ['context_warmth', 'gist_count', 'fact_count',
+                'working_memory_depth', 'topic_age', 'partial_match_signal',
+                'recall_failure_rate']:
+        lines.append(f"  {key}: {state.get(key, 'N/A')}")
+    lines.append(f"  focus_active: {state.get('focus_active', False)}")
     return "\n".join(lines)

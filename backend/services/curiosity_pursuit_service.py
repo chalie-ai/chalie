@@ -65,6 +65,10 @@ class CuriosityPursuitService:
         from services.curiosity_thread_service import CuriosityThreadService
 
         thread_service = CuriosityThreadService()
+
+        # Seed curiosity threads from recurring capability gaps
+        self._seed_from_capability_gaps(thread_service)
+
         threads = thread_service.get_threads_for_exploration(limit=1)
 
         if not threads:
@@ -112,6 +116,39 @@ class CuriosityPursuitService:
         else:
             logger.info(f"{LOG_PREFIX} No learning produced for thread {thread_id}")
             return None
+
+    def _seed_from_capability_gaps(self, thread_service) -> None:
+        """Seed behavioral curiosity threads from recurring capability gaps."""
+        try:
+            from services.self_model_service import SelfModelService
+            sm = SelfModelService()
+            gaps = sm.get_frequent_gaps(min_occurrences=3, limit=3)
+
+            for gap in gaps:
+                # Skip gaps already linked to a curiosity thread
+                if gap.get('seeded_curiosity_thread_id'):
+                    continue
+
+                title = f"Capability gap: {gap['request_summary'][:80]}"
+                thread_id = thread_service.seed_thread(
+                    title=title,
+                    seed_topic=gap['request_summary'][:120],
+                    rationale=(
+                        f"Users have requested this {gap['occurrences']} times "
+                        f"but I lack the capability. Exploring alternatives."
+                    ),
+                    thread_type='behavioral',
+                    source='capability_gap',
+                )
+                if thread_id:
+                    # Link the gap to the curiosity thread
+                    sm.link_gap_to_curiosity(gap['id'], thread_id)
+                    logger.info(
+                        f"{LOG_PREFIX} Seeded curiosity thread from capability gap: "
+                        f"'{gap['request_summary'][:60]}' → {thread_id}"
+                    )
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Capability gap seeding failed: {e}")
 
     def _build_self_prompt(self, thread: Dict) -> str:
         """Generate a self-prompt based on thread type."""
@@ -169,6 +206,17 @@ class CuriosityPursuitService:
                 selected_skills = ['recall', 'memorize', 'introspect', 'associate']
             else:
                 selected_skills = ['recall', 'introspect', 'associate']
+
+            # Include ambient-capable external tools for richer exploration
+            try:
+                from services.tool_registry_service import ToolRegistryService
+                registry = ToolRegistryService()
+                for tool in registry.get_ambient_tools():
+                    tool_name = tool['name']
+                    if tool_name not in selected_skills:
+                        selected_skills.append(tool_name)
+            except Exception:
+                pass  # Graceful degradation — pursue with innate skills only
 
             # Run ACT loop iterations
             for _ in range(act_loop.max_iterations):
