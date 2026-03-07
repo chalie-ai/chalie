@@ -144,6 +144,7 @@ class CortexIterationService:
                 for iteration in iterations:
                     cursor.execute("""
                         INSERT INTO cortex_iterations (
+                            id,
                             loop_id, topic, exchange_id, session_id,
                             iteration_number, started_at, completed_at, execution_time_ms,
                             chosen_mode, chosen_confidence, alternative_paths,
@@ -154,12 +155,14 @@ class CortexIterationService:
                             actions_executed, action_count, action_success_count,
                             frontal_cortex_response, config_snapshot
                         ) VALUES (
+                            ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?
                         )
                     """, (
+                        str(uuid.uuid4()),
                         loop_id,
                         topic,
                         exchange_id,
