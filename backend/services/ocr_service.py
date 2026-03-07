@@ -120,37 +120,19 @@ def _ocr_with_vision_llm(images: list) -> str:
         return ''
 
 
+_VISION_PLATFORMS = {'gemini', 'anthropic', 'openai'}
+
+
 def _get_vision_provider() -> Optional[dict]:
     """
     Find the vision provider for OCR via the job-provider assignment system.
 
-    Checks 'document-ocr' job assignment first, falls back to first vision-capable provider.
+    Delegates to ProviderCacheService.resolve_for_job so the resolution order
+    (job-specific assignment → first available vision provider) is handled centrally.
     """
     try:
-        from services.provider_db_service import ProviderDbService
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        provider_svc = ProviderDbService(db)
-
-        # Check job-provider assignment for 'document-ocr'
-        assignment = provider_svc.get_job_assignment('document-ocr')
-        ocr_provider_id = assignment['provider_id'] if assignment else None
-
-        providers = provider_svc.get_all_providers()
-        vision_platforms = {'gemini', 'anthropic', 'openai'}
-
-        if ocr_provider_id:
-            for p in providers:
-                if p.get('id') == ocr_provider_id and p.get('platform') in vision_platforms:
-                    return p
-
-        # Fallback: first vision-capable provider
-        for p in providers:
-            if p.get('platform') in vision_platforms:
-                return p
-
-        return None
+        from services.provider_cache_service import ProviderCacheService
+        return ProviderCacheService.resolve_for_job('document-ocr', platforms=_VISION_PLATFORMS)
     except Exception as e:
         logger.debug(f'[OCR] Failed to resolve vision provider: {e}')
         return None
@@ -185,7 +167,7 @@ def _ocr_gemini(config: dict, images: list) -> str:
     from services.llm_service import _resolve_api_key
     api_key = _resolve_api_key(config)
     client = genai.Client(api_key=api_key, http_options={"timeout": _OCR_TIMEOUT * 1000})
-    model = config.get('model', 'gemini-2.5-flash')
+    model = config.get('model')
 
     pages = []
     for page_num, img in images:
@@ -211,7 +193,7 @@ def _ocr_anthropic(config: dict, images: list) -> str:
     from services.llm_service import _resolve_api_key
     api_key = _resolve_api_key(config)
     client = anthropic.Anthropic(api_key=api_key)
-    model = config.get('model', 'claude-haiku-4-5-20251001')
+    model = config.get('model')
 
     pages = []
     for page_num, img in images:
@@ -242,7 +224,7 @@ def _ocr_openai(config: dict, images: list) -> str:
     from services.llm_service import _resolve_api_key
     api_key = _resolve_api_key(config)
     client = openai.OpenAI(api_key=api_key)
-    model = config.get('model', 'gpt-4o-mini')
+    model = config.get('model')
 
     pages = []
     for page_num, img in images:
