@@ -68,63 +68,62 @@ This glossary defines key terms, concepts, and architecture-specific vocabulary 
 
 **MemoryStore** — In-memory, thread-safe key-value store backed by SQLite persistence. Manages queue topics (`prompt-queue`, `memory-chunker-queue`, etc.), conversation threads with 24h TTL, and runtime state without global locks. Core data structure for the single-process architecture.
 
-**Mode Router Service** — The core routing service implementing deterministic mode selection via mathematical scoring over observable signals (context warmth, topic confidence, skill availability). Scores all five modes (ACT, RESPOND, CLARIFY, ACKNOWLEDGE, IGNORE) and selects highest; uses LLM tiebreaker only when top-2 scores are within margin.
+**Mode Router Service** — The core routing service implementing deterministic mode selection based on weighted signals from conversation context, memory depth, user engagement patterns, and system load. Returns one of five modes: RESPOND, CLARIFY, ACKNOWLEDGE, ACT, or IGNORE.
 
-**Moments Service** — Pinned message bookmark system allowing users to permanently save Chalie responses with LLM-enriched context summaries. Stores in SQLite `moments` table with semantic search via sqlite-vec, salience boosting for related episodes, and inline HTML card rendering in conversation spine. Background enrichment worker runs on 5-minute poll cycle.
+---
+
+## N
+
+**NEWMA (Neural Exponential Weighted Moving Average)** — Adaptive smoothing algorithm that dynamically adjusts its decay factor based on signal variance. Used in topic boundary detection to balance responsiveness to new topics against stability during established conversations.
 
 ---
 
 ## P
 
-**Procedural Memory Service** — Learned action reliability tracking system that records tool invocation outcomes (success/failure, execution time) to build confidence profiles. Surfaces top-3 reliable tools for similar intents after ≥8 attempts with labeled confidence scores in context assembly.
+**Procedural Memory** — Learned patterns and action sequences stored as concept graphs with confidence scores. Tracks tool reliability, user preferences, and interaction patterns across ≥8 attempts before surfacing as hints. Decays slowly unless reinforced by successful outcomes.
 
-**Prompt Queue** — Thread-based job queue (`services/prompt_queue.py`) holding incoming prompt jobs consumed by the Digest Worker. Implements producer-consumer pattern within single-process architecture, avoiding inter-process communication overhead while maintaining thread safety.
+**Prompt Queue** — Thread-safe FIFO queue that buffers incoming chat requests for sequential processing. Ensures single-threaded prompt handling to prevent race conditions in memory updates and context assembly.
 
 ---
 
 ## R
 
-**Radiant Design System** — The vanilla JavaScript frontend UI framework powering Chalie's web interface. Provides consistent styling, components, and interaction patterns across chat interface (`/interface/`), cognitive dashboard (`/brain/`), and onboarding wizard (`/on-boarding/`). No external CSS frameworks or build tools required.
+**Relationship Phase Tracker** — Tracks the stage of user-assistant relationship (stranger → acquaintance → friend → confidant) based on interaction frequency, depth, and reciprocity metrics. Gates autonomous action eligibility and adjusts response warmth accordingly.
 
-**Routing Stability Regulator Service** — Single authority for mode router weight mutation running on 24-hour cycle. Reads pressure signals from multiple monitors (routing reflection, triage calibration) but is the only entity that mutates weights directly. Applies bounded corrections (max ±0.02/day per parameter) with 48-hour cooldown to prevent oscillation.
-
-**Routing Reflection Service** — Idle-time peer review system using a strong LLM to analyze routing decision audit trails from SQLite. Performs dimensional analysis on past decisions and feeds pressure signals into the Routing Stability Regulator for gradual weight adjustments.
+**Relevance Pre-Parser** — Fast (~10ms) context filtering service that scores memory items against current query before full retrieval. Uses keyword matching, recency weighting, and topic alignment to reduce token usage by 40–60%.
 
 ---
 
 ## S
 
-**Salience Factors** — LLM-computed scores (0–3 scale) determining episode importance: novelty, emotional intensity, commitment level, and unresolved status. Combined via weighted formula `Base = 0.4·novelty + 0.4·emotional + 0.2·commitment`, then multiplied by 1.25 if unresolved loops exist. Retrieved episodes receive additional 0.2 boost (reconsolidation).
+**Semantic Memory** — Knowledge graph of concepts and their relationships stored in SQLite with vector embeddings. Supports spreading activation queries where retrieving one concept activates related nodes with decayed priority scores.
 
-**Semantic Consolidation Service** — Background process converting episodic memories into semantic concepts via spreading activation and pattern extraction. Runs on configurable cycle to build the concept graph used for long-term knowledge retrieval and associative reasoning.
+**Soul Layer** — Optional personality configuration file (`soul.md`) that injects character traits, tone preferences, and behavioral quirks into LLM prompts. Applied only to terminal response modes (RESPOND, CLARIFY), not ACT mode or innate skills.
 
-**Spreading Activation** — Semantic graph traversal algorithm starting from seed concepts and following weighted edges to related nodes. Used by Cognitive Drift Engine for spontaneous thought generation, Associate Skill for semantic queries, and Context Assembly Service for enriched retrieval beyond direct vector similarity.
+**Spreading Activation** — Retrieval pattern where activating one memory node automatically surfaces related nodes with decreasing priority scores. Mimics human associative recall by following concept graph edges from the query anchor point.
 
 ---
 
 ## T
 
-**Thread Conversation Service** — MemoryStore-backed conversation thread management with 24h TTL and confidence tracking via bounded reinforcement formula `new = current + (new_confidence - current) * 0.5`. Handles topic switching, exchange storage, and metadata persistence to SQLite for durability beyond in-memory expiry.
+**Transient Surprise Signal** — Anomaly detection metric that spikes when conversation content deviates significantly from recent patterns. Feeds into Adaptive Boundary Detector to trigger topic boundary declarations and memory consolidation events.
 
-**Trusted Tools** — Python subprocess tools that run without Docker isolation, requiring no container runtime. Must be explicitly marked `"trust": "trusted"` in `embodiment_library.json` catalog (authors cannot self-declare). Include `runner.py` entry point instead of `Dockerfile`. Default tools are trusted for instant startup.
+**Tool Sandbox** — Isolated execution environment for user-defined tools using Docker containers with strict resource limits (CPU, memory, network). All tool output is validated against schema before being injected back into conversation context.
 
 ---
 
-## U
+## W
 
-**User Traits Service** — Per-user characteristic management across six categories: core identity, relationship dynamics, physical attributes, preferences, communication style, micro-preferences, and behavioral patterns. Supports category-specific decay rates to model trait stability over time. Behavioral patterns discovered by Temporal Pattern Service from interaction log mining.
+**Working Memory** — Short-term context buffer holding the last 4 turns of conversation plus current topic metadata. Has 24-hour TTL and auto-evicts when conversation ends or user explicitly clears context via `/clear` command.
 
 ---
 
 ## Related Documentation
 
-- **[01-QUICK-START.md](01-QUICK-START.md)** — Installation and basic usage instructions
-- **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — System architecture reference for understanding data flow and components
-- **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed pipeline explanation from prompt to response
-- **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Mode routing, decision flow, and innate skills deep dive
-- **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Database schemas for episodes, threads, lists, and providers
-- **[09-TOOLS.md](09-TOOLS.md)** — Tools system documentation including sandbox requirements and contracts
+- **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Mode router implementation details
+- **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Memory layer data structures
+- **[19-TROUBLESHOOTING.md](19-TROUBLESHOOTING.md)** — Common problems and solutions
 
 ---
 
-*Last updated: 2026-03-07 | Part of Chalie Documentation SEO Overhaul Phase 3*
+*Last Updated: 2026-03-07 | Part of Chalie Documentation Suite*
