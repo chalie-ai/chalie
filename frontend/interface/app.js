@@ -260,6 +260,37 @@ class ChalieApp {
       this._momentSearch.open();
     });
 
+    // Action button click (deterministic skill invocation, bypasses LLM)
+    document.addEventListener('chalie:action', (e) => {
+      const { payload } = e.detail;
+      if (!payload || this._isSending) return;
+
+      this._isSending = true;
+      const pendingForm = this.renderer.createPendingForm();
+
+      this.ws.sendAction(payload, {
+        onMessage: (data) => {
+          const meta = {
+            mode: data.mode || 'ACT',
+            confidence: data.confidence || 0.95,
+            actions: data.actions || null,
+          };
+          if (pendingForm.isConnected) {
+            this.renderer.resolvePendingForm(pendingForm, data.text, meta);
+          } else {
+            this.renderer.appendChalieForm(data.text, meta);
+          }
+        },
+        onError: (data) => {
+          this.renderer.resolvePendingFormError(pendingForm, data.message);
+        },
+        onDone: () => {
+          this._isSending = false;
+          this.presence.setState('resting');
+        },
+      });
+    });
+
     // Pin moment event (from remember button on Chalie messages)
     let pinDebounce = 0;
     document.addEventListener('chalie:pin-moment', async (e) => {
@@ -775,6 +806,7 @@ class ChalieApp {
           exchange_id: data.exchange_id,
           mode: data.mode || '',
           confidence: data.confidence || 0,
+          actions: data.actions || null,
         };
         this.presence.setState('responding');
       },

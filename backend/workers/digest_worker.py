@@ -541,6 +541,12 @@ def _generate_with_act_orchestrator(
         for r in result.act_history
     ] if result.act_history else None
 
+    # Extract reply_actions from the last successful skill result (for UI buttons)
+    for entry in reversed(result.act_history):
+        if entry.get('status') == 'success' and entry.get('reply_actions'):
+            terminal_response['reply_actions'] = entry['reply_actions']
+            break
+
     return terminal_response
 
 
@@ -669,6 +675,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
                 'metadata': metadata,
                 'actions': response_data.get('actions', []),
                 'clarification_question': response_data.get('response', '') if response_data.get('mode') == 'CLARIFY' else None,
+                'reply_actions': response_data.get('reply_actions'),
             }
 
             mode = response_data.get('mode', 'RESPOND')

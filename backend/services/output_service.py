@@ -31,6 +31,7 @@ class OutputService:
         confidence: float,
         generation_time: float,
         original_metadata: dict = None,
+        reply_actions: list = None,
     ) -> str:
         """
         Enqueue a TEXT output for delivery via SSE to the web interface.
@@ -42,6 +43,7 @@ class OutputService:
             confidence: Confidence score of the response
             generation_time: Time taken to generate the response
             original_metadata: Optional original metadata from the request (uuid, user_id, etc.)
+            reply_actions: Optional action buttons for the frontend (only delivered on sync chat, never drift)
 
         Returns:
             str: UUID of the enqueued output
@@ -54,6 +56,8 @@ class OutputService:
             "generation_time": generation_time,
             "metadata": original_metadata or {}
         }
+        if reply_actions:
+            metadata_dict["reply_actions"] = reply_actions
 
         output = {
             "id": output_id,

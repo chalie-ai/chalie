@@ -3,9 +3,10 @@ WebSocket endpoint — single bidirectional channel replacing both SSE streams.
 
 Protocol:
   → Client sends:  {"type": "chat", "text": "...", "source": "text|voice"}
+  → Client sends:  {"type": "action", "payload": {"skill": "...", ...}}
   → Client sends:  {"type": "resume", "last_seq": N}
   ← Server sends:  {"type": "status", "stage": "...", "seq": N}
-  ← Server sends:  {"type": "message", "text": "...", ..., "seq": N}
+  ← Server sends:  {"type": "message", "text": "...", "actions?": [...], ..., "seq": N}
   ← Server sends:  {"type": "card", "html": "...", ..., "seq": N}
   ← Server sends:  {"type": "done", "duration_ms": N, "seq": N}
   ← Server sends:  {"type": "drift|task|reminder|escalation|notification", ..., "seq": N}
@@ -160,6 +161,8 @@ def register_websocket(sock):
 
                 if msg_type == 'chat':
                     _handle_chat(ws, store, msg)
+                elif msg_type == 'action':
+                    _handle_action(ws, store, msg)
                 elif msg_type == 'resume':
                     _handle_resume(ws, msg)
                 elif msg_type == 'pong':
@@ -178,6 +181,67 @@ def _handle_resume(ws, msg):
     for event in events:
         _send_json(ws, event)
     logger.debug(f"[WS] Resume: replayed {len(events)} events from seq {last_seq}")
+
+
+def _handle_action(ws, store, msg):
+    """Handle a deterministic action button click — bypasses mode router entirely."""
+    payload = msg.get('payload', {})
+    skill = payload.get('skill', '')
+    if not skill:
+        _send_json(ws, {"type": "error", "message": "Missing 'skill' in action payload"})
+        return
+
+    seq = _next_seq()
+    _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
+
+    try:
+        from services.innate_skills import get_skill_handler
+        handler = get_skill_handler(skill)
+        if not handler:
+            seq = _next_seq()
+            _send_json(ws, {"type": "error", "message": f"Unknown skill: {skill}", "recoverable": True, "seq": seq})
+            seq = _next_seq()
+            _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
+            return
+
+        import time
+        start = time.time()
+        result = handler('action_button', payload)
+
+        # Handle structured results (text + reply_actions)
+        reply_actions = None
+        if isinstance(result, dict) and 'text' in result:
+            reply_actions = result.get('reply_actions')
+            result = result['text']
+
+        elapsed_ms = int((time.time() - start) * 1000)
+
+        seq = _next_seq()
+        message_evt = {
+            "type": "message",
+            "text": result or "Done.",
+            "topic": "",
+            "mode": "ACT",
+            "confidence": 0.95,
+            "exchange_id": "",
+            "seq": seq,
+        }
+        if reply_actions:
+            message_evt["actions"] = reply_actions
+        _buffer_event(message_evt)
+        _send_json(ws, message_evt)
+
+        seq = _next_seq()
+        done_evt = {"type": "done", "duration_ms": elapsed_ms, "seq": seq}
+        _buffer_event(done_evt)
+        _send_json(ws, done_evt)
+
+    except Exception as e:
+        logger.error(f"[WS] Action handler error: {e}", exc_info=True)
+        seq = _next_seq()
+        _send_json(ws, {"type": "error", "message": str(e), "recoverable": True, "seq": seq})
+        seq = _next_seq()
+        _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
 
 
 def _handle_chat(ws, store, msg):
@@ -279,6 +343,9 @@ def _handle_chat(ws, store, msg):
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
+                # Include reply actions (UI buttons) — sync chat only, never drift
+                if metadata.get("reply_actions"):
+                    message_evt["actions"] = metadata["reply_actions"]
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
@@ -323,6 +390,8 @@ def _handle_chat(ws, store, msg):
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
+                if metadata.get("reply_actions"):
+                    message_evt["actions"] = metadata["reply_actions"]
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
             elif bg_error:
