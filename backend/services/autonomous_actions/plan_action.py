@@ -123,7 +123,7 @@ class PlanAction(AutonomousAction):
         return any(verb in content_lower for verb in self.actionable_verbs)
 
     def _duplicate_gate(self, thought: ThoughtContext) -> bool:
-        """Gate 5: No similar active persistent task."""
+        """Gate 5: No similar active persistent task (Jaccard + topic match)."""
         try:
             from services.database_service import get_shared_db_service
             from services.persistent_task_service import PersistentTaskService
@@ -131,8 +131,28 @@ class PlanAction(AutonomousAction):
             db = get_shared_db_service()
             service = PersistentTaskService(db)
             account_id = self._get_account_id()
+
+            # Standard Jaccard check on goal text
             duplicate = service.find_duplicate(account_id, thought.thought_content)
-            return duplicate is None
+            if duplicate:
+                return False
+
+            # Secondary check: same seed topic in scope of any active task.
+            # Jaccard misses paraphrased goals (e.g., "research AGI papers"
+            # vs "deep dive into AGI development" score only 0.19).
+            topic = thought.seed_topic
+            if topic and topic != 'general':
+                active = service.get_active_tasks(account_id)
+                for task in active:
+                    scope = task.get('scope', '') or ''
+                    if topic.lower() in scope.lower():
+                        logger.info(
+                            f"{LOG_PREFIX} Topic-duplicate: '{topic}' matches "
+                            f"task {task['id']} scope"
+                        )
+                        return False
+
+            return True
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Duplicate gate error: {e}")
             return True  # Permissive on error
@@ -236,12 +256,11 @@ class PlanAction(AutonomousAction):
 
             cost_class = plan.get('cost_class', 'expensive')
 
-            # Auto-start cheap plans, ask for confirmation on expensive ones
-            if cost_class == 'cheap':
-                task_service.transition(task_id, 'accepted')
-                self._surface_auto_start(thought, plan)
-            else:
-                self._surface_confirmation(thought, plan)
+            # Auto-accept all drift tasks — the 7 gates are sufficient protection.
+            # The old cheap/expensive distinction left most tasks stranded in
+            # 'proposed' because the WebSocket confirmation was unreliable.
+            task_service.transition(task_id, 'accepted')
+            self._surface_auto_start(thought, plan)
 
             # Set cooldown
             self.store.setex(COOLDOWN_KEY, self.cooldown_seconds, '1')
