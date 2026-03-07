@@ -51,7 +51,6 @@ class ToolPerformanceService:
         success: bool,
         latency_ms: float,
         cost: float = 0.0,
-        user_id: str = 'default',
     ) -> None:
         """Called from tool_worker after each tool execution."""
         db = self._get_db()
@@ -69,15 +68,15 @@ class ToolPerformanceService:
             # Update user preferences: usage_count++, success_count if success
             db.execute(
                 """
-                INSERT INTO user_tool_preferences (user_id, tool_name, usage_count, success_count, last_used_at)
-                VALUES (?, ?, 1, ?, datetime('now'))
-                ON CONFLICT (user_id, tool_name) DO UPDATE SET
+                INSERT INTO user_tool_preferences (tool_name, usage_count, success_count, last_used_at)
+                VALUES (?, 1, ?, datetime('now'))
+                ON CONFLICT (tool_name) DO UPDATE SET
                     usage_count = user_tool_preferences.usage_count + 1,
                     success_count = user_tool_preferences.success_count + EXCLUDED.success_count,
                     last_used_at = datetime('now'),
                     updated_at = datetime('now')
                 """,
-                (user_id, tool_name, 1 if success else 0)
+                (tool_name, 1 if success else 0)
             )
 
             # Positive implicit preference update (+0.05 for successful invocation)
@@ -87,9 +86,9 @@ class ToolPerformanceService:
                     UPDATE user_tool_preferences
                     SET implicit_preference = MIN(1.0, implicit_preference + 0.05),
                         updated_at = datetime('now')
-                    WHERE user_id = ? AND tool_name = ?
+                    WHERE tool_name = ?
                     """,
-                    (user_id, tool_name)
+                    (tool_name,)
                 )
 
             logger.debug(
@@ -101,7 +100,7 @@ class ToolPerformanceService:
             if not self._db:
                 db.close_pool()
 
-    def record_user_correction(self, exchange_id: str, tool_name: str, user_id: str = 'default') -> None:
+    def record_user_correction(self, exchange_id: str, tool_name: str) -> None:
         """Called when next message indicates user correction."""
         if not exchange_id:
             return
@@ -121,9 +120,9 @@ class ToolPerformanceService:
                 UPDATE user_tool_preferences
                 SET implicit_preference = MAX(-1.0, implicit_preference - 0.10),
                     updated_at = datetime('now')
-                WHERE user_id = ? AND tool_name = ?
+                WHERE tool_name = ?
                 """,
-                (user_id, tool_name)
+                (tool_name,)
             )
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} record_user_correction failed: {e}")
@@ -206,7 +205,7 @@ class ToolPerformanceService:
             if not self._db:
                 db.close_pool()
 
-    def rank_candidates(self, candidates: List[str], user_id: str = 'default') -> List[dict]:
+    def rank_candidates(self, candidates: List[str]) -> List[dict]:
         """
         Re-rank triage tool candidates by performance + preference.
         Returns list sorted by score descending.
@@ -217,7 +216,7 @@ class ToolPerformanceService:
         ranked = []
         for tool_name in candidates:
             stats = self.get_tool_stats(tool_name)
-            pref = self._get_user_preference(tool_name, user_id)
+            pref = self._get_user_preference(tool_name)
             reliability = self._get_reliability(tool_name)
 
             score = (
@@ -237,7 +236,7 @@ class ToolPerformanceService:
 
         return sorted(ranked, key=lambda x: x['score'], reverse=True)
 
-    def apply_preference_decay(self, user_id: str = 'default') -> None:
+    def apply_preference_decay(self) -> None:
         """
         Apply 30-day preference decay (20% toward neutral).
         Called by the enrichment service or as a scheduled task.
@@ -249,11 +248,10 @@ class ToolPerformanceService:
                 UPDATE user_tool_preferences
                 SET implicit_preference = implicit_preference * ?,
                     updated_at = datetime('now')
-                WHERE user_id = ?
-                AND last_used_at < datetime('now', '-30 days')
+                WHERE last_used_at < datetime('now', '-30 days')
                 AND ABS(implicit_preference) > 0.01
                 """,
-                (PREFERENCE_DECAY_FACTOR, user_id)
+                (PREFERENCE_DECAY_FACTOR,)
             )
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} preference decay failed: {e}")
@@ -261,13 +259,13 @@ class ToolPerformanceService:
             if not self._db:
                 db.close_pool()
 
-    def _get_user_preference(self, tool_name: str, user_id: str) -> float:
+    def _get_user_preference(self, tool_name: str) -> float:
         """Get combined preference score (explicit + implicit) for a tool."""
         db = self._get_db()
         try:
             rows = db.fetch_all(
-                "SELECT explicit_preference, implicit_preference FROM user_tool_preferences WHERE user_id = ? AND tool_name = ?",
-                (user_id, tool_name)
+                "SELECT explicit_preference, implicit_preference FROM user_tool_preferences WHERE tool_name = ?",
+                (tool_name,)
             )
             if rows:
                 return float(rows[0]['explicit_preference'] or 0) + float(rows[0]['implicit_preference'] or 0)

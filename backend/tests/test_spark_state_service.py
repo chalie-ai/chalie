@@ -46,7 +46,7 @@ def spark_service(mock_store):
     with patch('services.spark_state_service.MemoryClientService') as mock_cls:
         mock_cls.create_connection.return_value = mock_store
         from services.spark_state_service import SparkStateService
-        svc = SparkStateService(user_id='test')
+        svc = SparkStateService()
         # Patch trait counting and welcome check to return 0/False by default
         svc._count_user_traits = MagicMock(return_value=0)
         svc._has_established_traits = MagicMock(return_value=False)

@@ -47,8 +47,8 @@ _REJECT_WINDOW = 604800  # 7 days for rejection tracking
 _AUTO_PAUSE_DURATION = 1209600  # 14 days
 
 
-def _key(user_id: str, suffix: str) -> str:
-    return f"{_NS}:{user_id}:{suffix}"
+def _key(suffix: str) -> str:
+    return f"{_NS}:{suffix}"
 
 
 class SuggestAction(AutonomousAction):
@@ -63,7 +63,6 @@ class SuggestAction(AutonomousAction):
 
         config = config or {}
         self.store = MemoryClientService.create_connection()
-        self.user_id = config.get('user_id', 'default')
 
         self.min_trait_confidence = config.get('min_trait_confidence', 0.7)
         self.relevance_threshold = config.get('relevance_threshold', 0.4)
@@ -168,18 +167,18 @@ class SuggestAction(AutonomousAction):
         now = time.time()
 
         # Global daily cooldown
-        last_sent = self.store.get(_key(self.user_id, 'last_suggest_ts'))
+        last_sent = self.store.get(_key('last_suggest_ts'))
         if last_sent and (now - float(last_sent)) < _DAILY_COOLDOWN:
             return False
 
         # Per-topic cooldown
         if topic:
-            topic_key = _key(self.user_id, f'topic_cooldown:{topic}')
+            topic_key = _key(f'topic_cooldown:{topic}')
             if self.store.get(topic_key):
                 return False
 
         # Auto-pause check
-        paused_until = self.store.get(_key(self.user_id, 'paused_until'))
+        paused_until = self.store.get(_key('paused_until'))
         if paused_until and now < float(paused_until):
             return False
 
@@ -189,9 +188,9 @@ class SuggestAction(AutonomousAction):
         """Check engagement score is above threshold."""
         try:
             score = float(
-                self.store.get(f"proactive:{self.user_id}:engagement_score") or 1.0
+                self.store.get(f"proactive:engagement_score") or 1.0
             )
-            paused = self.store.get(f"proactive:{self.user_id}:paused")
+            paused = self.store.get(f"proactive:paused")
             if paused == '1':
                 return False
             return score > 0.5
@@ -271,9 +270,9 @@ class SuggestAction(AutonomousAction):
 
         # Update rate limits
         now = time.time()
-        self.store.set(_key(self.user_id, 'last_suggest_ts'), str(now))
+        self.store.set(_key('last_suggest_ts'), str(now))
         if thought.seed_topic:
-            topic_key = _key(self.user_id, f'topic_cooldown:{thought.seed_topic}')
+            topic_key = _key(f'topic_cooldown:{thought.seed_topic}')
             self.store.setex(topic_key, _TOPIC_COOLDOWN, '1')
 
         # Log
@@ -405,7 +404,7 @@ class SuggestAction(AutonomousAction):
         outcome = user_feedback.get('outcome', 'unknown')
 
         # Track rejections
-        rejections_key = _key(self.user_id, 'rejection_log')
+        rejections_key = _key('rejection_log')
         entry = json.dumps({
             'outcome': outcome,
             'ts': time.time(),
@@ -436,7 +435,7 @@ class SuggestAction(AutonomousAction):
                 if rate > self.reject_pause_threshold:
                     pause_until = now + _AUTO_PAUSE_DURATION
                     self.store.set(
-                        _key(self.user_id, 'paused_until'), str(pause_until)
+                        _key('paused_until'), str(pause_until)
                     )
                     logger.info(
                         f"{LOG_PREFIX} Auto-paused for 14 days "

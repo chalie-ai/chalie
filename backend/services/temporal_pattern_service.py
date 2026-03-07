@@ -169,10 +169,10 @@ class TemporalObservationBuffer:
                     cursor.execute(
                         """
                         INSERT INTO temporal_aggregate
-                            (user_id, observation_type, observed_value, day_of_week,
+                            (observation_type, observed_value, day_of_week,
                              hour_bucket, device_class, count, last_seen)
-                        VALUES ('primary', ?, ?, ?, ?, ?, 1, ?)
-                        ON CONFLICT(user_id, observation_type, observed_value,
+                        VALUES (?, ?, ?, ?, ?, 1, ?)
+                        ON CONFLICT(observation_type, observed_value,
                                     day_of_week, hour_bucket, device_class)
                         DO UPDATE SET count = count + 1, last_seen = ?
                         """,
@@ -208,7 +208,7 @@ class TemporalPatternService:
 
     # ── Public API ──────────────────────────────────────────────────
 
-    def mine_patterns(self, user_id: str = 'primary', lookback_days: int = 30) -> List[Dict]:
+    def mine_patterns(self, lookback_days: int = 30) -> List[Dict]:
         """
         Main entry point. Mines patterns from both interaction_log and
         ambient aggregates, stores as user traits.
@@ -242,7 +242,7 @@ class TemporalPatternService:
         patterns.extend(self._detect_transitions())
 
         # Store all as user traits
-        self._store_patterns_as_traits(patterns, user_id)
+        self._store_patterns_as_traits(patterns)
 
         self._last_mining_duration = _time.monotonic() - start
         return patterns
@@ -353,7 +353,7 @@ class TemporalPatternService:
 
         return transitions
 
-    def get_rhythm_summary(self, user_id: str = 'primary') -> str:
+    def get_rhythm_summary(self) -> str:
         """Human-readable rhythm summary for prompt injection.
 
         Returns max 3 most salient lines, sanitized, total < 200 chars.
@@ -361,7 +361,7 @@ class TemporalPatternService:
         try:
             from services.user_trait_service import UserTraitService
             trait_service = UserTraitService(self.db)
-            all_traits = trait_service.get_all_traits(user_id)
+            all_traits = trait_service.get_all_traits()
             traits = [t for t in all_traits if t.get('category') == 'behavioral_pattern']
 
             if not traits:
@@ -912,7 +912,7 @@ class TemporalPatternService:
 
     # ── Trait storage (existing, unchanged) ─────────────────────────
 
-    def _store_patterns_as_traits(self, patterns: List[Dict], user_id: str):
+    def _store_patterns_as_traits(self, patterns: List[Dict]):
         """Store discovered patterns as user traits.
 
         Uses store_trait() which handles deduplication internally:
@@ -935,7 +935,6 @@ class TemporalPatternService:
                     category='behavioral_pattern',
                     source='inferred',
                     is_literal=True,
-                    user_id=user_id,
                 )
                 if result:
                     stored += 1

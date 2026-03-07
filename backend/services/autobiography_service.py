@@ -33,12 +33,9 @@ class AutobiographyService:
         self.db = db_service
         logger.info("[AUTOBIOGRAPHY] Service initialized")
 
-    def get_current_narrative(self, user_id: str = "primary") -> Optional[Dict[str, Any]]:
+    def get_current_narrative(self) -> Optional[Dict[str, Any]]:
         """
         Fetch the latest version of Chalie's self-narrative.
-
-        Args:
-            user_id: User identifier (default: "primary")
 
         Returns:
             Dict with narrative, version, created_at, or None if not synthesized
@@ -49,11 +46,10 @@ class AutobiographyService:
                     text("""
                     SELECT id, version, narrative, created_at, episodes_since
                     FROM autobiography
-                    WHERE user_id = :user_id
                     ORDER BY version DESC
                     LIMIT 1
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 row = result.fetchone()
 
@@ -71,16 +67,13 @@ class AutobiographyService:
             logger.error(f"[AUTOBIOGRAPHY] Error fetching narrative: {e}")
             return None
 
-    def should_synthesize(self, user_id: str = "primary") -> bool:
+    def should_synthesize(self) -> bool:
         """
         Check if enough new material exists to warrant synthesis.
 
         Returns True if:
         - No autobiography exists and >=5 total episodes exist, OR
         - Autobiography exists and >=3 new episodes since last cursor
-
-        Args:
-            user_id: User identifier (default: "primary")
 
         Returns:
             True if synthesis is warranted
@@ -92,11 +85,10 @@ class AutobiographyService:
                     text("""
                     SELECT version, episode_cursor, episodes_since
                     FROM autobiography
-                    WHERE user_id = :user_id
                     ORDER BY version DESC
                     LIMIT 1
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 current = result.fetchone()
 
@@ -132,14 +124,12 @@ class AutobiographyService:
 
     def gather_synthesis_inputs(
         self,
-        user_id: str = "primary",
         since_cursor: Optional[datetime] = None
     ) -> Dict[str, Any]:
         """
         Gather all inputs for synthesis (episodes, traits, concepts, relationships).
 
         Args:
-            user_id: User identifier
             since_cursor: If set, only include episodes after this timestamp
 
         Returns:
@@ -201,10 +191,10 @@ class AutobiographyService:
                     text("""
                     SELECT trait_key, trait_value, category, confidence, reinforcement_count
                     FROM user_traits
-                    WHERE user_id = :user_id AND confidence > 0.3
+                    WHERE confidence > 0.3
                     ORDER BY confidence DESC
                     """),
-                    {"user_id": user_id}
+                    {}
                 )
                 for row in result.fetchall():
                     inputs["traits"].append({
@@ -266,14 +256,11 @@ class AutobiographyService:
                 "relationships": [],
             }
 
-    def synthesize(self, user_id: str = "primary") -> bool:
+    def synthesize(self) -> bool:
         """
         Full synthesis pipeline: acquire lock -> gather -> prompt -> LLM -> store.
 
         Acquires a threading lock to prevent concurrent synthesis.
-
-        Args:
-            user_id: User identifier
 
         Returns:
             True if synthesis succeeded, False otherwise
@@ -287,7 +274,7 @@ class AutobiographyService:
         try:
             with self.db.get_session() as session:
                 # Get current narrative for context
-                current = self.get_current_narrative(user_id)
+                current = self.get_current_narrative()
                 since_cursor = None
 
                 if current:
@@ -295,18 +282,17 @@ class AutobiographyService:
                     result = session.execute(
                         text("""
                         SELECT episode_cursor FROM autobiography
-                        WHERE user_id = :user_id
                         ORDER BY version DESC
                         LIMIT 1
                         """),
-                        {"user_id": user_id}
+                        {}
                     )
                     cursor_row = result.fetchone()
                     if cursor_row and cursor_row[0]:
                         since_cursor = cursor_row[0]
 
                 # Gather inputs
-                inputs = self.gather_synthesis_inputs(user_id, since_cursor)
+                inputs = self.gather_synthesis_inputs(since_cursor)
 
                 if not inputs["episodes"]:
                     logger.debug("[AUTOBIOGRAPHY] No episodes to synthesize")
@@ -333,7 +319,6 @@ class AutobiographyService:
                 # Store new version
                 self._store_narrative(
                     session,
-                    user_id,
                     narrative,
                     newest_episode,
                     len(inputs["episodes"]),
@@ -342,7 +327,7 @@ class AutobiographyService:
 
                 logger.info(
                     f"[AUTOBIOGRAPHY] Synthesis complete: "
-                    f"v{self.get_current_narrative(user_id)['version']} "
+                    f"v{self.get_current_narrative()['version']} "
                     f"({synthesis_ms}ms)"
                 )
 
@@ -354,7 +339,7 @@ class AutobiographyService:
                     delta_service = AutobiographyDeltaService(self.db)
 
                     # Compute growth delta
-                    delta = delta_service.compute_growth_delta(user_id)
+                    delta = delta_service.compute_growth_delta()
                     if delta and delta.get('section_deltas'):
                         # Store delta_summary on latest autobiography row
                         with self.db.get_session() as delta_session:
@@ -362,13 +347,9 @@ class AutobiographyService:
                                 text("""
                                 UPDATE autobiography
                                 SET delta_summary = :delta
-                                WHERE user_id = :user_id
-                                  AND version = (
-                                      SELECT MAX(version) FROM autobiography
-                                      WHERE user_id = :user_id
-                                  )
+                                WHERE version = (SELECT MAX(version) FROM autobiography)
                                 """),
-                                {"user_id": user_id, "delta": _json.dumps(delta)}
+                                {"delta": _json.dumps(delta)}
                             )
                         logger.info(
                             f"[AUTOBIOGRAPHY] Delta computed: "
@@ -376,7 +357,7 @@ class AutobiographyService:
                         )
 
                     # Reinforce stable traits
-                    delta_service.reinforce_stable_traits(user_id)
+                    delta_service.reinforce_stable_traits()
 
                 except Exception as de:
                     logger.warning(f"[AUTOBIOGRAPHY] Delta computation non-fatal error: {de}")
@@ -519,7 +500,6 @@ class AutobiographyService:
     def _store_narrative(
         self,
         session,
-        user_id: str,
         narrative: str,
         episode_cursor: Optional[datetime],
         episodes_since: int,
@@ -530,7 +510,6 @@ class AutobiographyService:
 
         Args:
             session: SessionProxy instance
-            user_id: User identifier
             narrative: Synthesized narrative text
             episode_cursor: Timestamp of newest episode included
             episodes_since: Count of episodes in this synthesis
@@ -540,8 +519,8 @@ class AutobiographyService:
 
         # Get next version number
         result = session.execute(
-            text("SELECT MAX(version) FROM autobiography WHERE user_id = :user_id"),
-            {"user_id": user_id}
+            text("SELECT MAX(version) FROM autobiography"),
+            {}
         )
         max_version = result.scalar() or 0
         next_version = max_version + 1
@@ -552,11 +531,10 @@ class AutobiographyService:
         session.execute(
             text("""
             INSERT INTO autobiography
-            (user_id, version, narrative, episode_cursor, episodes_since, synthesis_ms, section_hashes)
-            VALUES (:user_id, :version, :narrative, :cursor, :episodes, :synthesis_ms, :section_hashes)
+            (version, narrative, episode_cursor, episodes_since, synthesis_ms, section_hashes)
+            VALUES (:version, :narrative, :cursor, :episodes, :synthesis_ms, :section_hashes)
             """),
             {
-                "user_id": user_id,
                 "version": next_version,
                 "narrative": narrative,
                 "cursor": episode_cursor,

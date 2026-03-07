@@ -34,7 +34,6 @@ class ListService:
         self,
         name: str,
         list_type: str = 'checklist',
-        user_id: str = 'primary',
     ) -> str:
         """
         Create a new list.
@@ -42,13 +41,12 @@ class ListService:
         Args:
             name: List name (e.g. "Shopping List")
             list_type: List type (default 'checklist')
-            user_id: User identifier
 
         Returns:
             list_id (8-char hex string)
 
         Raises:
-            ValueError: If a list with that name already exists for the user
+            ValueError: If a list with that name already exists
         """
         list_id = secrets.token_hex(4)
 
@@ -56,9 +54,9 @@ class ListService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO lists (id, user_id, name, list_type, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
-                """, (list_id, user_id, name, list_type))
+                    INSERT INTO lists (id, name, list_type, created_at, updated_at)
+                    VALUES (?, ?, ?, datetime('now'), datetime('now'))
+                """, (list_id, name, list_type))
                 cursor.close()
 
             self._log_event(list_id, 'list_created', details={'name': name})
@@ -71,22 +69,17 @@ class ListService:
             logger.error(f"[LISTS] Failed to create list: {e}")
             raise
 
-    def delete_list(
-        self,
-        name_or_id: str,
-        user_id: str = 'primary',
-    ) -> bool:
+    def delete_list(self, name_or_id: str) -> bool:
         """
         Soft-delete a list.
 
         Args:
             name_or_id: List name or ID
-            user_id: User identifier
 
         Returns:
             True if deleted, False if not found
         """
-        list_row = self._resolve_list(name_or_id, user_id)
+        list_row = self._resolve_list(name_or_id)
         if not list_row:
             return False
 
@@ -96,8 +89,8 @@ class ListService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE lists SET deleted_at = datetime('now'), updated_at = datetime('now')
-                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-                """, (list_id, user_id))
+                    WHERE id = ? AND deleted_at IS NULL
+                """, (list_id,))
                 updated = cursor.rowcount > 0
                 cursor.close()
 
@@ -110,22 +103,17 @@ class ListService:
             logger.error(f"[LISTS] delete_list failed: {e}")
             return False
 
-    def clear_list(
-        self,
-        name_or_id: str,
-        user_id: str = 'primary',
-    ) -> int:
+    def clear_list(self, name_or_id: str) -> int:
         """
         Soft-delete all items in a list.
 
         Args:
             name_or_id: List name or ID
-            user_id: User identifier
 
         Returns:
             Count of items removed, or -1 if list not found
         """
-        list_row = self._resolve_list(name_or_id, user_id)
+        list_row = self._resolve_list(name_or_id)
         if not list_row:
             return -1
 
@@ -150,29 +138,23 @@ class ListService:
             logger.error(f"[LISTS] clear_list failed: {e}")
             return -1
 
-    def rename_list(
-        self,
-        name_or_id: str,
-        new_name: str,
-        user_id: str = 'primary',
-    ) -> bool:
+    def rename_list(self, name_or_id: str, new_name: str) -> bool:
         """
         Rename a list.
 
         Args:
             name_or_id: List name or ID
             new_name: New name for the list
-            user_id: User identifier
 
         Returns:
             True if renamed, False if not found or name collision
         """
-        list_row = self._resolve_list(name_or_id, user_id)
+        list_row = self._resolve_list(name_or_id)
         if not list_row:
             return False
 
         # Check for name collision
-        existing = self._resolve_list(new_name, user_id)
+        existing = self._resolve_list(new_name)
         if existing and existing['id'] != list_row['id']:
             logger.warning(f"[LISTS] Cannot rename to '{new_name}' — name already in use")
             return False
@@ -184,8 +166,8 @@ class ListService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE lists SET name = ?, updated_at = datetime('now')
-                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-                """, (new_name, list_id, user_id))
+                    WHERE id = ? AND deleted_at IS NULL
+                """, (new_name, list_id))
                 updated = cursor.rowcount > 0
                 cursor.close()
 
@@ -198,22 +180,17 @@ class ListService:
             logger.error(f"[LISTS] rename_list failed: {e}")
             return False
 
-    def get_list(
-        self,
-        name_or_id: str,
-        user_id: str = 'primary',
-    ) -> Optional[Dict[str, Any]]:
+    def get_list(self, name_or_id: str) -> Optional[Dict[str, Any]]:
         """
         Get a list with its active items.
 
         Args:
             name_or_id: List name or ID
-            user_id: User identifier
 
         Returns:
             Dict with list data and items array, or None if not found
         """
-        list_row = self._resolve_list(name_or_id, user_id)
+        list_row = self._resolve_list(name_or_id)
         if not list_row:
             return None
 
@@ -247,15 +224,9 @@ class ListService:
             logger.error(f"[LISTS] get_list failed: {e}")
             return None
 
-    def get_all_lists(
-        self,
-        user_id: str = 'primary',
-    ) -> List[Dict[str, Any]]:
+    def get_all_lists(self) -> List[Dict[str, Any]]:
         """
         Get all active lists with summary counts.
-
-        Args:
-            user_id: User identifier
 
         Returns:
             List of summary dicts (name, item_count, checked_count, updated_at)
@@ -273,10 +244,10 @@ class ListService:
                         SUM(CASE WHEN li.removed_at IS NULL AND li.checked THEN 1 ELSE 0 END)        AS checked_count
                     FROM lists l
                     LEFT JOIN list_items li ON li.list_id = l.id
-                    WHERE l.user_id = ? AND l.deleted_at IS NULL
+                    WHERE l.deleted_at IS NULL
                     GROUP BY l.id, l.name, l.list_type, l.updated_at
                     ORDER BY l.updated_at DESC
-                """, (user_id,))
+                """)
                 rows = cursor.fetchall()
                 cursor.close()
 
@@ -304,7 +275,6 @@ class ListService:
         self,
         name_or_id: str,
         items: List[str],
-        user_id: str = 'primary',
         dedupe: bool = True,
         auto_create: bool = True,
     ) -> int:
@@ -314,20 +284,19 @@ class ListService:
         Args:
             name_or_id: List name or ID
             items: List of item content strings
-            user_id: User identifier
             dedupe: Skip items already on the list (case-insensitive, default True)
             auto_create: Create the list if it doesn't exist (default True)
 
         Returns:
             Count of items actually added
         """
-        list_row = self._resolve_list(name_or_id, user_id)
+        list_row = self._resolve_list(name_or_id)
 
         if not list_row:
             if not auto_create:
                 logger.warning(f"[LISTS] List '{name_or_id}' not found")
                 return 0
-            list_id = self.create_list(name_or_id, user_id=user_id)
+            list_id = self.create_list(name_or_id)
             list_row = {'id': list_id, 'name': name_or_id}
 
         list_id = list_row['id']
@@ -417,24 +386,18 @@ class ListService:
             logger.error(f"[LISTS] add_items failed: {e}")
             return 0
 
-    def remove_items(
-        self,
-        name_or_id: str,
-        items: List[str],
-        user_id: str = 'primary',
-    ) -> int:
+    def remove_items(self, name_or_id: str, items: List[str]) -> int:
         """
         Soft-remove items from a list (case-insensitive match).
 
         Args:
             name_or_id: List name or ID
             items: List of item content strings to remove
-            user_id: User identifier
 
         Returns:
             Count of items removed
         """
-        list_row = self._resolve_list(name_or_id, user_id)
+        list_row = self._resolve_list(name_or_id)
         if not list_row or not items:
             return 0
 
@@ -471,52 +434,34 @@ class ListService:
             logger.error(f"[LISTS] remove_items failed: {e}")
             return 0
 
-    def check_items(
-        self,
-        name_or_id: str,
-        items: List[str],
-        user_id: str = 'primary',
-    ) -> int:
+    def check_items(self, name_or_id: str, items: List[str]) -> int:
         """
         Check off items in a list (case-insensitive match).
 
         Args:
             name_or_id: List name or ID
             items: List of item content strings to check
-            user_id: User identifier
 
         Returns:
             Count of items checked
         """
-        return self._set_checked(name_or_id, items, user_id, checked=True)
+        return self._set_checked(name_or_id, items, checked=True)
 
-    def uncheck_items(
-        self,
-        name_or_id: str,
-        items: List[str],
-        user_id: str = 'primary',
-    ) -> int:
+    def uncheck_items(self, name_or_id: str, items: List[str]) -> int:
         """
         Uncheck items in a list (case-insensitive match).
 
         Args:
             name_or_id: List name or ID
             items: List of item content strings to uncheck
-            user_id: User identifier
 
         Returns:
             Count of items unchecked
         """
-        return self._set_checked(name_or_id, items, user_id, checked=False)
+        return self._set_checked(name_or_id, items, checked=False)
 
-    def _set_checked(
-        self,
-        name_or_id: str,
-        items: List[str],
-        user_id: str,
-        checked: bool,
-    ) -> int:
-        list_row = self._resolve_list(name_or_id, user_id)
+    def _set_checked(self, name_or_id: str, items: List[str], checked: bool) -> int:
+        list_row = self._resolve_list(name_or_id)
         if not list_row or not items:
             return 0
 
@@ -562,7 +507,6 @@ class ListService:
         name_or_id: Optional[str],
         since: Optional[datetime] = None,
         limit: int = 50,
-        user_id: str = 'primary',
     ) -> List[Dict[str, Any]]:
         """
         Return change log events for a list.
@@ -571,7 +515,6 @@ class ListService:
             name_or_id: List name or ID (None returns events for all lists)
             since: Optional datetime filter
             limit: Max events to return
-            user_id: User identifier
 
         Returns:
             List of event dicts
@@ -581,7 +524,7 @@ class ListService:
                 cursor = conn.cursor()
 
                 if name_or_id:
-                    list_row = self._resolve_list(name_or_id, user_id)
+                    list_row = self._resolve_list(name_or_id)
                     if not list_row:
                         return []
                     list_id = list_row['id']
@@ -603,27 +546,22 @@ class ListService:
                             LIMIT ?
                         """, (list_id, limit))
                 else:
-                    # All lists for this user
                     if since:
                         cursor.execute("""
                             SELECT le.id, le.list_id, le.event_type, le.item_content,
                                    le.details, le.created_at
                             FROM list_events le
-                            JOIN lists l ON l.id = le.list_id
-                            WHERE l.user_id = ? AND le.created_at >= ?
+                            WHERE le.created_at >= ?
                             ORDER BY le.created_at DESC
                             LIMIT ?
-                        """, (user_id, since, limit))
+                        """, (since, limit))
                     else:
                         cursor.execute("""
-                            SELECT le.id, le.list_id, le.event_type, le.item_content,
-                                   le.details, le.created_at
-                            FROM list_events le
-                            JOIN lists l ON l.id = le.list_id
-                            WHERE l.user_id = ?
-                            ORDER BY le.created_at DESC
+                            SELECT id, list_id, event_type, item_content, details, created_at
+                            FROM list_events
+                            ORDER BY created_at DESC
                             LIMIT ?
-                        """, (user_id, limit))
+                        """, (limit,))
 
                 rows = cursor.fetchall()
                 cursor.close()
@@ -644,23 +582,17 @@ class ListService:
             logger.error(f"[LISTS] get_history failed: {e}")
             return []
 
-    def get_lists_for_prompt(
-        self,
-        user_id: str = 'primary',
-    ) -> str:
+    def get_lists_for_prompt(self) -> str:
         """
         Format active lists summary for LLM prompt injection.
 
         Returns compact representation with recency cues so the LLM
         knows what lists exist without needing to load all items.
 
-        Args:
-            user_id: User identifier
-
         Returns:
             Formatted string or empty string if no lists
         """
-        lists = self.get_all_lists(user_id)
+        lists = self.get_all_lists()
         if not lists:
             return ""
 
@@ -704,17 +636,12 @@ class ListService:
     # Internal helpers
     # ─────────────────────────────────────────────
 
-    def _resolve_list(
-        self,
-        name_or_id: str,
-        user_id: str = 'primary',
-    ) -> Optional[Dict[str, Any]]:
+    def _resolve_list(self, name_or_id: str) -> Optional[Dict[str, Any]]:
         """
         Resolve a list by exact ID first, then case-insensitive name.
 
         Args:
             name_or_id: List name or 8-char hex ID
-            user_id: User identifier
 
         Returns:
             List dict or None
@@ -727,8 +654,8 @@ class ListService:
                 cursor.execute("""
                     SELECT id, name, list_type, updated_at
                     FROM lists
-                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-                """, (name_or_id, user_id))
+                    WHERE id = ? AND deleted_at IS NULL
+                """, (name_or_id,))
                 row = cursor.fetchone()
 
                 if not row:
@@ -736,9 +663,9 @@ class ListService:
                     cursor.execute("""
                         SELECT id, name, list_type, updated_at
                         FROM lists
-                        WHERE user_id = ? AND LOWER(name) = LOWER(?) AND deleted_at IS NULL
+                        WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL
                         LIMIT 1
-                    """, (user_id, name_or_id))
+                    """, (name_or_id,))
                     row = cursor.fetchone()
 
                 cursor.close()
@@ -751,15 +678,9 @@ class ListService:
             logger.error(f"[LISTS] _resolve_list failed: {e}")
             return None
 
-    def get_most_recent_list(
-        self,
-        user_id: str = 'primary',
-    ) -> Optional[Dict[str, Any]]:
+    def get_most_recent_list(self) -> Optional[Dict[str, Any]]:
         """
         Get the most recently updated active list.
-
-        Args:
-            user_id: User identifier
 
         Returns:
             List dict or None if no lists
@@ -770,10 +691,10 @@ class ListService:
                 cursor.execute("""
                     SELECT id, name, list_type, updated_at
                     FROM lists
-                    WHERE user_id = ? AND deleted_at IS NULL
+                    WHERE deleted_at IS NULL
                     ORDER BY updated_at DESC
                     LIMIT 1
-                """, (user_id,))
+                """)
                 row = cursor.fetchone()
                 cursor.close()
 

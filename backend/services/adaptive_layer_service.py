@@ -164,7 +164,6 @@ class AdaptiveLayerService:
 
     def generate_directives(
         self,
-        user_id: str = 'primary',
         thread_id: Optional[str] = None,
         current_signals: Optional[Dict] = None,
         working_memory_turns: Optional[List[Dict]] = None,
@@ -173,7 +172,6 @@ class AdaptiveLayerService:
         Build the full adaptive directive block for injection into an LLM prompt.
 
         Args:
-            user_id:              User identifier (default 'primary').
             thread_id:            Active conversation thread ID (used for fork).
             current_signals:      Dict with optional keys:
                                     'prompt_token_count' (int),
@@ -188,7 +186,7 @@ class AdaptiveLayerService:
             working_memory_turns = working_memory_turns or []
 
             # -- 1. Fetch style ------------------------------------------------
-            style = self._get_communication_style(user_id)
+            style = self._get_communication_style()
 
             # -- 2. Cold-start gate --------------------------------------------
             if not style:
@@ -198,8 +196,8 @@ class AdaptiveLayerService:
                 return ""
 
             # -- 3. Fetch supporting data --------------------------------------
-            micro_prefs    = self._get_micro_preferences(user_id)
-            challenge_tol  = self._get_challenge_tolerance(user_id)
+            micro_prefs    = self._get_micro_preferences()
+            challenge_tol  = self._get_challenge_tolerance()
 
             # -- 4. Cognitive load ---------------------------------------------
             load_tier = self._estimate_cognitive_load(working_memory_turns, micro_prefs)
@@ -273,7 +271,7 @@ class AdaptiveLayerService:
             fork_directive = self._get_fork_directive(style, thread_id)
 
             # -- 8. Growth reflection -------------------------------------------
-            growth_reflection = self._get_growth_reflection(user_id)
+            growth_reflection = self._get_growth_reflection()
 
             # -- 9. Assemble output ---------------------------------------------
             if not directives and not micro_prefs and not fork_directive and not growth_reflection:
@@ -313,7 +311,7 @@ class AdaptiveLayerService:
     # Data retrieval helpers
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _get_communication_style(self, user_id: str) -> dict:
+    def _get_communication_style(self) -> dict:
         """
         Retrieve stored communication style dict from UserTraitService.
 
@@ -325,12 +323,12 @@ class AdaptiveLayerService:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             trait_svc = UserTraitService(db)
-            return trait_svc.get_communication_style(user_id=user_id)
+            return trait_svc.get_communication_style()
         except Exception as e:
             logger.warning(f"[adaptive_layer] _get_communication_style failed: {e}")
             return {}
 
-    def _get_micro_preferences(self, user_id: str) -> List[str]:
+    def _get_micro_preferences(self) -> List[str]:
         """
         Query user_traits for micro-preference rows and return natural-language labels.
 
@@ -348,12 +346,11 @@ class AdaptiveLayerService:
                 cursor.execute("""
                     SELECT trait_key, confidence
                     FROM user_traits
-                    WHERE user_id = ?
-                      AND category = 'micro_preference'
+                    WHERE category = 'micro_preference'
                       AND confidence > 0.4
                     ORDER BY confidence DESC
                     LIMIT 3
-                """, (user_id,))
+                """)
                 rows = cursor.fetchall()
                 cursor.close()
 
@@ -367,7 +364,7 @@ class AdaptiveLayerService:
             logger.warning(f"[adaptive_layer] _get_micro_preferences failed: {e}")
             return []
 
-    def _get_challenge_tolerance(self, user_id: str) -> Optional[float]:
+    def _get_challenge_tolerance(self) -> Optional[float]:
         """
         Retrieve explicit challenge tolerance float (1-10) from user_traits.
 
@@ -384,12 +381,11 @@ class AdaptiveLayerService:
                 cursor.execute("""
                     SELECT trait_value
                     FROM user_traits
-                    WHERE user_id = ?
-                      AND trait_key = 'challenge_tolerance'
+                    WHERE trait_key = 'challenge_tolerance'
                       AND category = 'micro_preference'
                     ORDER BY updated_at DESC
                     LIMIT 1
-                """, (user_id,))
+                """)
                 row = cursor.fetchone()
                 cursor.close()
 
@@ -599,14 +595,14 @@ class AdaptiveLayerService:
     # Growth reflection
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _get_growth_reflection(self, user_id: str) -> str:
+    def _get_growth_reflection(self) -> str:
         """
         Return a single-sentence growth observation if a pattern qualifies.
 
         Queries user_traits for growth_signal:* rows (category='core'), parses
         the JSON value, and checks for consecutive_cycles >= 6.
 
-        Respects a 24-hour per-user MemoryStore cooldown.
+        Respects a 24-hour MemoryStore cooldown.
 
         Returns:
             str: Randomly selected reflection sentence, or "".
@@ -616,7 +612,7 @@ class AdaptiveLayerService:
             from services.database_service import get_shared_db_service
 
             store = MemoryClientService.create_connection()
-            cooldown_key = f"adaptive_growth_reflection_cooldown:{user_id}"
+            cooldown_key = "adaptive_growth_reflection_cooldown"
             if store.exists(cooldown_key):
                 return ""
 
@@ -626,10 +622,9 @@ class AdaptiveLayerService:
                 cursor.execute("""
                     SELECT trait_key, trait_value
                     FROM user_traits
-                    WHERE user_id = ?
-                      AND trait_key LIKE 'growth_signal:%'
+                    WHERE trait_key LIKE 'growth_signal:%'
                       AND category = 'core'
-                """, (user_id,))
+                """)
                 rows = cursor.fetchall()
                 cursor.close()
 

@@ -38,22 +38,18 @@ def handle_autobiography(topic: str, params: dict) -> str:
 
         db = get_shared_db_service()
 
-        user_id = "primary"
-
         # Handle delta/growth section specially
         section = params.get("section", "").lower()
         if section in ("delta", "growth"):
-            return _get_delta_summary(db, user_id)
+            return _get_delta_summary(db)
 
         with db.get_session() as session:
             result = session.execute(
                 text("""
                 SELECT narrative FROM autobiography
-                WHERE user_id = :user_id
                 ORDER BY version DESC
                 LIMIT 1
-                """),
-                {"user_id": user_id}
+                """)
             )
             row = result.fetchone()
 
@@ -77,13 +73,12 @@ def handle_autobiography(topic: str, params: dict) -> str:
         return f"[AUTOBIOGRAPHY] Error retrieving narrative: {e}"
 
 
-def _get_delta_summary(db, user_id: str) -> str:
+def _get_delta_summary(db) -> str:
     """
     Retrieve and format the growth delta between the last two autobiography versions.
 
     Args:
         db: DatabaseService instance
-        user_id: User identifier
 
     Returns:
         Formatted delta summary string
@@ -95,11 +90,10 @@ def _get_delta_summary(db, user_id: str) -> str:
                 text("""
                 SELECT version, delta_summary
                 FROM autobiography
-                WHERE user_id = :user_id AND delta_summary IS NOT NULL
+                WHERE delta_summary IS NOT NULL
                 ORDER BY version DESC
                 LIMIT 1
-                """),
-                {"user_id": user_id}
+                """)
             )
             row = result.fetchone()
 

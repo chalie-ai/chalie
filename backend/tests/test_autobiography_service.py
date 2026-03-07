@@ -39,7 +39,7 @@ class TestAutobiographyService:
         mock_db.get_session.return_value.__exit__.return_value = None
         mock_session.execute.return_value.fetchone.return_value = None
 
-        result = service.get_current_narrative("primary")
+        result = service.get_current_narrative()
 
         assert result is None
 
@@ -60,7 +60,7 @@ class TestAutobiographyService:
             5  # episodes_since
         )
 
-        result = service.get_current_narrative("primary")
+        result = service.get_current_narrative()
 
         assert result is not None
         assert result["version"] == 2
@@ -116,7 +116,7 @@ class TestAutobiographyService:
             []   # relationships
         ]
 
-        result = service.gather_synthesis_inputs("primary")
+        result = service.gather_synthesis_inputs()
 
         assert "episodes" in result
         assert "traits" in result
@@ -142,7 +142,7 @@ class TestAutobiographyService:
             []   # relationships
         ]
 
-        result = service.gather_synthesis_inputs("primary")
+        result = service.gather_synthesis_inputs()
 
         assert len(result["episodes"]) == 1
         assert len(result["episodes"][0]["gist"]) == 503  # 500 + "..."
@@ -161,7 +161,7 @@ class TestAutobiographyService:
             [],  # relationships
         ]
 
-        result = service.gather_synthesis_inputs("primary")
+        result = service.gather_synthesis_inputs()
 
         assert len(result["concepts"]) == 1
         assert result["concepts"][0] == {
@@ -185,7 +185,7 @@ class TestAutobiographyService:
             [("Python", "Flask", "uses", 0.85)],  # relationships
         ]
 
-        result = service.gather_synthesis_inputs("primary")
+        result = service.gather_synthesis_inputs()
 
         assert len(result["relationships"]) == 1
         assert result["relationships"][0] == {
@@ -208,7 +208,7 @@ class TestAutobiographyService:
             [],  # relationships
         ]
 
-        service.gather_synthesis_inputs("primary")
+        service.gather_synthesis_inputs()
 
         # Capture all SQL strings passed to session.execute()
         sql_calls = [
