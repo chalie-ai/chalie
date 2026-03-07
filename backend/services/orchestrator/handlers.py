@@ -37,6 +37,7 @@ class RespondHandler:
             confidence=context.get('confidence', 0.0),
             generation_time=context.get('generation_time', 0.0),
             original_metadata=context.get('metadata'),
+            reply_actions=context.get('reply_actions'),
         )
 
         logger.info(f"[RESPOND] Queued response {output_id} for topic '{context['topic']}' to output-queue")
@@ -110,6 +111,7 @@ class ClarifyHandler:
             confidence=context.get('confidence', 0.0),
             generation_time=context.get('generation_time', 0.0),
             original_metadata=context.get('metadata'),
+            reply_actions=context.get('reply_actions'),
         )
 
         logger.info(f"[CLARIFY] Queued clarification {output_id} for topic '{context['topic']}' to output-queue")
@@ -149,6 +151,7 @@ class AcknowledgeHandler:
             confidence=context.get('confidence', 0.0),
             generation_time=context.get('generation_time', 0.0),
             original_metadata=context.get('metadata'),
+            reply_actions=context.get('reply_actions'),
         )
 
         logger.info(f"[ACKNOWLEDGE] Queued acknowledgment {output_id} for topic '{context['topic']}'")

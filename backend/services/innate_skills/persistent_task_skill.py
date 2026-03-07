@@ -124,11 +124,25 @@ def _create(topic: str, params: dict) -> str:
 
     # User-originated: stay proposed, let user choose execution mode
     scope_line = f"\nScope: {scope}" if scope else ""
-    return (
-        f"I've identified this as a deeper task: \"{goal[:80]}\"{scope_line}\n"
-        f"Task #{task_id} ready. Should I handle this quickly now, "
-        f"or do a thorough deep dive and get back to you later?"
-    )
+    return {
+        "text": (
+            f"I've identified this as a deeper task: \"{goal[:80]}\"{scope_line}\n"
+            f"Task #{task_id} ready. Should I handle this quickly now, "
+            f"or do a thorough deep dive and get back to you later?"
+        ),
+        "reply_actions": [
+            {
+                "label": "Quick Research",
+                "payload": {"skill": "persistent_task", "action": "confirm",
+                            "task_id": task_id, "mode": "now"},
+            },
+            {
+                "label": "Deep Dive",
+                "payload": {"skill": "persistent_task", "action": "confirm",
+                            "task_id": task_id, "mode": "later"},
+            },
+        ],
+    }
 
 
 def _confirm(topic: str, params: dict) -> str:
