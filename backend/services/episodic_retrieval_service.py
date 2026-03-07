@@ -231,6 +231,7 @@ class EpisodicRetrievalService:
                     SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
                            e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
                            e.last_accessed_at, e.salience_factors, e.open_loops,
+                           COALESCE(e.reliability, 'reliable') AS reliability,
                            v.distance AS vector_distance
                     FROM episodes e
                     JOIN episodes_vec v ON v.rowid = e.rowid
@@ -253,9 +254,10 @@ class EpisodicRetrievalService:
                     SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
                            e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
                            e.last_accessed_at, e.salience_factors, e.open_loops,
-                           f.rank AS text_rank
-                    FROM episodes_fts f
-                    JOIN episodes e ON e.rowid = f.rowid
+                           COALESCE(e.reliability, 'reliable') AS reliability,
+                           episodes_fts.rank AS text_rank
+                    FROM episodes_fts
+                    JOIN episodes e ON e.rowid = episodes_fts.rowid
                     WHERE episodes_fts MATCH ?
                       AND e.deleted_at IS NULL
                 """
@@ -265,7 +267,7 @@ class EpisodicRetrievalService:
                     fts_query += " AND e.topic = ?"
                     fts_params.append(topic)
 
-                fts_query += " ORDER BY f.rank LIMIT ?"
+                fts_query += " ORDER BY episodes_fts.rank LIMIT ?"
                 fts_params.append(limit)
 
                 cursor.execute(fts_query, fts_params)
@@ -316,6 +318,7 @@ class EpisodicRetrievalService:
                     'last_accessed_at': row['last_accessed_at'],
                     'salience_factors': row.get('salience_factors', {}),
                     'open_loops': row.get('open_loops', []),
+                    'reliability': row.get('reliability', 'reliable'),
                     'vector_distance': row.get('vector_distance'),
                     'text_rank': None,
                     'rrf_score': 0
@@ -342,6 +345,7 @@ class EpisodicRetrievalService:
                     'last_accessed_at': row['last_accessed_at'],
                     'salience_factors': row.get('salience_factors', {}),
                     'open_loops': row.get('open_loops', []),
+                    'reliability': row.get('reliability', 'reliable'),
                     'vector_distance': None,
                     'text_rank': row.get('text_rank'),
                     'rrf_score': 0
