@@ -460,6 +460,7 @@ def _generate_with_act_orchestrator(
         assembled_context=assembled_context,
         inclusion_map=act_inclusion_map,
         session_id='digest_fast_path',
+        exchange_id=metadata.get('exchange_id', 'unknown'),
     )
 
     # ── Post-loop: re-route through mode router ─────────────────────
