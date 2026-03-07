@@ -150,6 +150,51 @@ class ChatHistoryProcessor:
         return chat_history
 
 
+def _extract_response_from_broken_json(text: str) -> str | None:
+    """
+    Extract the 'response' value from broken JSON where inner quotes are unescaped.
+
+    Strategy: find '"response"' key, then locate the value boundary by searching
+    backwards from the next known sibling key ('"modifiers"', '"mode"', etc.)
+    or from the last '}' if no sibling is found.
+    """
+    # Known sibling keys that appear after "response" in frontal cortex output
+    sibling_keys = ['"modifiers"', '"mode"', '"actions"', '"confidence"',
+                    '"alternative_paths"', '"downstream_mode"']
+
+    resp_marker = '"response"'
+    idx = text.find(resp_marker)
+    if idx == -1:
+        return None
+
+    # Find the colon and opening quote after "response"
+    colon_idx = text.find(':', idx + len(resp_marker))
+    if colon_idx == -1:
+        return None
+    open_quote = text.find('"', colon_idx + 1)
+    if open_quote == -1:
+        return None
+
+    # Find the earliest sibling key after the opening quote
+    value_start = open_quote + 1
+    end_boundary = len(text)
+    for key in sibling_keys:
+        pos = text.find(key, value_start)
+        if pos != -1 and pos < end_boundary:
+            end_boundary = pos
+
+    # Walk backwards from boundary to find the closing pattern: ", or "}
+    segment = text[value_start:end_boundary]
+    # Strip trailing whitespace, comma, and quote
+    segment = segment.rstrip()
+    if segment.endswith(','):
+        segment = segment[:-1].rstrip()
+    if segment.endswith('"'):
+        segment = segment[:-1]
+
+    return segment if segment else None
+
+
 class FrontalCortexService:
     """Service for generating contextual responses using LLM."""
 
@@ -296,7 +341,21 @@ class FrontalCortexService:
                             response_data = None
 
                     if response_data is None:
-                        # Recovery layer 2: LLM returned pure prose — wrap it as RESPOND.
+                        # Recovery layer 2: LLM returned broken JSON (e.g. unescaped
+                        # inner quotes like "status update"). Extract the response
+                        # value using known field boundaries rather than regex.
+                        prose = stripped.strip() or response_text.strip()
+                        if prose and prose.lstrip().startswith('{'):
+                            extracted = _extract_response_from_broken_json(prose)
+                            if extracted:
+                                logging.warning(
+                                    "[FRONTAL CORTEX] Extracted response from broken JSON "
+                                    f"(first 80 chars): {extracted[:80]!r}"
+                                )
+                                response_data = {"response": extracted, "modifiers": []}
+
+                    if response_data is None:
+                        # Recovery layer 3: LLM returned pure prose — wrap it as RESPOND.
                         # Use fence-stripped text so markdown code blocks don't leak
                         # into the frontend.
                         prose = stripped.strip() or response_text.strip()

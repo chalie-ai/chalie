@@ -332,8 +332,12 @@ def observability_tasks():
         try:
             from services.persistent_task_service import PersistentTaskService
             from services.database_service import get_shared_db_service
-            svc = PersistentTaskService(get_shared_db_service())
-            result['persistent_tasks'] = svc.get_active_tasks(1)
+            db = get_shared_db_service()
+            svc = PersistentTaskService(db)
+            with db.connection() as conn:
+                row = conn.execute("SELECT id FROM master_account LIMIT 1").fetchone()
+            account_id = row[0] if row else 1
+            result['persistent_tasks'] = svc.get_active_tasks(account_id)
         except Exception as e:
             logger.warning(f"[OBS] persistent tasks error: {e}")
 
