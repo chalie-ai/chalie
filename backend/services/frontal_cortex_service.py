@@ -18,6 +18,7 @@ import logging
 # order; later entries can be added here without touching any other code.
 # ─────────────────────────────────────────────────────────────────────────────
 _ONBOARDING_SCHEDULE = [
+    # ── Phase 0: First impression ─────────────────────────────────────────────
     {
         'trait': 'name',
         'min_turn': 3,
@@ -27,26 +28,6 @@ _ONBOARDING_SCHEDULE = [
             "You haven't learned the user's name yet. "
             "Find a natural moment in your response to ask what they'd like to be called. "
             "Keep it casual — don't make it the focus of the response."
-        ),
-    },
-    {
-        'trait': 'timezone',
-        'min_turn': 15,
-        'cooldown_turns': 10,
-        'max_attempts': 1,
-        'hint': (
-            "If relevant, ask where the user is based — "
-            "it helps with scheduling context."
-        ),
-    },
-    {
-        'trait': 'interests',
-        'min_turn': 20,
-        'cooldown_turns': 15,
-        'max_attempts': 1,
-        'hint': (
-            "If the conversation touches on hobbies or interests, "
-            "ask what they enjoy working on or exploring."
         ),
     },
     # ── Phase 1: Core identity ────────────────────────────────────────────────
@@ -73,6 +54,16 @@ _ONBOARDING_SCHEDULE = [
     },
     # ── Phase 2: Communication & work ────────────────────────────────────────
     {
+        'trait': 'timezone',
+        'min_turn': 15,
+        'cooldown_turns': 10,
+        'max_attempts': 1,
+        'hint': (
+            "If relevant, ask where the user is based — "
+            "it helps with scheduling context."
+        ),
+    },
+    {
         'trait': 'communication_preference',
         'min_turn': 18,
         'cooldown_turns': 12,
@@ -80,6 +71,16 @@ _ONBOARDING_SCHEDULE = [
         'hint': (
             "Ask whether they prefer detailed explanations or quick summaries. "
             "Do they like theory first, or jump straight to examples?"
+        ),
+    },
+    {
+        'trait': 'interests',
+        'min_turn': 20,
+        'cooldown_turns': 15,
+        'max_attempts': 1,
+        'hint': (
+            "If the conversation touches on hobbies or interests, "
+            "ask what they enjoy working on or exploring."
         ),
     },
     {

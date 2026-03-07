@@ -1231,6 +1231,10 @@ class ChalieApp {
   _handleAuthFailure() {
     // Stop the task strip interval so it doesn't keep firing 401s while user re-authenticates
     clearInterval(this._taskStripInterval);
+    // Guard: don't open the login dialog if it's already open (e.g. two concurrent
+    // 401s from _loadRecentConversation and _loadActiveTasks both firing at once).
+    const dialog = document.getElementById('loginDialog');
+    if (dialog?.open) return;
     this._showLoginDialog();
   }
 
@@ -1302,8 +1306,9 @@ class ChalieApp {
     const dismiss = () => {
       _lsSet('chalie_pwa_dismissed', '1');
       dialog.close();
-      // Resume normal init flow (auth already checked in _init)
-      this._start();
+      // _init() owns the boot sequence — it awaits _showPwaDialogIfNeeded() and
+      // calls _start() when the dialog closes. Do NOT call _start() here; doing so
+      // would run _start() twice (once from dismiss, once from _init's await).
     };
 
     closeBtn.addEventListener('click', dismiss);

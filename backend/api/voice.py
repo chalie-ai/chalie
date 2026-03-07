@@ -179,7 +179,12 @@ def voice_synthesize():
         return jsonify({"error": "TTS busy — try again shortly"}), 503
 
     try:
+        import numpy as np
         audio = _tts_model.generate(text, voice=KITTEN_VOICE)
+        # Pad with 300ms of silence so the last phoneme isn't clipped at the
+        # hardware buffer boundary — a common TTS tail-cutoff artefact.
+        silence = np.zeros(int(24000 * 0.3), dtype=audio.dtype)
+        audio = np.concatenate([audio, silence])
         wav_bytes = _audio_to_wav_bytes(audio)
         return Response(wav_bytes, mimetype="audio/wav")
     except Exception as e:

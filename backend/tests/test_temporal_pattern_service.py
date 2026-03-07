@@ -295,15 +295,19 @@ class TestTransitions:
 
     def test_get_upcoming_transitions(self, memdb, svc):
         """Detects value change at hour boundary."""
-        now = datetime.utcnow()
-        hour = now.hour
-        next_hour = (hour + 1) % 24
+        # Use a fixed weekday + hour so the test passes regardless of when it runs.
+        fixed_hour = 10
+        next_hour = 11
+        fixed_monday = datetime(2026, 3, 2, fixed_hour, 0, 0)  # known Monday
 
         for d in range(5):
-            seed_aggregate(memdb, 'energy', 'high', d, hour, 20)
+            seed_aggregate(memdb, 'energy', 'high', d, fixed_hour, 20)
             seed_aggregate(memdb, 'energy', 'low', d, next_hour, 20)
 
-        transitions = svc.get_upcoming_transitions(lookahead_minutes=120)
+        with patch('services.temporal_pattern_service.datetime') as mock_dt:
+            mock_dt.utcnow.return_value = fixed_monday
+            transitions = svc.get_upcoming_transitions(lookahead_minutes=120)
+
         energy_t = [t for t in transitions if t['obs_type'] == 'energy']
         assert len(energy_t) >= 1
         assert energy_t[0]['from_value'] == 'high'
@@ -737,7 +741,7 @@ class TestStorePatternsAsTraits:
         # UserTraitService is a lazy import inside _store_patterns_as_traits,
         # so patch the source module, not the temporal_pattern_service module.
         with patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
-            service._store_patterns_as_traits(patterns, 'primary')
+            service._store_patterns_as_traits(patterns)
 
         assert mock_trait_svc.store_trait.call_count == 2
 
@@ -782,7 +786,7 @@ class TestStorePatternsAsTraits:
         with patch('services.user_trait_service.UserTraitService', side_effect=Exception("db error")):
             # Should not raise
             service._store_patterns_as_traits(
-                [{'key': 'k', 'value': 'v', 'confidence': 0.5}], 'primary'
+                [{'key': 'k', 'value': 'v', 'confidence': 0.5}]
             )
 
 
