@@ -458,21 +458,34 @@ class CognitiveTriageService:
                 result.self_eval_override = True
                 result.self_eval_reason = 'act_tool_deferred_to_loop'
             else:
-                # No tools available at all
-                result.branch = 'respond'
-                result.mode = 'RESPOND'
-                result.self_eval_override = True
-                result.self_eval_reason = 'act_no_tools_available'
-                # Log capability gap — user wanted ACT but no tools matched
-                try:
-                    from services.self_model_service import SelfModelService
-                    SelfModelService().log_capability_gap(
-                        request_summary=text[:200],
-                        detection_source="triage",
-                        confidence=0.5,
-                    )
-                except Exception:
-                    pass
+                # No external tools — but innate skills don't need them.
+                # Triage LLM sometimes omits skills[] when tool_summaries is empty.
+                # Recover by running the keyword heuristic directly on the text.
+                _recovered = self._detect_innate_skill(text.lower())
+                if _recovered and _recovered in _CONTEXTUAL_SKILLS:
+                    if _recovered not in result.skills:
+                        result.skills.append(_recovered)
+                    for _p in _PRIMITIVES:
+                        if _p not in result.skills:
+                            result.skills.insert(0, _p)
+                    result.self_eval_override = True
+                    result.self_eval_reason = 'act_innate_skill_recovered'
+                else:
+                    # Genuinely no tools and no innate skill — downgrade to RESPOND
+                    result.branch = 'respond'
+                    result.mode = 'RESPOND'
+                    result.self_eval_override = True
+                    result.self_eval_reason = 'act_no_tools_available'
+                    # Log capability gap — user wanted ACT but no tools matched
+                    try:
+                        from services.self_model_service import SelfModelService
+                        SelfModelService().log_capability_gap(
+                            request_summary=text[:200],
+                            detection_source="triage",
+                            confidence=0.5,
+                        )
+                    except Exception:
+                        pass
 
         # Rule 2: RESPOND on high-freshness question → escalate to ACT
         # Freshness risk alone is sufficient — if the answer requires live data, use tools.

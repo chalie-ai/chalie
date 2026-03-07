@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from workers.digest_worker import calculate_context_warmth, _handle_social_triage
+from workers.digest_worker import calculate_context_warmth, _handle_social_triage, _is_innate_skill_only
 from services.cognitive_triage_service import TriageResult
 from services.mode_router_service import (
     GREETING_PATTERNS,
@@ -171,3 +171,48 @@ class TestHandleSocialTriage:
             None, {}, None, None, None,
         )
         assert result is None
+
+
+# ── _is_innate_skill_only / contextual_skills dispatch ───────────
+
+def _make_act_triage(skills):
+    return TriageResult(
+        branch='act', mode='ACT', tools=[], skills=skills,
+        confidence_internal=0.9, confidence_tool_need=0.1,
+        freshness_risk=0.0, decision_entropy=0.0,
+        reasoning='test', triage_time_ms=0.0,
+        fast_filtered=False, self_eval_override=False, self_eval_reason=None,
+    )
+
+
+class TestInnateSkillOnly:
+    """
+    _is_innate_skill_only gates _handle_innate_skill_dispatch.
+    Ensures only contextual skills (not primitives) trigger direct dispatch,
+    and that the dispatch path passes only contextual_skills to the LLM
+    (preventing introspect/recall from crowding out the intended skill).
+    """
+
+    def test_schedule_skill_is_innate_only(self):
+        """schedule in skills + no tools → direct dispatch path."""
+        triage = _make_act_triage(['recall', 'memorize', 'introspect', 'schedule'])
+        assert _is_innate_skill_only(triage) is True
+
+    def test_primitives_only_is_not_innate_only(self):
+        """Only recall/memorize/introspect → not an innate-only dispatch (no contextual skill)."""
+        triage = _make_act_triage(['recall', 'memorize', 'introspect'])
+        assert _is_innate_skill_only(triage) is False
+
+    def test_empty_skills_is_not_innate_only(self):
+        triage = _make_act_triage([])
+        assert _is_innate_skill_only(triage) is False
+
+    def test_external_tool_present_is_not_innate_only(self):
+        """External tools present → full ACT loop, not direct dispatch."""
+        triage = _make_act_triage(['schedule'])
+        triage.tools = ['duckduckgo_search']
+        assert _is_innate_skill_only(triage) is False
+
+    def test_list_skill_is_innate_only(self):
+        triage = _make_act_triage(['recall', 'list'])
+        assert _is_innate_skill_only(triage) is True

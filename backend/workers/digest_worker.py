@@ -1628,7 +1628,7 @@ def _handle_innate_skill_dispatch(
         classification={'topic': topic, 'confidence': 10},
         chat_history=chat_history,
         act_history='(none)',  # First and only iteration — no history
-        selected_skills=triage_result.skills,
+        selected_skills=contextual_skills,  # primitives excluded — avoids introspect/recall noise
     )
 
     actions = response_data.get('actions', [])

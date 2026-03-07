@@ -281,6 +281,40 @@ class TestSelfEvalRules:
         result = svc._heuristic_fallback("What is quantum computing?", ctx)
         assert result.branch == 'respond'
 
+    def test_rule1_act_no_tools_recovers_innate_skill_from_text(self):
+        """ACT + skills=[] + no tools + 'remind me' text → skill recovered, stays ACT."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('act', 'ACT', tools=[])
+        ctx = self._make_context(tool_summaries='')
+        result = svc._self_evaluate(result, "remind me to water the plants at 6pm tomorrow", ctx)
+        assert result.branch == 'act'
+        assert result.mode == 'ACT'
+        assert 'schedule' in result.skills
+        assert result.self_eval_override is True
+        assert result.self_eval_reason == 'act_innate_skill_recovered'
+
+    def test_rule1_act_no_tools_recovers_list_skill_from_text(self):
+        """ACT + skills=[] + no tools + 'add to my list' → list skill recovered."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('act', 'ACT', tools=[])
+        ctx = self._make_context(tool_summaries='')
+        result = svc._self_evaluate(result, "add eggs to my shopping list", ctx)
+        assert result.branch == 'act'
+        assert 'list' in result.skills
+        assert result.self_eval_reason == 'act_innate_skill_recovered'
+
+    def test_rule1_act_no_tools_no_innate_match_still_downgrades(self):
+        """ACT + skills=[] + no tools + generic text → downgrade (no innate skill detected)."""
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        result = self._make_result('act', 'ACT', tools=[])
+        ctx = self._make_context(tool_summaries='')
+        result = svc._self_evaluate(result, "do something external with a database", ctx)
+        assert result.branch == 'respond'
+        assert result.self_eval_reason == 'act_no_tools_available'
+
     def test_heuristic_fallback_command_gives_act_when_tools_available(self):
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
