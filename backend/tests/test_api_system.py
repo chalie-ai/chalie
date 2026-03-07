@@ -638,3 +638,87 @@ class TestSystemAPI:
         # Should be a valid ISO 8601 string
         parsed = datetime.fromisoformat(data['generated_at'])
         assert parsed.tzinfo is not None
+
+    # ────────────────────────────────────────────
+    # GET /ready
+    # ────────────────────────────────────────────
+
+    def _ready_patches(self, db_ok=True, store_ok=True, worker_ok=True):
+        """Build patch context for /ready — all three components can be individually broken."""
+        mock_db, _ = _make_db_mock()
+        if not db_ok:
+            mock_db.connection.side_effect = Exception('db down')
+
+        mock_store = MagicMock()
+        if not store_ok:
+            mock_store.ping.side_effect = Exception('store down')
+
+        patches = {
+            'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
+            'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
+        }
+        if not worker_ok:
+            patches['services.prompt_queue.PromptQueue'] = MagicMock(side_effect=ImportError('no queue'))
+        return patches
+
+    def test_ready_all_ok_returns_200_with_component_status(self, client):
+        """/ready with all components healthy returns 200 and structured component objects."""
+        patches = self._ready_patches()
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for target, mock_val in patches.items():
+                stack.enter_context(patch(target, mock_val))
+            resp = client.get('/ready')
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['ready'] is True
+        assert data['database'] == {'status': 'ok', 'connected': True}
+        assert data['memory_store'] == {'status': 'ok'}
+        assert data['workers'] == {'status': 'ok'}
+
+    def test_ready_db_failure_returns_503(self, client):
+        """/ready with database down returns 503 and error status in database component."""
+        patches = self._ready_patches(db_ok=False)
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for target, mock_val in patches.items():
+                stack.enter_context(patch(target, mock_val))
+            resp = client.get('/ready')
+
+        assert resp.status_code == 503
+        data = resp.get_json()
+        assert data['ready'] is False
+        assert data['database']['status'] == 'error'
+        assert data['database']['connected'] is False
+        assert 'message' in data['database']
+        assert data['memory_store']['status'] == 'ok'
+        assert data['workers']['status'] == 'ok'
+
+    def test_ready_store_failure_returns_503(self, client):
+        """/ready with memory store down returns 503 and error in memory_store component."""
+        patches = self._ready_patches(store_ok=False)
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for target, mock_val in patches.items():
+                stack.enter_context(patch(target, mock_val))
+            resp = client.get('/ready')
+
+        assert resp.status_code == 503
+        data = resp.get_json()
+        assert data['ready'] is False
+        assert data['database']['status'] == 'ok'
+        assert data['memory_store']['status'] == 'error'
+        assert 'message' in data['memory_store']
+
+    def test_ready_no_checks_key_in_response(self, client):
+        """Response must not include the legacy 'checks' key — components are top-level."""
+        patches = self._ready_patches()
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for target, mock_val in patches.items():
+                stack.enter_context(patch(target, mock_val))
+            resp = client.get('/ready')
+
+        data = resp.get_json()
+        assert 'checks' not in data
