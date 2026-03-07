@@ -190,13 +190,17 @@ class ToolProfileService:
             triage_triggers = profile_data.get('triage_triggers', [])[:10]
             with db.connection() as conn:
                 cursor = conn.cursor()
+                effort_tier = profile_data.get('effort_tier', 'moderate')
+                if effort_tier not in ('trivial', 'light', 'moderate', 'deep'):
+                    effort_tier = 'moderate'
+
                 cursor.execute(
                     """
                     INSERT INTO tool_capability_profiles
                         (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
                          anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, updated_at)
-                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                         triage_triggers, effort, updated_at)
+                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT (tool_name) DO UPDATE SET
                         tool_type = 'tool',
                         short_summary = EXCLUDED.short_summary,
@@ -207,6 +211,7 @@ class ToolProfileService:
                         manifest_hash = EXCLUDED.manifest_hash,
                         domain = EXCLUDED.domain,
                         triage_triggers = EXCLUDED.triage_triggers,
+                        effort = EXCLUDED.effort,
                         updated_at = datetime('now')
                     """,
                     (
@@ -219,6 +224,7 @@ class ToolProfileService:
                         manifest_hash,
                         profile_data.get('domain', 'Other'),
                         json.dumps(triage_triggers),
+                        effort_tier,
                     )
                 )
 
@@ -303,6 +309,11 @@ class ToolProfileService:
         db = self._get_db()
         try:
             triage_triggers = profile_data.get('triage_triggers', [])[:10]
+
+            # Skills are innate — use authoritative effort from registry
+            from services.innate_skills.registry import SKILL_EFFORT
+            effort = SKILL_EFFORT.get(skill_name, 'moderate')
+
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -310,8 +321,8 @@ class ToolProfileService:
                     INSERT INTO tool_capability_profiles
                         (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
                          anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, updated_at)
-                    VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, 'Innate Skill', ?, datetime('now'))
+                         triage_triggers, effort, updated_at)
+                    VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, 'Innate Skill', ?, ?, datetime('now'))
                     ON CONFLICT (tool_name) DO UPDATE SET
                         tool_type = 'skill',
                         short_summary = EXCLUDED.short_summary,
@@ -322,6 +333,7 @@ class ToolProfileService:
                         manifest_hash = EXCLUDED.manifest_hash,
                         domain = EXCLUDED.domain,
                         triage_triggers = EXCLUDED.triage_triggers,
+                        effort = EXCLUDED.effort,
                         updated_at = datetime('now')
                     """,
                     (
@@ -333,6 +345,7 @@ class ToolProfileService:
                         json.dumps(profile_data.get('complementary_skills', [])),
                         manifest_hash,
                         json.dumps(triage_triggers),
+                        effort,
                     )
                 )
 
@@ -576,7 +589,7 @@ class ToolProfileService:
         rows = None
         try:
             rows = db.fetch_all(
-                "SELECT tool_name, tool_type, short_summary, triage_triggers, domain "
+                "SELECT tool_name, tool_type, short_summary, triage_triggers, domain, effort "
                 "FROM tool_capability_profiles ORDER BY domain, tool_name"
             )
         except Exception as e:
@@ -597,6 +610,8 @@ class ToolProfileService:
                         triggers = json.loads(triggers)
                     if triggers:
                         summary += f" [{', '.join(triggers[:10])}]"
+                    effort = r.get('effort') or 'moderate'
+                    summary += f" (effort: {effort})"
                     by_domain[domain].append(f"- {r['tool_name']}: {summary}")
 
         # Fallback: no tool rows in DB -> build from manifests directly
@@ -909,6 +924,7 @@ class ToolProfileService:
             triggers = fallback.get('triage_triggers', [])
             if triggers:
                 summary += f" [{', '.join(triggers[:10])}]"
+            summary += " (effort: moderate)"  # default for unanalyzed tools
             by_domain[domain].append(f"- {tool_name}: {summary}")
 
         if not by_domain:

@@ -55,6 +55,18 @@ class CuriosityPursuitService:
                 logger.error(f"{LOG_PREFIX} Cycle error: {e}", exc_info=True)
                 time.sleep(300)  # 5min backoff on error
 
+    def _are_workers_idle(self) -> bool:
+        """Check if main worker queues are empty (avoid competing with user-facing work)."""
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            for queue_name in ['prompt-queue', 'memory-chunker-queue']:
+                if store.llen(queue_name) > 0:
+                    return False
+            return True
+        except Exception:
+            return True  # fail-open
+
     def run_once(self) -> Optional[Dict]:
         """
         Run one exploration cycle.
@@ -62,6 +74,20 @@ class CuriosityPursuitService:
         Returns:
             Dict with exploration results, or None if nothing to explore.
         """
+        # Self-regulation: skip when memory is too thin or workers are busy
+        try:
+            from services.self_model_service import SelfModelService
+            richness = SelfModelService().get_memory_richness()
+            if richness < 0.15:
+                logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.15, skipping exploration")
+                return None
+        except Exception:
+            pass  # fail-open
+
+        if not self._are_workers_idle():
+            logger.debug(f"{LOG_PREFIX} Workers busy, skipping exploration")
+            return None
+
         from services.curiosity_thread_service import CuriosityThreadService
 
         thread_service = CuriosityThreadService()

@@ -45,6 +45,15 @@ def moment_enrichment_worker(shared_state=None):
 
 def _poll_and_enrich():
     """Poll for enriching moment documents and process each."""
+    # Self-regulation: skip during cold start when no interactions have occurred
+    try:
+        from services.self_model_service import SelfModelService
+        richness = SelfModelService().get_memory_richness()
+        if richness < 0.05:
+            return
+    except Exception:
+        pass  # fail-open
+
     try:
         from services.database_service import get_shared_db_service
         from services.moment_service import MomentService
