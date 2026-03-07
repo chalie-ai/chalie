@@ -169,7 +169,7 @@ def _extract_and_store_traits(memory_chunk: dict, metadata: dict):
 
     Args:
         memory_chunk: The LLM-generated memory chunk (may contain user_traits)
-        metadata: Job metadata (may contain user_id for speaker detection)
+        metadata: Job metadata (may contain speaker detection info)
     """
     traits = memory_chunk.get('user_traits', [])
     if not traits or not isinstance(traits, list):
@@ -402,8 +402,8 @@ def _detect_challenge_reaction(prompt_message: str, response_message: str):
             with db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT trait_value FROM user_traits WHERE user_id = 'primary' "
-                    "AND trait_key = 'challenge_tolerance' LIMIT 1"
+                    "SELECT trait_value FROM user_traits "
+                    "WHERE trait_key = 'challenge_tolerance' LIMIT 1"
                 )
                 row = cursor.fetchone()
                 cursor.close()

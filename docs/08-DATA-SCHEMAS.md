@@ -78,7 +78,6 @@ Conversations are stored as MemoryStore-backed threads with metadata in SQLite.
 ```sql
 CREATE TABLE threads (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     topic TEXT NOT NULL,
     title TEXT,
     status TEXT DEFAULT 'active',  -- active, archived, deleted
@@ -106,7 +105,6 @@ Three tables provide deterministic list management with full history (`list_serv
 ```sql
 CREATE TABLE lists (
     id          TEXT        PRIMARY KEY,           -- 8-char hex
-    user_id     TEXT        NOT NULL DEFAULT 'primary',
     name        TEXT        NOT NULL,
     list_type   TEXT        NOT NULL DEFAULT 'checklist',
     metadata    JSONB       NOT NULL DEFAULT '{}',
@@ -114,8 +112,8 @@ CREATE TABLE lists (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at  TIMESTAMPTZ                        -- soft delete
 );
--- Unique name per user (case-insensitive, active lists only)
-CREATE UNIQUE INDEX idx_lists_user_name_unique ON lists (user_id, lower(name)) WHERE deleted_at IS NULL;
+-- Unique name (case-insensitive, active lists only)
+CREATE UNIQUE INDEX idx_lists_name_unique ON lists (lower(name)) WHERE deleted_at IS NULL;
 ```
 
 **`list_items`** — Items within lists
@@ -158,7 +156,6 @@ CREATE TABLE list_events (
 ```sql
 CREATE TABLE scheduled_items (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     title TEXT NOT NULL,
     description TEXT,
     scheduled_for TIMESTAMP NOT NULL,
@@ -192,7 +189,6 @@ CREATE TABLE curiosity_threads (
 ```sql
 CREATE TABLE autobiography (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     content TEXT NOT NULL,
     sections JSONB,  -- identity, values, patterns, etc.
     version INTEGER DEFAULT 1,
@@ -205,7 +201,6 @@ CREATE TABLE autobiography (
 ```sql
 CREATE TABLE routing_decisions (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     selected_mode TEXT NOT NULL,
     scores JSONB NOT NULL,
     signals JSONB NOT NULL,
@@ -217,7 +212,6 @@ CREATE TABLE routing_decisions (
 ```sql
 CREATE TABLE semantic_concepts (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     definition TEXT,
     embedding vector(768),
@@ -240,7 +234,6 @@ CREATE TABLE semantic_relationships (
 ```sql
 CREATE TABLE user_traits (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     category TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
@@ -255,7 +248,6 @@ CREATE TABLE user_traits (
 ```sql
 CREATE TABLE providers (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     type TEXT NOT NULL,  -- ollama, openai, anthropic, gemini
     endpoint TEXT,
@@ -273,7 +265,6 @@ CREATE TABLE job_provider_assignments (
 
 CREATE TABLE tool_configs (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     tool_name TEXT NOT NULL,
     config JSONB,
     enabled BOOLEAN DEFAULT TRUE,
@@ -297,7 +288,6 @@ CREATE TABLE master_account (
 ```sql
 CREATE TABLE triage_calibration (
     id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
     metric_name TEXT NOT NULL,
     score FLOAT NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()

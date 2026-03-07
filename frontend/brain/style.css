@@ -1111,47 +1111,6 @@ body::before {
     line-height: 1.6;
 }
 
-/* Embodiment sections */
-.embodiment-section {
-    padding: 0 0 24px 0;
-}
-
-.embodiment-section:first-of-type {
-    padding-top: 0;
-}
-
-.section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.section-title {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--text-muted);
-}
-
-.section-link {
-    font-size: 12px;
-    color: var(--accent);
-    text-decoration: none;
-}
-
-.section-link:hover {
-    text-decoration: underline;
-}
-
-/* Marketplace tool cards (placeholder style) */
-.tools-grid--recommended {
-    padding: 0;
-}
-
 /* Catalog grid inside the Add Tool modal */
 .tools-grid--modal {
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

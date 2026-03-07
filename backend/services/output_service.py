@@ -42,7 +42,7 @@ class OutputService:
             mode: Output mode (RESPOND, CLARIFY, ACKNOWLEDGE)
             confidence: Confidence score of the response
             generation_time: Time taken to generate the response
-            original_metadata: Optional original metadata from the request (uuid, user_id, etc.)
+            original_metadata: Optional original metadata from the request (uuid, source, etc.)
             reply_actions: Optional action buttons for the frontend (only delivered on sync chat, never drift)
 
         Returns:

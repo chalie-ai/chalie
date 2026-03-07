@@ -30,8 +30,8 @@ LOG_PREFIX = "[AMBIENT_TOOL]"
 _NS = "ambient_tool"
 
 
-def _key(user_id: str, suffix: str) -> str:
-    return f"{_NS}:{user_id}:{suffix}"
+def _key(suffix: str) -> str:
+    return f"{_NS}:{suffix}"
 
 
 class AmbientToolAction(AutonomousAction):
@@ -40,7 +40,6 @@ class AmbientToolAction(AutonomousAction):
         super().__init__(name='AMBIENT_TOOL', enabled=True, priority=6)
         config = config or {}
         self.store = MemoryClientService.create_connection()
-        self.user_id = config.get('user_id', 'default')
 
         self.relevance_threshold = config.get('relevance_threshold', 0.35)
         self.min_activation = config.get('min_activation', 0.5)
@@ -119,7 +118,7 @@ class AmbientToolAction(AutonomousAction):
 
     def _rate_limit_gate(self, tool_name: str) -> bool:
         """Max 1 invocation per cooldown period per tool."""
-        last_key = _key(self.user_id, f'last_invoke:{tool_name}')
+        last_key = _key(f'last_invoke:{tool_name}')
         last = self.store.get(last_key)
         if last and (time.time() - float(last)) < self.per_tool_cooldown:
             return False
@@ -184,7 +183,7 @@ class AmbientToolAction(AutonomousAction):
                                 details={'reason': 'invocation_failed', 'error': str(e)[:100]})
 
         # 3. Update rate limit
-        self.store.set(_key(self.user_id, f'last_invoke:{tool_name}'), str(time.time()))
+        self.store.set(_key(f'last_invoke:{tool_name}'), str(time.time()))
 
         # 4. Store finding as gist for future drift/recall
         gist_stored = self._store_finding_gist(thought, tool_name, query, result_text)
