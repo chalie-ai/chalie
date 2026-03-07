@@ -46,18 +46,23 @@ class AppUpdateService:
         return self._memory_store
 
     def get_deployment_mode(self) -> str:
-        """Detect the current deployment mode based on environment variables.
+        """Detect the current deployment mode based on environment and file system checks.
 
         Returns one of:
-            - 'docker': If IS_DOCKER environment variable is set
-            - 'installed': If APP_HOME environment variable is set
+            - 'docker': If running in Docker (detected via /.dockerenv or IS_DOCKER env var)
+            - 'installed': If APP_HOME environment variable is set (production installation)
             - 'dev': Otherwise (default for development environments)
 
         Returns:
             str: The detected deployment mode ('docker', 'installed', or 'dev')
         """
-        if os.environ.get("IS_DOCKER"):
+        # Check for Docker via /.dockerenv file (standard Docker indicator)
+        if os.path.exists("/.dockerenv"):
             return "docker"
+        # Fallback to environment variable check
+        elif os.environ.get("IS_DOCKER"):
+            return "docker"
+        # Check for installed mode via APP_HOME env var
         elif os.environ.get("APP_HOME"):
             return "installed"
         else:
