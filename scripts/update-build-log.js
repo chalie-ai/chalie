@@ -8,16 +8,47 @@ const TODAY = new Date().toISOString().slice(0, 10);
 const BUILD_LOG_DIR = './chalie-web/src/build-log';
 const BUILD_LOG_FILE = `${BUILD_LOG_DIR}/${TODAY}.md`;
 
+function getLastProcessedDate() {
+  try {
+    // Find the most recent build log file
+    const files = fs.readdirSync(BUILD_LOG_DIR)
+      .filter(f => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
+      .sort()
+      .reverse();
+
+    if (files.length === 0) {
+      // No build logs exist yet; start from yesterday to be safe
+      const yesterday = new Date();
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      return yesterday.toISOString().slice(0, 10);
+    }
+
+    // Return the most recent build log's date
+    return files[0].slice(0, 10);
+  } catch (e) {
+    // If directory doesn't exist, start from yesterday
+    const yesterday = new Date();
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    return yesterday.toISOString().slice(0, 10);
+  }
+}
+
 async function getCommitsForToday() {
   try {
-    // Get all commits from today using UTC dates
+    const lastProcessed = getLastProcessedDate();
+    // Add 1 second to the last processed date to avoid duplicates
+    const sinceDate = new Date(lastProcessed + ' 00:00:01');
+    const sinceDateStr = sinceDate.toISOString().slice(0, 19).replace('T', ' ');
+    const untilDateStr = TODAY + ' 23:59:59';
+
+    // Get all commits since last processed build log
     const output = execSync(
-      `git log --since="${TODAY} 00:00:00" --until="${TODAY} 23:59:59" --date=iso --pretty=format:"%h|%s|%b" --name-only`,
+      `git log --since="${sinceDateStr}" --until="${untilDateStr}" --date=iso --pretty=format:"%h|%s|%b" --name-only`,
       { encoding: 'utf8' }
     );
 
     if (!output.trim()) {
-      console.log('No commits found for today');
+      console.log(`No commits found since ${lastProcessed}`);
       return null;
     }
 
@@ -290,7 +321,10 @@ ${entry.body}`;
 
 async function main() {
   try {
-    // Get commits for today
+    const lastProcessed = getLastProcessedDate();
+    console.log(`Processing commits since ${lastProcessed} up to ${TODAY}`);
+
+    // Get commits since last processed build log
     const commits = await getCommitsForToday();
 
     if (!commits || commits.length === 0) {
@@ -298,7 +332,7 @@ async function main() {
       process.exit(0);
     }
 
-    console.log(`Found ${commits.length} commits for ${TODAY}`);
+    console.log(`Found ${commits.length} commits`);
 
     // Compute stats
     const stats = computeStats(commits);
