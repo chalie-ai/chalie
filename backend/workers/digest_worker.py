@@ -233,6 +233,20 @@ def classify_prompt(text, existing_topics, recent_topic, gist_context, world_sta
     return json.loads(response), classification_time
 
 
+def _format_visual_context(image_contexts: list) -> str:
+    """Format image analysis results as a markdown section for the prompt."""
+    parts = []
+    for i, ctx in enumerate(image_contexts, 1):
+        label = f"Image {i}" if len(image_contexts) > 1 else "Attached image"
+        desc = ctx.get('description', '').strip()
+        ocr = ctx.get('ocr_text', '').strip()
+        part = f"**{label}:** {desc}" if desc else f"**{label}:** (no description)"
+        if ocr:
+            part += f"\n> Extracted text: {ocr[:500]}"
+        parts.append(part)
+    return "\n\n".join(parts)
+
+
 def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None):
     """
     Generate response for a terminal mode (RESPOND, CLARIFY, ACKNOWLEDGE).
@@ -341,6 +355,13 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
                         )
         except Exception as e:
             logging.debug(f"[Mode:{mode}] Ingestion contradiction check skipped: {e}")
+
+    # Inject visual context from attached images into assembled_context
+    image_contexts = (metadata or {}).get('image_contexts', [])
+    if image_contexts:
+        if assembled_context is None:
+            assembled_context = {}
+        assembled_context['visual_context'] = _format_visual_context(image_contexts)
 
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
@@ -2152,7 +2173,17 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     source = metadata.get('source', 'unknown') if metadata else 'unknown'
 
     # Step 3a: Immediate commit - append user turn to working memory (keyed by thread_id)
-    working_memory.append_turn(thread_id, 'user', text)
+    # If images are attached, annotate the turn with their visual descriptions so
+    # subsequent turns have context about what was shared.
+    _image_ctxs_wm = (metadata or {}).get('image_contexts', [])
+    _wm_text = text
+    if _image_ctxs_wm:
+        _visual_note = '; '.join(
+            ctx.get('description', '') for ctx in _image_ctxs_wm if ctx.get('description')
+        )
+        if _visual_note:
+            _wm_text = f"{text}\n[Attached: {_visual_note}]" if text else f"[Attached: {_visual_note}]"
+    working_memory.append_turn(thread_id, 'user', _wm_text)
 
     # IIP: Immediate Identity Promotion — synchronous, before any LLM call
     # Detects explicit name statements and writes to MemoryStore + SQLite immediately.
@@ -2733,7 +2764,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 intent, intent_classifier, working_memory, thread_conv_service,
             )
             is_fast_path_ack = True
-            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms}
+            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
 
         elif triage_result.branch == 'act' and _is_innate_skill_only(triage_result):
             # Direct dispatch: fire-and-done skills bypass the full ACT loop
@@ -2765,7 +2796,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         topic, text, classification, thread_conv_service,
                         cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
                         metadata=metadata, context_warmth=context_warmth,
-                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms},
+                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                         selected_tools=triage_result.tools if triage_result.tools else None,
                         selected_skills=triage_result.skills if triage_result.skills else None,
                         thread_id=thread_id,
@@ -2786,7 +2817,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 )
             is_fast_path_ack = True
             if routing_result is None:
-                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms}
+                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
 
         elif triage_result.branch == 'act':
             # Full ACT loop — complex multi-step tasks with external tools
@@ -2812,7 +2843,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     topic, text, classification, thread_conv_service,
                     cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
                     metadata=metadata, context_warmth=context_warmth,
-                    pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms},
+                    pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                     selected_tools=triage_result.tools if triage_result.tools else None,
                     selected_skills=triage_result.skills if triage_result.skills else None,
                     thread_id=thread_id,
@@ -2824,7 +2855,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     intent, intent_classifier, working_memory, thread_conv_service,
                     context_warmth, exchange_id,
                 )
-                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms}
+                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
             is_fast_path_ack = True
 
         else:
@@ -2858,7 +2889,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 topic, text, classification, thread_conv_service,
                 cortex_config, cortex_prompt_map, mode_router, _forced_signals, fact_store,
                 metadata=metadata, context_warmth=context_warmth,
-                pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal, 'routing_time_ms': triage_result.triage_time_ms},
+                pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal, 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                 selected_tools=triage_result.tools if triage_result.tools else None,
                 selected_skills=triage_result.skills if triage_result.skills else None,
                 thread_id=thread_id,
@@ -2982,7 +3013,14 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         try:
             from services.save_suggestion_service import SaveSuggestionService
             _save_svc = SaveSuggestionService()
-            _saveable = _save_svc.detect_saveable_content(
+            # Text-heavy images (receipt, document photo) → trigger save suggestion
+            _image_ctxs_save = (metadata or {}).get('image_contexts', [])
+            _image_saveable = None
+            for _ictx in _image_ctxs_save:
+                if _ictx.get('has_text') and len(_ictx.get('ocr_text', '')) > 200:
+                    _image_saveable = {'content_type': 'image_document', 'topic': 'Captured document'}
+                    break
+            _saveable = _image_saveable or _save_svc.detect_saveable_content(
                 response_data['response'], topic, thread_id,
             )
             if _saveable:
