@@ -261,7 +261,13 @@ class EpisodicRetrievalService:
                     WHERE episodes_fts MATCH ?
                       AND e.deleted_at IS NULL
                 """
-                fts_params = [query_text]
+                # FTS5 interprets `word:` as a column filter — strip colons and other FTS5
+                # operators so user messages containing URLs, timestamps, or structured text
+                # don't trigger "no such column: <word>" errors.
+                import re as _re
+                fts_safe = _re.sub(r'[:\(\)\*\^"\\]', ' ', query_text)
+                fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
+                fts_params = [fts_safe or '*']
 
                 if topic:
                     fts_query += " AND e.topic = ?"
