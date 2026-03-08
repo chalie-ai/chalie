@@ -58,7 +58,10 @@ class MomentService:
 
         doc_service = DocumentService(self.db)
 
-        # Duplicate check via embedding similarity on existing moment documents
+        # Duplicate check via embedding similarity on existing moment documents.
+        # embedding is kept in scope so it can be eagerly written to documents_vec
+        # after document creation — before the async pipeline runs.
+        embedding = None
         try:
             from services.embedding_service import get_embedding_service
             embedding = get_embedding_service().generate_embedding(message_text)
@@ -106,6 +109,25 @@ class MomentService:
         doc_service.update_extracted_metadata(
             doc_id, metadata=moment_meta, summary='',
         )
+
+        # Eagerly write the embedding to documents_vec so the next duplicate
+        # check finds this moment immediately, before async processing runs.
+        # The pipeline uses INSERT OR REPLACE, so this is safe and idempotent.
+        if embedding is not None:
+            try:
+                packed = _pack_embedding(embedding)
+                with self.db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT rowid FROM documents WHERE id = ?", (doc_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO documents_vec(rowid, embedding) VALUES (?, ?)",
+                            (row[0], packed),
+                        )
+                    cursor.close()
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} Eager embedding insert failed (non-fatal): {e}")
 
         # Enqueue for document processing (chunking, embedding, classification)
         enqueue_document_processing(doc_id)
