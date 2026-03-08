@@ -639,6 +639,52 @@ class MemoryStore:
     def pipeline(self, transaction: bool = True) -> 'PipelineProxy':
         return PipelineProxy(self)
 
+    def export_matching(self, patterns: list) -> dict:
+        """
+        Return all matching keys with their type and value in a single pass.
+
+        Instead of keys() × type() × get() per key (O(n×m×5) lock acquisitions),
+        this iterates each keyspace once and applies all patterns simultaneously —
+        O(n) total, where n = number of live keys across all keyspaces.
+
+        Returns: {key: {"type": str, "value": any}}
+        """
+        import re as _re
+        regexes = [_re.compile(p.replace("*", ".*").replace("?", ".")) for p in patterns]
+
+        def _matches(k):
+            return any(rx.fullmatch(k) for rx in regexes)
+
+        result = {}
+        now = time.time()
+
+        with self._str_lock:
+            for k, (v, expiry) in self._strings.items():
+                if (expiry is None or now <= expiry) and _matches(k):
+                    result[k] = {"type": "string", "value": v}
+
+        with self._list_lock:
+            for k, (v, expiry) in self._lists.items():
+                if (expiry is None or now <= expiry) and _matches(k):
+                    result[k] = {"type": "list", "value": list(v)}
+
+        with self._hash_lock:
+            for k, (v, expiry) in self._hashes.items():
+                if (expiry is None or now <= expiry) and _matches(k):
+                    result[k] = {"type": "hash", "value": dict(v)}
+
+        with self._zset_lock:
+            for k, (v, expiry) in self._sorted_sets.items():
+                if (expiry is None or now <= expiry) and _matches(k):
+                    result[k] = {"type": "zset", "value": [m for m, _ in v]}
+
+        with self._set_lock:
+            for k, (v, expiry) in self._sets.items():
+                if (expiry is None or now <= expiry) and _matches(k):
+                    result[k] = {"type": "set", "value": list(v)}
+
+        return result
+
     # ── Type method (compatibility) ────────────────────────────
 
     def type(self, key: str) -> str:

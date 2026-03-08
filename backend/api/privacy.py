@@ -167,41 +167,29 @@ def export_data():
             except Exception:
                 yield '{"count": 0, "error": "table not found or empty"}'
 
-        # ── MemoryStore keys ──
-        yield '}, "memory_store": {'
-        first_pattern = True
-        for pattern in store_patterns:
-            keys = store.keys(pattern)
-            if not keys:
-                continue
-            if not first_pattern:
-                yield ','
-            first_pattern = False
+        # ── MemoryStore keys — single-pass export via export_matching ──
+        # export_matching() scans each keyspace once and applies all patterns
+        # simultaneously, returning {key: {type, value}} in O(n) time.
+        # This replaces the previous O(n×m×5) pattern of keys() + type() per key.
+        yield '}, "memory_store": '
+        try:
+            import re as _re
+            all_entries = store.export_matching(store_patterns)
 
-            section = {}
-            for key in keys:
-                key_str = key if isinstance(key, str) else key.decode()
-                key_type = store.type(key)
-                key_type = key_type if isinstance(key_type, str) else key_type.decode()
-                try:
-                    if key_type == "string":
-                        val = store.get(key)
-                        section[key_str] = val if isinstance(val, str) else val.decode() if val else None
-                    elif key_type == "list":
-                        section[key_str] = [v.decode() if isinstance(v, bytes) else v for v in store.lrange(key, 0, -1)]
-                    elif key_type == "hash":
-                        raw = store.hgetall(key)
-                        section[key_str] = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in raw.items()}
-                    elif key_type == "zset":
-                        section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.zrange(key, 0, -1)]
-                    elif key_type == "set":
-                        section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.smembers(key)]
-                except Exception:
-                    section[key_str] = "<unreadable>"
+            # Group results by pattern for the same JSON shape as before
+            compiled = [(p, _re.compile(p.replace("*", ".*").replace("?", "."))) for p in store_patterns]
+            by_pattern = {p: {} for p in store_patterns}
+            for key, entry in all_entries.items():
+                for pattern, rx in compiled:
+                    if rx.fullmatch(key):
+                        by_pattern[pattern][key] = entry["value"]
+                        break
 
-            yield json.dumps(pattern) + ': ' + json.dumps(section)
+            yield json.dumps(by_pattern)
+        except Exception:
+            yield '{}'
 
-        yield '}}'
+        yield '}'
 
     response = Response(
         stream_with_context(generate()),
