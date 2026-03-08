@@ -575,9 +575,9 @@ class ToolRegistryService:
             # Trusted tool — subprocess execution, no Docker
             runner_path = str(tool_dir / "runner.py")
 
-            # Install any tool-declared dependencies before registering
-            self._install_tool_requirements(tool_name, tool_dir)
-
+            # Register first so the tool is immediately visible in the registry,
+            # then install dependencies. Deps install can be slow on a fresh container;
+            # pre-registering avoids a race where tests query /tools before pip finishes.
             with self._lock:
                 self.tools[tool_name] = {
                     "manifest": manifest,
@@ -589,6 +589,9 @@ class ToolRegistryService:
                 }
             trigger_type = manifest.get("trigger", {}).get("type", "unknown")
             logger.info(f"[TOOL REGISTRY] Loaded trusted tool '{tool_name}' (trigger={trigger_type})")
+
+            # Install any tool-declared dependencies after registering
+            self._install_tool_requirements(tool_name, tool_dir)
         else:
             # Sandboxed tool — Docker container execution
             version = manifest.get("version", "latest")

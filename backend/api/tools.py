@@ -335,20 +335,13 @@ def install_tool():
                         "error": f"Symlinks not allowed in tool repo: {path.relative_to(temp_dir)}"
                     }), 400
 
-            # Validate manifest and Dockerfile exist
+            # Validate manifest exists
             manifest_path = temp_dir / "manifest.json"
-            dockerfile_path = temp_dir / "Dockerfile"
 
             if not manifest_path.exists():
                 return jsonify({
                     "ok": False,
                     "error": "manifest.json not found in root"
-                }), 400
-
-            if not dockerfile_path.exists():
-                return jsonify({
-                    "ok": False,
-                    "error": "Dockerfile not found in root"
                 }), 400
 
             # Parse and validate manifest
@@ -360,6 +353,22 @@ def install_tool():
                     "ok": False,
                     "error": f"Invalid manifest.json: {str(e)[:200]}"
                 }), 400
+
+            # Require Dockerfile (sandboxed) or runner.py (trusted) depending on trust status
+            _tool_name_for_trust = manifest.get("name", "")
+            _is_trusted = registry._is_tool_trusted(_tool_name_for_trust)
+            if _is_trusted:
+                if not (temp_dir / "runner.py").exists():
+                    return jsonify({
+                        "ok": False,
+                        "error": "runner.py not found in root (required for trusted tools)"
+                    }), 400
+            else:
+                if not (temp_dir / "Dockerfile").exists():
+                    return jsonify({
+                        "ok": False,
+                        "error": "Dockerfile not found in root (required for sandboxed tools)"
+                    }), 400
 
             # Check required fields
             required_fields = {"name", "description", "trigger", "parameters", "returns"}
@@ -551,13 +560,19 @@ def update_tool(tool_name: str):
         if git_dir.exists():
             shutil.rmtree(git_dir, ignore_errors=True)
 
-        # Validate the new version has manifest and Dockerfile
+        # Validate the new version has manifest and either Dockerfile or runner.py
         if not (temp_dir / "manifest.json").exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
             return jsonify({"error": "manifest.json not found in new version"}), 400
-        if not (temp_dir / "Dockerfile").exists():
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return jsonify({"error": "Dockerfile not found in new version"}), 400
+        _trusted_update = registry._is_tool_trusted(tool_name)
+        if _trusted_update:
+            if not (temp_dir / "runner.py").exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return jsonify({"error": "runner.py not found in new version (required for trusted tools)"}), 400
+        else:
+            if not (temp_dir / "Dockerfile").exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return jsonify({"error": "Dockerfile not found in new version"}), 400
 
         # Now replace the old tool directory
         old_dir = tools_dir / tool_name
@@ -859,8 +874,10 @@ def list_tools():
                     continue
 
                 manifest_path = tool_dir / "manifest.json"
-                dockerfile_path = tool_dir / "Dockerfile"
-                if not (manifest_path.exists() and dockerfile_path.exists()):
+                # Trusted tools use runner.py; only sandboxed tools need a Dockerfile
+                if not manifest_path.exists():
+                    continue
+                if not (tool_dir / "Dockerfile").exists() and not (tool_dir / "runner.py").exists():
                     continue
 
                 try:
