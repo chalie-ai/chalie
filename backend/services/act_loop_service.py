@@ -7,6 +7,7 @@ base cost, and fatigue grows non-linearly with iteration depth.
 
 import re
 import time
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 import logging
 
@@ -30,6 +31,10 @@ def _strip_tool_markers(text: str) -> str:
 
 
 from services.act_action_categories import ACTION_FATIGUE_COSTS
+
+# Actions that never block the ACT loop — dispatched to background threads.
+# Their results aren't needed for subsequent iteration reasoning.
+FIRE_AND_FORGET: frozenset = frozenset({'memorize', 'focus'})
 
 
 class ActLoopService:
@@ -261,6 +266,8 @@ class ActLoopService:
     def execute_actions(self, topic: str, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Execute actions via dispatcher. Multiple actions run sequentially with output chaining.
+        Fire-and-forget actions (memorize, focus) dispatch to background threads and return
+        a synthetic success immediately — they never block the next iteration.
 
         Args:
             topic: Current conversation topic
@@ -280,6 +287,23 @@ class ActLoopService:
         accumulated = {}  # outputs from completed actions, keyed by downstream param name
 
         for i, action in enumerate(actions):
+            action_type = action.get('type', '')
+
+            # Fire-and-forget: dispatch to background, return synthetic result immediately
+            if action_type in FIRE_AND_FORGET:
+                enriched = {**self.context_extras, **action}
+                self._dispatch_async(topic, enriched)
+                results.append({
+                    'action_type': action_type,
+                    'status': 'success',
+                    'result': '(running in background)',
+                    'execution_time': 0.0,
+                    'confidence': 0.92,
+                    'notes': 'fire-and-forget',
+                })
+                logging.debug(f"[MODE:ACT] [ACT LOOP] Step {i+1}/{len(actions)} → {action_type} (fire-and-forget)")
+                continue
+
             # Enrich action params with context_extras as defaults, then accumulated outputs
             enriched = {**self.context_extras, **action}
             for field, value in accumulated.items():
@@ -309,6 +333,17 @@ class ActLoopService:
                         accumulated[key] = value
 
         return results
+
+    def _dispatch_async(self, topic: str, action: Dict[str, Any]) -> None:
+        """Dispatch an action to a background daemon thread (fire-and-forget)."""
+        def _run():
+            try:
+                self._dispatcher.dispatch_action(topic, action)
+            except Exception as e:
+                logging.warning(f"[MODE:ACT] [ACT LOOP] Fire-and-forget {action.get('type')} failed: {e}")
+
+        t = threading.Thread(target=_run, daemon=True, name=f"act-ff-{action.get('type')}")
+        t.start()
 
     def log_iteration(
         self,

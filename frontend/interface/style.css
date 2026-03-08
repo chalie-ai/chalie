@@ -346,6 +346,13 @@ body {
   animation: blink 1.5s infinite;
 }
 
+/* Narrating — shimmer between violet and cyan (live ACT loop) */
+.presence-dot[data-state="narrating"] .presence-dot__inner {
+  background: linear-gradient(90deg, var(--violet), var(--dusk-blue), var(--violet));
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
 /* --------------------------------------------------------------------------
    7. Conversation Spine
    -------------------------------------------------------------------------- */
@@ -809,6 +816,63 @@ body {
 @keyframes thinkingBounce {
   0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
+}
+
+/* --------------------------------------------------------------------------
+   Narration Bubbles — live ACT loop progress
+   -------------------------------------------------------------------------- */
+.narration-bubble {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  margin: 2px 0 2px 48px;
+  border-left: 2px solid rgba(138, 92, 255, 0.20);
+  line-height: 1.5;
+  animation: formEntry 200ms var(--ease-out) both;
+  max-width: 85%;
+}
+
+.steer-bubble {
+  font-size: 0.82rem;
+  color: rgba(234, 230, 242, 0.72);
+  padding: 6px 14px;
+  margin: 2px 48px 2px auto;
+  text-align: right;
+  border-right: 2px solid rgba(138, 92, 255, 0.30);
+  font-style: italic;
+  line-height: 1.5;
+  animation: formEntry 200ms var(--ease-out) both;
+  max-width: 70%;
+}
+
+/* Collapsed narration group */
+.narration-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 2px 48px;
+}
+
+.narration-group--collapsed .narration-bubble,
+.narration-group--collapsed .steer-bubble {
+  display: none;
+}
+
+.narration-toggle {
+  background: none;
+  border: 1px solid rgba(138, 92, 255, 0.15);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  padding: 2px 10px;
+  cursor: pointer;
+  width: fit-content;
+  transition: all 220ms ease;
+}
+
+.narration-toggle:hover {
+  color: var(--text-secondary);
+  border-color: rgba(138, 92, 255, 0.30);
 }
 
 /* Error form */

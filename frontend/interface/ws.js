@@ -162,19 +162,36 @@ export class WSClient {
 
   /**
    * Send a chat message via WebSocket.
+   * If an ACT loop is already in-flight, sends as a steer instead.
    *
    * @param {string} text
    * @param {"text"|"voice"} source
    * @param {{
-   *   onStatus?:  (stage: string) => void,
-   *   onMessage?: (data: object) => void,
-   *   onCard?:    (data: object) => void,
-   *   onError?:   (data: object) => void,
-   *   onDone?:    (data: object) => void,
+   *   onStatus?:    (stage: string) => void,
+   *   onMessage?:   (data: object) => void,
+   *   onNarration?: (data: object) => void,
+   *   onCard?:      (data: object) => void,
+   *   onError?:     (data: object) => void,
+   *   onDone?:      (data: object) => void,
+   *   onSteerSent?: (text: string) => void,
    * }} callbacks
    */
   send(text, source, callbacks = {}, imageIds = []) {
-    this.abort();
+    // If a chat is already in-flight, check if this is a steer (empty callbacks = steer)
+    if (this._chatCallbacks) {
+      const isSteer = !callbacks.onMessage && !callbacks.onDone;
+      if (isSteer) {
+        // Route as ACT steer — caller (app.js) already verified narrating state
+        if (this.isConnected && text) {
+          this._send({ type: 'act_steer', text });
+          this._chatCallbacks.onSteerSent?.(text);
+        }
+        return;
+      }
+      // Not a steer — abort old request and start fresh
+      this._chatCallbacks = null;
+    }
+
     this._chatCallbacks = callbacks;
 
     if (!this.isConnected) {
@@ -230,6 +247,9 @@ export class WSClient {
       switch (type) {
         case 'status':
           this._chatCallbacks.onStatus?.(data.stage);
+          return;
+        case 'act_narration':
+          this._chatCallbacks.onNarration?.(data);
           return;
         case 'message':
           this._chatCallbacks.onMessage?.(data);
