@@ -441,26 +441,30 @@ User clarifies (or new evidence arrives)
 
 ---
 
-## Implementation Order
+## Implementation Status
 
-### Phase 1: Foundation
-1. Schema changes (reliability columns, uncertainties table)
-2. `UncertaintyService` (CRUD, severity heuristic)
-3. Decay engine multiplier (read reliability field)
-4. Context assembly deprioritization (lower weight for non-reliable)
+All four phases are **complete and live**.
 
-### Phase 2: Detection
-5. Ingestion detection subprocess (vector search + contradiction classifier)
-6. Consolidation detection (concept extraction post-check)
-7. Drift RECONCILE action (cross-store contradiction sweep)
+### Phase 1: Foundation ✅
+1. Schema: `reliability` columns on `user_traits`, `episodes`, `semantic_concepts`; `uncertainties` table
+2. `UncertaintyService`: CRUD, severity heuristic, rank-guard on `_set_reliability()`
+3. Decay engine multiplier: `contradicted` ×0.5, `uncertain` ×0.75
+4. Context assembly deprioritization: lower weight for non-reliable memories
 
-### Phase 3: Resolution
-8. Temporal auto-resolution (supersede pattern)
-9. Response weaving (frontal cortex contradiction flag)
-10. ACT loop pre-action check
-11. Resolution feedback loop (clarification -> memory updates)
+### Phase 2: Detection ✅
+5. Ingestion detection: `ContradictionClassifierService.check_ingestion()` — 600ms time-box, vector pre-screen, LLM classify in `digest_worker.generate_for_mode()`
+6. Consolidation detection: `SemanticConsolidationService.consolidate_concept()` hook via `check_concept_conflict()`
+7. Drift RECONCILE: `ReconcileAction` (priority 4, 30min cooldown) registered in `CognitiveDriftEngine`
+8. Trait conflict path: `UserTraitService.store_trait()` creates uncertainty records on same-key conflicts
 
-### Phase 4: Self-Tuning
-12. Uncertainty tolerance identity trait
-13. Surfacing anti-nag logic
-14. Evidence-based resolution (reinforcement resolves uncertainties)
+### Phase 3: Resolution ✅
+9. Temporal auto-resolution: `_auto_supersede()` in `ReconcileAction`; `temporal_change` classification auto-resolves silently
+10. Response weaving: `{{contradiction_context}}` in `frontal-cortex-respond.md`; `FrontalCortexService._inject_parameters()` builds hint block
+11. ACT loop pre-action check: `ActDispatcherService._check_source_reliability()` — reduces confidence 40%, annotates `reliability_warning`
+12. Resolution feedback loop: `UserTraitService.correct_trait()` resolves linked uncertainties with `strategy='user_clarified'`
+
+### Phase 4: Self-Tuning ✅
+13. Uncertainty tolerance identity vector: seeded in `schema.sql` (`baseline=0.5, min=0.2, max=0.8`)
+14. Surfacing anti-nag: `UncertaintyService.downgrade_overexposed()` called from `mark_surfaced()` after 3+ surfacings
+15. Evidence-based resolution: `UncertaintyService.resolve_by_reinforcement()` — auto-resolves when reinforced confidence > 2× opposing
+16. Tolerance nudge: `_nudge_uncertainty_tolerance()` called on `correct_trait()` (−0.03) and trait reinforcement (+0.01)

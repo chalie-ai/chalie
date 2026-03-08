@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chalie is a human-in-the-loop cognitive assistant that combines memory consolidation, semantic reasoning, and proactive assistance. The system processes user prompts through a chain of workers and services, enriching conversations with memory chunks and generating episodic memories for future use.
+Chalie is a **persistent cognitive agent** — a continuously running cognitive runtime, not a request-response service. Intelligence emerges from experience: every interaction flows through a memory pipeline that compresses, abstracts, and decays information over time. The system is not a chatbot or assistant wrapper; it is a cognitive runtime that forms memories, runs background processes, exercises judgment, and diverges into a unique identity shaped by its interaction history.
 
 ## Core Architecture
 
@@ -12,10 +12,11 @@ Chalie is a human-in-the-loop cognitive assistant that combines memory consolida
 - **Core Pattern**: Single-process architecture with daemon threads and PromptQueue, service-oriented design
 
 ### Communication Pattern
-1. User sends message → POST to `/chat` with text
-2. Backend processes: Mode router selects mode → mode-specific LLM generates response
-3. Response delivered: Via WebSocket (status → message → done events)
-4. Authentication: Session cookie-based authentication (`@require_session` decorator)
+1. Client connects to `/ws` (WebSocket via flask-sock)
+2. Client sends `{"type": "message", "text": "..."}` JSON frame
+3. Backend enqueues message → Digest Worker processes → response streamed back as WebSocket frames (`status` → `message` → `done`)
+4. Drift thoughts, cards, and proactive notifications also arrive over the same `/ws` connection
+5. Authentication: Session cookie-based (`@require_session` decorator)
 
 ## Code Organization
 
@@ -166,11 +167,15 @@ frontend/
 - **Semantic Consolidation Worker** — Extracts concepts + relationships from episodes
 
 ### Services/Daemons (Daemon Threads)
-- **REST API + WebSocket** — Flask app with flask-sock on port 8080
+- **REST API + WebSocket** — Flask app with flask-sock on port 8081
 - **Cognitive Drift Engine** — Generates spontaneous thoughts during worker idle (attention-gated: skips when user in deep focus)
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
-- **Decay Engine** — Periodic memory decay cycle
+- **Decay Engine** — Periodic memory decay cycle; applies `contradicted`/`uncertain` reliability multipliers (×0.5/×0.75) so unreliable memories decay faster
+- **Uncertainty Engine** — Four-phase contradiction detection and resolution system:
+  - *UncertaintyService* — CRUD + state machine for `uncertainties` table; rank-guard on `reliability` columns; `mark_surfaced()` with anti-nag downgrade; `resolve_by_reinforcement()` for evidence-based auto-resolution
+  - *ContradictionClassifierService* — LLM pair classifier (600ms ingestion time-box); vector pre-screen via `user_traits_vec`/`concepts_vec`; discriminates temporal change vs true contradiction vs context-dependent
+  - *ReconcileAction* — Autonomous drift action (priority 4, 30min cooldown); samples traits+concepts, runs pairwise classification, creates uncertainty records or auto-supersedes temporal changes
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Routing Reflection** — Idle-time peer review of routing decisions
 - **Topic Stability Regulator** — Adaptive tuning of topic classification parameters
