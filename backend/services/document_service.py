@@ -458,9 +458,28 @@ class DocumentService:
             if not doc:
                 return False
 
-            # Delete from database (CASCADE removes chunks)
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+
+                # Clean up virtual tables BEFORE the document delete —
+                # sqlite-vec and FTS5 virtual tables don't support FK cascades.
+                cursor.execute(
+                    "DELETE FROM documents_vec WHERE rowid = "
+                    "(SELECT rowid FROM documents WHERE id = ?)",
+                    (doc_id,)
+                )
+                cursor.execute(
+                    "DELETE FROM document_chunks_vec WHERE rowid IN "
+                    "(SELECT id FROM document_chunks WHERE document_id = ?)",
+                    (doc_id,)
+                )
+                cursor.execute(
+                    "DELETE FROM document_chunks_fts WHERE rowid IN "
+                    "(SELECT id FROM document_chunks WHERE document_id = ?)",
+                    (doc_id,)
+                )
+
+                # Delete document — CASCADE removes document_chunks rows.
                 cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
                 deleted = cursor.rowcount > 0
                 cursor.close()
