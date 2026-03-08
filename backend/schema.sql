@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     routing_time_ms REAL,
     feedback TEXT,                            -- JSONB
     reflection TEXT,                          -- JSONB
+    reasoning TEXT,                           -- e.g. "[effort:trivial]"
     previous_mode TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );

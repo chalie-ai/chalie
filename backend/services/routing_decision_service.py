@@ -57,15 +57,17 @@ class RoutingDecisionService:
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
+                effort = routing_result.get('effort_estimate')
+                reasoning = f"[effort:{effort}]" if effort else None
                 cursor.execute("""
                     INSERT INTO routing_decisions (
                         id, topic, exchange_id, selected_mode,
                         router_confidence, scores, tiebreaker_used,
                         tiebreaker_candidates, margin, effective_margin,
                         signal_snapshot, weight_snapshot, routing_time_ms,
-                        previous_mode
+                        reasoning, previous_mode
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                 """, (
                     decision_id,
@@ -81,6 +83,7 @@ class RoutingDecisionService:
                     json.dumps(routing_result.get('signal_snapshot', {})),
                     json.dumps(routing_result.get('weight_snapshot')),
                     routing_result.get('routing_time_ms'),
+                    reasoning,
                     previous_mode,
                 ))
                 cursor.close()
