@@ -9,6 +9,14 @@ context payload.
 import logging
 from typing import Dict, Any, Optional, List
 
+RELIABILITY_WEIGHT = {
+    'reliable':    1.0,
+    'uncertain':   0.6,
+    'contradicted': 0.4,
+    'superseded':  0.2,
+}
+RELIABILITY_FLOOR = 0.3
+
 
 class ContextAssemblyService:
     """Orchestrates context retrieval from all memory systems."""
@@ -230,6 +238,13 @@ class ContextAssemblyService:
             if not episodes:
                 return ""
 
+            # Downweight unreliable episodes so they rank lower in caller scoring
+            for ep in episodes:
+                if isinstance(ep, dict) and 'activation_score' in ep:
+                    reliability = ep.get('reliability', 'reliable')
+                    r_weight = max(RELIABILITY_FLOOR, RELIABILITY_WEIGHT.get(reliability, 1.0))
+                    ep['activation_score'] = ep['activation_score'] * r_weight
+
             lines = ["\n## Relevant Past Experiences"]
             for i, ep in enumerate(episodes, 1):
                 lines.append(f"{i}. {ep['gist']}")
@@ -250,6 +265,13 @@ class ContextAssemblyService:
 
             if not concepts:
                 return ""
+
+            # Downweight unreliable concepts before the strength filter
+            for c in concepts:
+                if isinstance(c, dict) and 'strength' in c:
+                    reliability = c.get('reliability', 'reliable')
+                    r_weight = max(RELIABILITY_FLOOR, RELIABILITY_WEIGHT.get(reliability, 1.0))
+                    c['strength'] = c['strength'] * r_weight
 
             lines = ["## Relevant Concepts"]
             for c in concepts:

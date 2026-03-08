@@ -509,6 +509,31 @@ class FrontalCortexService:
         result = result.replace('{{facts}}', facts_context if _include('facts') else '')
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 
+        # Phase 3 — Response weaving: inject contradiction context when flagged
+        contradiction_ctx = _ctx.get('contradiction_context')
+        if contradiction_ctx and '{{contradiction_context}}' in result:
+            mem_a = contradiction_ctx.get('memory_a_text', '')
+            mem_b = contradiction_ctx.get('memory_b_text', '')
+            classification = contradiction_ctx.get('classification', '')
+            reasoning = contradiction_ctx.get('reasoning', '')
+            if mem_a and mem_b:
+                hint = (
+                    f"\n\n## Memory Conflict Detected\n"
+                    f"The current message may contradict an existing memory:\n"
+                    f"- Existing: {mem_b}\n"
+                    f"- Current context suggests: {mem_a}\n"
+                    f"- Classification: {classification}\n"
+                    f"- Reasoning: {reasoning}\n\n"
+                    f"If relevant to the response, weave this naturally into your reply "
+                    f"(e.g. noting a change, gently asking for clarification). "
+                    f"Do NOT present it as a system alert. Omit entirely if not relevant."
+                )
+            else:
+                hint = ''
+            result = result.replace('{{contradiction_context}}', hint)
+        else:
+            result = result.replace('{{contradiction_context}}', '')
+
         # Template integrity guard — warn when skills were selected but template has no placeholder
         if selected_skills and '{{injected_skills}}' not in template:
             logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")

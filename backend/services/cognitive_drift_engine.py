@@ -191,6 +191,15 @@ class CognitiveDriftEngine:
             )
             router.register(reflect)
 
+        # Register RECONCILE if enabled (priority 4, below REFLECT=5)
+        from services.autonomous_actions.reconcile_action import ReconcileAction
+        reconcile_config = action_config.get('reconcile', {})
+        if reconcile_config.get('enabled', True):
+            router.register(ReconcileAction(
+                config=reconcile_config,
+                services={'db_service': self.db_service},
+            ))
+
         return router
 
     def run(self, shared_state: Optional[dict] = None) -> None:

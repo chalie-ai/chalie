@@ -19,7 +19,7 @@
     "category": "search",
     "trigger": "on_demand",
     "trust": "trusted",
-    "installs_by_default": false
+    "installs_by_default": true
   },
   {
     "name": "news_tool",
@@ -96,7 +96,7 @@
     "category": "research",
     "trigger": "on_demand",
     "trust": "trusted",
-    "installs_by_default": false
+    "installs_by_default": true
   },
   {
     "name": "searxng",
