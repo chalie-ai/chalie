@@ -1027,18 +1027,24 @@ body {
   background: linear-gradient(to top, rgba(6, 8, 14, 0.92) 50%, transparent);
 }
 
-.input-dock__inner {
+/* Outer wrapper: positions mic (left) + input box side by side */
+.input-dock__outer {
   max-width: 680px;
   margin: 0 auto;
   display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.input-dock__inner {
+  flex: 1;
+  display: flex;
   align-items: center;
   gap: var(--space-sm);
-  background: rgba(255, 255, 255, 0.03);
+  background: #0d0f15;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--radius-lg);
   padding: var(--space-sm) var(--space-md);
-  backdrop-filter: blur(20px) saturate(130%);
-  -webkit-backdrop-filter: blur(20px) saturate(130%);
   transition: border-color 220ms ease, box-shadow 220ms ease;
 }
 
@@ -1104,23 +1110,50 @@ body {
   flex-shrink: 0;
 }
 
-.btn-action--mic svg,
-.btn-action--upload svg {
+.btn-action--mic svg {
+  width: 20px;
+  height: 20px;
+}
+
+.btn-action--attach svg {
   width: 16px;
   height: 16px;
 }
 
 .btn-action--mic {
-  background: transparent;
-  color: var(--text-secondary);
+  width: auto;
+  height: auto;
+  padding: 0 calc(var(--radius-lg) + var(--space-md)) 0 var(--space-lg);
+  background: rgba(0, 240, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-right: none;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  color: #00F0FF;
+  backdrop-filter: blur(20px) saturate(130%);
+  -webkit-backdrop-filter: blur(20px) saturate(130%);
+  transition: background 220ms ease, color 220ms ease, border-color 220ms ease;
 }
 
 .btn-action--mic:hover {
-  color: var(--text-primary);
+  background: rgba(0, 240, 255, 0.18);
+  color: #00F0FF;
+}
+
+/* Message box overlaps the mic's right side, its left border-radius creates the ( cutout */
+.btn-action--mic:not(.hidden) + .input-dock__inner {
+  margin-left: calc(-1 * var(--radius-lg));
+  z-index: 1;
+}
+
+/* When textarea is focused, light up the mic prepend too */
+.input-dock__outer:has(.input-dock__inner:focus-within) .btn-action--mic:not(.hidden) {
+  border-color: rgba(138, 92, 255, 0.20);
+  background: rgba(0, 240, 255, 0.14);
 }
 
 .btn-action--mic.recording {
-  background: rgba(224, 108, 108, 0.2);
+  background: rgba(224, 108, 108, 0.15);
+  border-color: rgba(224, 108, 108, 0.3);
   color: var(--error);
 }
 
@@ -1150,15 +1183,128 @@ body {
   cursor: not-allowed;
 }
 
-.btn-action--upload {
+/* + attach button — rotates to × when menu is open */
+.btn-action--attach {
   background: transparent;
   color: var(--text-secondary);
   transition: all 220ms ease;
 }
-.btn-action--upload:hover {
-  color: var(--accent-tertiary);
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.15);
+.btn-action--attach:hover {
+  color: var(--accent-primary);
 }
+.btn-action--attach.active {
+  color: var(--accent-primary);
+  transform: rotate(45deg);
+}
+
+/* Slide-up attachment menu */
+.attach-menu {
+  max-width: 680px;
+  margin: 0 auto;
+  padding-bottom: var(--space-xs);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 220ms ease;
+  pointer-events: none;
+}
+.attach-menu:not(.hidden) {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.attach-menu.hidden { display: none; }
+.attach-menu__inner {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: var(--space-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.attach-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 220ms ease;
+}
+.attach-menu__item:hover {
+  background: rgba(138, 92, 255, 0.08);
+}
+.attach-menu__item svg { color: var(--text-secondary); flex-shrink: 0; }
+.attach-menu__item.hidden { display: none; }
+
+/* Image preview strip */
+.image-preview {
+  max-width: 680px;
+  margin: 0 auto var(--space-xs);
+  display: flex;
+  gap: var(--space-sm);
+  padding: 0 var(--space-lg);
+}
+.image-preview.hidden { display: none; }
+.image-preview__thumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  flex-shrink: 0;
+}
+.image-preview__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.image-preview__remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(6, 8, 14, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+}
+.image-preview__thumb.analyzing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 14, 0.5);
+}
+.image-preview__spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.image-preview__spinner svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent-tertiary);
+  animation: imgSpinnerSpin 1s linear infinite;
+}
+@keyframes imgSpinnerSpin { to { transform: rotate(360deg); } }
 
 /* Upload dialog */
 .upload-dialog { position: relative; }
@@ -1787,7 +1933,7 @@ body {
     padding: var(--space-sm) var(--space-md);
   }
 
-  .input-dock__inner {
+  .input-dock__outer {
     max-width: 100%;
   }
 
@@ -1808,6 +1954,12 @@ body {
   .btn-action {
     width: 32px;
     height: 32px;
+  }
+
+  .btn-action--mic {
+    width: auto;
+    height: auto;
+    padding: 0 calc(var(--radius-lg) + var(--space-md)) 0 var(--space-md);
   }
 
   .api-key-dialog__content {

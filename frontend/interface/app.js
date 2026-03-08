@@ -33,6 +33,9 @@ class ChalieApp {
     this.renderer = null;
     this.voice = null;
 
+    // Attached images for current message
+    this._attachedImages = [];  // [{id: string, element: HTMLElement}]
+
     // Cards
     this._memoryCard = null;
     this._timelineCard = null;
@@ -84,6 +87,7 @@ class ChalieApp {
 
     this._registerServiceWorker();
     this._initInstallPrompt();
+    this._checkVisionCapability();
     this._initPresence();
     this._initRenderer();
     this._initVoice();
@@ -700,7 +704,7 @@ class ChalieApp {
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      sendBtn.disabled = !textarea.value.trim();
+      sendBtn.disabled = !textarea.value.trim() && !this._attachedImages.length;
     });
 
     // Enter to send (Shift+Enter for newline)
@@ -763,8 +767,9 @@ class ChalieApp {
     const textarea = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const text = textarea.value.trim();
+    const imageIds = this._attachedImages.map(a => a.id);
 
-    if (!text) return;
+    if (!text && !imageIds.length) return;
 
     // If a message is in-flight, resolve it before starting a new one
     if (this._isSending && this._pendingForm) {
@@ -775,12 +780,15 @@ class ChalieApp {
     this.presence.setState('processing');
     textarea.value = '';
     textarea.style.height = 'auto';
+    const pendingImageIds = [...imageIds];
+    this._clearImagePreview();
+    sendBtn.disabled = true;
 
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
 
     // Render user form with timestamp
-    this.renderer.appendUserForm(text, exchangeTimestamp);
+    this.renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp);
 
     // Create pending form and store reference for potential early resolution
     const pendingForm = this.renderer.createPendingForm();
@@ -794,7 +802,7 @@ class ChalieApp {
     let responseText = '';
     let responseMeta = {};
 
-    this.ws.send(text, source, {
+    this.ws.send(text || '[Image attached]', source, {
       onStatus: (stage) => {
         this.presence.setState(stage);
       },
@@ -846,7 +854,7 @@ class ChalieApp {
         // Re-enable input
         document.getElementById('messageInput').focus();
       },
-    });
+    }, pendingImageIds);
 
     // Fallback in case onDone never fires (connection drop)
     this._isSending = false;
@@ -1418,21 +1426,12 @@ class ChalieApp {
 
   // ─── Document upload ──────────────────────────────────────────────
   _initUpload() {
-    const btn = document.getElementById('uploadBtn');
     const dialog = document.getElementById('uploadDialog');
     const closeBtn = document.getElementById('uploadDialogClose');
     const dropzone = document.getElementById('uploadDropzone');
     const fileInput = document.getElementById('uploadFileInput');
-    const progress = document.getElementById('uploadProgress');
-    const progressLabel = document.getElementById('uploadProgressLabel');
-    const dupWarning = document.getElementById('uploadDuplicateWarning');
 
-    if (!btn || !dialog) return;
-
-    btn.addEventListener('click', () => {
-      this._resetUploadDialog();
-      dialog.showModal();
-    });
+    if (!dialog) return;
 
     closeBtn?.addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
@@ -1454,6 +1453,150 @@ class ChalieApp {
       if (fileInput.files?.length) this._handleFiles(fileInput.files);
     });
 
+    // Attach menu (+ button → slide-up with document and image options)
+    this._initAttachMenu();
+  }
+
+  _initAttachMenu() {
+    const attachBtn = document.getElementById('attachBtn');
+    const menu = document.getElementById('attachMenu');
+    const dialog = document.getElementById('uploadDialog');
+
+    if (!attachBtn || !menu) return;
+
+    attachBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !menu.classList.contains('hidden');
+      menu.classList.toggle('hidden', isOpen);
+      attachBtn.classList.toggle('active', !isOpen);
+    });
+
+    // Close on outside click
+    document.addEventListener('click', (e) => {
+      if (!menu.contains(e.target) && e.target !== attachBtn) {
+        menu.classList.add('hidden');
+        attachBtn.classList.remove('active');
+      }
+    });
+
+    // "Attach Document" → existing upload dialog
+    menu.querySelector('[data-action="document"]')?.addEventListener('click', () => {
+      menu.classList.add('hidden');
+      attachBtn.classList.remove('active');
+      this._resetUploadDialog();
+      dialog?.showModal();
+    });
+
+    // "Take Photo / Pick Image" → image file input
+    menu.querySelector('[data-action="image"]')?.addEventListener('click', () => {
+      menu.classList.add('hidden');
+      attachBtn.classList.remove('active');
+      document.getElementById('imageFileInput')?.click();
+    });
+
+    // Image file input change
+    document.getElementById('imageFileInput')?.addEventListener('change', (e) => {
+      if (e.target.files?.length) this._handleImageAttach(e.target.files[0]);
+      e.target.value = '';
+    });
+  }
+
+  async _checkVisionCapability() {
+    try {
+      const res = await fetch('/chat/vision-capable', { credentials: 'same-origin' });
+      if (res.ok) {
+        const data = await res.json();
+        if (!data?.available) {
+          document.getElementById('attachImageBtn')?.classList.add('hidden');
+        }
+      }
+    } catch { /* silently hide on any error */ }
+  }
+
+  async _handleImageAttach(file) {
+    if (this._attachedImages.length >= 3) {
+      this._showToast?.('Maximum 3 images per message');
+      return;
+    }
+    const thumbEl = this._addImagePreview(file);
+
+    const formData = new FormData();
+    formData.append('image', file);
+    try {
+      const res = await fetch('/chat/image', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok && data.image_id) {
+        this._attachedImages.push({ id: data.image_id, element: thumbEl });
+        thumbEl.classList.remove('analyzing');
+        thumbEl.querySelector('.image-preview__spinner')?.remove();
+        document.getElementById('sendBtn').disabled = false;
+      } else {
+        thumbEl.remove();
+        this._updatePreviewVisibility();
+        this._showToast?.(data.error || 'Image upload failed');
+      }
+    } catch {
+      thumbEl.remove();
+      this._updatePreviewVisibility();
+      this._showToast?.('Image upload failed');
+    }
+  }
+
+  _addImagePreview(file) {
+    const strip = document.getElementById('imagePreview');
+    strip.classList.remove('hidden');
+
+    const thumb = document.createElement('div');
+    thumb.className = 'image-preview__thumb analyzing';
+
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(file);
+    img.alt = file.name;
+    thumb.appendChild(img);
+
+    // Spinner overlay (shown while upload/analysis in-flight)
+    const spinner = document.createElement('div');
+    spinner.className = 'image-preview__spinner';
+    spinner.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93 2.83-2.83m8.48-8.48 2.83-2.83M2 12h4m12 0h4m-3.93 7.07-2.83-2.83M7.76 7.76 4.93 4.93"/></svg>';
+    thumb.appendChild(spinner);
+
+    // Remove button
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'image-preview__remove';
+    removeBtn.setAttribute('aria-label', 'Remove image');
+    removeBtn.textContent = '\u00d7';
+    removeBtn.addEventListener('click', () => {
+      const idx = this._attachedImages.findIndex(a => a.element === thumb);
+      if (idx >= 0) this._attachedImages.splice(idx, 1);
+      thumb.remove();
+      this._updatePreviewVisibility();
+      if (!this._attachedImages.length) {
+        const textarea = document.getElementById('messageInput');
+        document.getElementById('sendBtn').disabled = !textarea?.value.trim();
+      }
+    });
+    thumb.appendChild(removeBtn);
+
+    strip.appendChild(thumb);
+    return thumb;
+  }
+
+  _updatePreviewVisibility() {
+    const strip = document.getElementById('imagePreview');
+    if (strip && !strip.children.length) strip.classList.add('hidden');
+  }
+
+  _clearImagePreview() {
+    this._attachedImages = [];
+    const strip = document.getElementById('imagePreview');
+    if (strip) {
+      strip.innerHTML = '';
+      strip.classList.add('hidden');
+    }
   }
 
   _resetUploadDialog() {
