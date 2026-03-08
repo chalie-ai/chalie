@@ -79,7 +79,7 @@ class CuriosityPursuitService:
             from services.self_model_service import SelfModelService
             richness = SelfModelService().get_memory_richness()
             if richness < 0.15:
-                logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.15, skipping exploration")
+                logger.info(f"{LOG_PREFIX} Richness {richness:.2f} < 0.15, skipping exploration")
                 return None
         except Exception:
             pass  # fail-open
