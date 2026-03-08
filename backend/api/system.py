@@ -250,16 +250,57 @@ def observability_memory():
 @system_bp.route('/system/observability/tools', methods=['GET'])
 @require_session
 def observability_tools():
-    """Tool performance stats across all tools."""
+    """Tool capability profiles with effort annotations and performance stats."""
     try:
+        from services.database_service import get_shared_db_service
         from services.tool_performance_service import ToolPerformanceService
 
-        svc = ToolPerformanceService()
-        stats = svc.get_all_tool_stats(30)
+        db = get_shared_db_service()
+        rows = db.fetch_all(
+            "SELECT tool_name, tool_type, short_summary, domain, effort, "
+            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+            "triage_triggers, updated_at "
+            "FROM tool_capability_profiles ORDER BY domain, tool_name"
+        )
+
+        # Index performance stats by tool name for merging
+        perf_by_name = {}
+        try:
+            perf_stats = ToolPerformanceService().get_all_tool_stats(30)
+            for s in (perf_stats or []):
+                perf_by_name[s.get('tool_name', '')] = s
+        except Exception:
+            pass
+
+        import json as _json
+        tools = []
+        for r in (rows or []):
+            triggers = r.get('triage_triggers') or []
+            if isinstance(triggers, str):
+                try:
+                    triggers = _json.loads(triggers)
+                except Exception:
+                    triggers = []
+            entry = {
+                'tool_name': r['tool_name'],
+                'tool_type': r.get('tool_type', 'tool'),
+                'summary': r.get('short_summary', ''),
+                'domain': r.get('domain') or 'Other',
+                'effort': r.get('effort') or 'moderate',
+                'reliability_score': r.get('reliability_score', 1.0),
+                'cost_tier': r.get('cost_tier', 'free'),
+                'avg_latency_ms': r.get('avg_latency_ms', 0),
+                'enrichment_count': r.get('enrichment_count', 0),
+                'triage_triggers': triggers,
+                'updated_at': r.get('updated_at'),
+            }
+            if r['tool_name'] in perf_by_name:
+                entry['performance'] = perf_by_name[r['tool_name']]
+            tools.append(entry)
 
         return jsonify({
             'generated_at': _now_iso(),
-            'tools': stats,
+            'tools': tools,
         }), 200
     except Exception as e:
         logger.error(f"[REST API] observability/tools error: {e}")
