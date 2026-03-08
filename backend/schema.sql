@@ -556,6 +556,7 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     reliability_score REAL DEFAULT 1.0,
     domain TEXT DEFAULT 'Other',
     effort TEXT DEFAULT 'moderate',
+    skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

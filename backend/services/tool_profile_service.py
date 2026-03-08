@@ -310,9 +310,10 @@ class ToolProfileService:
         try:
             triage_triggers = profile_data.get('triage_triggers', [])[:10]
 
-            # Skills are innate — use authoritative effort from registry
-            from services.innate_skills.registry import SKILL_EFFORT
+            # Skills are innate — use authoritative effort and category from registry
+            from services.innate_skills.registry import SKILL_EFFORT, SKILL_CATEGORIES
             effort = SKILL_EFFORT.get(skill_name, 'moderate')
+            skill_category = SKILL_CATEGORIES.get(skill_name)
 
             with db.connection() as conn:
                 cursor = conn.cursor()
@@ -321,8 +322,8 @@ class ToolProfileService:
                     INSERT INTO tool_capability_profiles
                         (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
                          anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, effort, updated_at)
-                    VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, 'Innate Skill', ?, ?, datetime('now'))
+                         triage_triggers, effort, skill_category, updated_at)
+                    VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, 'Innate Skill', ?, ?, ?, datetime('now'))
                     ON CONFLICT (tool_name) DO UPDATE SET
                         tool_type = 'skill',
                         short_summary = EXCLUDED.short_summary,
@@ -334,6 +335,7 @@ class ToolProfileService:
                         domain = EXCLUDED.domain,
                         triage_triggers = EXCLUDED.triage_triggers,
                         effort = EXCLUDED.effort,
+                        skill_category = EXCLUDED.skill_category,
                         updated_at = datetime('now')
                     """,
                     (
@@ -346,6 +348,7 @@ class ToolProfileService:
                         manifest_hash,
                         json.dumps(triage_triggers),
                         effort,
+                        skill_category,
                     )
                 )
 
