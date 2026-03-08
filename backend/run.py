@@ -189,15 +189,21 @@ def main():
     from services.encryption_key_service import get_encryption_key
     get_encryption_key()
 
-    # Preload embedding model singleton (eagerly load the actual model, not just the wrapper)
-    try:
-        logger.info("[System] Preloading embedding model...")
-        from services.embedding_service import get_embedding_service, _get_st_model
-        svc = get_embedding_service()
-        _get_st_model(svc.model_name)
-        logger.info("[System] Embedding model ready")
-    except Exception as e:
-        logger.warning(f"[System] Embedding model preload failed: {e}")
+    # Preload embedding model in a background thread so Flask starts immediately.
+    # On first run the model (~438MB) may need to download from HuggingFace;
+    # blocking here would prevent the onboarding page from loading for 5+ minutes.
+    def _preload_embedding_model():
+        try:
+            logger.info("[System] Preloading embedding model (background)...")
+            from services.embedding_service import get_embedding_service, _get_st_model
+            svc = get_embedding_service()
+            _get_st_model(svc.model_name)
+            logger.info("[System] Embedding model ready")
+        except Exception as e:
+            logger.warning(f"[System] Embedding model preload failed: {e}")
+
+    import threading as _threading
+    _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
 
     # Initialize SQLite database
     from services.database_service import get_shared_db_service

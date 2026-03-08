@@ -181,9 +181,14 @@ _check_docker() {
       _warn "  https://www.docker.com/products/docker-desktop/"
     fi
   else
-    # Linux: ask
+    # Linux: ask (skip in non-interactive environments)
     printf "\n"
-    read -r -p "  Install Docker for sandboxed tool execution? [y/N] " _docker_reply
+    if [[ -t 0 ]]; then
+      read -r -p "  Install Docker for sandboxed tool execution? [y/N] " _docker_reply
+    else
+      _docker_reply="${CHALIE_INSTALL_DOCKER:-n}"
+      _info "Non-interactive: skipping Docker prompt (use CHALIE_INSTALL_DOCKER=y to install)"
+    fi
     printf "\n"
     if [[ "${_docker_reply,,}" == "y" ]]; then
       _info "Installing Docker via get.docker.com…"
@@ -371,7 +376,8 @@ while [[ $# -gt 0 ]]; do
     --port)   _port="$2"; shift 2 ;;
     --host=*) _host="${1#--host=}"; shift ;;
     --host)   _host="$2"; shift 2 ;;
-    stop|restart|update|status|logs|help) _cmd="$1"; shift ;;
+    --version|-V) _cmd="version"; shift ;;
+    stop|restart|update|status|logs|help|version) _cmd="$1"; shift ;;
     *) _args+=("$1"); shift ;;
   esac
 done
@@ -405,10 +411,33 @@ case "$_cmd" in
     _is_running && echo "Running (PID $(cat "$PID_FILE"))" || echo "Not running"
     ;;
   logs)
-    tail -f "$LOG_FILE"
+    if [[ ! -f "$LOG_FILE" ]]; then
+      echo "No log file found at $LOG_FILE" >&2
+      exit 1
+    fi
+    # Follow interactively when stdout is a terminal; show last 50 lines and exit when piped
+    if [[ -t 1 ]]; then
+      tail -f "$LOG_FILE"
+    else
+      tail -n 50 "$LOG_FILE"
+    fi
+    ;;
+  version)
+    _ver=""
+    for _vf in "$CHALIE_HOME/app/VERSION" "$CHALIE_HOME/app/backend/consumer.py"; do
+      if [[ -f "$_vf" ]]; then
+        if [[ "$_vf" == *.py ]]; then
+          _ver=$(grep -oE 'APP_VERSION\s*=\s*"[^"]+"' "$_vf" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"')
+        else
+          _ver=$(cat "$_vf" | tr -d '[:space:]')
+        fi
+        [[ -n "$_ver" ]] && break
+      fi
+    done
+    echo "chalie ${_ver:-unknown}"
     ;;
   help|*)
-    echo "Usage: chalie [--port=N] [--host=H] [stop|restart|update|status|logs]"
+    echo "Usage: chalie [--port=N] [--host=H] [stop|restart|update|status|logs|version]"
     echo ""
     echo "  chalie                   Start on port 8081 (default)"
     echo "  chalie --port=9000       Start on a custom port"
@@ -482,9 +511,14 @@ main() {
     _install_cli
     _print_success
 
-    # Ask to start
+    # Ask to start (skip in non-interactive environments)
     printf "\n"
-    read -r -p "  Start Chalie now? [Y/n] " _start_reply
+    if [[ -t 0 ]]; then
+      read -r -p "  Start Chalie now? [Y/n] " _start_reply
+    else
+      _start_reply="${CHALIE_AUTO_START:-n}"
+      _info "Non-interactive: skipping start prompt (use CHALIE_AUTO_START=y to start automatically)"
+    fi
     printf "\n"
     if [[ "${_start_reply,,}" != "n" ]]; then
       "$CHALIE_BIN/chalie" start
