@@ -44,14 +44,13 @@ def tool_worker(job_data: dict) -> str:
     Returns:
         str: Status message
     """
-    import signal
-
-    def timeout_handler(signum, frame):
-        raise TimeoutError("Tool worker job exceeded hard timeout")
-
-    signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(300)  # 5 min hard timeout
-
+    # Note: signal.signal()/signal.alarm() do not work in non-main threads (raises ValueError
+    # before the try/except, so _notify_sse_error is never called and the WebSocket hangs 300s).
+    # Time-limiting is handled by the ACTOrchestrator cumulative_timeout instead.
+    # Pre-initialise so the except handler can always reference these safely.
+    metadata = job_data.get('metadata', {}) if isinstance(job_data, dict) else {}
+    cycle_id = ''
+    cycle_service = None
     try:
         cycle_id = job_data.get('cycle_id', '')
         parent_cycle_id = job_data.get('parent_cycle_id', '')
@@ -149,22 +148,17 @@ def tool_worker(job_data: dict) -> str:
             _last_heartbeat=_last_heartbeat,
         )
 
-    except TimeoutError:
-        logger.error(f"[TOOL WORKER] Hard timeout for topic '{topic}'")
-        if cycle_service and cycle_id:
-            cycle_service.complete_cycle(cycle_id, 'failed')
-        # Notify SSE loop of failure so it doesn't hang for 600s
-        _notify_sse_error(metadata, "Tool execution timed out")
-        return f"Topic '{topic}' | TIMEOUT"
     except Exception as e:
         logger.error(f"[TOOL WORKER] Failed: {e}", exc_info=True)
-        if cycle_service and cycle_id:
-            cycle_service.complete_cycle(cycle_id, 'failed')
-        # Notify SSE loop of failure so it doesn't hang for 600s
+        try:
+            if cycle_service and cycle_id:
+                cycle_service.complete_cycle(cycle_id, 'failed')
+        except Exception:
+            pass
+        # Notify SSE loop of failure so it doesn't hang for 300s
         _notify_sse_error(metadata, f"Tool execution failed: {str(e)[:200]}")
-        return f"Topic '{topic}' | ERROR: {e}"
-    finally:
-        signal.alarm(0)
+        _topic = job_data.get('topic', '?') if isinstance(job_data, dict) else '?'
+        return f"Topic '{_topic}' | ERROR: {e}"
 
 
 def _tool_worker_orchestrator(
