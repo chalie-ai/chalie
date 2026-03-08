@@ -69,6 +69,11 @@ class ActDispatcherService:
         """
         Execute single action with timeout enforcement.
 
+        Phase 3 — Pre-action reliability check: if the action references a
+        memory marked as 'uncertain' or 'contradicted', log a warning and
+        annotate the result so the ACT loop / critic can decide whether to
+        proceed or route to CLARIFY.
+
         Args:
             topic: Current conversation topic
             action: Action specification dict
@@ -80,6 +85,9 @@ class ActDispatcherService:
         start_time = time.time()
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
+
+        # Pre-action reliability check — non-blocking: only logs/annotates
+        _reliability_warning = self._check_source_reliability(action)
 
         # Get handler
         handler = self.handlers.get(action_type)
@@ -163,6 +171,14 @@ class ActDispatcherService:
             }
             if reply_actions:
                 dispatch_result['reply_actions'] = reply_actions
+            # Annotate with reliability warning if source memory is unreliable
+            if _reliability_warning:
+                dispatch_result['reliability_warning'] = _reliability_warning
+                # Reduce confidence proportionally
+                dispatch_result['confidence'] = confidence * 0.6
+                logging.warning(
+                    f"[ACT DISPATCH] Unreliable source for {action_type}: {_reliability_warning}"
+                )
             return dispatch_result
 
         except Exception as e:
@@ -176,3 +192,32 @@ class ActDispatcherService:
                 'confidence': 0.0,
                 'notes': '',
             }
+
+    def _check_source_reliability(self, action: Dict[str, Any]) -> str:
+        """
+        Phase 3 — Pre-action reliability check.
+
+        Looks for a 'source_memory' key in the action dict containing
+        {type, id} identifying the memory that motivated this action.
+        Returns a warning string if unreliable, empty string otherwise.
+        """
+        source = action.get('source_memory')
+        if not source or not isinstance(source, dict):
+            return ''
+        memory_type = source.get('type')
+        memory_id = source.get('id')
+        if not memory_type or not memory_id:
+            return ''
+        try:
+            from services.uncertainty_service import UncertaintyService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            reliability = UncertaintyService(db).check_memory_reliability(memory_type, memory_id)
+            if reliability in ('uncertain', 'contradicted'):
+                return (
+                    f"Source memory {memory_type}:{memory_id} is '{reliability}'. "
+                    f"Consider clarifying before acting."
+                )
+        except Exception:
+            pass
+        return ''

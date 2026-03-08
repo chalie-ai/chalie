@@ -363,6 +363,11 @@ class DatabaseService:
                 ("documents", "doc_project", "TEXT", None),
                 ("documents", "doc_date", "TEXT", None),
                 ("documents", "meta_locked", "INTEGER DEFAULT 0", None),
+                ("tool_capability_profiles", "effort", "TEXT DEFAULT 'moderate'", None),
+                # Uncertainty Engine Phase 1 — reliability columns on durable memory stores
+                ("user_traits",       "reliability", "TEXT DEFAULT 'reliable'", None),
+                ("episodes",          "reliability", "TEXT DEFAULT 'reliable'", None),
+                ("semantic_concepts", "reliability", "TEXT DEFAULT 'reliable'", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

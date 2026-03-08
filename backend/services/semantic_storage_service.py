@@ -374,7 +374,8 @@ class SemanticStorageService:
                         sc.access_count, sc.consolidation_count, sc.confidence, sc.source_episodes,
                         sc.verification_status, sc.context_constraints, sc.examples,
                         sc.first_learned_at, sc.last_accessed_at, sc.last_reinforced_at,
-                        sc.utility_score, sc.decay_resistance, sc.created_at, sc.updated_at
+                        sc.utility_score, sc.decay_resistance, sc.created_at, sc.updated_at,
+                        COALESCE(sc.reliability, 'reliable') AS reliability
                     FROM semantic_concepts sc
                     JOIN semantic_concepts_vec v ON v.rowid = sc.rowid
                     WHERE sc.deleted_at IS NULL
@@ -409,7 +410,8 @@ class SemanticStorageService:
                         'utility_score': row[18],
                         'decay_resistance': row[19],
                         'created_at': row[20],
-                        'updated_at': row[21]
+                        'updated_at': row[21],
+                        'reliability': row[22] if len(row) > 22 else 'reliable'
                     })
 
                 logging.debug(f"Retrieved {len(concepts)} concepts")
