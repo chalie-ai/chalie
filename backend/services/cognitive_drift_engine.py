@@ -813,7 +813,7 @@ class CognitiveDriftEngine:
                 thought_type = thought.get('type', '').strip()
                 content = thought.get('content', '').strip()
 
-                if thought_type not in ('reflection', 'question', 'hypothesis'):
+                if thought_type not in ('reflection', 'question', 'hypothesis', 'insight'):
                     logger.warning(f"{LOG_PREFIX} Invalid thought type: '{thought_type}'")
                     return None
 
