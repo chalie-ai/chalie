@@ -398,6 +398,9 @@ class ModeRouterService:
         respond += gist_density * w.get('respond.gist_density', 0.10)
         if is_question and warmth > 0.4:
             respond += w.get('respond.question_warm', 0.15)
+        if is_question and is_cold:
+            # Questions in cold context: LLM can still answer general knowledge
+            respond += w.get('respond.question_cold', 0.10)
         if is_cold:
             respond -= w.get('respond.cold_penalty', 0.15)
         if greeting:
@@ -409,13 +412,14 @@ class ModeRouterService:
         # ── CLARIFY ──────────────────────────────────────────────
         clarify = self.bases['CLARIFY']
         if is_cold:
-            clarify += (1.0 - warmth) * w.get('clarify.cold_boost', 0.25)
+            clarify += (1.0 - warmth) * w.get('clarify.cold_boost', 0.12)
         if is_question and is_cold:
             clarify += w.get('clarify.cold_question', 0.05)
         if is_question and fact_count == 0:
-            clarify += w.get('clarify.question_no_facts', 0.20)
+            # Reduced: no facts ≠ ambiguous question — just means new topic
+            clarify += w.get('clarify.question_no_facts', 0.08)
         if is_new and is_question:
-            clarify += w.get('clarify.new_topic_question', 0.10)
+            clarify += w.get('clarify.new_topic_question', 0.05)
         if is_warm:
             clarify -= w.get('clarify.warm_penalty', 0.20)
         # Self-constraint: degraded state or capability gaps nudge toward CLARIFY
@@ -441,12 +445,13 @@ class ModeRouterService:
         if signals.get('intent_type') == 'action':
             act += w.get('act.action_intent', 0.40)
         # Graduated memory confidence: low recall confidence → lean toward ACT
+        # Only for genuinely memory-seeking questions, not general knowledge
         mem_conf = signals.get('memory_confidence', 1.0)
         if interrog or has_q:
             if mem_conf < 0.15:
-                act += w.get('act.memory_confidence_very_low', 0.20)
+                act += w.get('act.memory_confidence_very_low', 0.10)
             elif mem_conf < 0.30:
-                act += w.get('act.memory_confidence_low', 0.10)
+                act += w.get('act.memory_confidence_low', 0.05)
 
         # ── ACKNOWLEDGE ──────────────────────────────────────────
         acknowledge = self.bases['ACKNOWLEDGE']
@@ -493,9 +498,10 @@ class ModeRouterService:
             adjusted['ACT'] -= 0.15
             logger.debug(f"{LOG_PREFIX} Anti-oscillation: ACT suppressed (previous was ACT)")
         elif previous_mode == 'CLARIFY':
-            # User just answered a question — respond to it
-            adjusted['RESPOND'] += 0.05
-            logger.debug(f"{LOG_PREFIX} Anti-oscillation: RESPOND boosted (previous was CLARIFY)")
+            # User just answered a clarification — respond to it, don't re-clarify
+            adjusted['RESPOND'] += 0.15
+            adjusted['CLARIFY'] -= 0.20
+            logger.debug(f"{LOG_PREFIX} Anti-oscillation: RESPOND boosted, CLARIFY suppressed (previous was CLARIFY)")
 
         return adjusted
 

@@ -504,9 +504,10 @@ class CognitiveTriageService:
                         pass
 
         # Rule 2: RESPOND on high-freshness question → escalate to ACT
-        # Freshness risk alone is sufficient — if the answer requires live data, use tools.
+        # Only escalate for genuinely time-sensitive questions (≥0.7 freshness).
+        # General knowledge questions (recipes, definitions, how-to) stay in RESPOND.
         if (result.branch == 'respond'
-                and result.freshness_risk > 0.5
+                and result.freshness_risk >= 0.7
                 and _is_factual_question(text)
                 and ctx.tool_summaries):
             result.branch = 'act'

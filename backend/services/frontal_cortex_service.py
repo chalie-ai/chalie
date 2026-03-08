@@ -437,7 +437,7 @@ class FrontalCortexService:
         except json.JSONDecodeError as e:
             raise Exception(f"Failed to parse JSON response: {str(e)}\nRaw response: {response_text[:200]}") from e
 
-        return {
+        result = {
             'mode': mode,
             'modifiers': modifiers,
             'response': user_response,
@@ -445,8 +445,16 @@ class FrontalCortexService:
             'actions': actions,
             'confidence': confidence,
             'alternative_paths': alternative_paths,
-            'downstream_mode': response_data.get('downstream_mode', 'RESPOND')
+            'downstream_mode': response_data.get('downstream_mode', 'RESPOND'),
         }
+
+        # Pass through ACT narration fields (used by ACTOrchestrator for live progress)
+        if 'narrated' in response_data:
+            result['narrated'] = response_data['narrated']
+        if 'narration' in response_data:
+            result['narration'] = response_data['narration']
+
+        return result
 
     def _inject_parameters(
         self,
