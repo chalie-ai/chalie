@@ -113,7 +113,7 @@ class GrowthPatternService:
                 from services.self_model_service import SelfModelService
                 richness = SelfModelService().get_memory_richness()
                 if richness < 0.2:
-                    logger.debug(f"[GROWTH PATTERN] Richness {richness:.2f} < 0.2, skipping cycle")
+                    logger.info(f"[GROWTH PATTERN] Richness {richness:.2f} < 0.2, skipping cycle")
                     return result
             except Exception:
                 pass  # fail-open
