@@ -78,6 +78,7 @@ Your response is rendered as Markdown. Use formatting when it makes the answer c
 
 ## Current Message
 {{original_prompt}}
+{{visual_context}}
 
 {{focus}}
 

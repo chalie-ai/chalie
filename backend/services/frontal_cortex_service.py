@@ -534,6 +534,14 @@ class FrontalCortexService:
         else:
             result = result.replace('{{contradiction_context}}', '')
 
+        # Inject visual context from attached images
+        visual_context_raw = _ctx.get('visual_context', '')
+        if visual_context_raw:
+            visual_block = f"\n\n## Visual Context (attached images)\n{visual_context_raw}"
+        else:
+            visual_block = ''
+        result = result.replace('{{visual_context}}', visual_block)
+
         # Template integrity guard — warn when skills were selected but template has no placeholder
         if selected_skills and '{{injected_skills}}' not in template:
             logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")
