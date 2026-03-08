@@ -2,9 +2,10 @@
 Privacy blueprint — /privacy/data-summary, /privacy/export, /privacy/delete-all.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, Response, request, jsonify, stream_with_context
 
 from .auth import require_session
 
@@ -93,87 +94,121 @@ def data_summary():
 @privacy_bp.route('/privacy/export', methods=['GET'])
 @require_session
 def export_data():
-    """Export all user data as JSON."""
-    try:
+    """Export all user data as a streaming JSON download."""
+
+    user_data_tables = [
+        "episodes", "semantic_concepts", "semantic_relationships",
+        "user_traits", "threads", "autobiography", "moments",
+        "scheduled_items", "persistent_tasks", "lists", "list_items",
+        "list_events", "identity_vectors", "identity_events",
+        "place_fingerprints", "cognitive_reflexes", "curiosity_threads",
+        "interaction_log", "cortex_iterations", "routing_decisions",
+        "procedural_memory", "topics", "user_tool_preferences",
+    ]
+
+    store_patterns = [
+        "working_memory:*", "gist:*", "fact:*",
+        "identity_state:*", "spark_state:*", "focus_session:*",
+    ]
+
+    MAX_EXPORT_ROWS = 10000
+    FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
+
+    def generate():
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 
         db = get_shared_db_service()
         store = MemoryClientService.create_connection()
-        export = {"exported_at": datetime.now(timezone.utc).isoformat(), "tables": {}, "memory_store": {}}
 
-        # ── SQLite tables ──
-        user_data_tables = [
-            "episodes", "semantic_concepts", "semantic_relationships",
-            "user_traits", "threads", "autobiography", "moments",
-            "scheduled_items", "persistent_tasks", "lists", "list_items",
-            "list_events", "identity_vectors", "identity_events",
-            "place_fingerprints", "cognitive_reflexes", "curiosity_threads",
-            "interaction_log", "cortex_iterations", "routing_decisions",
-            "procedural_memory", "topics", "user_tool_preferences",
-        ]
+        exported_at = datetime.now(timezone.utc).isoformat()
+        yield f'{{"exported_at": {json.dumps(exported_at)}, "tables": {{'
 
-        MAX_EXPORT_ROWS = 10000  # Safety cap per table to prevent memory exhaustion
+        first_table = True
+        for table in user_data_tables:
+            if not first_table:
+                yield ','
+            first_table = False
 
-        with db.connection() as conn:
-            for table in user_data_tables:
-                try:
+            yield json.dumps(table) + ': '
+            try:
+                with db.connection() as conn:
                     cursor = conn.cursor()
-                    # Count first, then fetch with limit
                     cursor.execute(f"SELECT COUNT(*) FROM {table}")
                     total_count = cursor.fetchone()[0]
                     cursor.execute(f"SELECT * FROM {table} LIMIT {MAX_EXPORT_ROWS}")
                     columns = [desc[0] for desc in cursor.description]
-                    rows = cursor.fetchall()
-                    entry = {
-                        "count": total_count,
-                        "columns": columns,
-                        "rows": [_serialize_row(dict(zip(columns, row))) for row in rows],
-                    }
-                    if total_count > MAX_EXPORT_ROWS:
-                        entry["truncated"] = True
-                        entry["exported_rows"] = MAX_EXPORT_ROWS
-                    export["tables"][table] = entry
-                except Exception:
-                    export["tables"][table] = {"count": 0, "error": "table not found or empty"}
 
-        # ── MemoryStore keys (user-data patterns only) ──
-        store_patterns = [
-            "working_memory:*", "gist:*", "fact:*",
-            "identity_state:*", "spark_state:*", "focus_session:*",
-        ]
+                    yield (
+                        f'{{"count": {total_count}, '
+                        f'"columns": {json.dumps(columns)}, '
+                        f'"rows": ['
+                    )
+
+                    first_row = True
+                    exported = 0
+                    while True:
+                        batch = cursor.fetchmany(FETCH_BATCH)
+                        if not batch:
+                            break
+                        for row in batch:
+                            if not first_row:
+                                yield ','
+                            first_row = False
+                            yield json.dumps(_serialize_row(dict(zip(columns, row))))
+                            exported += 1
+
+                    suffix = ']'
+                    if total_count > MAX_EXPORT_ROWS:
+                        suffix += f', "truncated": true, "exported_rows": {exported}'
+                    yield suffix + '}'
+                    cursor.close()
+
+            except Exception:
+                yield '{"count": 0, "error": "table not found or empty"}'
+
+        # ── MemoryStore keys ──
+        yield '}, "memory_store": {'
+        first_pattern = True
         for pattern in store_patterns:
             keys = store.keys(pattern)
-            if keys:
-                section = {}
-                for key in keys:
-                    key_str = key if isinstance(key, str) else key.decode()
-                    key_type = store.type(key)
-                    key_type = key_type if isinstance(key_type, str) else key_type.decode()
-                    try:
-                        if key_type == "string":
-                            val = store.get(key)
-                            section[key_str] = val if isinstance(val, str) else val.decode() if val else None
-                        elif key_type == "list":
-                            section[key_str] = [v.decode() if isinstance(v, bytes) else v for v in store.lrange(key, 0, -1)]
-                        elif key_type == "hash":
-                            raw = store.hgetall(key)
-                            section[key_str] = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in raw.items()}
-                        elif key_type == "zset":
-                            section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.zrange(key, 0, -1)]
-                        elif key_type == "set":
-                            section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.smembers(key)]
-                    except Exception:
-                        section[key_str] = "<unreadable>"
-                export["memory_store"][pattern] = section
+            if not keys:
+                continue
+            if not first_pattern:
+                yield ','
+            first_pattern = False
 
-        response = jsonify(export)
-        response.headers["Content-Disposition"] = "attachment; filename=chalie-export.json"
-        return response, 200
+            section = {}
+            for key in keys:
+                key_str = key if isinstance(key, str) else key.decode()
+                key_type = store.type(key)
+                key_type = key_type if isinstance(key_type, str) else key_type.decode()
+                try:
+                    if key_type == "string":
+                        val = store.get(key)
+                        section[key_str] = val if isinstance(val, str) else val.decode() if val else None
+                    elif key_type == "list":
+                        section[key_str] = [v.decode() if isinstance(v, bytes) else v for v in store.lrange(key, 0, -1)]
+                    elif key_type == "hash":
+                        raw = store.hgetall(key)
+                        section[key_str] = {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in raw.items()}
+                    elif key_type == "zset":
+                        section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.zrange(key, 0, -1)]
+                    elif key_type == "set":
+                        section[key_str] = [(v.decode() if isinstance(v, bytes) else v) for v in store.smembers(key)]
+                except Exception:
+                    section[key_str] = "<unreadable>"
 
-    except Exception as e:
-        logger.error(f"[REST API] privacy/export error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to export data"}), 500
+            yield json.dumps(pattern) + ': ' + json.dumps(section)
+
+        yield '}}'
+
+    response = Response(
+        stream_with_context(generate()),
+        mimetype='application/json',
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=chalie-export.json"
+    return response
 
 
 @privacy_bp.route('/privacy/delete-all', methods=['DELETE'])
