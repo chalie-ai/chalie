@@ -72,6 +72,9 @@ export class Renderer {
     const metaRow = this._buildMetaRow(text, meta);
     el.appendChild(metaRow);
 
+    // Collapse any narration bubbles before appending the response
+    this._collapseNarrations();
+
     this._spine.appendChild(el);
     this._setActiveForm(el);
     this._scrollToBottom();
@@ -92,6 +95,45 @@ export class Renderer {
   }
 
   /**
+   * Append a narration bubble — lightweight progress indicator during ACT loops.
+   * @param {string} text — narration line from the LLM
+   * @param {number} step — iteration number
+   */
+  appendNarrationBubble(text, step) {
+    const bubble = this._createEl('div', 'narration-bubble');
+    bubble.dataset.step = step;
+    bubble.textContent = text;
+
+    // Insert before the pending form (thinking dots) if present
+    const pending = this._spine.querySelector('.thinking-indicator')?.parentElement;
+    if (pending) {
+      this._spine.insertBefore(bubble, pending);
+    } else {
+      this._spine.appendChild(bubble);
+    }
+    this._scrollToBottom();
+    return bubble;
+  }
+
+  /**
+   * Append a steer bubble — user's redirect shown inline with narration.
+   * @param {string} text — the user's steering message
+   */
+  appendSteerBubble(text) {
+    const bubble = this._createEl('div', 'steer-bubble');
+    bubble.textContent = text;
+
+    const pending = this._spine.querySelector('.thinking-indicator')?.parentElement;
+    if (pending) {
+      this._spine.insertBefore(bubble, pending);
+    } else {
+      this._spine.appendChild(bubble);
+    }
+    this._scrollToBottom();
+    return bubble;
+  }
+
+  /**
    * Replace a pending form's thinking dots with actual content.
    * @param {HTMLElement} form
    * @param {string} text
@@ -109,6 +151,9 @@ export class Renderer {
 
     const metaRow = this._buildMetaRow(text, meta);
     form.appendChild(metaRow);
+
+    // Collapse narration bubbles into an expandable group
+    this._collapseNarrations();
 
     this._setActiveForm(form);
     this._scrollToBottom();
@@ -166,6 +211,30 @@ export class Renderer {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  _collapseNarrations() {
+    const bubbles = this._spine.querySelectorAll('.narration-bubble:not(.narration--collapsed), .steer-bubble:not(.narration--collapsed)');
+    if (bubbles.length < 2) return; // Don't collapse a single bubble
+
+    const wrapper = this._createEl('div', 'narration-group narration-group--collapsed');
+    const toggle = this._createEl('button', 'narration-toggle');
+    toggle.textContent = `${bubbles.length} steps`;
+    toggle.addEventListener('click', () => {
+      wrapper.classList.toggle('narration-group--collapsed');
+      toggle.textContent = wrapper.classList.contains('narration-group--collapsed')
+        ? `${bubbles.length} steps`
+        : 'collapse';
+    });
+    wrapper.appendChild(toggle);
+
+    // Move bubbles into the wrapper
+    const firstBubble = bubbles[0];
+    firstBubble.parentNode.insertBefore(wrapper, firstBubble);
+    for (const b of bubbles) {
+      b.classList.add('narration--collapsed');
+      wrapper.appendChild(b);
+    }
+  }
 
   _buildActionButtons(actions) {
     const row = this._createEl('div', 'speech-form__actions');

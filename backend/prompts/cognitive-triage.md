@@ -31,9 +31,9 @@ Routing rules:
   - "research this over the next few days" / "task status" / "what's the status on [topic matching active task]" → persistent_task
   - "what does my warranty say" / "search my documents" / "in my uploaded file" → document
 
-Critical bias: when in doubt between RESPOND and ACT, choose ACT. Accuracy matters more than speed.
-freshness_risk scale: 0.0 = timeless/opinion → 1.0 = live event results, today's data, current status.
-High freshness_risk + available search tool = ACT, always.
+Routing bias: prefer RESPOND for questions answerable from general knowledge or memory (recipes, definitions, advice, how-to, history, science, math). Reserve ACT for questions that genuinely need live or external data (current prices, today's news, real-time status, user-specific external lookups). When in doubt and the question is about timeless knowledge, choose RESPOND.
+freshness_risk scale: 0.0 = timeless/opinion/general knowledge → 1.0 = live event results, today's data, current status.
+High freshness_risk (≥0.7) + available search tool = ACT. Low freshness_risk (<0.4) = RESPOND even if tools are available.
 
 Effort estimation — match effort to the user's actual request complexity:
 - trivial: single lookup, instant answer (weather, simple search, memory recall)

@@ -526,6 +526,31 @@ def _generate_with_act_orchestrator(
         deferred_card_context=False,
     )
 
+    # ── Narration callback: stream progress to user via WebSocket ─────
+    request_uuid = metadata.get('uuid', '')
+
+    def _narration_callback(narration_text, step):
+        """Publish narration to the per-request SSE channel."""
+        logging.info(f"[MODE:ACT] Narration callback fired: step={step}, text={narration_text[:60]}")
+        if not request_uuid:
+            logging.warning("[MODE:ACT] Narration skipped — no request_uuid")
+            return
+        try:
+            import json as _json
+            from uuid import uuid4
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            narration_id = f"narr_{uuid4().hex[:12]}"
+            store.set(f"output:{narration_id}", _json.dumps({
+                'type': 'act_narration',
+                'text': narration_text,
+                'step': step,
+            }), ex=300)
+            store.publish(f"sse:{request_uuid}", narration_id)
+            logging.info(f"[MODE:ACT] Narration published: {narration_id} → sse:{request_uuid[:12]}...")
+        except Exception as _e:
+            logging.error(f"[MODE:ACT] Narration publish failed: {_e}", exc_info=True)
+
     result = orchestrator.run(
         topic=topic,
         text=text,
@@ -538,8 +563,10 @@ def _generate_with_act_orchestrator(
         selected_tools=selected_tools,
         assembled_context=assembled_context,
         inclusion_map=act_inclusion_map,
+        on_narration=_narration_callback,
         session_id='digest_fast_path',
         exchange_id=metadata.get('exchange_id', 'unknown'),
+        request_id=request_uuid,
     )
 
     # ── Post-loop: re-route through mode router ─────────────────────
