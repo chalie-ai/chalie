@@ -693,17 +693,6 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
     except Exception:
         pass
 
-    if routing_decision_service:
-        try:
-            routing_decision_service.log_decision(
-                topic=topic,
-                exchange_id=exchange_id,
-                routing_result=routing_result,
-                previous_mode=previous_mode,
-            )
-        except Exception as e:
-            logging.warning(f"[DIGEST] Failed to log routing decision: {e}")
-
     # Generate based on selected mode
     if selected_mode == 'ACT':
         response_data = generate_with_act_loop(
@@ -732,6 +721,23 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             returning_from_silence=returning_from_silence,
             signals=signals,
         )
+
+    # Log the routing decision AFTER generation so the recorded mode reflects the
+    # terminal mode (ACT loops may re-route to RESPOND/CLARIFY after execution).
+    if routing_decision_service:
+        try:
+            terminal_routing = dict(routing_result)
+            terminal_mode = response_data.get('mode') or selected_mode
+            if terminal_mode and terminal_mode != terminal_routing.get('mode'):
+                terminal_routing['mode'] = terminal_mode
+            routing_decision_service.log_decision(
+                topic=topic,
+                exchange_id=exchange_id,
+                routing_result=terminal_routing,
+                previous_mode=previous_mode,
+            )
+        except Exception as e:
+            logging.warning(f"[DIGEST] Failed to log routing decision: {e}")
 
     # Store response
     thread_conv_service.add_response(
