@@ -290,12 +290,15 @@ def delete_all():
             if keys:
                 store.delete(*keys)
 
-        # Truncate SQLite — all user-data tables
-        # NOTE: lists CASCADE handles list_items and list_events via FK relationships
-        # NOTE: interaction_log is truncated here; the audit entry below is written after
+        # Delete all user data from SQLite tables.
+        # PRAGMA foreign_keys=OFF lets us delete in any order without FK constraint
+        # errors — re-enabled immediately after. interaction_log is cleared here;
+        # the audit entry below is written into the freshly-emptied table.
         db = get_shared_db_service()
         truncate_failures = []
         with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA foreign_keys=OFF")
             for table in [
                 # User-personal data (critical)
                 "episodes",
@@ -307,7 +310,9 @@ def delete_all():
                 "moments",
                 "scheduled_items",
                 "persistent_tasks",
-                "lists",              # CASCADE will handle list_items, list_events
+                "lists",
+                "list_items",
+                "list_events",
                 "identity_vectors",
                 "identity_events",
                 "place_fingerprints",
@@ -327,11 +332,12 @@ def delete_all():
                 "curiosity_threads",
             ]:
                 try:
-                    cursor = conn.cursor()
-                    cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
+                    cursor.execute(f"DELETE FROM {table}")
                 except Exception as e:
-                    logger.warning(f"[REST API] Failed to truncate {table}: {e}")
+                    logger.warning(f"[REST API] Failed to delete from {table}: {e}")
                     truncate_failures.append(table)
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
 
         # Audit trail — log the deletion event AFTER truncation so it persists
         try:
