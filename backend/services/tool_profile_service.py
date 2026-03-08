@@ -618,6 +618,27 @@ class ToolProfileService:
         if not by_domain:
             return self._manifest_fallback_summaries()
 
+        # Coverage check: any on-demand tools missing from DB profiles?
+        # Merge manifest-derived summaries for tools not yet profiled.
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+            on_demand = set(registry.get_on_demand_tools())
+            profiled = {r['tool_name'] for r in (rows or []) if r['tool_type'] == 'tool'}
+            missing = on_demand - profiled
+            if missing:
+                for tool_name in sorted(missing):
+                    tool_data = registry.tools.get(tool_name)
+                    if not tool_data:
+                        continue
+                    fallback = self._fallback_profile(tool_name, tool_data['manifest'])
+                    domain = fallback.get('domain', 'Other')
+                    summary = fallback['short_summary'] + " (effort: moderate)"
+                    by_domain[domain].append(f"- {tool_name}: {summary}")
+                logger.info(f"{LOG_PREFIX} Added manifest fallback for {len(missing)} unprofiled tool(s): {sorted(missing)}")
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Coverage check failed: {e}")
+
         lines = []
         for domain in sorted(by_domain.keys()):
             lines.append(f"## {domain}")
