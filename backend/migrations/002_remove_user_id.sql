@@ -89,46 +89,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_lists_name_unique
 CREATE INDEX IF NOT EXISTS idx_lists_active ON lists(created_at DESC) WHERE deleted_at IS NULL;
 
 -- ── moments ──────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS moments_new (
-    id TEXT PRIMARY KEY,
-    title TEXT,
-    message_text TEXT NOT NULL,
-    exchange_id TEXT,
-    topic TEXT,
-    thread_id TEXT,
-    gists TEXT NOT NULL DEFAULT '[]',
-    summary TEXT,
-    status TEXT NOT NULL DEFAULT 'enriching'
-        CHECK (status IN ('enriching', 'sealed', 'forgotten')),
-    pinned_at TEXT NOT NULL DEFAULT (datetime('now')),
-    sealed_at TEXT,
-    last_enriched_at TEXT,
-    metadata TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    deleted_at TEXT
-);
-
-INSERT INTO moments_new
-    (id, title, message_text, exchange_id, topic, thread_id, gists, summary,
-     status, pinned_at, sealed_at, last_enriched_at, metadata, created_at,
-     updated_at, deleted_at)
-SELECT id, title, message_text, exchange_id, topic, thread_id, gists, summary,
-       status, pinned_at, sealed_at, last_enriched_at, metadata, created_at,
-       updated_at, deleted_at
-FROM moments;
-
-DROP TABLE IF EXISTS moments;
-ALTER TABLE moments_new RENAME TO moments;
-
-CREATE INDEX IF NOT EXISTS idx_moments_active
-    ON moments(pinned_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_moments_enriching
-    ON moments(status, pinned_at) WHERE status = 'enriching' AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_moments_topic
-    ON moments(topic, pinned_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_moments_exchange
-    ON moments(exchange_id) WHERE exchange_id IS NOT NULL;
+-- Skipped: the moments table is dropped entirely by migration 004, and
+-- schema.sql no longer creates it. On a fresh install moments never exists,
+-- so the shadow-copy pattern would crash. The user_id removal here is moot
+-- because the table is dropped before it can be read again.
 
 -- ── user_tool_preferences ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_tool_preferences_new (
