@@ -208,53 +208,32 @@ def observability_memory():
     """Memory layer counts and health indicators."""
     try:
         from services.memory_client import MemoryClientService
-        from services.database_service import get_shared_db_service
+        from services.self_model_service import SelfModelService
+
+        # SelfModelService holds a cached (sub-ms) snapshot with the canonical
+        # nested structure: operational.memory_pressure.{episode_count, ...}
+        # Use it directly to avoid redundant DB queries and ensure the response
+        # shape matches what consumers (e.g. get_memory_richness()) expect.
+        snapshot = SelfModelService().get_snapshot()
 
         result = {
             'generated_at': _now_iso(),
-            'episodes': 0,
-            'concepts': 0,
-            'traits': 0,
-            'avg_episode_activation': 0.0,
-            'avg_trait_strength': 0.0,
+            'operational': snapshot.get('operational', {}),
+            'epistemic': snapshot.get('epistemic', {}),
+            'noteworthy': snapshot.get('noteworthy', []),
             'working_memory': 0,
             'gists': 0,
             'facts': 0,
             'queues': {},
         }
 
-        # SQLite counts + averages
-        try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*), AVG(activation_score) FROM episodes")
-                row = cursor.fetchone()
-                if row:
-                    result['episodes'] = row[0] or 0
-                    result['avg_episode_activation'] = round(float(row[1] or 0), 3)
-
-                cursor.execute("SELECT COUNT(*) FROM semantic_concepts")
-                row = cursor.fetchone()
-                if row:
-                    result['concepts'] = row[0] or 0
-
-                cursor.execute("SELECT COUNT(*), AVG(confidence) FROM user_traits")
-                row = cursor.fetchone()
-                if row:
-                    result['traits'] = row[0] or 0
-                    result['avg_trait_strength'] = round(float(row[1] or 0), 3)
-        except Exception as e:
-            logger.warning(f"[OBS] memory database error: {e}")
-
-        # MemoryStore counts
+        # MemoryStore counts (not in the snapshot — add alongside)
         try:
             store = MemoryClientService.create_connection()
             result['working_memory'] = len(store.keys("working_memory:*"))
             result['gists'] = len(store.keys("gist_index:*"))
             result['facts'] = len(store.keys("fact_index:*"))
 
-            # Queue depths (only include non-zero)
             for q in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
                 depth = store.llen(q)
                 if depth:
