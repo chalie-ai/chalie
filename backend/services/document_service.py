@@ -17,6 +17,7 @@ import shutil
 import struct
 import uuid
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from services.database_service import DictCursor
@@ -31,8 +32,9 @@ DEDUP_MIN_TEXT_LENGTH = 200        # skip semantic dedup for very short docs
 # Purge window (days after soft delete)
 PURGE_WINDOW_DAYS = 30
 
-# Document storage root (inside Docker volume)
-DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', '/app/data/documents')
+# Document storage root — env var overrides for Docker; local default mirrors backend/data/
+_DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "documents")
+DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
 
 
 def _pack_embedding(embedding):
@@ -59,9 +61,10 @@ class DocumentService:
         file_hash: str,
         source_type: str = 'upload',
         watched_folder_id: str = None,
+        doc_id: str = None,
     ) -> str:
         """Create a new document record. Returns doc_id (8-char hex)."""
-        doc_id = secrets.token_hex(4)
+        doc_id = doc_id or secrets.token_hex(4)
 
         try:
             with self.db.connection() as conn:
@@ -208,6 +211,7 @@ class DocumentService:
             file_path=f"{doc_id}/{original_name}",
             file_hash=file_hash,
             source_type=source_type,
+            doc_id=doc_id,
         )
 
         logger.info(f"[DOCS] Created text document '{original_name}' (id={doc_id})")

@@ -441,9 +441,12 @@ def purge_document(doc_id):
 @require_session
 def search_documents():
     """Semantic search across document chunks."""
-    query = request.args.get('q', '').strip()
-    if not query:
+    q_raw = request.args.get('q', None)
+    if q_raw is None:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
+    query = q_raw.strip()
+    if not query:
+        return jsonify({"error": "Query cannot be empty"}), 400
 
     limit = min(int(request.args.get('limit', 5)), 20)
 
