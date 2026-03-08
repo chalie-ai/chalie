@@ -247,9 +247,37 @@ def _handle_action(ws, store, msg):
 def _handle_chat(ws, store, msg):
     """Process a chat message — replaces the POST /chat SSE endpoint."""
     text = (msg.get('text') or '').strip()
-    if not text:
+    image_ids = (msg.get('image_ids') or [])[:3]  # max 3 images
+
+    if not text and not image_ids:
         _send_json(ws, {"type": "error", "message": "Missing 'text' field"})
         return
+
+    # Resolve image analysis results from MemoryStore.
+    # If analysis is still in-flight (bytes present but result not yet stored),
+    # wait up to 5s (10 × 500ms polls) before giving up.
+    image_contexts = []
+    for img_id in image_ids:
+        result_key = f'chat_image_result:{img_id}'
+        bytes_key = f'chat_image:{img_id}'
+        raw = store.get(result_key)
+        if raw is None and store.exists(bytes_key):
+            # Analysis in-flight — poll briefly
+            for _ in range(10):
+                time.sleep(0.5)
+                raw = store.get(result_key)
+                if raw is not None:
+                    break
+        if raw:
+            try:
+                ctx = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+                image_contexts.append(ctx)
+            except Exception:
+                pass
+
+    # If user sent only images with no text, provide a sensible fallback
+    if not text and image_contexts:
+        text = '[Image attached]'
 
     source = msg.get('source', 'text')
     request_id = str(uuid.uuid4())
@@ -273,6 +301,7 @@ def _handle_chat(ws, store, msg):
             digest_worker(text, metadata={
                 'uuid': request_id,
                 'source': source,
+                'image_contexts': image_contexts,
             })
         except Exception as e:
             logger.error(f"[WS] digest_worker error for {request_id}: {e}", exc_info=True)

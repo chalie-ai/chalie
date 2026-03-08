@@ -173,7 +173,7 @@ export class WSClient {
    *   onDone?:    (data: object) => void,
    * }} callbacks
    */
-  send(text, source, callbacks = {}) {
+  send(text, source, callbacks = {}, imageIds = []) {
     this.abort();
     this._chatCallbacks = callbacks;
 
@@ -184,7 +184,9 @@ export class WSClient {
       return;
     }
 
-    this._send({ type: 'chat', text, source });
+    const payload = { type: 'chat', text, source };
+    if (imageIds?.length) payload.image_ids = imageIds;
+    this._send(payload);
   }
 
   /**
