@@ -498,7 +498,19 @@ class FrontalCortexService:
         world_state = self.world_state_service.get_world_state(topic, thread_id=thread_id) if _include('world_state') else ''
 
         # Replace placeholders
-        result = template.replace('{{original_prompt}}', original_prompt)
+        try:
+            from services.time_utils import utc_now
+            _now = utc_now()
+            _current_datetime = _now.strftime('%A, %Y-%m-%d %H:%M UTC')
+            _current_date = _now.strftime('%A, %Y-%m-%d')
+        except Exception:
+            from datetime import datetime, timezone
+            _now = datetime.now(timezone.utc)
+            _current_datetime = _now.strftime('%A, %Y-%m-%d %H:%M UTC')
+            _current_date = _now.strftime('%A, %Y-%m-%d')
+        result = template.replace('{{current_datetime}}', _current_datetime)
+        result = result.replace('{{current_date}}', _current_date)
+        result = result.replace('{{original_prompt}}', original_prompt)
         result = result.replace('{{topic}}', str(topic))
         result = result.replace('{{confidence}}', str(confidence))
         result = result.replace('{{chat_history}}', formatted_context)
