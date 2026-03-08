@@ -67,6 +67,12 @@ _URL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+_TOOL_INVOCATION_WORDS = frozenset([
+    'search', 'find', 'check', 'look up', 'look it up', 'get me', 'fetch',
+    'just look', 'pull up', 'google', 'browse', 'open', 'visit',
+    'go to', 'read this', 'check this', 'use',
+])
+
 
 _JSON_FENCE_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
 
@@ -92,6 +98,16 @@ def _extract_json(text: str) -> dict:
 def _is_factual_question(text: str) -> bool:
     """Heuristic: does this look like a factual question needing real-world data?"""
     return bool(_FACTUAL_QUESTION.search(text))
+
+
+def _is_tool_invocation_command(text: str) -> bool:
+    """Heuristic: does this look like an imperative tool-invocation command?
+
+    Catches patterns like 'Search arXiv for...', 'Find papers about...', 'Use X to...'
+    that don't end with '?' and therefore bypass the factual-question failsafe.
+    """
+    lower = text.lower()
+    return any(w in lower for w in _TOOL_INVOCATION_WORDS)
 
 
 def _contains_url(text: str) -> bool:
@@ -499,6 +515,18 @@ class CognitiveTriageService:
                 result.skills = list(_PRIMITIVES)
             result.self_eval_override = True
             result.self_eval_reason = 'act_failsafe'
+
+        # Rule 2b: RESPOND on imperative tool-invocation command → escalate to ACT
+        # Commands like "Search arXiv for..." don't end with '?' so Rule 2 misses them.
+        if (result.branch == 'respond'
+                and _is_tool_invocation_command(text)
+                and ctx.tool_summaries):
+            result.branch = 'act'
+            result.mode = 'ACT'
+            if not result.skills:
+                result.skills = list(_PRIMITIVES)
+            result.self_eval_override = True
+            result.self_eval_reason = 'act_tool_command'
 
         # Rule 5: URL in message → escalate to ACT (URL is an unambiguous external-action signal)
         if result.branch == 'respond' and _contains_url(text) and ctx.tool_summaries:
