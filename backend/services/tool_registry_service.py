@@ -490,7 +490,22 @@ class ToolRegistryService:
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
 
-        # Build images in parallel (up to 4 concurrent)
+        # Build images in parallel (up to 4 concurrent).
+        # Trusted tools register immediately inside _load_tool; sandboxed tools
+        # block on Docker image build. After the executor finishes, all registrations
+        # are complete and pip installs for trusted tools run in a daemon thread so
+        # Flask startup is not held behind slow package downloads.
+        trusted_dirs: list = []  # (tool_name, tool_dir) pairs for deferred pip install
+        for (entry, _manifest_path) in candidates:
+            try:
+                import json as _json
+                with open(_manifest_path) as _f:
+                    _name = _json.load(_f).get("name", entry.name)
+            except Exception:
+                _name = entry.name
+            if self._is_tool_trusted(_name):
+                trusted_dirs.append((_name, entry))
+
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(self._load_tool, d, m): d.name for d, m in candidates}
             for future in as_completed(futures):
@@ -511,6 +526,17 @@ class ToolRegistryService:
             logger.info(f"[TOOL REGISTRY] Loaded {len(self.tools)} tools: {names}")
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
+
+        # Deferred pip install for trusted tools — runs in background so Flask
+        # starts without waiting for potentially slow package downloads.
+        if trusted_dirs:
+            def _install_all():
+                for tool_name, tool_dir in trusted_dirs:
+                    self._install_tool_requirements(tool_name, tool_dir)
+                logger.info(f"[TOOL REGISTRY] Background dep install complete ({len(trusted_dirs)} tools)")
+            import threading as _threading
+            t = _threading.Thread(target=_install_all, name="tool-dep-installer", daemon=True)
+            t.start()
 
     def _compute_tool_hash(self, tool_dir: Path) -> str:
         """Compute MD5 of all source files in a tool directory for staleness detection."""
@@ -572,12 +598,11 @@ class ToolRegistryService:
         trusted = self._is_tool_trusted(tool_name)
 
         if trusted:
-            # Trusted tool — subprocess execution, no Docker
+            # Trusted tool — subprocess execution, no Docker.
+            # Register immediately so the tool is visible in /tools before pip install
+            # completes. Dep installation is deferred to a background thread so the
+            # executor (and therefore Flask startup) is not blocked by pip.
             runner_path = str(tool_dir / "runner.py")
-
-            # Register first so the tool is immediately visible in the registry,
-            # then install dependencies. Deps install can be slow on a fresh container;
-            # pre-registering avoids a race where tests query /tools before pip finishes.
             with self._lock:
                 self.tools[tool_name] = {
                     "manifest": manifest,
@@ -589,9 +614,6 @@ class ToolRegistryService:
                 }
             trigger_type = manifest.get("trigger", {}).get("type", "unknown")
             logger.info(f"[TOOL REGISTRY] Loaded trusted tool '{tool_name}' (trigger={trigger_type})")
-
-            # Install any tool-declared dependencies after registering
-            self._install_tool_requirements(tool_name, tool_dir)
         else:
             # Sandboxed tool — Docker container execution
             version = manifest.get("version", "latest")
