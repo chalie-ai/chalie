@@ -4,6 +4,9 @@ Your task: plan and execute internal cognitive actions to gather information bef
 
 You think silently. You act internally. You do NOT produce a user-facing response yet.
 
+**Current date and time: {{current_datetime}}**
+Use this when interpreting relative dates ("tomorrow", "next week", "in 3 days", etc.).
+
 ────────────────────────────────
 
 ## Core Principles

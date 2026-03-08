@@ -310,12 +310,12 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
             classifier = ContradictionClassifierService(db_service=db)
             conflict = classifier.check_ingestion(text)
             if conflict:
-                classification = conflict.get('classification')
+                conflict_type = conflict.get('classification')  # e.g. 'temporal_change', 'true_contradiction'
                 mem_a = conflict.get('memory_a', {})
                 mem_b = conflict.get('memory_b', {})
                 unc_svc = UncertaintyService(db)
 
-                if classification == 'temporal_change' and conflict.get('temporal_signal'):
+                if conflict_type == 'temporal_change' and conflict.get('temporal_signal'):
                     # Auto-supersede silently — don't surface in response
                     if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
                         unc_id = unc_svc.create_uncertainty(
@@ -331,12 +331,12 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
                             strategy='temporal_supersede',
                             detail=conflict.get('reasoning', ''),
                         )
-                elif classification in ('true_contradiction', 'context_dependent'):
+                elif conflict_type in ('true_contradiction', 'context_dependent'):
                     # Flag for response weaving
                     if assembled_context is None:
                         assembled_context = {}
                     assembled_context['contradiction_context'] = {
-                        'classification': classification,
+                        'classification': conflict_type,
                         'memory_a_text': mem_a.get('text', ''),
                         'memory_b_text': mem_b.get('text', ''),
                         'reasoning': conflict.get('reasoning', ''),
