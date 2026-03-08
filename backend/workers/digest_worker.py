@@ -284,6 +284,64 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     except Exception as e:
         logging.warning(f"[Mode:{mode}] Context assembly failed: {e}")
 
+    # Phase 2 — Ingestion detection: run contradiction check in parallel with
+    # context assembly. Time-boxed to 600ms — skip if slow.
+    # Only runs for RESPOND mode (has conversational context to weave into).
+    if mode == 'RESPOND' and assembled_context is not None:
+        try:
+            from services.contradiction_classifier_service import ContradictionClassifierService
+            from services.uncertainty_service import UncertaintyService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            classifier = ContradictionClassifierService(db_service=db)
+            conflict = classifier.check_ingestion(text)
+            if conflict:
+                classification = conflict.get('classification')
+                mem_a = conflict.get('memory_a', {})
+                mem_b = conflict.get('memory_b', {})
+                unc_svc = UncertaintyService(db)
+
+                if classification == 'temporal_change' and conflict.get('temporal_signal'):
+                    # Auto-supersede silently — don't surface in response
+                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
+                        unc_id = unc_svc.create_uncertainty(
+                            memory_a_type=mem_b['type'],
+                            memory_a_id=mem_b['id'],
+                            uncertainty_type='contradiction',
+                            detection_context='ingestion',
+                            reasoning=conflict.get('reasoning'),
+                            temporal_signal=True,
+                        )
+                        unc_svc.resolve_uncertainty(
+                            uncertainty_id=unc_id,
+                            strategy='temporal_supersede',
+                            detail=conflict.get('reasoning', ''),
+                        )
+                elif classification in ('true_contradiction', 'context_dependent'):
+                    # Flag for response weaving
+                    if assembled_context is None:
+                        assembled_context = {}
+                    assembled_context['contradiction_context'] = {
+                        'classification': classification,
+                        'memory_a_text': mem_a.get('text', ''),
+                        'memory_b_text': mem_b.get('text', ''),
+                        'reasoning': conflict.get('reasoning', ''),
+                        'surface_context': conflict.get('surface_context', ''),
+                    }
+                    # Create uncertainty record if not already tracked
+                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
+                        unc_svc.create_uncertainty(
+                            memory_a_type=mem_b['type'],
+                            memory_a_id=mem_b['id'],
+                            uncertainty_type='contradiction',
+                            detection_context='ingestion',
+                            reasoning=conflict.get('reasoning'),
+                            temporal_signal=False,
+                            surface_context=conflict.get('surface_context'),
+                        )
+        except Exception as e:
+            logging.debug(f"[Mode:{mode}] Ingestion contradiction check skipped: {e}")
+
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 

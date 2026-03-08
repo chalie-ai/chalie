@@ -40,6 +40,27 @@ MAX_TRAITS_IN_PROMPT = 8
 INJECTION_THRESHOLD = 0.3
 
 
+def _nudge_uncertainty_tolerance(db_service, direction: float) -> None:
+    """
+    Phase 4: Nudge Chalie's uncertainty_tolerance identity dimension.
+
+    direction > 0 → higher tolerance (surface less, resolve more silently)
+    direction < 0 → lower tolerance (surface sooner, clarify more)
+    """
+    try:
+        from services.identity_service import IdentityService
+        identity = IdentityService(db_service)
+        # Use emotion_signal=direction (identity reads this as a positive/negative nudge)
+        identity.update_activation(
+            vector_name='uncertainty_tolerance',
+            emotion_signal=direction,
+            reward_signal=direction * 0.5,
+            topic='self_calibration',
+        )
+    except Exception:
+        pass  # Identity vector may not exist yet — safe to skip
+
+
 def _pack_embedding(embedding) -> Optional[bytes]:
     """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
     if embedding is None:
@@ -168,8 +189,28 @@ class UserTraitService:
                             f"confidence {old_confidence:.2f} → {new_confidence:.2f} "
                             f"(count: {new_count})"
                         )
+
+                        # Phase 4 — evidence-based resolution: reinforcement resolves uncertainties
+                        # on this trait if the other side is significantly weaker
+                        cursor.execute("SELECT id FROM user_traits WHERE trait_key = ?", (trait_key,))
+                        rein_id_row = cursor.fetchone()
+                        if rein_id_row:
+                            try:
+                                from services.uncertainty_service import UncertaintyService
+                                UncertaintyService(self.db).resolve_by_reinforcement(
+                                    memory_type='trait',
+                                    memory_id=rein_id_row[0],
+                                    reinforced_confidence=new_confidence,
+                                )
+                            except Exception as ue:
+                                logger.debug(f"[USER_TRAITS] Evidence resolution skipped: {ue}")
                     elif confidence > old_confidence * 2:
                         # Conflict with significantly higher confidence → overwrite
+                        # Fetch the old trait's ID before overwriting for uncertainty tracking
+                        cursor.execute("SELECT id FROM user_traits WHERE trait_key = ?", (trait_key,))
+                        old_id_row = cursor.fetchone()
+                        old_trait_id = old_id_row[0] if old_id_row else None
+
                         embedding_blob = self._generate_embedding_blob(trait_key, trait_value)
                         cursor.execute("""
                             UPDATE user_traits
@@ -193,8 +234,33 @@ class UserTraitService:
                             f"'{old_value}' → '{trait_value}' "
                             f"(confidence {old_confidence:.2f} → {confidence:.2f})"
                         )
+
+                        # Create uncertainty for the conflict (confidence dominance path)
+                        if old_trait_id:
+                            try:
+                                from services.uncertainty_service import UncertaintyService
+                                unc_svc = UncertaintyService(self.db)
+                                unc_svc.create_uncertainty(
+                                    memory_a_type='trait',
+                                    memory_a_id=old_trait_id,
+                                    memory_b_type=None,
+                                    memory_b_id=None,
+                                    uncertainty_type='contradiction',
+                                    detection_context='ingestion',
+                                    reasoning=(
+                                        f"Trait '{trait_key}' overwritten: "
+                                        f"'{old_value}' → '{trait_value}' "
+                                        f"(confidence dominance: {confidence:.2f} > 2x {old_confidence:.2f})"
+                                    ),
+                                )
+                            except Exception as ue:
+                                logger.debug(f"[USER_TRAITS] Uncertainty creation skipped: {ue}")
                     else:
-                        # Conflict but not strong enough to overwrite — record conflict
+                        # Conflict but not strong enough to overwrite — create uncertainty record
+                        cursor.execute("SELECT id FROM user_traits WHERE trait_key = ?", (trait_key,))
+                        conflict_id_row = cursor.fetchone()
+                        conflict_trait_id = conflict_id_row[0] if conflict_id_row else None
+
                         cursor.execute("""
                             UPDATE user_traits
                             SET last_conflict_at = datetime('now'), updated_at = datetime('now')
@@ -206,6 +272,35 @@ class UserTraitService:
                             f"'{trait_value}' vs existing '{old_value}' "
                             f"(new conf {confidence:.2f} <= 2x old {old_confidence:.2f})"
                         )
+
+                        # Create uncertainty record (replaces silent timestamp update)
+                        if conflict_trait_id:
+                            try:
+                                from services.uncertainty_service import UncertaintyService
+                                unc_svc = UncertaintyService(self.db)
+                                # Only create if not already tracked
+                                existing = unc_svc.get_uncertainties_for_memory('trait', conflict_trait_id)
+                                open_contradictions = [
+                                    u for u in existing
+                                    if u.get('uncertainty_type') == 'contradiction'
+                                    and u.get('state') in ('open', 'surfaced')
+                                ]
+                                if not open_contradictions:
+                                    unc_svc.create_uncertainty(
+                                        memory_a_type='trait',
+                                        memory_a_id=conflict_trait_id,
+                                        memory_b_type=None,
+                                        memory_b_id=None,
+                                        uncertainty_type='contradiction',
+                                        detection_context='ingestion',
+                                        reasoning=(
+                                            f"Trait '{trait_key}': new value '{trait_value}' "
+                                            f"conflicts with existing '{old_value}' "
+                                            f"(insufficient confidence to overwrite)"
+                                        ),
+                                    )
+                            except Exception as ue:
+                                logger.debug(f"[USER_TRAITS] Uncertainty creation skipped: {ue}")
                 else:
                     # New trait
                     trait_id = str(uuid.uuid4())
@@ -410,13 +505,14 @@ class UserTraitService:
                 # Load all traits
                 cursor.execute("""
                     SELECT id, trait_key, confidence, category, source,
-                           reinforcement_count, updated_at
+                           reinforcement_count, updated_at,
+                           COALESCE(reliability, 'reliable') AS reliability
                     FROM user_traits
                 """)
                 rows = cursor.fetchall()
 
                 for row in rows:
-                    trait_id, trait_key, confidence, category, source, reinf_count, updated_at = row
+                    trait_id, trait_key, confidence, category, source, reinf_count, updated_at, reliability = row
 
                     decay_cfg = CATEGORY_DECAY.get(category, CATEGORY_DECAY['general'])
                     base_decay = decay_cfg['base_decay']
@@ -429,6 +525,10 @@ class UserTraitService:
                     # Inferred traits decay 1.5x faster
                     if source == 'inferred':
                         effective_decay *= 1.5
+
+                    # Reliability multiplier: contradicted/uncertain traits decay faster
+                    from services.decay_engine_service import RELIABILITY_DECAY_MULTIPLIER
+                    effective_decay *= RELIABILITY_DECAY_MULTIPLIER.get(reliability, 1.0)
 
                     new_confidence = max(floor, confidence - effective_decay)
 
@@ -454,6 +554,12 @@ class UserTraitService:
                                 f"[USER_TRAITS] Deleted stale trait '{trait_key}' "
                                 f"(below floor for 7+ days)"
                             )
+                            # Resolve any open uncertainties tied to this deleted trait
+                            try:
+                                from services.uncertainty_service import UncertaintyService
+                                UncertaintyService(self.db).resolve_decayed('trait', trait_id)
+                            except Exception as ue:
+                                logger.debug(f"[USER_TRAITS] resolve_decayed skipped: {ue}")
 
                 cursor.close()
 
@@ -488,6 +594,7 @@ class UserTraitService:
                 existing = cursor.fetchone()
 
                 if existing:
+                    existing_trait_id = existing[0]
                     # Overwrite with high confidence, reset reinforcement, preserve category
                     update_category = category or existing[1]
                     cursor.execute(
@@ -505,6 +612,27 @@ class UserTraitService:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
                     logger.info(f"[USER_TRAITS] Corrected trait '{trait_key}' → '{new_value}' (explicit_correction)")
+
+                    # Phase 3 — Resolution feedback loop: resolve linked uncertainties
+                    # and Phase 4 — lower uncertainty tolerance (user correcting us)
+                    try:
+                        from services.uncertainty_service import UncertaintyService
+                        unc_svc = UncertaintyService(self.db)
+                        open_uncs = unc_svc.get_uncertainties_for_memory('trait', existing_trait_id)
+                        for unc in open_uncs:
+                            unc_svc.resolve_uncertainty(
+                                uncertainty_id=unc['id'],
+                                strategy='user_clarified',
+                                detail=f"User explicitly corrected '{trait_key}' → '{new_value}'",
+                                winner_type='trait',
+                                winner_id=existing_trait_id,
+                                loser_type=unc.get('memory_b_type'),
+                                loser_id=unc.get('memory_b_id'),
+                            )
+                        # Lower uncertainty tolerance in identity (user corrects = wants accuracy)
+                        _nudge_uncertainty_tolerance(self.db, direction=-0.03)
+                    except Exception as ue:
+                        logger.debug(f"[USER_TRAITS] Post-correction resolution skipped: {ue}")
                 else:
                     # New trait from explicit correction
                     trait_id = str(uuid.uuid4())

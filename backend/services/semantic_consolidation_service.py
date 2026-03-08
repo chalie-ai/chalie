@@ -187,6 +187,47 @@ class SemanticConsolidationService:
             )
 
             if existing_concept:
+                # Before strengthening, check if the new extraction contradicts the existing concept
+                try:
+                    from services.contradiction_classifier_service import ContradictionClassifierService
+                    from services.uncertainty_service import UncertaintyService
+                    db_svc = self.storage.db_service
+                    classifier = ContradictionClassifierService(db_service=db_svc)
+                    conflict = classifier.check_concept_conflict(
+                        concept_name=concept['name'],
+                        concept_definition=concept['definition'],
+                        existing=existing_concept,
+                    )
+                    if conflict:
+                        unc_svc = UncertaintyService(db_svc)
+                        # Skip if this concept already has an open contradiction record
+                        existing_uncs = unc_svc.get_uncertainties_for_memory(
+                            'concept', existing_concept['id']
+                        )
+                        already_tracked = any(
+                            u.get('uncertainty_type') == 'contradiction'
+                            and u.get('state') in ('open', 'surfaced')
+                            for u in existing_uncs
+                        )
+                        if not already_tracked:
+                            unc_svc.create_uncertainty(
+                                memory_a_type='concept',
+                                memory_a_id=existing_concept['id'],
+                                memory_b_type=None,
+                                memory_b_id=None,
+                                uncertainty_type='contradiction',
+                                detection_context='consolidation',
+                                reasoning=conflict.get('reasoning'),
+                                temporal_signal=conflict.get('temporal_signal', False),
+                                surface_context=conflict.get('surface_context'),
+                            )
+                            logging.info(
+                                f"[CONSOLIDATION] Contradiction detected on concept "
+                                f"'{existing_concept['concept_name']}': {conflict.get('reasoning', '')[:80]}"
+                            )
+                except Exception as ue:
+                    logging.debug(f"[CONSOLIDATION] Contradiction check skipped: {ue}")
+
                 # Strengthen existing concept
                 self.storage.strengthen_concept(existing_concept['id'], episode_id)
                 logging.info(f"Strengthened existing concept: {existing_concept['concept_name']}")

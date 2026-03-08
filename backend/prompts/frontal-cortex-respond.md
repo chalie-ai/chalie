@@ -91,6 +91,8 @@ Your response is rendered as Markdown. Use formatting when it makes the answer c
 
 {{semantic_concepts}}
 
+{{contradiction_context}}
+
 Previous Internal Actions (use these results to inform your response):
 {{act_history}}
 

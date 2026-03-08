@@ -15,6 +15,13 @@ from .config_service import ConfigService
 
 logger = logging.getLogger(__name__)
 
+RELIABILITY_DECAY_MULTIPLIER = {
+    'reliable':    1.0,
+    'uncertain':   1.5,
+    'contradicted': 2.0,
+    'superseded':  3.0,
+}
+
 
 class DecayEngineService:
     """Background service that applies decay to all memory types periodically."""
@@ -133,7 +140,8 @@ class DecayEngineService:
                         SELECT id, activation_score,
                                (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', COALESCE(last_accessed_at, created_at)) AS REAL)) / 3600.0 AS hours_since,
                                json_extract(salience_factors, '$.source') AS sf_source,
-                               json_extract(salience_factors, '$.durability') AS sf_durability
+                               json_extract(salience_factors, '$.durability') AS sf_durability,
+                               COALESCE(reliability, 'reliable') AS reliability
                         FROM episodes
                         WHERE deleted_at IS NULL
                           AND activation_score > 0.1
@@ -146,7 +154,7 @@ class DecayEngineService:
                     cron_tool_updated = 0
 
                     for row in rows:
-                        episode_id, activation_score, hours_since, sf_source, sf_durability = row
+                        episode_id, activation_score, hours_since, sf_source, sf_durability, reliability = row
 
                         # Determine effective decay rate
                         rate = self.episodic_decay_rate
@@ -164,6 +172,9 @@ class DecayEngineService:
                         if sf_durability == 'cron_tool':
                             rate = self.episodic_decay_rate * 3.0
                             cron_tool_updated += 1
+
+                        # Reliability multiplier: contradicted/uncertain memories decay faster
+                        rate *= RELIABILITY_DECAY_MULTIPLIER.get(reliability, 1.0)
 
                         # Compute new activation: activation * exp(-rate * hours)
                         new_activation = max(0.1, activation_score * math.exp(-rate * hours_since))
@@ -222,12 +233,22 @@ class DecayEngineService:
                 with db_service.connection() as conn:
                     cursor = conn.cursor()
 
-                    # Batch update: decay strength respecting decay_resistance, floor at 0.2
+                    # Batch update: decay strength respecting decay_resistance and reliability.
+                    # Reliability multiplier is embedded in SQL via CASE to keep this a
+                    # single-pass batch UPDATE (avoids a costly row-by-row Python loop).
                     cursor.execute("""
                         UPDATE semantic_concepts
                         SET strength = MAX(
                             0.2,
-                            strength - (? * (1.0 - COALESCE(decay_resistance, 0.5)))
+                            strength - (
+                                ? * (1.0 - COALESCE(decay_resistance, 0.5)) *
+                                CASE COALESCE(reliability, 'reliable')
+                                    WHEN 'uncertain'    THEN 1.5
+                                    WHEN 'contradicted' THEN 2.0
+                                    WHEN 'superseded'   THEN 3.0
+                                    ELSE 1.0
+                                END
+                            )
                         ),
                         updated_at = datetime('now')
                         WHERE deleted_at IS NULL
