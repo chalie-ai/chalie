@@ -4,9 +4,11 @@ WebSocket endpoint — single bidirectional channel replacing both SSE streams.
 Protocol:
   → Client sends:  {"type": "chat", "text": "...", "source": "text|voice"}
   → Client sends:  {"type": "action", "payload": {"skill": "...", ...}}
+  → Client sends:  {"type": "act_steer", "text": "..."}
   → Client sends:  {"type": "resume", "last_seq": N}
   ← Server sends:  {"type": "status", "stage": "...", "seq": N}
   ← Server sends:  {"type": "message", "text": "...", "actions?": [...], ..., "seq": N}
+  ← Server sends:  {"type": "act_narration", "text": "...", "step": N, "seq": N}
   ← Server sends:  {"type": "card", "html": "...", ..., "seq": N}
   ← Server sends:  {"type": "done", "duration_ms": N, "seq": N}
   ← Server sends:  {"type": "drift|task|reminder|escalation|notification", ..., "seq": N}
@@ -143,6 +145,9 @@ def register_websocket(sock):
         )
         drift_thread.start()
 
+        # Track active request for user steering (set by _handle_chat)
+        active_request = {'id': None}
+
         # Main loop: receive client messages
         try:
             while True:
@@ -160,9 +165,11 @@ def register_websocket(sock):
                 msg_type = msg.get('type', '')
 
                 if msg_type == 'chat':
-                    _handle_chat(ws, store, msg)
+                    _handle_chat(ws, store, msg, active_request)
                 elif msg_type == 'action':
                     _handle_action(ws, store, msg)
+                elif msg_type == 'act_steer':
+                    _handle_act_steer(store, msg, active_request)
                 elif msg_type == 'resume':
                     _handle_resume(ws, msg)
                 elif msg_type == 'pong':
@@ -244,7 +251,18 @@ def _handle_action(ws, store, msg):
         _send_json(ws, {"type": "done", "duration_ms": 0, "seq": seq})
 
 
-def _handle_chat(ws, store, msg):
+def _handle_act_steer(store, msg, active_request):
+    """Inject user steering text into the active ACT loop via MemoryStore."""
+    steer_text = (msg.get('text') or '').strip()
+    request_id = active_request.get('id')
+    if steer_text and request_id:
+        steer_key = f"steer:{request_id}"
+        store.rpush(steer_key, steer_text)
+        store.expire(steer_key, 120)
+        logger.debug(f"[WS] Steer injected for {request_id}: {steer_text[:60]}")
+
+
+def _handle_chat(ws, store, msg, active_request=None):
     """Process a chat message — replaces the POST /chat SSE endpoint."""
     text = (msg.get('text') or '').strip()
     image_ids = (msg.get('image_ids') or [])[:3]  # max 3 images
@@ -281,6 +299,10 @@ def _handle_chat(ws, store, msg):
 
     source = msg.get('source', 'text')
     request_id = str(uuid.uuid4())
+
+    # Track active request for user steering
+    if active_request is not None:
+        active_request['id'] = request_id
 
     # Subscribe to per-request SSE channel (OutputService publishes here)
     pubsub = store.pubsub()
@@ -360,6 +382,20 @@ def _handle_chat(ws, store, msg):
 
             if output_data:
                 output = json.loads(output_data)
+
+                # Act narration: forward to client as a progress update (not a final message)
+                if output.get('type') == 'act_narration':
+                    seq = _next_seq()
+                    narr_evt = {
+                        "type": "act_narration",
+                        "text": output.get("text", ""),
+                        "step": output.get("step", 0),
+                        "seq": seq,
+                    }
+                    _buffer_event(narr_evt)
+                    _send_json(ws, narr_evt)
+                    continue  # Keep listening — this isn't the final response
+
                 metadata = output.get("metadata", {})
                 original_meta = metadata.get("metadata", {})
                 seq = _next_seq()
@@ -378,6 +414,11 @@ def _handle_chat(ws, store, msg):
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
+
+                # Clear active request when response is delivered
+                if active_request is not None:
+                    active_request['id'] = None
+
                 seq = _next_seq()
                 done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
                 _buffer_event(done_evt)

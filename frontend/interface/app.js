@@ -771,9 +771,14 @@ class ChalieApp {
 
     if (!text && !imageIds.length) return;
 
-    // If a message is in-flight, resolve it before starting a new one
-    if (this._isSending && this._pendingForm) {
-      this.renderer.resolvePendingForm(this._pendingForm, '', {});
+    // Only route as steer when the ACT loop is actively narrating.
+    // This prevents normal replies (e.g. to clarifications) from being
+    // misrouted as steering commands.
+    if (this.ws._chatCallbacks && this.presence.state === 'narrating') {
+      textarea.value = '';
+      textarea.style.height = 'auto';
+      this.ws.send(text, source, {});
+      return;
     }
 
     this._isSending = true;
@@ -805,6 +810,18 @@ class ChalieApp {
     this.ws.send(text || '[Image attached]', source, {
       onStatus: (stage) => {
         this.presence.setState(stage);
+      },
+      onNarration: (data) => {
+        // Live ACT narration: remove thinking dots, show narration bubble instead
+        clearTimeout(pendingUpgradeTimer);
+        // Remove the pending form entirely — narration bubbles replace it
+        if (pendingForm.isConnected) pendingForm.remove();
+        this.presence.setState('narrating');
+        this.renderer.appendNarrationBubble(data.text, data.step);
+      },
+      onSteerSent: (steerText) => {
+        // User sent a redirect while ACT is running — show inline
+        this.renderer.appendSteerBubble(steerText);
       },
       onMessage: (data) => {
         clearTimeout(pendingUpgradeTimer);
@@ -856,8 +873,13 @@ class ChalieApp {
       },
     }, pendingImageIds);
 
-    // Fallback in case onDone never fires (connection drop)
-    this._isSending = false;
+    // Safety: if onDone never fires (connection drop), reset after 5 minutes
+    setTimeout(() => {
+      if (this._isSending) {
+        this._isSending = false;
+        this._pendingForm = null;
+      }
+    }, 300000);
   }
 
   // ---------------------------------------------------------------------------

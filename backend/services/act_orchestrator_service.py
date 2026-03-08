@@ -108,9 +108,11 @@ class ACTOrchestrator:
         assembled_context=None,
         inclusion_map=None,
         on_iteration_complete: Optional[Callable] = None,
+        on_narration: Optional[Callable] = None,
         context_extras: Optional[dict] = None,
         session_id: str = 'orchestrator',
         exchange_id: str = 'unknown',
+        request_id: str = '',
     ) -> ACTResult:
         """
         Execute the unified ACT loop.
@@ -131,9 +133,13 @@ class ACTOrchestrator:
                 termination_reason) -> Optional[str]. Return a termination reason string
                 to abort the loop, or None to continue. Use for heartbeat, cancellation,
                 custom termination logic.
+            on_narration: Optional callback(narration_text: str, step: int) -> None.
+                Called when the LLM emits a narration line during a narrated ACT loop.
+                Used by digest_worker to stream progress to the user via WebSocket.
             context_extras: Extra params merged into every action dispatch
             session_id: Session identifier for iteration logging
             exchange_id: Exchange correlation ID for iteration logging
+            request_id: Per-request UUID for user steering (steer:{request_id} in MemoryStore)
 
         Returns:
             ACTResult with full loop outcome
@@ -168,6 +174,10 @@ class ACTOrchestrator:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Iteration logging init failed: {e}")
 
+        # ── Narration state ───────────────────────────────────────────────
+        self._narrated = False  # Set on iteration 0 by LLM decision
+        self._request_id = request_id
+
         # ── Repetition detection state ──────────────────────────────────
         consecutive_same_action = 0
         last_action_type = None
@@ -187,6 +197,10 @@ class ACTOrchestrator:
                     act_history_str, topic
                 )
 
+            # ── Inject user steering input (if any) ──────────────────────
+            if self._request_id:
+                act_history_str = self._inject_steering(act_history_str)
+
             # Generate action plan via LLM
             response_data = cortex_service.generate_response(
                 system_prompt_template=act_prompt,
@@ -202,6 +216,24 @@ class ACTOrchestrator:
             )
 
             actions = response_data.get('actions', [])
+
+            # ── Narration gate (iteration 0 only) + emission ─────────────
+            if act_loop.iteration_number == 0:
+                self._narrated = bool(response_data.get('narrated', False))
+                if self._narrated:
+                    logger.info(f"{LOG_PREFIX} Narrated ACT loop enabled")
+
+            if self._narrated:
+                narration_text = response_data.get('narration', '')
+                logger.info(
+                    f"{LOG_PREFIX} Narration check: has_callback={on_narration is not None}, "
+                    f"has_text={bool(narration_text)}, text={narration_text[:50] if narration_text else '(none)'}"
+                )
+                if on_narration and narration_text:
+                    try:
+                        on_narration(narration_text, act_loop.iteration_number)
+                    except Exception as e:
+                        logger.error(f"{LOG_PREFIX} Narration callback error: {e}", exc_info=True)
 
             # ── Repetition detection (type-based) ───────────────────────
             if actions and len(actions) == 1:
@@ -435,6 +467,23 @@ class ACTOrchestrator:
         )
 
     # ── Private helpers ─────────────────────────────────────────────────
+
+    def _inject_steering(self, act_history_str: str) -> str:
+        """Check MemoryStore for user steering input and inject into act_history."""
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            steer_key = f"steer:{self._request_id}"
+            steers = store.lrange(steer_key, 0, -1)
+            if steers:
+                store.delete(steer_key)
+                for steer in steers:
+                    steer_text = steer if isinstance(steer, str) else steer.decode()
+                    act_history_str += f"\n\n⚡ [User interrupted]: {steer_text}"
+                    logger.info(f"{LOG_PREFIX} Injected user steer: {steer_text[:80]}")
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Steering check failed: {e}")
+        return act_history_str
 
     def _run_critic(
         self,
