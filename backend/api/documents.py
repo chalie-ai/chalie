@@ -209,6 +209,7 @@ def upload_document():
             "original_name": original_name,
             "status": "pending",
             "file_size": len(content),
+            "file_hash": file_hash,
         }
 
         if duplicates:
