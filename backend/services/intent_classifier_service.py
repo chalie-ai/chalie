@@ -190,7 +190,10 @@ class IntentClassifierService:
             return 'empty'
         if GREETING_PATTERNS.match(stripped):
             return 'greeting'
-        if FEEDBACK_PATTERNS.search(text):
+        # Only classify as feedback if the text is NOT a question — feedback words like
+        # "great", "good", "correct" appear naturally in questions ("What makes a great X?")
+        # and must not override the interrogative check below.
+        if FEEDBACK_PATTERNS.search(text) and '?' not in text and not INTERROGATIVE_PATTERNS.search(text):
             return 'feedback'
         if any(p.search(text) for p in CANCEL_PATTERNS):
             return 'command'
