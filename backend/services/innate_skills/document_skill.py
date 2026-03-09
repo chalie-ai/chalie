@@ -4,10 +4,25 @@ Document Skill — Search and manage uploaded documents via the ACT loop.
 Actions: search, list, view, delete, restore
 """
 
+import json as _json
 import logging
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_extracted_metadata(raw) -> dict:
+    """Safely parse extracted_metadata which may be a JSON string or dict."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = _json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
 
 
 def handle_document(topic: str, params: dict) -> str:
@@ -109,8 +124,12 @@ def _handle_search(service, params: dict, topic: str) -> str:
 
         lines = [f"[DOCUMENT] Found {len(seen_docs)} document(s) matching '{query}':"]
         for doc_id, doc in seen_docs.items():
-            meta = doc.get('extracted_metadata', {})
-            doc_type = meta.get('document_type', {}).get('value', '')
+            meta = _parse_extracted_metadata(doc.get('extracted_metadata'))
+            doc_type = meta.get('document_type', {})
+            if isinstance(doc_type, dict):
+                doc_type = doc_type.get('value', '')
+            elif not isinstance(doc_type, str):
+                doc_type = ''
             type_str = f" [{doc_type}]" if doc_type and doc_type != 'document' else ''
             pages = doc.get('page_count')
             page_str = f", {pages}p" if pages else ''
@@ -145,7 +164,12 @@ def _handle_list(service, topic: str) -> str:
 
     lines = ["[DOCUMENT] Document library:"]
     for doc in docs:
-        doc_type = doc.get('extracted_metadata', {}).get('document_type', {}).get('value', '')
+        _meta = _parse_extracted_metadata(doc.get('extracted_metadata'))
+        doc_type = _meta.get('document_type', {})
+        if isinstance(doc_type, dict):
+            doc_type = doc_type.get('value', '')
+        elif not isinstance(doc_type, str):
+            doc_type = ''
         type_str = f" [{doc_type}]" if doc_type and doc_type != 'document' else ''
         pages = doc.get('page_count')
         page_str = f", {pages}p" if pages else ''
@@ -181,10 +205,14 @@ def _handle_view(service, params: dict, topic: str) -> str:
         return f"[DOCUMENT] '{doc['original_name']}' is still being processed or awaiting confirmation."
 
     # Format for act_history — full content for analysis
-    meta = doc.get('extracted_metadata', {})
+    meta = _parse_extracted_metadata(doc.get('extracted_metadata'))
     lines = [f"[DOCUMENT] {doc['original_name']}:"]
 
-    doc_type = meta.get('document_type', {}).get('value', '')
+    doc_type = meta.get('document_type', {})
+    if isinstance(doc_type, dict):
+        doc_type = doc_type.get('value', '')
+    elif not isinstance(doc_type, str):
+        doc_type = ''
     if doc_type:
         lines.append(f"  Type: {doc_type}")
 

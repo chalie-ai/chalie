@@ -71,15 +71,24 @@ class DocumentProcessingService:
             return False
 
         try:
+            import os
+            import time as _time
+
+            t_start = _time.monotonic()
+            def _elapsed(since=None):
+                return f"{_time.monotonic() - (since or t_start):.1f}s"
+
             # Step 1: Set processing status
             doc_service.update_status(doc_id, 'processing')
 
-            import os
             # Watched folder docs store absolute paths; uploaded docs store relative paths.
             # os.path.join already handles this correctly (absolute second arg wins).
             file_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
+            fname = doc.get('original_name', doc_id)
+            logger.info(f"[DOC PROC] Starting: {fname} ({doc_id})")
 
             # Step 2: Extract text
+            t2 = _time.monotonic()
             text = _extract_text_from_file(file_path, doc['mime_type'])
 
             # Step 2b: OCR fallback for image-only PDFs and images
@@ -89,6 +98,8 @@ class DocumentProcessingService:
             if not text or not text.strip():
                 doc_service.update_status(doc_id, 'failed', 'No text could be extracted from this document.')
                 return False
+
+            logger.info(f"[DOC PROC] {fname} — text extraction: {_elapsed(t2)} ({len(text):,} chars)")
 
             # Step 3: Clean text and detect language
             clean_text = _normalize_text_fn(text)
@@ -106,10 +117,12 @@ class DocumentProcessingService:
             summary = self._generate_summary(clean_text)
 
             # Step 6: Generate summary embedding + fingerprint
+            t6 = _time.monotonic()
             from services.embedding_service import get_embedding_service
             embedding_service = get_embedding_service()
             summary_embedding = embedding_service.generate_embedding(summary)
             fingerprint = self._simhash(clean_text)
+            logger.info(f"[DOC PROC] {fname} — summary embedding: {_elapsed(t6)}")
 
             # Step 7: Store metadata
             page_count = self._count_pages(file_path, doc['mime_type'])
@@ -143,8 +156,10 @@ class DocumentProcessingService:
             chunks = self._chunk_text(text, doc_type)
 
             # Step 10: Embed all chunks in adaptive batches
+            t10 = _time.monotonic()
             chunk_texts = [c['content'] for c in chunks]
             chunk_embeddings = self._generate_chunk_embeddings(embedding_service, chunk_texts)
+            logger.info(f"[DOC PROC] {fname} — chunk embeddings: {_elapsed(t10)} ({len(chunks)} chunks)")
 
             # Step 11: Store chunks
             chunk_records = []
@@ -164,13 +179,13 @@ class DocumentProcessingService:
             if doc.get('source_type') in ('watched_folder', 'moment'):
                 doc_service.update_status(doc_id, 'ready',
                                           chunk_count=len(chunk_records))
-                logger.info(f"[DOC PROC] Document {doc_id} auto-confirmed ({doc['source_type']}): "
-                            f"{len(chunk_records)} chunks")
+                logger.info(f"[DOC PROC] {fname} auto-confirmed ({doc['source_type']}): "
+                            f"{len(chunk_records)} chunks — pipeline so far: {_elapsed()}")
             else:
                 doc_service.update_status(doc_id, 'awaiting_confirmation',
                                           chunk_count=len(chunk_records))
-                logger.info(f"[DOC PROC] Document {doc_id} processed: {len(chunk_records)} chunks, "
-                            f"awaiting confirmation")
+                logger.info(f"[DOC PROC] {fname} processed: {len(chunk_records)} chunks — "
+                            f"pipeline so far: {_elapsed()}")
 
             # Step 13: LLM synthesis (non-blocking enrichment, 60s hard timeout)
             # Runs AFTER status change so the user isn't stuck waiting.
@@ -179,6 +194,7 @@ class DocumentProcessingService:
             # NOTE: signal.alarm() only works in the main thread; use a thread-based timeout instead.
             import threading
             _synthesis_result = {}
+            t13 = _time.monotonic()
             def _run_synthesis():
                 try:
                     result = self._generate_llm_synthesis(
@@ -193,7 +209,7 @@ class DocumentProcessingService:
             synth_thread.join(timeout=60)
 
             if synth_thread.is_alive():
-                logger.warning(f"[DOC PROC] Synthesis timed out after 60s for {doc_id} — proceeding without")
+                logger.warning(f"[DOC PROC] {fname} synthesis timed out after 60s")
             elif _synthesis_result.get('data'):
                 synthesis_data = _synthesis_result['data']
                 metadata['_synthesis'] = synthesis_data.get('synthesis', '')
@@ -201,7 +217,9 @@ class DocumentProcessingService:
                 doc_service.update_extracted_metadata(
                     doc_id, metadata=metadata, summary=summary,
                 )
-                logger.info(f"[DOC PROC] LLM synthesis stored for {doc_id}")
+                logger.info(f"[DOC PROC] {fname} — LLM synthesis: {_elapsed(t13)}")
+
+            logger.info(f"[DOC PROC] {fname} complete — total: {_elapsed()}")
 
             # Step 14: Document classification (non-fatal enrichment)
             # Infers category, project, and date via LLM.
