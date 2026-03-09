@@ -907,9 +907,8 @@ class ToolRegistryService:
                     )
                     if card_data:
                         OutputService().enqueue_card(topic, card_data, {})
-                        output = f"[TOOL:{tool_name}] (card displayed, cost: {elapsed_ms}ms) [/TOOL]"
                         self._log_outcome(tool_name, success, topic, elapsed_ms)
-                        return output
+                        return '__CARD_ONLY__'
                 except Exception as e:
                     logger.warning(f"[TOOL REGISTRY] Card render failed for {tool_name}: {e}")
         elif card_enabled and card_mode != "deferred" and not result_html and isinstance(result, dict):
@@ -924,9 +923,8 @@ class ToolRegistryService:
                     )
                     if card_data:
                         OutputService().enqueue_card(topic, card_data, {})
-                        output = f"[TOOL:{tool_name}] (card displayed, cost: {elapsed_ms}ms) [/TOOL]"
                         self._log_outcome(tool_name, success, topic, elapsed_ms)
-                        return output
+                        return '__CARD_ONLY__'
                 except Exception as e:
                     logger.warning(f"[TOOL REGISTRY] Template card render failed for {tool_name}: {e}")
 
