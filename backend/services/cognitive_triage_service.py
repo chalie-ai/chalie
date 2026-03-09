@@ -1,11 +1,10 @@
 """
-Cognitive Triage Service — LLM-based routing with social fast filter and self-eval.
+Cognitive Triage Service — LLM-based routing with self-eval guardrails.
 
-Replaces the 12-step linear pipeline with a 4-step branching flow:
-  1. Social filter (~1ms, regex) → fast template response
+3-step branching flow:
+  1. Empty-input guard (~0ms)
   2. LLM cognitive triage (~100-300ms, lightweight model)
   3. Self-eval sanity check (~0ms, deterministic rules)
-  4. Branch dispatch → RESPOND, CLARIFY, or ACT
 
 The triage LLM reasons about the prompt with context and tool summaries,
 returning a structured decision. The self-eval applies deterministic
@@ -29,33 +28,6 @@ _PRIMITIVES = ['recall', 'memorize', 'introspect']
 _VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task', 'document', 'read'}
 _CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES)  # innate skills that don't need external tools
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
-
-# Social filter regex patterns (reused from IntentClassifierService)
-_GREETING_PATTERNS = re.compile(
-    r'^(hey|hi|hello|yo|sup|what\'?s\s*up|howdy|hiya|heya|greetings|'
-    r'good\s*(morning|afternoon|evening))\b',
-    re.IGNORECASE
-)
-
-_POSITIVE_FEEDBACK = re.compile(
-    r'\b(thanks|thank\s+you|great|perfect|awesome|exactly|that\s+works|correct|'
-    r'good|nice|helpful|got\s+it|understood)\b',
-    re.IGNORECASE
-)
-
-_CANCEL_PATTERNS = [
-    re.compile(r'\bnever\s*mind\b', re.IGNORECASE),
-    re.compile(r'\bignore\s+that\b', re.IGNORECASE),
-    re.compile(r'\bstop\s+(searching|looking|checking)\b', re.IGNORECASE),
-    re.compile(r'\bforget\s+(it|about\s+it|that)\b', re.IGNORECASE),
-    re.compile(r'\bcancel\b(?!\s+(?:(?:my|all|the|a|this|that)\s+)?(?:reminder|alarm|schedule|task|notification|event|recurring|appointment)s?\b)', re.IGNORECASE),
-    re.compile(r'\bdon\'?t\s+bother\b', re.IGNORECASE),
-]
-
-_SELF_RESOLVED_PATTERNS = [
-    re.compile(r'\b(found|figured|sorted|solved|got)\s+(it|that|this)\s*(out|now|myself)?\b', re.IGNORECASE),
-    re.compile(r'\b(all\s+good|no\s+worries|no\s+need)\b', re.IGNORECASE),
-]
 
 _FACTUAL_QUESTION = re.compile(
     r'\b(what|where|when|who|how\s+much|how\s+many|is\s+it|are\s+they|did\s+they|does\s+it)\b.*\?',
@@ -146,76 +118,24 @@ class TriageResult:
     effort_estimate: str = 'moderate'  # trivial | light | moderate | deep
 
 
-def social_filter(text: str) -> 'Optional[TriageResult]':
-    """
-    Module-level social filter for early short-circuit (CANCEL/IGNORE only).
+class CognitiveTriageService:
+    """3-step branching triage: empty guard → LLM → self-eval → dispatch."""
 
-    Used by digest_worker to skip topic classification for trivial messages.
-    Only returns a result for CANCEL and IGNORE — ACKNOWLEDGE still needs
-    response generation and goes through full triage.
+    def triage(self, text: str, context: TriageContext) -> TriageResult:
+        """Main entry point. Empty guard → LLM triage → self-eval."""
+        start = time.time()
 
-    Safety guardrails:
-    - Length gate: only fires if message is ≤ 6 words (prevents false positives
-      on longer instructions like "ignore the previous error and continue")
-    - Clause check: if message contains '?' or clause separators (comma, semicolon),
-      skip the pre-check and let triage handle it
-    """
-    stripped = text.strip()
-    if not stripped:
-        return TriageResult(
-            branch='social', mode='IGNORE', tools=[], skills=[],
-            confidence_internal=1.0, confidence_tool_need=0.0,
-            freshness_risk=0.0, decision_entropy=0.0,
-            reasoning='social_precheck_empty', triage_time_ms=0.0,
-            fast_filtered=True, self_eval_override=False, self_eval_reason='',
-            effort_estimate='trivial',
-        )
-
-    words = stripped.split()
-    # Length gate: only short-circuit short messages
-    if len(words) > 6:
-        return None
-    # Clause/question check: multi-clause or question → let full triage handle it
-    if '?' in stripped or ',' in stripped or ';' in stripped:
-        return None
-
-    for pattern in _CANCEL_PATTERNS:
-        if pattern.search(stripped):
-            return TriageResult(
-                branch='social', mode='CANCEL', tools=[], skills=[],
-                confidence_internal=1.0, confidence_tool_need=0.0,
-                freshness_risk=0.0, decision_entropy=0.0,
-                reasoning='social_precheck_cancel', triage_time_ms=0.0,
-                fast_filtered=True, self_eval_override=False, self_eval_reason='',
-                effort_estimate='trivial',
-            )
-
-    for pattern in _SELF_RESOLVED_PATTERNS:
-        if pattern.search(stripped):
-            return TriageResult(
+        # 1. Empty-input guard (~0ms)
+        if not text.strip():
+            result = TriageResult(
                 branch='social', mode='IGNORE', tools=[], skills=[],
                 confidence_internal=1.0, confidence_tool_need=0.0,
                 freshness_risk=0.0, decision_entropy=0.0,
-                reasoning='social_precheck_self_resolved', triage_time_ms=0.0,
+                reasoning='empty_input', triage_time_ms=(time.time() - start) * 1000,
                 fast_filtered=True, self_eval_override=False, self_eval_reason='',
                 effort_estimate='trivial',
             )
-
-    return None
-
-
-class CognitiveTriageService:
-    """4-step branching triage: social filter → LLM → self-eval → dispatch."""
-
-    def triage(self, text: str, context: TriageContext) -> TriageResult:
-        """Main entry point. Social filter → LLM triage → self-eval."""
-        start = time.time()
-
-        # 1. Fast social filter (~1ms, regex)
-        social = self._social_filter(text)
-        if social:
-            social.triage_time_ms = (time.time() - start) * 1000
-            return social
+            return result
 
         # 2. LLM cognitive triage (~100-300ms)
         result = self._cognitive_triage(text, context)
@@ -225,50 +145,6 @@ class CognitiveTriageService:
 
         result.triage_time_ms = (time.time() - start) * 1000
         return result
-
-    def _social_filter(self, text: str) -> Optional[TriageResult]:
-        """Regex fast exit. Returns TriageResult or None if not social."""
-        stripped = text.strip()
-        if not stripped:
-            return self._make_social('IGNORE')
-
-        if _GREETING_PATTERNS.match(stripped):
-            # Greetings with questions → let LLM decide
-            if '?' in stripped and len(stripped.split()) > 3:
-                return None
-            return self._make_social('ACKNOWLEDGE')
-
-        if _POSITIVE_FEEDBACK.search(stripped) and len(stripped.split()) <= 8 and '?' not in stripped:
-            return self._make_social('ACKNOWLEDGE')
-
-        for pattern in _CANCEL_PATTERNS:
-            if pattern.search(stripped):
-                return self._make_social('CANCEL')
-
-        for pattern in _SELF_RESOLVED_PATTERNS:
-            if pattern.search(stripped):
-                return self._make_social('IGNORE')
-
-        return None
-
-    def _make_social(self, mode: str) -> TriageResult:
-        """Create a social filter result."""
-        return TriageResult(
-            branch='social',
-            mode=mode,
-            tools=[],
-            skills=[],
-            confidence_internal=1.0,
-            confidence_tool_need=0.0,
-            freshness_risk=0.0,
-            decision_entropy=0.0,
-            reasoning=f'social_filter_{mode.lower()}',
-            triage_time_ms=0.0,
-            fast_filtered=True,
-            self_eval_override=False,
-            self_eval_reason='',
-            effort_estimate='trivial',
-        )
 
     def _cognitive_triage(self, text: str, context: TriageContext) -> TriageResult:
         """LLM call with cognitive-triage.md prompt. Falls back to heuristics on timeout."""
@@ -538,7 +414,7 @@ class CognitiveTriageService:
             result.self_eval_override = True
             result.self_eval_reason = 'act_url_detected'
 
-        # Rule 3: Social filter missed a substantive question
+        # Rule 3: LLM classified as social but message has a substantive question
         if result.branch == 'social' and '?' in text and len(text.split()) > 3:
             if result.mode not in ('CANCEL', 'IGNORE'):
                 result.branch = 'respond'

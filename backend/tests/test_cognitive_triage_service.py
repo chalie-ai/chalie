@@ -24,74 +24,35 @@ def triage_context():
     }
 
 
-class TestSocialFilter:
-    """Test the regex-based social fast filter."""
+class TestEmptyInputGuard:
+    """Test the empty-input guard in triage()."""
 
     def test_empty_text_returns_ignore(self):
-        from services.cognitive_triage_service import CognitiveTriageService
+        from services.cognitive_triage_service import CognitiveTriageService, TriageContext
         svc = CognitiveTriageService()
-        result = svc._social_filter("")
-        assert result is not None
+        ctx = TriageContext(
+            context_warmth=0.5, memory_confidence=0.5,
+            working_memory_turns=0, gist_count=0, fact_count=0,
+            previous_mode='RESPOND', previous_tools=[],
+            tool_summaries='', working_memory_summary='',
+        )
+        result = svc.triage("", ctx)
         assert result.mode == 'IGNORE'
         assert result.branch == 'social'
         assert result.fast_filtered is True
 
     def test_whitespace_returns_ignore(self):
-        from services.cognitive_triage_service import CognitiveTriageService
+        from services.cognitive_triage_service import CognitiveTriageService, TriageContext
         svc = CognitiveTriageService()
-        result = svc._social_filter("   ")
-        assert result is not None
+        ctx = TriageContext(
+            context_warmth=0.5, memory_confidence=0.5,
+            working_memory_turns=0, gist_count=0, fact_count=0,
+            previous_mode='RESPOND', previous_tools=[],
+            tool_summaries='', working_memory_summary='',
+        )
+        result = svc.triage("   ", ctx)
         assert result.mode == 'IGNORE'
-
-    def test_greeting_returns_acknowledge(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        for greeting in ["hey", "Hi there", "hello!", "Good morning"]:
-            result = svc._social_filter(greeting)
-            assert result is not None, f"Expected social result for '{greeting}'"
-            assert result.mode == 'ACKNOWLEDGE'
-            assert result.branch == 'social'
-
-    def test_greeting_with_question_passes_through(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = svc._social_filter("hey, what's the weather today?")
-        assert result is None  # Should NOT be filtered — has a real question
-
-    def test_positive_feedback_returns_acknowledge(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        for feedback in ["thanks!", "thank you", "great", "that works"]:
-            result = svc._social_filter(feedback)
-            assert result is not None, f"Expected social result for '{feedback}'"
-            assert result.mode == 'ACKNOWLEDGE'
-
-    def test_cancel_returns_cancel(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        for cancel in ["never mind", "cancel", "forget it", "don't bother"]:
-            result = svc._social_filter(cancel)
-            assert result is not None, f"Expected social result for '{cancel}'"
-            assert result.mode == 'CANCEL'
-
-    def test_self_resolved_returns_acknowledge(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = svc._social_filter("all good, found it")
-        assert result is not None
-        assert result.mode == 'ACKNOWLEDGE'
-
-    def test_normal_question_returns_none(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = svc._social_filter("what's the weather in London?")
-        assert result is None  # Not social, should go to LLM
-
-    def test_factual_question_returns_none(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = svc._social_filter("search for best Python tutorials")
-        assert result is None
+        assert result.fast_filtered is True
 
 
 class TestSelfEvalRules:
@@ -179,7 +140,9 @@ class TestSelfEvalRules:
         svc = CognitiveTriageService()
         result = self._make_result('respond', 'RESPOND')
         ctx = self._make_context(tool_summaries='## Info\n- read: read URLs and local files')
-        result = svc._self_evaluate(result, "open https://github.com/chalie-ai/chalie", ctx)
+        # Use a message with URL but without tool invocation words,
+        # so rule 2b doesn't fire first
+        result = svc._self_evaluate(result, "this is https://github.com/chalie-ai/chalie", ctx)
         assert result.branch == 'act'
         assert result.mode == 'ACT'
         assert result.self_eval_reason == 'act_url_detected'
@@ -345,23 +308,51 @@ class TestTriageFull:
         defaults.update(kwargs)
         return TriageContext(**defaults)
 
-    def test_triage_greeting_fast_path(self):
+    @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
+    def test_triage_greeting_goes_through_llm(self, mock_get_llm):
+        """Greetings now go through LLM triage (no social filter short-circuit)."""
+        import json
+        mock_llm = MagicMock()
+        mock_llm.send_message.return_value = MagicMock(text=json.dumps({
+            'mode': 'ACKNOWLEDGE',
+            'tools': [],
+            'confidence_internal': 0.9,
+            'confidence_tool_need': 0.0,
+            'freshness_risk': 0.0,
+            'reasoning': 'Simple greeting',
+        }))
+        mock_get_llm.return_value = mock_llm
+
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         ctx = self._make_context()
         result = svc.triage("hey!", ctx)
         assert result.branch == 'social'
-        assert result.fast_filtered is True
-        assert result.triage_time_ms >= 0
+        assert result.mode == 'ACKNOWLEDGE'
+        assert result.fast_filtered is False  # Went through LLM
 
-    def test_triage_cancel_fast_path(self):
+    @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
+    def test_triage_cancel_goes_through_llm(self, mock_get_llm):
+        """Cancel messages now go through LLM triage."""
+        import json
+        mock_llm = MagicMock()
+        mock_llm.send_message.return_value = MagicMock(text=json.dumps({
+            'mode': 'CANCEL',
+            'tools': [],
+            'confidence_internal': 1.0,
+            'confidence_tool_need': 0.0,
+            'freshness_risk': 0.0,
+            'reasoning': 'User cancelled',
+        }))
+        mock_get_llm.return_value = mock_llm
+
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         ctx = self._make_context()
         result = svc.triage("never mind", ctx)
         assert result.branch == 'social'
         assert result.mode == 'CANCEL'
-        assert result.fast_filtered is True
+        assert result.fast_filtered is False  # Went through LLM
 
     @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
     def test_triage_llm_respond_branch(self, mock_get_llm):
@@ -448,71 +439,3 @@ class TestTriageFull:
         assert result.triage_time_ms >= 0
 
 
-class TestSocialFilterPrecheck:
-    """Tests for the module-level social_filter() pre-check function."""
-
-    def test_nevermind_triggers_cancel(self):
-        """'nevermind' (1 word, ≤6) should trigger CANCEL pre-check."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("nevermind")
-        assert result is not None
-        assert result.mode == 'CANCEL'
-        assert result.fast_filtered is True
-
-    def test_empty_triggers_ignore(self):
-        """Empty string triggers IGNORE."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("")
-        assert result is not None
-        assert result.mode == 'IGNORE'
-
-    def test_forget_it_triggers_cancel(self):
-        """'forget it' triggers CANCEL."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("forget it")
-        assert result is not None
-        assert result.mode == 'CANCEL'
-
-    def test_long_instruction_does_not_trigger(self):
-        """'ignore the previous error and continue' (>6 words) must NOT trigger."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("ignore the previous error and continue")
-        assert result is None
-
-    def test_question_with_cancel_word_does_not_trigger(self):
-        """Messages with '?' skip the pre-check."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("cancel what?")
-        assert result is None
-
-    def test_comma_clause_does_not_trigger(self):
-        """'forget about it, can you also check X?' skips pre-check (has comma)."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("forget about it, check X")
-        assert result is None
-
-    def test_greeting_does_not_trigger(self):
-        """Greetings should NOT be caught by the pre-check (only CANCEL/IGNORE)."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("hey")
-        assert result is None  # Greetings need ACKNOWLEDGE → go through triage
-
-    def test_self_resolved_short_triggers_ignore(self):
-        """'all good' (≤6 words, no ? or ,) triggers IGNORE."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("all good")
-        assert result is not None
-        assert result.mode == 'IGNORE'
-
-    def test_normal_text_passes_through(self):
-        """Normal text should not be caught."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("what's the weather?")
-        assert result is None  # has '?'
-
-    def test_stop_searching_triggers_cancel(self):
-        """'stop searching' triggers CANCEL."""
-        from services.cognitive_triage_service import social_filter
-        result = social_filter("stop searching")
-        assert result is not None
-        assert result.mode == 'CANCEL'

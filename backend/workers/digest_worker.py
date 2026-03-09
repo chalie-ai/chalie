@@ -1937,10 +1937,12 @@ def _handle_direct_tool_dispatch(
     per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
     dispatcher = ActDispatcherService(timeout=per_action_timeout)
 
-    # Build action dict matching the format LLM would produce
+    # Build action dict matching the format the LLM produces in the ACT loop:
+    # flat params alongside 'type', NOT nested under a 'params' key.
+    # The registry lambda strips 'type' and passes the rest to invoke() as params.
     action_spec = {
         'type': tool_name,
-        'params': {'query': text},  # Tools expect at least a query
+        'query': text,
     }
     result = dispatcher.dispatch_action(topic, action_spec)
 
@@ -2648,46 +2650,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # ═══════════════════════════════════════════════════════════
     # PHASE C: CLASSIFICATION + ROUTING + RESPONSE
     # ═══════════════════════════════════════════════════════════
-
-    # Step 5a: Social pre-check — skip topic classification for CANCEL/IGNORE
-    # This saves ~100ms on ~10% of messages by avoiding the topic classifier LLM call
-    try:
-        from services.cognitive_triage_service import social_filter as _social_precheck
-        _social_result = _social_precheck(text)
-        if _social_result and _social_result.mode in ('CANCEL', 'IGNORE'):
-            logging.info(f"[DIGEST] Social pre-check: {_social_result.mode} (skipping topic classification)")
-            # CANCEL: cancel active tool work
-            if _social_result.mode == 'CANCEL':
-                _cancel_active_tool_work(context_topic or 'unknown')
-            response_data = {
-                'response': '',
-                'mode': _social_result.mode,
-                'confidence': 1.0,
-                'generation_time': 0.0,
-            }
-            routing_result = {'mode': _social_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage', 'routing_time_ms': _social_result.triage_time_ms}
-            is_fast_path_ack = True
-
-            # Minimal post-response commit for social pre-check
-            exchange_data = {
-                'exchange_id': f'social_{int(time.time())}',
-                'prompt': {'message': text},
-                'timestamp': time.time(),
-                'response': {'message': ''},
-            }
-            session_service.add_exchange(exchange_data)
-            working_memory.append_turn(thread_id, 'assistant', '')
-
-            logging.info(f"\n{'='*60}")
-            logging.info(f"Topic: {context_topic or 'unknown'}")
-            logging.info(f"Mode: {_social_result.mode} (router confidence: 1.000)")
-            logging.info(f"{'='*60}\n")
-
-            metrics.record_timing(trace_id, 'total_request', (time.time() - request_start_time) * 1000)
-            metrics.record_counter('responses_total')
-            return f"Topic '{context_topic or 'unknown'}' | Mode: {_social_result.mode} | Social pre-check"
-    except Exception as _sp_err:
-        logging.debug(f"[DIGEST] Social pre-check failed (non-fatal): {_sp_err}")
 
     # Step 5b: Reflex check — learned fast path via semantic abstraction
     _reflex_candidate = False
