@@ -1702,9 +1702,25 @@ def _is_innate_skill_only(triage_result) -> bool:
     return len(contextual) > 0
 
 
+def _is_single_tool_trivial(triage_result) -> bool:
+    """True if triage selected exactly one external tool with trivial/light effort.
+
+    These requests don't need the full ACT orchestrator loop — triage already
+    identified the tool and the effort is minimal. Direct dispatch saves ~3s of
+    redundant LLM iterations (orchestrator iter 0 rubber-stamps triage, iter 1
+    just confirms "nothing left to do").
+    """
+    return (
+        len(triage_result.tools) == 1
+        and triage_result.effort_estimate in ('trivial', 'light')
+        and triage_result.confidence_tool_need >= 0.7
+    )
+
+
 def _handle_innate_skill_dispatch(
     triage_result, text, topic, thread_id, metadata,
     intent, working_memory, thread_conv_service,
+    cortex_config, cortex_prompt_map,
     context_warmth, exchange_id,
 ):
     """
@@ -1745,35 +1761,321 @@ def _handle_innate_skill_dispatch(
 
     actions = response_data.get('actions', [])
     if not actions:
-        # LLM decided no action needed — return response data as-is
-        return response_data
+        cortex_text = response_data.get('response', '')
+        if cortex_text:
+            # LLM decided no action needed but provided a text answer —
+            # deliver it directly via OutputService → WebSocket.
+            if metadata:
+                thread_conv_service.add_response(
+                    thread_id, cortex_text,
+                    response_data.get('generation_time', 0.0),
+                )
+                try:
+                    orchestrator = get_orchestrator()
+                    orchestrator.route_path(mode='RESPOND', context={
+                        'topic': topic,
+                        'response': cortex_text,
+                        'confidence': response_data.get('confidence', 0.0),
+                        'generation_time': response_data.get('generation_time', 0.0),
+                        'destination': metadata.get('destination', 'web'),
+                        'metadata': metadata,
+                    })
+                except Exception as _oe:
+                    logging.error(f"[DIGEST] Innate skill (no-action) delivery failed: {_oe}")
+            return response_data
+        else:
+            # No text AND no actions — cortex ACT couldn't handle this.
+            # Return None to trigger fallback to standard RESPOND path.
+            logging.info("[DIGEST] Innate skill dispatch: cortex returned empty — falling back to RESPOND")
+            return None
 
     # Execute actions directly via dispatcher (no loop)
-    dispatcher = ActDispatcherService(timeout=10.0)
+    # Use config timeout (default 10s) — document search needs headroom for embeddings
+    _skill_timeout = act_config.get('act_per_action_timeout', 30.0)
+    dispatcher = ActDispatcherService(timeout=_skill_timeout)
 
+    act_results = []
     for action in actions:
         result = dispatcher.dispatch_action(topic, action)
+        act_results.append(result)
         logging.info(
             f"[DIGEST] Direct skill dispatch: {result['action_type']} "
             f"{result['status']} ({result['execution_time']:.2f}s)"
         )
 
-    # Card was already emitted by the skill — close the WebSocket response channel
-    # so the handler emits "done" instead of timing out with "No response received".
+    # Check if ALL results are card-only (schedule, list emit cards; document search returns text)
+    all_card_only = (
+        bool(act_results)
+        and all(r.get('status') == 'success' for r in act_results)
+        and all(r.get('result') == '__CARD_ONLY__' for r in act_results)
+    )
+
+    ws_uuid = metadata.get('uuid')
+
+    if all_card_only:
+        # Card was already emitted by the skill — close the WebSocket response channel
+        if ws_uuid:
+            try:
+                from services.output_service import OutputService
+                OutputService().enqueue_close_signal(ws_uuid)
+            except Exception as _ce:
+                logging.warning(f"[DIGEST] Innate skill close signal failed: {_ce}")
+
+        return {
+            'response': '',
+            'mode': 'ACT',
+            'confidence': 0.9,
+            'generation_time': response_data.get('generation_time', 0.0),
+        }
+
+    # Substantive text results — generate terminal RESPOND so user sees them
+    from services.act_loop_service import ActLoopService
+    _tmp = ActLoopService.__new__(ActLoopService)
+    _tmp.act_history = act_results
+    act_history_context = _tmp.get_history_context()
+
+    terminal_response = generate_for_mode(
+        topic, text, 'RESPOND', {'topic': topic, 'confidence': 10},
+        thread_conv_service, cortex_config, cortex_prompt_map, metadata,
+        act_history_context=act_history_context,
+        thread_id=thread_id,
+    )
+
+    # Carry over action history
+    terminal_response['actions'] = [
+        {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
+        for r in act_results
+    ]
+
+    # Extract reply_actions from the last successful result
+    for entry in reversed(act_results):
+        if entry.get('status') == 'success' and entry.get('reply_actions'):
+            terminal_response['reply_actions'] = entry['reply_actions']
+            break
+
+    # Deliver via orchestrator → OutputService → WebSocket
+    thread_conv_service.add_response(
+        thread_id,
+        terminal_response['response'],
+        terminal_response['generation_time'],
+    )
+
+    if metadata:
+        try:
+            orchestrator = get_orchestrator()
+            context = {
+                'topic': topic,
+                'response': terminal_response.get('response', ''),
+                'confidence': terminal_response.get('confidence', 0.0),
+                'generation_time': terminal_response.get('generation_time', 0.0),
+                'destination': metadata.get('destination', 'web'),
+                'metadata': metadata,
+                'actions': terminal_response.get('actions', []),
+                'reply_actions': terminal_response.get('reply_actions'),
+            }
+            orchestrator.route_path(mode='RESPOND', context=context)
+        except Exception as _oe:
+            logging.error(f"[DIGEST] Innate skill delivery failed: {_oe}")
+
+    return terminal_response
+
+
+def _handle_direct_tool_dispatch(
+    triage_result, text, topic, thread_id, metadata,
+    intent, working_memory, thread_conv_service,
+    cortex_config, cortex_prompt_map, mode_router, signals,
+    context_warmth, exchange_id,
+):
+    """
+    Direct dispatch for single-tool trivial requests.
+
+    Bypasses the full ACT orchestrator loop: triage already selected exactly
+    one tool with high confidence and trivial/light effort. We execute the
+    tool directly, run critic verification, then generate a terminal RESPOND
+    with the tool results as context.
+
+    Saves ~3s of redundant LLM iterations that the orchestrator would spend
+    rubber-stamping triage's decision.
+
+    Returns:
+        tuple: (response_data dict, routing_result dict) — same contract as
+               route_and_generate() so the caller can handle it uniformly.
+    """
+    import time as _time
+    from services.act_dispatcher_service import ActDispatcherService
+    from services.critic_service import CriticService
+    from services.act_reflection_service import enqueue_tool_reflection
+
+    tool_name = triage_result.tools[0]
+    dispatch_start = _time.time()
+
+    logging.info(
+        f"[DIGEST] Direct tool dispatch: {tool_name} "
+        f"(effort={triage_result.effort_estimate}, "
+        f"confidence={triage_result.confidence_tool_need:.2f})"
+    )
+
+    # ── Emit status so frontend shows progress ────────────────────────
     ws_uuid = metadata.get('uuid')
     if ws_uuid:
         try:
-            from services.output_service import OutputService
-            OutputService().enqueue_close_signal(ws_uuid)
-        except Exception as _ce:
-            logging.warning(f"[DIGEST] Innate skill close signal failed: {_ce}")
+            import json as _json
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            from uuid import uuid4
+            status_id = f"narr_{uuid4().hex[:12]}"
+            store.set(f"output:{status_id}", _json.dumps({
+                'type': 'act_narration',
+                'text': f"Using {tool_name}…",
+                'step': 0,
+            }), ex=300)
+            store.publish(f"sse:{ws_uuid}", status_id)
+        except Exception as _e:
+            logging.debug(f"[DIGEST] Direct dispatch narration failed: {_e}")
 
-    return {
-        'response': '',
-        'mode': 'ACT',
-        'confidence': 0.9,
-        'generation_time': response_data.get('generation_time', 0.0),
+    # ── Execute the tool via dispatcher ───────────────────────────────
+    per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
+    dispatcher = ActDispatcherService(timeout=per_action_timeout)
+
+    # Build action dict matching the format LLM would produce
+    action_spec = {
+        'type': tool_name,
+        'params': {'query': text},  # Tools expect at least a query
     }
+    result = dispatcher.dispatch_action(topic, action_spec)
+
+    execution_time = _time.time() - dispatch_start
+    logging.info(
+        f"[DIGEST] Direct tool dispatch result: {result['action_type']} "
+        f"{result['status']} ({result['execution_time']:.2f}s)"
+    )
+
+    act_history = [result]
+
+    # ── Critic verification ───────────────────────────────────────────
+    try:
+        critic = CriticService()
+        if not critic.should_skip(tool_name, result):
+            verdict = critic.evaluate(
+                original_request=text,
+                action_type=tool_name,
+                action_intent=action_spec,
+                action_result=result,
+            )
+            if not verdict.get('verified', True):
+                logging.info(
+                    f"[DIGEST] Direct dispatch critic flag: "
+                    f"{verdict.get('issue', 'unknown')}"
+                )
+                result['critic_issue'] = verdict.get('issue', '')
+    except Exception as _ce:
+        logging.debug(f"[DIGEST] Direct dispatch critic skipped: {_ce}")
+
+    # ── Card-only detection ───────────────────────────────────────────
+    is_card_only = (
+        result.get('status') == 'success'
+        and result.get('result') == '__CARD_ONLY__'
+    )
+
+    if is_card_only:
+        logging.info(
+            "[DIGEST] Direct dispatch: card-only result — closing channel"
+        )
+        if ws_uuid:
+            try:
+                from services.output_service import OutputService
+                OutputService().enqueue_close_signal(ws_uuid)
+            except Exception as _ce:
+                logging.warning(f"[DIGEST] Direct dispatch close signal failed: {_ce}")
+
+        routing_result = {
+            'mode': 'ACT',
+            'router_confidence': triage_result.confidence_tool_need,
+            'routing_source': 'triage_direct',
+            'routing_time_ms': triage_result.triage_time_ms,
+            'effort_estimate': triage_result.effort_estimate,
+        }
+        return {
+            'response': '',
+            'mode': 'ACT',
+            'confidence': 0.9,
+            'generation_time': execution_time,
+        }, routing_result
+
+    # ── Substantive result → generate terminal RESPOND ────────────────
+    # Format act_history for the RESPOND prompt (same format as orchestrator)
+    from services.act_loop_service import ActLoopService
+    _tmp = ActLoopService.__new__(ActLoopService)
+    _tmp.act_history = act_history
+    act_history_context = _tmp.get_history_context()
+
+    terminal_response = generate_for_mode(
+        topic, text, 'RESPOND', {'topic': topic, 'confidence': 10},
+        thread_conv_service, cortex_config, cortex_prompt_map, metadata,
+        act_history_context=act_history_context,
+        thread_id=thread_id,
+        signals=signals,
+    )
+
+    # Carry over action history for downstream consumers
+    terminal_response['actions'] = [
+        {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
+        for r in act_history
+    ]
+
+    # Extract reply_actions if the tool produced any
+    if result.get('reply_actions'):
+        terminal_response['reply_actions'] = result['reply_actions']
+
+    # ── Store response + deliver via WebSocket ────────────────────────
+    # route_and_generate() normally handles this, but we bypassed it.
+    # The orchestrator.route_path() call is what triggers OutputService
+    # to publish to the sse:{uuid} channel the WS handler listens on.
+    thread_conv_service.add_response(
+        thread_id,
+        terminal_response['response'],
+        terminal_response['generation_time'],
+    )
+
+    if metadata:
+        try:
+            orchestrator = get_orchestrator()
+            context = {
+                'topic': topic,
+                'response': terminal_response.get('response', ''),
+                'confidence': terminal_response.get('confidence', 0.0),
+                'generation_time': terminal_response.get('generation_time', 0.0),
+                'destination': metadata.get('destination', 'web'),
+                'metadata': metadata,
+                'actions': terminal_response.get('actions', []),
+                'reply_actions': terminal_response.get('reply_actions'),
+            }
+            mode = terminal_response.get('mode', 'RESPOND')
+            orchestrator.route_path(mode=mode, context=context)
+            logging.info(f"[DIGEST] Direct dispatch delivered via orchestrator: {mode}")
+        except Exception as _oe:
+            logging.error(f"[DIGEST] Direct dispatch orchestrator delivery failed: {_oe}")
+
+    total_time = _time.time() - dispatch_start
+    logging.info(
+        f"[DIGEST] Direct tool dispatch complete: {tool_name} "
+        f"({total_time:.2f}s total, saved ~3s vs orchestrator)"
+    )
+
+    # Enqueue tool reflection (background)
+    try:
+        enqueue_tool_reflection(act_history, topic, text)
+    except Exception as _e:
+        logging.debug(f"[DIGEST] Direct dispatch reflection skipped: {_e}")
+
+    routing_result = {
+        'mode': 'ACT',
+        'router_confidence': triage_result.confidence_tool_need,
+        'routing_source': 'triage_direct',
+        'routing_time_ms': triage_result.triage_time_ms,
+        'effort_estimate': triage_result.effort_estimate,
+    }
+    return terminal_response, routing_result
 
 
 def _handle_act_triage(
@@ -2804,6 +3106,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             response_data = _handle_innate_skill_dispatch(
                 triage_result, text, topic, thread_id, metadata,
                 intent, working_memory, thread_conv_service,
+                cortex_config, cortex_prompt_map,
                 context_warmth, exchange_id,
             )
             if response_data is None:
@@ -2841,16 +3144,43 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         context_warmth, exchange_id,
                     )
             else:
-                # Direct dispatch succeeded — record the exchange so /conversation/recent
-                # has a closed entry with a timestamp (the card is the response; text is empty).
-                thread_conv_service.add_response(
-                    thread_id,
-                    response_data.get('response', ''),
-                    response_data.get('generation_time', 0.0),
-                )
+                # Direct dispatch succeeded. All paths with truthy response
+                # (substantive results, no-action cortex text) deliver inside
+                # the function. Only card-only (response='') needs add_response here.
+                if not response_data.get('response'):
+                    thread_conv_service.add_response(
+                        thread_id,
+                        response_data.get('response', ''),
+                        response_data.get('generation_time', 0.0),
+                    )
             is_fast_path_ack = True
             if routing_result is None:
                 routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
+
+        elif triage_result.branch == 'act' and _is_single_tool_trivial(triage_result):
+            # Direct tool dispatch: single tool, trivial/light effort — skip ACT orchestrator
+            _dt_nlp = compute_nlp_signals(text, intent)
+            _dt_signals = {
+                'context_warmth': context_warmth,
+                'working_memory_turns': working_memory_turns,
+                'gist_count': gist_count,
+                'fact_count': fact_count,
+                'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                'world_state_present': bool(world_state and world_state.strip()),
+                'topic_confidence': classification_result.get('confidence', 0.5),
+                'is_new_topic': classification_result.get('is_new_topic', False),
+                'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+                'memory_confidence': memory_confidence,
+            }
+            _dt_signals.update(_dt_nlp)
+            _dt_signals['_prompt_text'] = text
+            response_data, routing_result = _handle_direct_tool_dispatch(
+                triage_result, text, topic, thread_id, metadata,
+                intent, working_memory, thread_conv_service,
+                cortex_config, cortex_prompt_map, mode_router, _dt_signals,
+                context_warmth, exchange_id,
+            )
+            is_fast_path_ack = True
 
         elif triage_result.branch == 'act':
             # Full ACT loop — complex multi-step tasks with external tools

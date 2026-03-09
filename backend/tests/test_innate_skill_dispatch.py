@@ -1,10 +1,10 @@
-"""Tests for innate skill direct dispatch — _is_innate_skill_only, _handle_innate_skill_dispatch, scheduler dedup."""
+"""Tests for innate skill direct dispatch — _is_innate_skill_only, _is_single_tool_trivial, _handle_innate_skill_dispatch, scheduler dedup."""
 
 import pytest
 from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
 
-from workers.digest_worker import _is_innate_skill_only, _CONTEXTUAL_SKILLS
+from workers.digest_worker import _is_innate_skill_only, _is_single_tool_trivial, _CONTEXTUAL_SKILLS
 from services.innate_skills.registry import COGNITIVE_PRIMITIVES as _PRIMITIVES
 
 
@@ -28,6 +28,7 @@ class FakeTriageResult:
     fast_filtered: bool = False
     self_eval_override: bool = False
     self_eval_reason: str = ''
+    effort_estimate: str = 'moderate'
 
     def __post_init__(self):
         if self.tools is None:
@@ -73,6 +74,83 @@ class TestIsInnateSkillOnly:
         assert _is_innate_skill_only(tr) is False
 
 
+# ── _is_single_tool_trivial ──────────────────────────────────────────
+
+class TestIsSingleToolTrivial:
+
+    def test_true_single_tool_trivial(self):
+        """Single tool, trivial effort, high confidence → True"""
+        tr = FakeTriageResult(
+            tools=['news_tool'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.85,
+        )
+        assert _is_single_tool_trivial(tr) is True
+
+    def test_true_single_tool_light(self):
+        """Single tool, light effort, high confidence → True"""
+        tr = FakeTriageResult(
+            tools=['searxng'], skills=['recall'],
+            effort_estimate='light', confidence_tool_need=0.75,
+        )
+        assert _is_single_tool_trivial(tr) is True
+
+    def test_false_multiple_tools(self):
+        """Two tools → False (needs orchestrator to sequence them)"""
+        tr = FakeTriageResult(
+            tools=['searxng', 'news_tool'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.9,
+        )
+        assert _is_single_tool_trivial(tr) is False
+
+    def test_false_moderate_effort(self):
+        """Moderate effort → False (complex enough to warrant orchestrator)"""
+        tr = FakeTriageResult(
+            tools=['searxng'], skills=['recall'],
+            effort_estimate='moderate', confidence_tool_need=0.9,
+        )
+        assert _is_single_tool_trivial(tr) is False
+
+    def test_false_deep_effort(self):
+        """Deep effort → False"""
+        tr = FakeTriageResult(
+            tools=['searxng'], skills=['recall'],
+            effort_estimate='deep', confidence_tool_need=0.9,
+        )
+        assert _is_single_tool_trivial(tr) is False
+
+    def test_false_low_confidence(self):
+        """Low confidence → False (triage unsure, let orchestrator decide)"""
+        tr = FakeTriageResult(
+            tools=['searxng'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.5,
+        )
+        assert _is_single_tool_trivial(tr) is False
+
+    def test_false_no_tools(self):
+        """No tools → False (this is an innate skill request, not our path)"""
+        tr = FakeTriageResult(
+            tools=[], skills=['recall', 'schedule'],
+            effort_estimate='trivial', confidence_tool_need=0.9,
+        )
+        assert _is_single_tool_trivial(tr) is False
+
+    def test_boundary_confidence(self):
+        """Exactly 0.7 confidence → True (inclusive threshold)"""
+        tr = FakeTriageResult(
+            tools=['searxng'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.7,
+        )
+        assert _is_single_tool_trivial(tr) is True
+
+    def test_boundary_confidence_below(self):
+        """Just below 0.7 → False"""
+        tr = FakeTriageResult(
+            tools=['searxng'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.69,
+        )
+        assert _is_single_tool_trivial(tr) is False
+
+
 # ── Constants ────────────────────────────────────────────────────────
 
 class TestConstants:
@@ -110,6 +188,7 @@ class TestHandleInnateSkillDispatch:
         mock_dispatcher.dispatch_action.return_value = {
             'action_type': 'schedule',
             'status': 'success',
+            'result': '__CARD_ONLY__',
             'execution_time': 0.1,
         }
 
@@ -124,7 +203,9 @@ class TestHandleInnateSkillDispatch:
              patch('services.act_dispatcher_service.ActDispatcherService', return_value=mock_dispatcher):
             result = _handle_innate_skill_dispatch(
                 triage, "remind me to drink water", "health", "thread-1", {},
-                {'type': 'request'}, wm, thread_conv, 0.5, "ex-1",
+                {'type': 'request'}, wm, thread_conv,
+                {'act_per_action_timeout': 10.0}, {'RESPOND': 'test'},
+                0.5, "ex-1",
             )
 
         assert result['mode'] == 'ACT'
@@ -132,7 +213,7 @@ class TestHandleInnateSkillDispatch:
         mock_dispatcher.dispatch_action.assert_called_once()
 
     def test_no_actions_returns_response_data(self):
-        """When LLM returns no actions, should return response_data directly."""
+        """When LLM returns no actions, should return response_data and deliver via orchestrator."""
         from workers.digest_worker import _handle_innate_skill_dispatch
 
         mock_config = MagicMock()
@@ -151,15 +232,62 @@ class TestHandleInnateSkillDispatch:
         thread_conv = MagicMock()
         thread_conv.get_conversation_history.return_value = []
         wm = MagicMock()
+        mock_orchestrator = MagicMock()
+
+        metadata = {'uuid': 'test-uuid-123', 'destination': 'web'}
+
+        with patch('services.ConfigService', mock_config), \
+             patch('services.FrontalCortexService', return_value=mock_cortex), \
+             patch('workers.digest_worker.get_orchestrator', return_value=mock_orchestrator):
+            result = _handle_innate_skill_dispatch(
+                triage, "maybe set a reminder", "general", "thread-1", metadata,
+                {'type': 'request'}, wm, thread_conv,
+                {'act_per_action_timeout': 10.0}, {'RESPOND': 'test'},
+                0.5, "ex-1",
+            )
+
+        assert result == response_data
+        # Verify delivery happened
+        thread_conv.add_response.assert_called_once_with(
+            "thread-1", 'I understand you want a reminder.', 0.3,
+        )
+        mock_orchestrator.route_path.assert_called_once()
+        call_kwargs = mock_orchestrator.route_path.call_args
+        assert call_kwargs[1]['mode'] == 'RESPOND'
+        assert call_kwargs[1]['context']['response'] == 'I understand you want a reminder.'
+
+    def test_empty_response_and_actions_returns_none(self):
+        """When cortex returns empty text AND no actions, should return None (fallback signal)."""
+        from workers.digest_worker import _handle_innate_skill_dispatch
+
+        mock_config = MagicMock()
+        mock_config.resolve_agent_config.return_value = {'model': 'test'}
+        mock_config.get_agent_prompt.return_value = 'test prompt'
+
+        mock_cortex = MagicMock()
+        response_data = {
+            'actions': None,  # normalized from [] by generate_response
+            'response': '',
+            'generation_time': 0.2,
+        }
+        mock_cortex.generate_response.return_value = response_data
+
+        triage = FakeTriageResult(tools=[], skills=['recall', 'document'])
+        thread_conv = MagicMock()
+        thread_conv.get_conversation_history.return_value = []
+        wm = MagicMock()
 
         with patch('services.ConfigService', mock_config), \
              patch('services.FrontalCortexService', return_value=mock_cortex):
             result = _handle_innate_skill_dispatch(
-                triage, "maybe set a reminder", "general", "thread-1", {},
-                {'type': 'request'}, wm, thread_conv, 0.5, "ex-1",
+                triage, "search docs for invoice", "general", "thread-1",
+                {'uuid': 'test-uuid', 'destination': 'web'},
+                {'type': 'request'}, wm, thread_conv,
+                {'act_per_action_timeout': 10.0}, {'RESPOND': 'test'},
+                0.5, "ex-1",
             )
 
-        assert result == response_data
+        assert result is None  # triggers fallback to RESPOND path
 
     def test_no_contextual_skills_returns_none(self):
         """If triage has no contextual skills, should return None (fallback signal)."""
@@ -171,7 +299,9 @@ class TestHandleInnateSkillDispatch:
 
         result = _handle_innate_skill_dispatch(
             triage, "test", "general", "thread-1", {},
-            {}, wm, thread_conv, 0.5, "ex-1",
+            {}, wm, thread_conv,
+            {'act_per_action_timeout': 10.0}, {'RESPOND': 'test'},
+            0.5, "ex-1",
         )
 
         assert result is None
@@ -220,3 +350,152 @@ class TestSchedulerDedup:
         assert result == "__CARD_ONLY__"
         # Should have executed 2 queries: SELECT (dedup) + INSERT
         assert cursor.execute.call_count == 2
+
+
+# ── _handle_direct_tool_dispatch ────────────────────────────────────
+
+class TestHandleDirectToolDispatch:
+
+    def test_substantive_result_generates_respond(self):
+        """Tool returns substantive result → generates terminal RESPOND."""
+        from workers.digest_worker import _handle_direct_tool_dispatch
+
+        triage = FakeTriageResult(
+            tools=['news_tool'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.85,
+        )
+        cortex_config = {'act_per_action_timeout': 10.0}
+        cortex_prompt_map = {'RESPOND': 'respond prompt'}
+
+        tool_result = {
+            'action_type': 'news_tool',
+            'status': 'success',
+            'result': 'Here are the latest headlines...',
+            'execution_time': 2.0,
+            'confidence': 0.8,
+            'notes': '',
+        }
+
+        terminal_response = {
+            'mode': 'RESPOND',
+            'modifiers': [],
+            'response': 'Based on the results, here is...',
+            'generation_time': 1.5,
+            'actions': None,
+            'confidence': 0.9,
+        }
+
+        mock_dispatcher = MagicMock()
+        mock_dispatcher.dispatch_action.return_value = tool_result
+
+        mock_critic = MagicMock()
+        mock_critic.should_skip.return_value = True
+
+        with patch('services.act_dispatcher_service.ActDispatcherService', return_value=mock_dispatcher), \
+             patch('services.critic_service.CriticService', return_value=mock_critic), \
+             patch('workers.digest_worker.generate_for_mode', return_value=terminal_response) as mock_gen, \
+             patch('services.act_reflection_service.enqueue_tool_reflection'):
+
+            resp, routing = _handle_direct_tool_dispatch(
+                triage, "search for latest news", "general", "thread-1",
+                {'uuid': ''}, {}, MagicMock(), MagicMock(),
+                cortex_config, cortex_prompt_map, MagicMock(), {},
+                0.5, "ex-1",
+            )
+
+        # Dispatcher called with the tool
+        mock_dispatcher.dispatch_action.assert_called_once()
+        call_args = mock_dispatcher.dispatch_action.call_args
+        assert call_args[0][1]['type'] == 'news_tool'
+
+        # Terminal RESPOND generated with act_history context
+        mock_gen.assert_called_once()
+
+        # Response includes action history
+        assert resp['actions'] is not None
+        assert resp['actions'][0]['type'] == 'news_tool'
+
+        # Routing marked as triage_direct
+        assert routing['routing_source'] == 'triage_direct'
+
+    def test_card_only_returns_empty_response(self):
+        """Tool returns __CARD_ONLY__ → empty response, no terminal RESPOND."""
+        from workers.digest_worker import _handle_direct_tool_dispatch
+
+        triage = FakeTriageResult(
+            tools=['weather_tool'], skills=['recall'],
+            effort_estimate='trivial', confidence_tool_need=0.9,
+        )
+
+        tool_result = {
+            'action_type': 'weather_tool',
+            'status': 'success',
+            'result': '__CARD_ONLY__',
+            'execution_time': 1.0,
+            'confidence': 0.9,
+            'notes': '',
+        }
+
+        mock_dispatcher = MagicMock()
+        mock_dispatcher.dispatch_action.return_value = tool_result
+
+        mock_critic = MagicMock()
+        mock_critic.should_skip.return_value = True
+
+        with patch('services.act_dispatcher_service.ActDispatcherService', return_value=mock_dispatcher), \
+             patch('services.critic_service.CriticService', return_value=mock_critic), \
+             patch('services.output_service.OutputService') as mock_output_cls:
+
+            resp, routing = _handle_direct_tool_dispatch(
+                triage, "what's the weather", "general", "thread-1",
+                {'uuid': 'test-uuid'}, {}, MagicMock(), MagicMock(),
+                {}, {}, MagicMock(), {},
+                0.5, "ex-1",
+            )
+
+        assert resp['response'] == ''
+        assert resp['mode'] == 'ACT'
+
+    def test_critic_runs_on_result(self):
+        """Critic should evaluate tool result when not skipped."""
+        from workers.digest_worker import _handle_direct_tool_dispatch
+
+        triage = FakeTriageResult(
+            tools=['search_tool'], skills=['recall'],
+            effort_estimate='light', confidence_tool_need=0.8,
+        )
+
+        tool_result = {
+            'action_type': 'search_tool',
+            'status': 'success',
+            'result': 'search results here',
+            'execution_time': 1.5,
+            'confidence': 0.7,
+            'notes': '',
+        }
+
+        terminal_response = {
+            'mode': 'RESPOND', 'modifiers': [], 'response': 'Done.',
+            'generation_time': 1.0, 'actions': None, 'confidence': 0.9,
+        }
+
+        mock_dispatcher = MagicMock()
+        mock_dispatcher.dispatch_action.return_value = tool_result
+
+        mock_critic = MagicMock()
+        mock_critic.should_skip.return_value = False
+        mock_critic.evaluate.return_value = {'verified': True}
+
+        with patch('services.act_dispatcher_service.ActDispatcherService', return_value=mock_dispatcher), \
+             patch('services.critic_service.CriticService', return_value=mock_critic), \
+             patch('workers.digest_worker.generate_for_mode', return_value=terminal_response), \
+             patch('services.act_reflection_service.enqueue_tool_reflection'):
+
+            _handle_direct_tool_dispatch(
+                triage, "search for X", "general", "thread-1",
+                {'uuid': ''}, {}, MagicMock(), MagicMock(),
+                {}, {}, MagicMock(), {},
+                0.5, "ex-1",
+            )
+
+        mock_critic.evaluate.assert_called_once()

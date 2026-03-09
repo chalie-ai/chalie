@@ -75,7 +75,19 @@ def readiness_check():
         logger.debug(f'[READY] worker check failed: {e}')
         components['workers'] = {'status': 'error', 'message': str(e)}
 
-    ready = all(c['status'] == 'ok' for c in components.values())
+    # Embedding model — preloaded in background thread on boot. Not ready until
+    # the model is loaded AND the first inference pass has warmed the graph.
+    try:
+        from services.embedding_service import _st_model
+        if _st_model is not None:
+            components['embeddings'] = {'status': 'ok'}
+        else:
+            components['embeddings'] = {'status': 'loading'}
+    except Exception as e:
+        logger.debug(f'[READY] embedding model not ready: {e}')
+        components['embeddings'] = {'status': 'error', 'message': str(e)}
+
+    ready = all(c.get('status') == 'ok' for c in components.values())
     return jsonify({'ready': ready, **components}), (200 if ready else 503)
 
 

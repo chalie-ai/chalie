@@ -198,7 +198,10 @@ def main():
             from services.embedding_service import get_embedding_service, _get_st_model
             svc = get_embedding_service()
             _get_st_model(svc.model_name)
-            logger.info("[System] Embedding model ready")
+            # Warm the inference path — first encode() triggers PyTorch graph
+            # compilation. Throwaway call here so the user never hits that delay.
+            svc.generate_embedding("warmup")
+            logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
             logger.warning(f"[System] Embedding model preload failed: {e}")
 
