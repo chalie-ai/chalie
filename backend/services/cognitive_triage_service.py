@@ -238,7 +238,7 @@ class CognitiveTriageService:
                 return None
             return self._make_social('ACKNOWLEDGE')
 
-        if _POSITIVE_FEEDBACK.search(stripped) and len(stripped.split()) <= 8:
+        if _POSITIVE_FEEDBACK.search(stripped) and len(stripped.split()) <= 8 and '?' not in stripped:
             return self._make_social('ACKNOWLEDGE')
 
         for pattern in _CANCEL_PATTERNS:
