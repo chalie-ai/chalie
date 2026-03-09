@@ -12,7 +12,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-INITIAL_DELAY = 120   # 2 minutes after startup
+INITIAL_DELAY = 30    # 30 seconds after startup
 CHECK_INTERVAL = 30   # Check for due scans every 30s
 
 

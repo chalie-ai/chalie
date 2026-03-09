@@ -57,7 +57,7 @@ class FolderWatcherService:
         file_patterns: list = None,
         ignore_patterns: list = None,
         recursive: bool = True,
-        scan_interval: int = 300,
+        scan_interval: int = 60,
         source_type: str = 'filesystem',
         source_config: dict = None,
     ) -> Dict[str, Any]:

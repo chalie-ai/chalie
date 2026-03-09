@@ -26,6 +26,9 @@ Claude.md
 # Planning docs (local only)
 plans/
 
+# Training (separate repo)
+training/
+
 # Frontend build artifacts (none currently, vanilla JS)
 node_modules/
 

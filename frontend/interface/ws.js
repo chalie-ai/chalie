@@ -22,6 +22,7 @@ export class WSClient {
     this._driftHandler = null;    // drift event handler
     this._connected = false;
     this._intentionallyClosed = false;
+    this._seenSeqs = new Set();   // dedup on reconnect replay
   }
 
   /**
@@ -85,9 +86,16 @@ export class WSClient {
         return;
       }
 
-      // Track sequence numbers
+      // Track sequence numbers and deduplicate replayed events
       if (data.seq) {
+        if (this._seenSeqs.has(data.seq)) return; // already processed
+        this._seenSeqs.add(data.seq);
         this._lastSeq = data.seq;
+        // Keep set bounded
+        if (this._seenSeqs.size > 500) {
+          const arr = [...this._seenSeqs];
+          this._seenSeqs = new Set(arr.slice(-250));
+        }
       }
 
       this._dispatch(data);
