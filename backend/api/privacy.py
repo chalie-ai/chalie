@@ -54,10 +54,10 @@ def data_summary():
         with db.connection() as conn:
             for table in [
                 "episodes", "semantic_concepts", "user_traits", "threads",
-                "autobiography", "moments", "scheduled_items", "persistent_tasks",
+                "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
                 "cognitive_reflexes", "interaction_log", "cortex_iterations",
-                "curiosity_threads",
+                "curiosity_threads", "documents", "document_chunks",
             ]:
                 try:
                     cursor = conn.cursor()
@@ -98,12 +98,13 @@ def export_data():
 
     user_data_tables = [
         "episodes", "semantic_concepts", "semantic_relationships",
-        "user_traits", "threads", "autobiography", "moments",
+        "user_traits", "threads", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
         "place_fingerprints", "cognitive_reflexes", "curiosity_threads",
         "interaction_log", "cortex_iterations", "routing_decisions",
         "procedural_memory", "topics", "user_tool_preferences",
+        "documents", "document_chunks", "watched_folders",
     ]
 
     store_patterns = [
@@ -295,7 +296,6 @@ def delete_all():
                 "user_traits",
                 "threads",
                 "autobiography",
-                "moments",
                 "scheduled_items",
                 "persistent_tasks",
                 "lists",
@@ -305,6 +305,11 @@ def delete_all():
                 "identity_events",
                 "place_fingerprints",
                 "cognitive_reflexes",
+
+                # Documents (includes moments, watched-folder docs)
+                "document_chunks",
+                "documents",
+                "watched_folders",
 
                 # Behavioral/derived data
                 "interaction_log",
