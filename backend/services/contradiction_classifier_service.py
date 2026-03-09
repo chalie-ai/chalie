@@ -44,6 +44,29 @@ _RECENT_UNCERTAINTY_WINDOW_DAYS = 7
 _JSON_FENCE_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
 
 
+def _is_established(memory_type: str, meta: dict) -> bool:
+    """
+    Collapse confidence/reinforcement/access signals into a single boolean.
+
+    A memory is "established" when there's strong evidence it's not noise:
+      - trait: reinforced 3+ times (user has said this repeatedly)
+      - concept: confidence >= 0.8 OR accessed 5+ times (well-grounded knowledge)
+      - episode: always False (singular narrative events, never "established")
+      - incoming: always False (just arrived, unverified)
+
+    NOTE: This signal is prepared for the ONNX contradiction classifier
+    (training/data/tasks/contradiction/). If the thresholds or logic change,
+    the classifier must be retrained — see training/data/tasks/contradiction/SIGNALS.md
+    """
+    if memory_type in ('incoming', 'episode'):
+        return False
+    if memory_type == 'trait':
+        return meta.get('reinforcement_count', 1) >= 3
+    if memory_type == 'concept':
+        return meta.get('confidence', 0.5) >= 0.8 or meta.get('access_count', 0) >= 5
+    return False
+
+
 def _extract_json(text: str) -> dict:
     text = text.strip()
     if text.startswith('{'):
@@ -205,16 +228,19 @@ class ContradictionClassifierService:
         Returns:
             Classification dict (same schema as check_ingestion) or None.
         """
+        meta_b = {
+            'source': 'consolidation_existing',
+            'confidence': existing.get('confidence', 0.5),
+            'access_count': existing.get('access_count', 0),
+            'created_at': existing.get('created_at'),
+        }
+        meta_b['established'] = _is_established('concept', meta_b)
         result = self._classify_pair_llm(
             f"{concept_name}: {concept_definition}",
             f"{existing.get('concept_name', '')}: {existing.get('definition', '')}",
             context_hint=None,
-            meta_a={'source': 'consolidation_new'},
-            meta_b={
-                'source': 'consolidation_existing',
-                'confidence': existing.get('confidence', 0.5),
-                'access_count': existing.get('access_count', 0),
-            },
+            meta_a={'source': 'consolidation_new', 'established': False},
+            meta_b=meta_b,
         )
         if result is None:
             return None
@@ -371,7 +397,8 @@ class ContradictionClassifierService:
                 try:
                     cursor.execute("""
                         SELECT t.id, t.trait_key, t.trait_value, t.confidence,
-                               t.source, t.reinforcement_count, t.reliability
+                               t.source, t.reinforcement_count, t.reliability,
+                               t.created_at
                         FROM user_traits_vec v
                         JOIN user_traits t ON t.rowid = v.rowid
                         WHERE v.embedding MATCH ? AND k = 5
@@ -380,18 +407,21 @@ class ContradictionClassifierService:
                     trait_rows = cursor.fetchall()
                     for row in trait_rows:
                         mem_text = f"{row[1]}: {row[2]}"
+                        meta = {
+                            'confidence': row[3],
+                            'source': row[4],
+                            'reinforcement_count': row[5],
+                            'reliability': row[6] or 'reliable',
+                            'created_at': row[7],
+                        }
+                        meta['established'] = _is_established('trait', meta)
                         pairs.append((
                             {'type': 'incoming', 'id': None, 'text': text},
                             {
                                 'type': 'trait',
                                 'id': row[0],
                                 'text': mem_text,
-                                'meta': {
-                                    'confidence': row[3],
-                                    'source': row[4],
-                                    'reinforcement_count': row[5],
-                                    'reliability': row[6] or 'reliable',
-                                },
+                                'meta': meta,
                             }
                         ))
                 except Exception as e:
@@ -406,7 +436,7 @@ class ContradictionClassifierService:
                 try:
                     cursor.execute("""
                         SELECT sc.id, sc.concept_name, sc.definition, sc.confidence,
-                               sc.access_count, sc.reliability
+                               sc.access_count, sc.reliability, sc.created_at
                         FROM concepts_vec v
                         JOIN semantic_concepts sc ON sc.id = v.id
                         WHERE v.embedding MATCH ? AND k = 5
@@ -416,17 +446,20 @@ class ContradictionClassifierService:
                     concept_rows = cursor.fetchall()
                     for row in concept_rows:
                         mem_text = f"{row[1]}: {row[2]}"
+                        meta = {
+                            'confidence': row[3],
+                            'access_count': row[4],
+                            'reliability': row[5] or 'reliable',
+                            'created_at': row[6],
+                        }
+                        meta['established'] = _is_established('concept', meta)
                         pairs.append((
                             {'type': 'incoming', 'id': None, 'text': text},
                             {
                                 'type': 'concept',
                                 'id': row[0],
                                 'text': mem_text,
-                                'meta': {
-                                    'confidence': row[3],
-                                    'access_count': row[4],
-                                    'reliability': row[5] or 'reliable',
-                                },
+                                'meta': meta,
                             }
                         ))
                 except Exception as e:
@@ -457,7 +490,7 @@ class ContradictionClassifierService:
                 cursor.execute("""
                     SELECT t.id, t.trait_key, t.trait_value, t.confidence,
                            t.source, t.reinforcement_count, t.reliability,
-                           v.embedding
+                           v.embedding, t.created_at
                     FROM user_traits t
                     LEFT JOIN user_traits_vec v ON v.rowid = t.rowid
                     WHERE t.confidence > 0.3
@@ -465,24 +498,27 @@ class ContradictionClassifierService:
                     LIMIT ?
                 """, (n_traits,))
                 for row in cursor.fetchall():
+                    meta = {
+                        'confidence': row[3],
+                        'source': row[4],
+                        'reinforcement_count': row[5],
+                        'reliability': row[6] or 'reliable',
+                        'created_at': row[8],
+                    }
+                    meta['established'] = _is_established('trait', meta)
                     memories.append({
                         'id': row[0],
                         'type': 'trait',
                         'text': f"{row[1]}: {row[2]}",
                         'embedding': _unpack_embedding(row[7]),
-                        'meta': {
-                            'confidence': row[3],
-                            'source': row[4],
-                            'reinforcement_count': row[5],
-                            'reliability': row[6] or 'reliable',
-                        },
+                        'meta': meta,
                     })
 
                 # Sample top concepts by strength
                 cursor.execute("""
                     SELECT sc.id, sc.concept_name, sc.definition, sc.confidence,
                            sc.access_count, sc.reliability,
-                           v.embedding
+                           v.embedding, sc.created_at
                     FROM semantic_concepts sc
                     LEFT JOIN concepts_vec v ON v.id = sc.id
                     WHERE sc.deleted_at IS NULL AND sc.confidence > 0.3
@@ -490,16 +526,19 @@ class ContradictionClassifierService:
                     LIMIT ?
                 """, (n_concepts,))
                 for row in cursor.fetchall():
+                    meta = {
+                        'confidence': row[3],
+                        'access_count': row[4],
+                        'reliability': row[5] or 'reliable',
+                        'created_at': row[7],
+                    }
+                    meta['established'] = _is_established('concept', meta)
                     memories.append({
                         'id': row[0],
                         'type': 'concept',
                         'text': f"{row[1]}: {row[2]}",
                         'embedding': _unpack_embedding(row[6]),
-                        'meta': {
-                            'confidence': row[3],
-                            'access_count': row[4],
-                            'reliability': row[5] or 'reliable',
-                        },
+                        'meta': meta,
                     })
 
                 cursor.close()
