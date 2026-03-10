@@ -1,5 +1,5 @@
 """
-ContradictionClassifierService — LLM-based classification of memory conflicts.
+ContradictionClassifierService — classification of memory conflicts.
 
 Core question: "Can these two memories both be true simultaneously?"
 Output: classification enum + confidence + recommended resolution.
@@ -9,12 +9,30 @@ Used by:
   - Drift RECONCILE action (ReconcileAction)
   - Semantic consolidation post-check (SemanticConsolidationService)
 
-Classifications:
-  temporal_change   — old belief replaced by new one (job switch, relocation, etc.)
-  true_contradiction — cannot both be true simultaneously
-  context_dependent  — both true but in different contexts
-  figurative         — one memory is non-literal (hyperbole, humor)
-  compatible         — no conflict; they can coexist (likes Honda + likes Toyota)
+Classifications (STATIC — changing these requires retraining the ONNX model):
+  A: temporal_change   — old belief replaced by new one (job switch, relocation, etc.)
+  B: true_contradiction — cannot both be true simultaneously
+  C: context_dependent  — both true but in different contexts
+  D: figurative         — one memory is non-literal (hyperbole, humor)
+  E: compatible         — no conflict; they can coexist (likes Honda + likes Toyota)
+
+ONNX MODEL CONTRACT
+===================
+This service has a companion ONNX classifier (trained in training/data/tasks/contradiction/).
+The ONNX model is the primary classifier; the LLM path (_classify_pair_llm) is the
+fallback when the ONNX model is unavailable or confidence is below threshold.
+
+The ONNX model was trained on a specific input format and signal contract. Changes to
+any of the following REQUIRE retraining the model:
+
+  1. Input JSON field names: text_a, text_b, type_a, type_b, age_a_days, age_b_days,
+     established_a, established_b
+  2. Memory type vocabulary: incoming, trait, concept, episode
+  3. The 5 classification labels and their A-E letter mapping
+  4. The _is_established() thresholds and logic
+  5. The prompt suffix format ("Options: A: ... Answer:")
+
+See training/data/tasks/contradiction/SIGNALS.md for the full signal contract.
 """
 
 import json
@@ -54,9 +72,14 @@ def _is_established(memory_type: str, meta: dict) -> bool:
       - episode: always False (singular narrative events, never "established")
       - incoming: always False (just arrived, unverified)
 
-    NOTE: This signal is prepared for the ONNX contradiction classifier
-    (training/data/tasks/contradiction/). If the thresholds or logic change,
-    the classifier must be retrained — see training/data/tasks/contradiction/SIGNALS.md
+    !! ONNX CONTRACT — RETRAINING REQUIRED IF CHANGED !!
+    The ONNX contradiction classifier was trained with these exact thresholds.
+    The model learned correlations between established=true/false and classification
+    outcomes. Changing thresholds (e.g. reinforcement_count >= 5 instead of >= 3)
+    will silently degrade accuracy without raising any error.
+
+    To retrain: see training/data/tasks/contradiction/SIGNALS.md
+    Mirrored in: training/data/tasks/contradiction/__init__.py::_synth_established()
     """
     if memory_type in ('incoming', 'episode'):
         return False
@@ -322,7 +345,195 @@ class ContradictionClassifierService:
 
         return results
 
-    # ── Private helpers ─────────────────────────────────────────────────────
+    # ── ONNX wrapper (primary path) ────────────────────────────────────────
+
+    # Label mapping: ONNX model outputs single letters, callers expect class names.
+    #
+    # !! STATIC CONTRACT — must match CLASS_LABELS in
+    # !! training/data/tasks/contradiction/__init__.py
+    # !! and the Options line in _build_onnx_input().
+    _ONNX_LABEL_TO_CLASS = {
+        'A': 'temporal_change',
+        'B': 'true_contradiction',
+        'C': 'context_dependent',
+        'D': 'figurative',
+        'E': 'compatible',
+    }
+
+    # Memory type mapping: the ONNX model only knows these 4 types.
+    # Any source/type not in this set must be mapped before inference.
+    #
+    # !! STATIC CONTRACT — must match MEMORY_TYPES in
+    # !! training/data/tasks/contradiction/__init__.py
+    _ONNX_KNOWN_TYPES = frozenset(['incoming', 'trait', 'concept', 'episode'])
+
+    # Source-to-type mapping for values the backend uses internally but
+    # the ONNX model has never seen.
+    _SOURCE_TYPE_MAP = {
+        'consolidation_new': 'concept',
+        'consolidation_existing': 'concept',
+    }
+
+    # Minimum ONNX confidence to trust the classification.
+    # Below this, fall back to LLM for higher-quality classification.
+    _ONNX_CONFIDENCE_THRESHOLD = 0.80
+
+    def _classify_pair_onnx(
+        self,
+        text_a: str,
+        text_b: str,
+        meta_a: dict,
+        meta_b: dict,
+    ) -> Optional[dict]:
+        """
+        Classify a memory pair using the ONNX contradiction model.
+
+        Returns a dict with {classification, confidence, temporal_signal,
+        recommended_resolution} or None if the model is unavailable or
+        confidence is below threshold.
+
+        !! WRAPPER CONTRACT — RETRAINING REQUIRED IF CHANGED !!
+        =====================================================
+        This method translates between the backend's internal representation
+        and the ONNX model's trained input format. The following elements
+        are FROZEN and must not be modified without retraining:
+
+        1. INPUT FORMAT: The _build_onnx_input() method must produce the exact
+           same format as training/data/tasks/contradiction/__init__.py::_format_input().
+           This includes JSON field names, key order, the Options line, and the
+           "Answer:" suffix.
+
+        2. LABEL MAPPING: _ONNX_LABEL_TO_CLASS must match CLASS_LABELS in the
+           training task. The model outputs A/B/C/D/E; this dict maps to names.
+
+        3. TYPE VOCABULARY: The model only knows 'incoming', 'trait', 'concept',
+           'episode'. Any other type_a/type_b value MUST be mapped via
+           _SOURCE_TYPE_MAP or default to 'episode'.
+
+        4. ESTABLISHED SIGNAL: Computed by _is_established() which has frozen
+           thresholds. See that function's docstring.
+
+        SAFE TO CHANGE (no retraining):
+        - _ONNX_CONFIDENCE_THRESHOLD (post-model gating)
+        - The deterministic resolution/temporal_signal inference below
+        - Adding new entries to _SOURCE_TYPE_MAP (maps TO existing types)
+        """
+        try:
+            from services.onnx_inference_service import get_onnx_inference_service
+            svc = get_onnx_inference_service()
+
+            input_text = self._build_onnx_input(text_a, text_b, meta_a, meta_b)
+            label, confidence = svc.predict("contradiction", input_text)
+
+            if label is None:
+                return None
+
+            if confidence < self._ONNX_CONFIDENCE_THRESHOLD:
+                logger.debug(
+                    f"{LOG_PREFIX} ONNX confidence {confidence:.3f} below "
+                    f"threshold {self._ONNX_CONFIDENCE_THRESHOLD} — using LLM"
+                )
+                return None
+
+            classification = self._ONNX_LABEL_TO_CLASS.get(label, 'compatible')
+
+            # Deterministic post-classification signals (not predicted by model)
+            temporal_signal = classification == 'temporal_change'
+            if classification == 'temporal_change':
+                resolution = 'auto_supersede'
+            elif classification in ('true_contradiction', 'context_dependent'):
+                resolution = 'flag_response'
+            else:
+                resolution = 'ignore'
+
+            return {
+                'classification': classification,
+                'confidence': confidence,
+                'temporal_signal': temporal_signal,
+                'reasoning': f'ONNX classifier ({confidence:.2f})',
+                'surface_context': None,
+                'recommended_resolution': resolution,
+            }
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} ONNX classification failed: {e}")
+            return None
+
+    def _build_onnx_input(
+        self,
+        text_a: str,
+        text_b: str,
+        meta_a: dict,
+        meta_b: dict,
+    ) -> str:
+        """
+        Build the ONNX model input string from a memory pair.
+
+        !! STATIC CONTRACT — RETRAINING REQUIRED IF CHANGED !!
+        This method MUST produce output identical to:
+            training/data/tasks/contradiction/__init__.py::_format_input()
+
+        The format is:
+            {JSON payload}
+            Options: A: temporal_change | B: true_contradiction | C: context_dependent | D: figurative | E: compatible
+            Answer:
+
+        JSON fields (exact names, no extras):
+            text_a, text_b, type_a, type_b, age_a_days, age_b_days,
+            established_a, established_b
+        """
+        from services.time_utils import utc_now, parse_utc
+
+        # Resolve memory types — map internal source types to model vocabulary
+        type_a = meta_a.get('source', meta_a.get('type', 'incoming'))
+        type_b = meta_b.get('source', meta_b.get('type', 'incoming'))
+        type_a = self._SOURCE_TYPE_MAP.get(type_a, type_a)
+        type_b = self._SOURCE_TYPE_MAP.get(type_b, type_b)
+        # Final guard: unknown types default to 'episode'
+        if type_a not in self._ONNX_KNOWN_TYPES:
+            type_a = 'episode'
+        if type_b not in self._ONNX_KNOWN_TYPES:
+            type_b = 'episode'
+
+        # Compute age in days
+        now = utc_now()
+        age_a = 0
+        age_b = 0
+        if meta_a.get('created_at'):
+            try:
+                age_a = (now - parse_utc(meta_a['created_at'])).days
+            except Exception:
+                pass
+        if meta_b.get('created_at'):
+            try:
+                age_b = (now - parse_utc(meta_b['created_at'])).days
+            except Exception:
+                pass
+
+        # Compute established signal
+        established_a = meta_a.get('established', _is_established(type_a, meta_a))
+        established_b = meta_b.get('established', _is_established(type_b, meta_b))
+
+        # Build JSON payload — must match _format_input() exactly:
+        # separators=(',', ':') for compact JSON, no spaces
+        payload = json.dumps({
+            "text_a": text_a,
+            "text_b": text_b,
+            "type_a": type_a,
+            "type_b": type_b,
+            "age_a_days": age_a,
+            "age_b_days": age_b,
+            "established_a": established_a,
+            "established_b": established_b,
+        }, separators=(',', ':'))
+
+        return (
+            f"{payload}\n"
+            "Options: A: temporal_change | B: true_contradiction | "
+            "C: context_dependent | D: figurative | E: compatible\n"
+            "Answer:"
+        )
+
+    # ── LLM fallback ───────────────────────────────────────────────────────
 
     def _classify_pair_llm(
         self,
@@ -336,6 +547,19 @@ class ContradictionClassifierService:
         Call the LLM to classify a memory pair.
 
         Returns parsed JSON dict or None on failure.
+
+        ONNX INJECTION POINT
+        ====================
+        This method is the single callsite where classification happens.
+        When the ONNX model is deployed, this method will:
+          1. Try ONNX first via _classify_pair_onnx()
+          2. If ONNX unavailable or confidence < threshold, fall back to LLM
+
+        The ONNX path does NOT use context_hint — the model was trained without it.
+        The ONNX path maps meta_a['source'] values like 'consolidation_new' and
+        'consolidation_existing' to the model's vocabulary ('concept').
+
+        See _classify_pair_onnx() for the wrapper contract.
         """
         user_parts = [
             f"Memory A: {text_a}",
