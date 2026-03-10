@@ -60,7 +60,7 @@ class TestAntiOscillation:
         router = ModeRouterService(_make_config())
         scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='CLARIFY')
-        assert adjusted['RESPOND'] == pytest.approx(0.55)  # 0.5 + 0.05
+        assert adjusted['RESPOND'] == pytest.approx(0.65)  # 0.5 + 0.15
 
     def test_no_change_for_other_modes(self):
         router = ModeRouterService(_make_config())

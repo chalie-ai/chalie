@@ -233,7 +233,7 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_memory_returns_all_layers(self, client):
-        """GET /system/observability/memory returns episode, concept, trait counts and MemoryStore counts."""
+        """GET /system/observability/memory returns SelfModel snapshot layers and MemoryStore counts."""
         mock_store = MagicMock()
         mock_store.keys.side_effect = lambda pattern: {
             'working_memory:*': ['wm1'],
@@ -242,22 +242,24 @@ class TestSystemAPI:
         }.get(pattern, [])
         mock_store.llen.return_value = 0
 
-        # Three SQL calls: episodes (count+avg), semantic_concepts (count), user_traits (count+avg)
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.fetchone.side_effect = [(100, 0.72), (50,), (30, 0.85)]
+        fake_snapshot = {
+            'operational': {'memory_pressure': {'episode_count': 100}},
+            'epistemic': {'knowledge_gaps': []},
+            'noteworthy': ['something interesting'],
+        }
+
+        mock_self_model = MagicMock()
+        mock_self_model.get_snapshot.return_value = fake_snapshot
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+             patch('services.self_model_service.SelfModelService', return_value=mock_self_model):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['episodes'] == 100
-        assert data['avg_episode_activation'] == 0.72
-        assert data['concepts'] == 50
-        assert data['traits'] == 30
-        assert data['avg_trait_strength'] == 0.85
+        assert data['operational'] == fake_snapshot['operational']
+        assert data['epistemic'] == fake_snapshot['epistemic']
+        assert data['noteworthy'] == fake_snapshot['noteworthy']
         assert data['working_memory'] == 1
         assert data['gists'] == 2
         assert data['facts'] == 3

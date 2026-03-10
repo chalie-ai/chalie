@@ -30,9 +30,10 @@ def db_service(tmp_path):
             signal_snapshot TEXT,
             weight_snapshot TEXT,
             routing_time_ms REAL,
-            previous_mode TEXT,
             feedback TEXT,
             reflection TEXT,
+            reasoning TEXT,
+            previous_mode TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         )
     """)
