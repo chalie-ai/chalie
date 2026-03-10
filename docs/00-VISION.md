@@ -227,6 +227,23 @@ Chalie evolves through capability stages, each building on the previous:
 
 **Interface trajectory:** Stages 1–7 use the chat interface as primary input surface. Stage 8 marks the transition to ambient presence — Chalie becomes input-agnostic, receiving observations from any surface (voice, notifications, sensors, API callbacks, calendar events). Stage 9 is full ambient superintelligence where the chat interface is one of many equal surfaces and Chalie operates primarily through silent autonomous action.
 
+### Cognitive OS
+
+At full maturity, Chalie is not an application — it is a **cognitive operating system**. The same way a traditional OS provides memory management, process scheduling, and inter-process communication to applications, Chalie provides persistent memory, reasoning, judgment, and user understanding to specialized agents.
+
+**Example:** A coding agent in an IDE receives "refactor the auth module." Instead of reasoning from scratch, it queries Chalie: "What does the user care about in auth?" Chalie's memory responds with preferences, past decisions, and reliability-weighted context accumulated across months. The coding agent makes informed decisions without needing its own memory system. On completion, it reports back — Chalie updates its world model, and that knowledge is available to every other agent.
+
+**Agent API surface** (four operations on top of the existing cognitive runtime):
+
+| Operation | What it does | Maps to |
+|-----------|-------------|---------|
+| **Query** | "What does the user prefer about X?" | Context assembly + episodic retrieval |
+| **Observe** | "I noticed Y while doing Z" | Observation stream → memory pipeline |
+| **Judge** | "Should I proceed with X or escalate?" | Reasoning loop + uncertainty engine |
+| **Report** | "Task complete, here's what happened" | World model update + episode creation |
+
+Specialized agents (coding, research, scheduling, communication) are peripherals. They handle domain-specific execution. Chalie handles everything else: memory, judgment, user understanding, goal tracking, and cross-agent knowledge sharing. No agent needs its own memory system or user model — Chalie is the shared cognitive layer.
+
 ---
 
 ## Decision Filter
