@@ -57,16 +57,18 @@ const JOBS = [
     { id: 'experience-assimilation',    name: 'Experience Assimilation',   desc: 'Evaluates tool outputs for novel knowledge worth storing.',                               badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.4K', frequency: 'Post-tool execution',   strengths: ['Structured Output', 'Classification'] },
     { id: 'fact-store',                 name: 'Fact Store',                desc: 'Extracts and stores atomic facts from exchanges. Runs async.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
     { id: 'frontal-cortex-acknowledge', name: 'Acknowledge Mode',          desc: 'Brief acknowledgments for greetings and simple inputs.',                                  badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.1K', frequency: 'Per message (ACK mode)', strengths: ['Structured Output'] },
+    { id: 'frontal-cortex-reflexive',   name: 'Reflexive Mode',            desc: 'Fast reflexive responses for simple, self-contained queries via cognitive reflex path.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per reflex activation',  strengths: ['Fast Inference', 'Structured Output'] },
+    { id: 'frontal-cortex-scheduled-tool', name: 'Scheduled Tool Mode',    desc: 'Generates responses after scheduled tool/reminder execution.',                             badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.5K', frequency: 'Per scheduled event',   strengths: ['Structured Output', 'Context Following'] },
     { id: 'memory-chunker',             name: 'Memory Chunker',            desc: 'Extracts gists, facts, and traits from exchanges. Runs async.',                           badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~4.1K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
     { id: 'moment-enrichment',          name: 'Moment Enrichment',         desc: 'Generates titles and summaries for pinned moments. Runs in a 5-minute background poll.',   badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~300',  frequency: 'Per pinned moment',     strengths: ['Summarisation', 'Extraction'] },
+    { id: 'document-synthesis',          name: 'Document Synthesis',        desc: 'Generates summaries for uploaded documents during processing.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per document upload',   strengths: ['Summarisation', 'Extraction'] },
+    { id: 'document-classification',     name: 'Document Classification',   desc: 'Classifies documents into categories, projects, and dates for automatic organisation.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1K',   frequency: 'Per document upload',   strengths: ['Classification', 'Structured Output', 'JSON'] },
 
-    // ── Tier 4: 4B sufficient ───────────────────────────────
-    { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Resolves ambiguous routing with binary A-vs-B decision. Must be fast.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~600',  frequency: '<5% of messages',    strengths: ['Fast Inference', 'Classification'] },
-    { id: 'topic-namer',     name: 'Topic Namer',     desc: 'Generates short display names for conversation topics.',               badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~550',  frequency: '5–10% of messages',  strengths: ['Fast Inference'] },
+    // ── ONNX classifiers ──────────────────────────────────────
+    { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Trained classifier that breaks ties between top-2 routing modes. Sub-millisecond inference.', badge: 'ONNX', badgeClass: 'badge-4b', tokens: '0',  frequency: 'Per ambiguous routing',    strengths: ['Fast Inference', 'Classification'] },
 
     // ── Vision ────────────────────────────────────────────────
     { id: 'document-ocr',    name: 'Document OCR',    desc: 'Extracts text from image-only PDFs and scanned documents via vision LLM.',  badge: 'Vision', badgeClass: 'badge-vision', tokens: '~1.5K', frequency: 'Per image-only document', strengths: ['Vision', 'OCR', 'Extraction'] },
-    { id: 'document-classification', name: 'Document Classification', desc: 'Classifies documents into categories, projects, and dates via LLM for automatic organisation.', badge: '≤ 8B', badgeClass: 'badge-8b', tokens: '~1K', frequency: 'Per document', strengths: ['Classification', 'Structured Output', 'JSON'] },
 
 ];
 
@@ -2266,7 +2268,7 @@ async function loadRoutingObs() {
         html += '<div class="obs-stats">';
         html += obsStatCard('Decisions (24h)', data.total_decisions_24h || 0);
         html += obsStatCard('Avg Confidence', ((data.avg_confidence_24h || 0) * 100).toFixed(1) + '%');
-        html += obsStatCard('Tiebreaker Rate', ((data.tiebreaker_rate_24h || 0) * 100).toFixed(1) + '%', 'Needed LLM to decide');
+        html += obsStatCard('Tiebreaker Rate', ((data.tiebreaker_rate_24h || 0) * 100).toFixed(1) + '%', 'ONNX or LLM tie-break');
         html += '</div>';
 
         // Mode distribution bar chart

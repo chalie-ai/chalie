@@ -39,6 +39,7 @@
 
   "tiebreaker_base_margin": 0.20,
   "tiebreaker_min_margin": 0.08,
+  "onnx_confidence_threshold": 0.80,
 
   "_comment": "Stability bands for mode entropy monitoring (informational only)",
   "healthy_ranges": {

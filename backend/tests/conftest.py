@@ -83,11 +83,6 @@ def mock_config():
             'tiebreaker_base_margin': 0.20,
             'tiebreaker_min_margin': 0.08,
         },
-        'mode-tiebreaker': {
-            'model': 'test-model',
-            'temperature': 0.1,
-            'max_tokens': 32,
-        },
         'fact-store': {
             'model': 'test-model',
             'ttl_minutes': 1440,
@@ -103,7 +98,6 @@ def mock_config():
     agent_prompts = {
         'memory-chunker': 'Test chunker prompt {{world_state}}',
         'fact-extraction': 'Test fact extraction prompt {{user_message}} {{system_response}}',
-        'mode-tiebreaker': 'Test tiebreaker prompt',
     }
     connections = {
         'memory': {},

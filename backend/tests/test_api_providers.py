@@ -132,17 +132,19 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 19
+        assert mock_service.set_job_assignment.call_count == 21
 
         assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
         expected_jobs = sorted([
             'autobiography', 'frontal-cortex', 'frontal-cortex-act',
             'plan-decomposition', 'frontal-cortex-respond',
             'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
-            'frontal-cortex-proactive', 'mode-reflection', 'semantic-memory',
-            'cognitive-triage', 'experience-assimilation', 'fact-store',
-            'frontal-cortex-acknowledge', 'memory-chunker', 'moment-enrichment',
-            'mode-tiebreaker', 'topic-namer',
+            'frontal-cortex-proactive', 'frontal-cortex-reflexive',
+            'frontal-cortex-scheduled-tool', 'mode-reflection',
+            'semantic-memory', 'cognitive-triage', 'experience-assimilation',
+            'fact-store', 'frontal-cortex-acknowledge', 'memory-chunker',
+            'moment-enrichment', 'document-synthesis',
+            'document-classification',
         ])
         assert assigned_jobs == expected_jobs
 
