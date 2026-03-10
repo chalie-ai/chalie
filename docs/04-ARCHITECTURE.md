@@ -145,10 +145,10 @@ frontend/
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-11 built-in cognitive skills for the ACT loop:
+14 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
-- **`introspect_skill.py`** — Self-examination (context warmth, FOK signal, stats, decision explanations, recent autonomous actions) (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
+- **`introspect_skill.py`** — Raw state snapshot: context warmth, FOK signal, stats, decision explanations, recent autonomous actions (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
 - **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
@@ -157,6 +157,9 @@ frontend/
 - **`moment_skill.py`** — Natural language moment recall ("Do you remember...") and listing via sqlite-vec search
 - **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
+- **`read_skill.py`** — Fetch and read web page content for information gathering and research
+- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
+- **`emit_card_skill.py`** — Render deferred tool cards into conversation stream (internal trigger)
 
 ## Worker Processes (`backend/workers/`)
 
