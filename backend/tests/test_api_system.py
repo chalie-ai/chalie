@@ -271,19 +271,28 @@ class TestSystemAPI:
 
     def test_observability_tools_returns_stats(self, client):
         """GET /system/observability/tools returns per-tool performance stats."""
-        mock_svc = MagicMock()
-        mock_svc.get_all_tool_stats.return_value = [
-            {'tool': 'web_search', 'success_rate': 0.9, 'avg_latency': 1.2},
-            {'tool': 'code_exec', 'success_rate': 0.95, 'avg_latency': 0.8},
+        mock_rows = [
+            {'tool_name': 'web_search', 'tool_type': 'docker', 'short_summary': 'Search',
+             'domain': 'Search', 'effort': 'low', 'reliability_score': 0.9,
+             'cost_tier': 'free', 'avg_latency_ms': 1200, 'enrichment_count': 1,
+             'triage_triggers': '[]', 'updated_at': '2025-01-01T00:00:00'},
+            {'tool_name': 'code_exec', 'tool_type': 'docker', 'short_summary': 'Execute',
+             'domain': 'Dev', 'effort': 'moderate', 'reliability_score': 0.95,
+             'cost_tier': 'free', 'avg_latency_ms': 800, 'enrichment_count': 1,
+             'triage_triggers': '[]', 'updated_at': '2025-01-01T00:00:00'},
         ]
+        mock_perf = MagicMock()
+        mock_perf.get_all_tool_stats.return_value = []
 
-        with patch('services.tool_performance_service.ToolPerformanceService', return_value=mock_svc):
+        with patch('services.database_service.get_shared_db_service') as mock_db, \
+             patch('services.tool_performance_service.ToolPerformanceService', return_value=mock_perf):
+            mock_db.return_value.fetch_all.return_value = mock_rows
             resp = client.get('/system/observability/tools')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert len(data['tools']) == 2
-        assert data['tools'][0]['tool'] == 'web_search'
+        assert data['tools'][0]['tool_name'] == 'web_search'
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -576,27 +585,21 @@ class TestSystemAPI:
         mock_auto_cls.assert_called_once_with(mock_db)
         mock_delta_cls.assert_called_once_with(mock_db)
 
-    def test_observability_memory_queries_confidence_not_strength(self, client):
-        """Memory endpoint must query AVG(confidence) from user_traits (not AVG(strength))."""
-        mock_store = MagicMock()
-        mock_store.keys.return_value = []
-        mock_store.llen.return_value = 0
+    def test_observability_memory_returns_structured_snapshot(self, client):
+        """Memory endpoint returns SelfModelService snapshot (refactored from raw SQL)."""
+        mock_self_model = MagicMock()
+        mock_self_model.get_snapshot.return_value = {
+            'operational': {'working_memory_turns': 2, 'active_gists': 1},
+            'epistemic': {'episodes': 10, 'concepts': 5, 'traits': 3},
+            'noteworthy': False,
+        }
 
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.fetchone.side_effect = [(10, 0.5), (5,), (3, 0.75)]
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.self_model_service.SelfModelService', return_value=mock_self_model):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
-        # Verify the SQL calls used the correct column name
-        calls = [str(call) for call in mock_cursor.execute.call_args_list]
-        assert any('AVG(confidence)' in c for c in calls), \
-            "Memory endpoint must use AVG(confidence), not AVG(strength), for user_traits"
-        assert not any('AVG(strength)' in c for c in calls), \
-            "Memory endpoint must not query AVG(strength) from user_traits"
+        data = resp.get_json()
+        assert 'operational' in data or 'epistemic' in data
 
     # ────────────────────────────────────────────
     # generated_at field on all observability endpoints
