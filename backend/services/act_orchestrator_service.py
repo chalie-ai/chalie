@@ -172,7 +172,7 @@ class ACTOrchestrator:
             loop_id = iteration_service.create_loop_id()
             act_loop.loop_id = loop_id
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Iteration logging init failed: {e}")
+            logger.error(f"{LOG_PREFIX} Iteration logging init failed (will retry at write): {e}")
 
         # ── Narration state ───────────────────────────────────────────────
         self._narrated = False  # Set on iteration 0 by LLM decision
@@ -422,17 +422,31 @@ class ACTOrchestrator:
                 break
 
         # ── Post-loop: batch write iterations ───────────────────────────
-        if iteration_service and act_loop.iteration_logs:
-            try:
-                iteration_service.log_iterations_batch(
-                    loop_id=loop_id,
-                    topic=topic,
-                    exchange_id=exchange_id,
-                    session_id=session_id,
-                    iterations=act_loop.iteration_logs,
-                )
-            except Exception as e:
-                logger.error(f"{LOG_PREFIX} Failed to log iterations: {e}")
+        if act_loop.iteration_logs:
+            # If init failed earlier, retry now — DB is guaranteed ready post-loop
+            if iteration_service is None:
+                try:
+                    from services.database_service import get_shared_db_service
+                    from services.cortex_iteration_service import CortexIterationService
+                    db_service = get_shared_db_service()
+                    iteration_service = CortexIterationService(db_service)
+                    loop_id = iteration_service.create_loop_id()
+                except Exception as e:
+                    logger.error(
+                        f"{LOG_PREFIX} Iteration logging unavailable — "
+                        f"{len(act_loop.iteration_logs)} iterations lost: {e}"
+                    )
+            if iteration_service:
+                try:
+                    iteration_service.log_iterations_batch(
+                        loop_id=loop_id,
+                        topic=topic,
+                        exchange_id=exchange_id,
+                        session_id=session_id,
+                        iterations=act_loop.iteration_logs,
+                    )
+                except Exception as e:
+                    logger.error(f"{LOG_PREFIX} Failed to log iterations: {e}")
 
         # ── Post-loop: fatigue telemetry ────────────────────────────────
         fatigue_telemetry = act_loop.get_fatigue_telemetry()
