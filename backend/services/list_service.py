@@ -123,7 +123,10 @@ class ListService:
             if updated:
                 self._log_event(list_id, 'list_deleted', details={'name': list_row['name']})
                 logger.info(f"[LISTS] Deleted list '{list_row['name']}' (id={list_id})")
-            return updated
+            else:
+                # Already deleted — idempotent: goal (resource gone) is already achieved
+                logger.debug(f"[LISTS] List '{list_row['name']}' (id={list_id}) already deleted, idempotent no-op")
+            return True
 
         except Exception as e:
             logger.error(f"[LISTS] delete_list failed: {e}")

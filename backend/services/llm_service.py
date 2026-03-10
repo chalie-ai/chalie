@@ -25,6 +25,10 @@ class RateLimitError(Exception):
         self.provider = provider
 
 
+class NonRetryableError(Exception):
+    """Raised for permanent provider errors (5xx) that should not be retried."""
+
+
 def _resolve_api_key(config: dict) -> str:
     """
     Resolve API key from provider config (from database).
@@ -84,6 +88,8 @@ def _call_with_retry(fn, max_retries=2, backoff=1.0):
             )
             time.sleep(wait)
             # Don't increment attempt — rate limits have their own counter
+        except NonRetryableError:
+            raise
         except Exception as e:
             if attempt == max_retries:
                 raise
@@ -431,6 +437,9 @@ class GeminiService:
                 ename = type(e).__name__
                 if 'ResourceExhausted' in ename or '429' in str(e):
                     raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
+                # 5xx server errors are permanent — do not retry
+                if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
+                    raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
                 raise
 
         response = _call_with_retry(_call)

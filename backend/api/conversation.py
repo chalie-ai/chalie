@@ -69,6 +69,7 @@ def conversation_summary():
     """Return compressed conversation summaries across time ranges."""
     try:
         from datetime import datetime, timedelta, timezone
+        from services.time_utils import parse_utc
         from services.thread_service import get_thread_service
         from services.gist_storage_service import GistStorageService
         from services.database_service import get_shared_db_service
@@ -115,9 +116,8 @@ def conversation_summary():
                     "salience": ep.get("salience", 0),
                     "created_at": str(created) if created else "",
                 }
-                if created and hasattr(created, 'replace'):
-                    # Normalize to tz-aware for comparison
-                    created_aware = created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+                if created:
+                    created_aware = parse_utc(created)
                     if created_aware >= week_ago:
                         result["this_week"].append(entry)
                     else:
