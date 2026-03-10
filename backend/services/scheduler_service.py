@@ -9,6 +9,7 @@ Entry point: scheduler_worker(shared_state=None) registered in run.py.
 """
 
 import logging
+import struct
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -16,6 +17,51 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
+
+
+def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
+    """
+    Generate and store an embedding for a scheduled item.
+
+    Inserts into scheduled_items_vec keyed by the item's rowid.
+    Non-fatal: logs a warning and returns silently on any failure.
+
+    Args:
+        item_id: The text primary key of the scheduled item (e.g. '3f8a2b1c').
+        message: The message field to embed.
+        db: Optional DatabaseService instance; fetches shared db if not provided.
+    """
+    try:
+        from services.embedding_service import get_embedding_service
+        if db is None:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+        emb_service = get_embedding_service()
+        embedding = emb_service.generate_embedding(message)
+        if not embedding:
+            return
+
+        packed = struct.pack(f'{len(embedding)}f', *embedding)
+
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT rowid FROM scheduled_items WHERE id = ?", (item_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return
+
+            item_rowid = row[0]
+            cursor.execute(
+                "INSERT OR REPLACE INTO scheduled_items_vec (rowid, embedding) VALUES (?, ?)",
+                (item_rowid, packed),
+            )
+
+        logger.debug(f"{LOG_PREFIX} Embedded scheduled item {item_id}")
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Failed to embed scheduled item {item_id}: {e}")
 
 
 def scheduler_worker(shared_state=None):
@@ -125,6 +171,7 @@ def _poll_and_fire():
                                 next_item.get("group_id"),
                                 1 if next_item.get("is_prompt", False) else 0,
                             ))
+                            embed_scheduled_item(next_item["id"], next_item["message"])
 
                 except Exception as e:
                     logger.error(f"{LOG_PREFIX} Failed to fire {item['id']}: {e}")

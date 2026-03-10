@@ -168,6 +168,13 @@ def _create(topic: str, params: dict) -> str:
             ))
             conn.commit()
 
+        # Embed the scheduled item message for semantic world state retrieval (non-fatal)
+        try:
+            from services.scheduler_service import embed_scheduled_item
+            embed_scheduled_item(item_id, message, db)
+        except Exception as emb_err:
+            logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
+
         # Emit card (non-fatal if it fails)
         try:
             from services.scheduler_card_service import SchedulerCardService
