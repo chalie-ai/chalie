@@ -14,6 +14,31 @@ from typing import Optional, List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+def embed_list(list_id: str, name: str, db=None) -> None:
+    """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
+    try:
+        from services.embedding_service import EmbeddingService
+        import struct
+        if db is None:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+        embedding = EmbeddingService().generate_embedding(name)
+        packed = struct.pack(f'{len(embedding)}f', *embedding)
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT rowid FROM lists WHERE id = ?", (list_id,))
+            row = cursor.fetchone()
+            if row:
+                rowid = row[0]
+                cursor.execute(
+                    "INSERT OR REPLACE INTO lists_vec(rowid, embedding) VALUES (?, ?)",
+                    (rowid, packed)
+                )
+                conn.commit()
+    except Exception as e:
+        logging.warning(f"[LISTS] Embedding failed (non-fatal): {e}")
+
+
 class ListService:
     """Manages deterministic user lists with history tracking."""
 
@@ -60,6 +85,7 @@ class ListService:
                 cursor.close()
 
             self._log_event(list_id, 'list_created', details={'name': name})
+            embed_list(list_id, name, db=self.db)
             logger.info(f"[LISTS] Created list '{name}' (id={list_id})")
             return list_id
 
@@ -173,6 +199,7 @@ class ListService:
 
             if updated:
                 self._log_event(list_id, 'list_renamed', details={'old_name': old_name, 'new_name': new_name})
+                embed_list(list_id, new_name, db=self.db)
                 logger.info(f"[LISTS] Renamed list '{old_name}' -> '{new_name}'")
             return updated
 

@@ -235,6 +235,9 @@ class ToolScannerThread:
         building = {n for n, s in self._registry.get_all_build_statuses().items()
                     if s.get("status") == "building"}
         locked = set(self._registry._install_locks)
+        # Track tools that failed to build — don't retry every cycle
+        failed = {n for n, s in self._registry.get_all_build_statuses().items()
+                  if s.get("status") in ("failed", "error")}
 
         for entry in sorted(self._tools_dir.iterdir()):
             if not entry.is_dir() or entry.name.startswith(("_", ".")):
@@ -247,6 +250,8 @@ class ToolScannerThread:
             except Exception:
                 continue
             if not tool_name or tool_name in known or tool_name in building or tool_name in locked:
+                continue
+            if tool_name in failed:
                 continue
             try:
                 from services.tool_config_service import ToolConfigService

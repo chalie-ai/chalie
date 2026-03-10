@@ -32,6 +32,7 @@ TEMPORAL_PAST_DECAY_HOURS = 24.0  # Completed items decay over 24 hours
 MAX_WORLD_STATE_ITEMS = 5
 MAX_SCHEDULED_CANDIDATES = 10
 MAX_TASK_CANDIDATES = 10
+MAX_LIST_CANDIDATES = 10
 
 
 class WorldStateService:
@@ -75,6 +76,9 @@ class WorldStateService:
 
         # 3. Persistent tasks (temporal + optional semantic)
         items.extend(self._get_salient_tasks(message_embedding))
+
+        # 4. Lists (temporal + semantic)
+        items.extend(self._get_salient_lists(message_embedding))
 
         if not items:
             return ""
@@ -240,6 +244,67 @@ class WorldStateService:
             logger.debug(f"{LOG_PREFIX} Tasks unavailable: {e}")
             return []
 
+    def _get_salient_lists(self, message_embedding: list = None) -> list:
+        """Retrieve lists scored by temporal recency + semantic salience."""
+        try:
+            db = self._get_db()
+            now = utc_now()
+            items = []
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT
+                        l.id,
+                        l.name,
+                        l.updated_at,
+                        SUM(CASE WHEN li.removed_at IS NULL AND li.id IS NOT NULL THEN 1 ELSE 0 END) AS item_count,
+                        SUM(CASE WHEN li.removed_at IS NULL AND li.checked THEN 1 ELSE 0 END) AS checked_count
+                    FROM lists l
+                    LEFT JOIN list_items li ON li.list_id = l.id
+                    WHERE l.deleted_at IS NULL
+                      AND l.updated_at >= datetime(?, '-7 days')
+                    GROUP BY l.id, l.name, l.updated_at
+                    ORDER BY l.updated_at DESC
+                    LIMIT ?
+                """, (now.isoformat(), MAX_LIST_CANDIDATES))
+                rows = cursor.fetchall()
+
+                for row in rows:
+                    list_id, name, updated_at_str, item_count, checked_count = row
+
+                    updated_at = parse_utc(updated_at_str)
+                    temporal = self._past_decay_score(now, updated_at)
+
+                    semantic = 0.0
+                    if message_embedding:
+                        semantic = self._semantic_score_list(
+                            conn, list_id, message_embedding
+                        )
+
+                    salience = W_TEMPORAL * temporal + W_SEMANTIC * semantic
+
+                    if salience >= SALIENCE_THRESHOLD:
+                        item_count = item_count or 0
+                        checked_count = checked_count or 0
+                        time_str = self._relative_time(now, updated_at)
+                        if checked_count > 0:
+                            count_str = f"{item_count} items, {checked_count} checked"
+                        else:
+                            count_str = f"{item_count} items"
+                        label = f"[LIST] {name} ({count_str}) — updated {time_str}"
+
+                        items.append({
+                            'type': 'list',
+                            'label': label,
+                            'salience': salience,
+                        })
+
+            return items
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Lists unavailable: {e}")
+            return []
+
     # ── Scoring Functions (deterministic, zero LLM) ──────────────────────────
 
     @staticmethod
@@ -344,6 +409,45 @@ class WorldStateService:
         except Exception as e:
             logger.debug(
                 f"{LOG_PREFIX} Semantic score failed for task {task_id}: {e}"
+            )
+            return 0.0
+
+    def _semantic_score_list(
+        self, conn, list_id: str, message_embedding: list
+    ) -> float:
+        """
+        Cosine similarity between the current message and a list name embedding.
+
+        Falls back to 0.0 on any error.
+        """
+        try:
+            packed = struct.pack(f'{len(message_embedding)}f', *message_embedding)
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT rowid FROM lists WHERE id = ?", (list_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return 0.0
+            list_rowid = row[0]
+
+            # KNN search: retrieve up to MAX_LIST_CANDIDATES nearest neighbours
+            cursor.execute("""
+                SELECT rowid, distance
+                FROM lists_vec
+                WHERE embedding MATCH ? AND k = ?
+            """, (packed, MAX_LIST_CANDIDATES))
+
+            for vec_row in cursor.fetchall():
+                if vec_row[0] == list_rowid:
+                    distance = vec_row[1]
+                    return max(0.0, 1.0 - distance)
+
+            return 0.0
+        except Exception as e:
+            logger.debug(
+                f"{LOG_PREFIX} Semantic score failed for list {list_id}: {e}"
             )
             return 0.0
 

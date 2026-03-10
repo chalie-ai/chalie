@@ -8,12 +8,12 @@
       "user_traits": true,
       "communication_style": true,
       "adaptive_directives": true,
-      "active_lists": true,
+      "active_lists": false,
       "client_context": true,
       "focus": true,
       "working_memory": true,
       "facts": true,
-      "active_goals": true,
+      "active_goals": false,
       "gists": true,
       "episodic_memory": true,
       "concepts": true,
@@ -30,12 +30,12 @@
       "user_traits": true,
       "communication_style": true,
       "adaptive_directives": true,
-      "active_lists": true,
+      "active_lists": false,
       "client_context": true,
       "focus": true,
       "working_memory": true,
       "facts": true,
-      "active_goals": true,
+      "active_goals": false,
       "gists": true,
       "episodic_memory": true,
       "concepts": true,
@@ -52,12 +52,12 @@
       "user_traits": false,
       "communication_style": true,
       "adaptive_directives": false,
-      "active_lists": true,
+      "active_lists": false,
       "client_context": true,
       "focus": true,
       "working_memory": true,
       "facts": true,
-      "active_goals": true,
+      "active_goals": false,
       "gists": true,
       "episodic_memory": true,
       "concepts": true,
@@ -155,21 +155,6 @@
         "strength": "hard"
       }
     ],
-    "active_lists": [
-      {
-        "when": {
-          "greeting_pattern": true
-        },
-        "strength": "soft"
-      },
-      {
-        "when": {
-          "greeting_pattern": true,
-          "prompt_token_count_lt": 6
-        },
-        "strength": "hard"
-      }
-    ],
     "onboarding_nudge": []
   },
   "urgency_overrides": [
@@ -218,7 +203,6 @@
     "working_memory",
     "world_state",
     "facts",
-    "active_lists",
     "focus",
     "gists"
   ],
