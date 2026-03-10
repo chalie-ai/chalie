@@ -61,7 +61,7 @@ def create_provider():
                 'autobiography', 'frontal-cortex', 'frontal-cortex-act',
                 'plan-decomposition', 'frontal-cortex-respond',
                 'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
-                'frontal-cortex-proactive', 'frontal-cortex-reflexive',
+                'frontal-cortex-proactive',
                 'frontal-cortex-scheduled-tool', 'mode-reflection',
                 'semantic-memory', 'cognitive-triage', 'experience-assimilation',
                 'fact-store', 'memory-chunker',
