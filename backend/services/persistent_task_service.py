@@ -15,6 +15,7 @@ Fairness: max 3 cycles per task per hour, max 5 active tasks per user.
 """
 
 import json
+import struct
 import time
 import logging
 from datetime import datetime, timedelta, timezone
@@ -89,6 +90,9 @@ class PersistentTaskService:
             task_id = cursor.lastrowid
 
         logger.info(f"{LOG_PREFIX} Created task {task_id}: {goal[:80]}")
+
+        # Embed the goal for semantic world state retrieval (non-fatal)
+        self._embed_task(task_id, goal)
 
         return self.get_task(task_id)
 
@@ -429,6 +433,34 @@ class PersistentTaskService:
         return summary
 
     # -- Helpers -------------------------------------------------------------
+
+    def _embed_task(self, task_id: int, goal: str) -> None:
+        """
+        Generate and store an embedding for a persistent task's goal.
+
+        Inserts into persistent_tasks_vec keyed by the task's rowid.
+        Non-fatal: logs a warning and returns silently on any failure.
+        """
+        try:
+            from services.embedding_service import get_embedding_service
+            emb_service = get_embedding_service()
+            embedding = emb_service.generate_embedding(goal)
+            if not embedding:
+                return
+
+            packed = struct.pack(f'{len(embedding)}f', *embedding)
+
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                # persistent_tasks uses INTEGER PRIMARY KEY AUTOINCREMENT so rowid == id
+                cursor.execute(
+                    "INSERT OR REPLACE INTO persistent_tasks_vec (rowid, embedding) VALUES (?, ?)",
+                    (task_id, packed),
+                )
+
+            logger.debug(f"{LOG_PREFIX} Embedded task {task_id}")
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to embed task {task_id}: {e}")
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
         """Convert a database row tuple to a task dict."""

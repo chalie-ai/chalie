@@ -67,6 +67,8 @@ class SchemaService:
             ("cognitive_reflexes_vec", self.embedding_dimensions),
             ("documents_vec", self.embedding_dimensions),
             ("document_chunks_vec", self.embedding_dimensions),
+            ("scheduled_items_vec", self.embedding_dimensions),
+            ("persistent_tasks_vec", self.embedding_dimensions),
         ]
 
         for table_name, dims in vec_tables:

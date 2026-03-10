@@ -905,3 +905,9 @@ CREATE INDEX IF NOT EXISTS idx_uncertainties_state ON uncertainties(state);
 CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_a ON uncertainties(memory_a_type, memory_a_id);
 CREATE INDEX IF NOT EXISTS idx_uncertainties_memory_b ON uncertainties(memory_b_type, memory_b_id);
 CREATE INDEX IF NOT EXISTS idx_uncertainties_severity ON uncertainties(severity, state);
+
+-- ────────────────────────────────────────────────────────────────
+-- WORLD STATE VECTOR TABLES — salience-based retrieval
+-- ────────────────────────────────────────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS persistent_tasks_vec USING vec0(embedding float[768]);

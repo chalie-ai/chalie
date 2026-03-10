@@ -245,7 +245,7 @@ def _format_visual_context(image_contexts: list) -> str:
     return "\n\n".join(parts)
 
 
-def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None):
+def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None, message_embedding=None):
     """
     Generate response for a terminal mode (RESPOND, CLARIFY).
 
@@ -360,6 +360,12 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
         if assembled_context is None:
             assembled_context = {}
         assembled_context['visual_context'] = _format_visual_context(image_contexts)
+
+    # Propagate message embedding so WorldStateService can apply semantic scoring
+    if message_embedding is not None:
+        if assembled_context is None:
+            assembled_context = {}
+        assembled_context['message_embedding'] = message_embedding
 
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
@@ -623,7 +629,8 @@ def _generate_with_act_orchestrator(
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, fact_store, metadata=None, context_warmth=1.0,
                        pre_routing_result=None, relevant_tools=None, selected_tools=None,
-                       selected_skills=None, thread_id=None, returning_from_silence=False):
+                       selected_skills=None, thread_id=None, returning_from_silence=False,
+                       message_embedding=None):
     """
     Main routing + generation function.
 
@@ -711,6 +718,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             signals=signals,
+            message_embedding=message_embedding,
         )
 
     # Log the routing decision AFTER generation so the recorded mode reflects the
@@ -1120,7 +1128,9 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     try:
         wm_turns = working_memory.get_recent_turns(thread_id or topic)
         gists = gist_storage.get_latest_gists(topic)
-        world_state = world_state_service.get_world_state(topic, thread_id=thread_id)
+        world_state = world_state_service.get_world_state(
+            topic, thread_id=thread_id, message_embedding=None
+        )
         context_warmth = calculate_context_warmth(
             working_memory_len=len(wm_turns),
             gists=gists,
@@ -2630,7 +2640,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     else:
         gist_context = "No previous conversation context available"
 
-    world_state = world_state_service.get_world_state(context_topic, thread_id=thread_id) if context_topic else ""
+    world_state = (
+        world_state_service.get_world_state(
+            context_topic, thread_id=thread_id, message_embedding=None
+        )
+        if context_topic
+        else ""
+    )
 
     # Step 4b: Calculate context warmth for cost scaling
     wm_turns = working_memory.get_recent_turns(thread_id)
@@ -2670,6 +2686,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         communicate.record_user_interaction(message_embedding=msg_embedding)
     except Exception as e:
         logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
+
 
     metrics.record_timing(trace_id, 'classification', classification_time * 1000)
     metrics.record_counter('classifications_total')
@@ -3167,6 +3184,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 selected_skills=triage_result.skills if triage_result.skills else None,
                 thread_id=thread_id,
                 returning_from_silence=returning_from_silence,
+                message_embedding=msg_embedding,
             )
 
             # Ignore fast path — skip encoding (trivial content)
@@ -3197,6 +3215,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             metadata=metadata, context_warmth=context_warmth,
             thread_id=thread_id,
             returning_from_silence=returning_from_silence,
+            message_embedding=msg_embedding,
         )
         if routing_result:
             routing_result.setdefault('routing_source', 'fallback')

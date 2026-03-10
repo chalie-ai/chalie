@@ -503,7 +503,14 @@ class FrontalCortexService:
         facts_context = _ctx.get('facts', '') if _include('facts') else ''
         working_memory_context = _ctx.get('working_memory', '') if _include('working_memory') else ''
         concepts_context = _ctx.get('concepts', '') if _include('concepts') else ''
-        world_state = self.world_state_service.get_world_state(topic, thread_id=thread_id) if _include('world_state') else ''
+        _msg_emb = _ctx.get('message_embedding') if _ctx else None
+        world_state = (
+            self.world_state_service.get_world_state(
+                topic, thread_id=thread_id, message_embedding=_msg_emb
+            )
+            if _include('world_state')
+            else ''
+        )
 
         # Replace placeholders
         try:
