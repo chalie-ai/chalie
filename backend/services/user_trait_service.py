@@ -37,6 +37,9 @@ CATEGORY_DECAY = {
 }
 
 MAX_TRAITS_IN_PROMPT = 8
+WILDCARD_SLOTS = 2              # High-confidence identity traits regardless of semantic match
+WILDCARD_CONFIDENCE = 0.7       # Minimum confidence to qualify as a wildcard
+SEMANTIC_RETRIEVAL_K = 25       # Wide retrieval window for fuzzy cross-domain connections
 INJECTION_THRESHOLD = 0.3
 
 
@@ -340,9 +343,14 @@ class UserTraitService:
         """
         Get user traits formatted for prompt injection.
 
-        Always injects core traits (confidence > threshold, is_literal=true).
-        Contextually injects relevant traits by embedding similarity.
-        Hard cap: MAX_TRAITS_IN_PROMPT (6) total.
+        Three-tier retrieval:
+        1. Core traits (name, etc.) — always injected
+        2. Semantic matches — KNN against current message embedding (wide k for
+           cross-domain fuzziness: "Docker" can surface "boxer" for metaphor)
+        3. Identity wildcards — highest-confidence non-core traits regardless of
+           semantic match, giving the LLM creative personality material
+
+        Hard cap: MAX_TRAITS_IN_PROMPT total.
 
         Confidence rendered as natural language:
         - > 0.7 → (well established)
@@ -352,6 +360,7 @@ class UserTraitService:
         Args:
             prompt: Current user message for contextual retrieval
             speaker_confidence: Confidence this is the known user
+            injection_threshold: Minimum confidence for inclusion
 
         Returns:
             str: Formatted traits section or empty string
@@ -360,7 +369,7 @@ class UserTraitService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
 
-                # Always get core traits above injection threshold
+                # ── Tier 1: Core traits (always present) ──────────────────
                 cursor.execute("""
                     SELECT trait_key, trait_value, confidence, category
                     FROM user_traits
@@ -372,10 +381,12 @@ class UserTraitService:
                 core_traits = cursor.fetchall()
 
                 remaining_slots = MAX_TRAITS_IN_PROMPT - len(core_traits)
-                contextual_traits = []
+                core_keys = {r[0] for r in core_traits}
+                semantic_traits = []
+                wildcard_traits = []
 
                 if remaining_slots > 0 and prompt:
-                    # Contextual retrieval by embedding similarity via user_traits_vec
+                    # ── Tier 2: Semantic matches (wide retrieval) ─────────
                     prompt_embedding = self._generate_embedding_raw(prompt)
                     if prompt_embedding:
                         packed = _pack_embedding(prompt_embedding)
@@ -386,17 +397,41 @@ class UserTraitService:
                                 JOIN user_traits t ON t.rowid = v.rowid
                                 WHERE v.embedding MATCH ? AND k = ?
                                 ORDER BY v.distance
-                            """, (packed, remaining_slots + len(core_traits)))
+                            """, (packed, SEMANTIC_RETRIEVAL_K))
                             all_vec_results = cursor.fetchall()
 
-                            # Filter: exclude core traits already included, apply thresholds
-                            core_keys = {r[0] for r in core_traits}
-                            contextual_traits = [
+                            semantic_traits = [
                                 r for r in all_vec_results
                                 if r[3] != 'core'
                                    and r[0] not in core_keys
                                    and r[2] > injection_threshold
-                            ][:remaining_slots]
+                            ]
+
+                    # ── Tier 3: Identity wildcards ────────────────────────
+                    # Highest-confidence non-core traits — the user's most
+                    # defining characteristics, always accessible for creative
+                    # analogies and personalisation even when not semantically
+                    # close to the current topic.
+                    semantic_keys = {r[0] for r in semantic_traits}
+                    cursor.execute("""
+                        SELECT trait_key, trait_value, confidence, category
+                        FROM user_traits
+                        WHERE category != 'core'
+                          AND confidence >= ?
+                          AND is_literal = 1
+                        ORDER BY confidence DESC, reinforcement_count DESC
+                        LIMIT ?
+                    """, (WILDCARD_CONFIDENCE, WILDCARD_SLOTS + len(semantic_keys) + len(core_keys)))
+                    wildcard_candidates = cursor.fetchall()
+
+                    wildcard_traits = [
+                        r for r in wildcard_candidates
+                        if r[0] not in core_keys and r[0] not in semantic_keys
+                    ][:WILDCARD_SLOTS]
+
+                    # Allocate: semantic fills remaining after wildcards
+                    semantic_cap = remaining_slots - len(wildcard_traits)
+                    semantic_traits = semantic_traits[:max(0, semantic_cap)]
 
                 elif remaining_slots > 0:
                     # No prompt for context — get highest confidence non-core traits
@@ -409,11 +444,11 @@ class UserTraitService:
                         ORDER BY confidence DESC
                         LIMIT ?
                     """, (injection_threshold, remaining_slots))
-                    contextual_traits = cursor.fetchall()
+                    semantic_traits = cursor.fetchall()
 
                 cursor.close()
 
-                all_traits = list(core_traits) + list(contextual_traits)
+                all_traits = list(core_traits) + list(semantic_traits) + list(wildcard_traits)
                 if not all_traits:
                     return ""
 
@@ -424,7 +459,6 @@ class UserTraitService:
                     if effective_confidence <= injection_threshold:
                         continue
                     label = self._confidence_label(effective_confidence)
-                    # Title-case the key for readability
                     display_key = trait_key.replace('_', ' ').title()
                     lines.append(f"- {display_key}: {trait_value} {label}")
 

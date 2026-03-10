@@ -73,8 +73,8 @@ class TestContextRelevanceService:
         respond_result = service.compute_inclusion_map(mode='RESPOND')
         act_result = service.compute_inclusion_map(mode='ACT')
 
-        # RESPOND includes available_skills
-        assert respond_result.get('available_skills') is True
+        # RESPOND does not include available_skills (dead placeholder, removed)
+        assert respond_result.get('available_skills') is False
 
         # ACT includes available_tools
         assert act_result.get('available_tools') is True
