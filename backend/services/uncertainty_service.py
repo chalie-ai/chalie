@@ -290,6 +290,21 @@ class UncertaintyService:
                 f"[UNCERTAINTY] Anti-nag: downgraded {uncertainty_id} "
                 f"{row[0]} → {new_severity} after {row[1]} surfacings"
             )
+            # Log to interaction_log for constraint learning
+            try:
+                from services.interaction_log_service import InteractionLogService
+                InteractionLogService(self.db).log_event(
+                    event_type='uncertainty_downgraded',
+                    payload={
+                        'uncertainty_id': uncertainty_id,
+                        'old_severity': row[0],
+                        'new_severity': new_severity,
+                        'surfaced_count': row[1],
+                    },
+                    source='uncertainty_service',
+                )
+            except Exception:
+                pass
             return True
         except Exception as e:
             logger.error(f"[UNCERTAINTY] downgrade_overexposed failed: {e}")

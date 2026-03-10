@@ -79,6 +79,8 @@ Skill/tool output reading: recall groups by layer with confidence. introspect re
 
 {{strategy_hints}}
 
+{{constraint_context}}
+
 ────────────────────────────────
 
 # Cognitive Context

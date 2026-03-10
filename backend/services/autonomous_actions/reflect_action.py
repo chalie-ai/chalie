@@ -236,13 +236,17 @@ class ReflectAction(AutonomousAction):
         Returns:
             (score, eligible)
         """
+        self.last_gate_result = None
+
         # Gate 1: Relevance
         score, passes, relevance_details = self._relevance_score(thought)
         if not passes:
             # Track rejections for adaptive threshold monitoring
             self._increment_rejected(thought.seed_topic)
+            reason = relevance_details.get('rejected', 'unknown')
+            self.last_gate_result = {'gate': 'relevance', 'reason': reason, 'details': relevance_details}
             logger.debug(
-                f"{LOG_PREFIX} Rejected: {relevance_details.get('rejected', 'unknown')} "
+                f"{LOG_PREFIX} Rejected: {reason} "
                 f"(topic={thought.seed_topic})"
             )
             return (0.0, False)
@@ -251,6 +255,7 @@ class ReflectAction(AutonomousAction):
         fatigue_passes, fatigue_details = self._fatigue_passes(thought)
         if not fatigue_passes:
             self._increment_rejected(thought.seed_topic)
+            self.last_gate_result = {'gate': 'fatigue', 'reason': 'fatigue budget exceeded', 'details': fatigue_details}
             logger.debug(f"{LOG_PREFIX} Rejected: fatigue budget exceeded")
             return (0.0, False)
 

@@ -68,8 +68,11 @@ class SeedThreadAction(AutonomousAction):
         Returns:
             (score, eligible)
         """
+        self.last_gate_result = None
+
         # Gate 1: Must come from an insight seed strategy (topic 3+ times in 7 days)
         if thought.extra.get('seed_type') != 'insight':
+            self.last_gate_result = {'gate': 'seed_type', 'reason': f"seed_type '{thought.extra.get('seed_type')}' != 'insight'"}
             return (0.0, False)
 
         # Gate 2: No active thread for same seed_topic
@@ -80,24 +83,29 @@ class SeedThreadAction(AutonomousAction):
         for t in active_threads:
             if t['seed_topic'] == thought.seed_topic:
                 logger.debug(f"{LOG_PREFIX} Dedup: active thread exists for '{thought.seed_topic}'")
+                self.last_gate_result = {'gate': 'duplicate_thread', 'reason': f"active thread exists for '{thought.seed_topic}'"}
                 return (0.0, False)
 
         # Gate 3: Activation energy threshold
         if thought.activation_energy < self.min_activation:
+            self.last_gate_result = {'gate': 'activation_energy', 'reason': f"energy {thought.activation_energy:.2f} < {self.min_activation}"}
             return (0.0, False)
 
         # Gate 4: 24h seed cooldown
         if self.store.exists(SEED_COOLDOWN_KEY):
             logger.debug(f"{LOG_PREFIX} Seed cooldown active, skipping")
+            self.last_gate_result = {'gate': 'cooldown', 'reason': '24h seed cooldown active'}
             return (0.0, False)
 
         # Gate 5: Max active threads
         if thread_service.count_active() >= CuriosityThreadService.MAX_ACTIVE_THREADS:
             logger.debug(f"{LOG_PREFIX} Max active threads reached")
+            self.last_gate_result = {'gate': 'active_count', 'reason': 'max active threads reached'}
             return (0.0, False)
 
         # Gate 6: Salience alignment
         if not self._check_salience(thought):
+            self.last_gate_result = {'gate': 'salience', 'reason': 'salience alignment failed'}
             return (0.0, False)
 
         # Score = activation energy (higher insight activation = higher priority)

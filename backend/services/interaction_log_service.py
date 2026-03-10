@@ -342,6 +342,47 @@ class InteractionLogService:
 
         return {'items': items, 'total': total, 'since_hours': since_hours}
 
+    def get_events_by_types(
+        self,
+        event_types: List[str],
+        since_hours: int = 24,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve events matching any of the given event types within a time window.
+
+        Args:
+            event_types: List of event_type strings to match
+            since_hours: How far back to look
+            limit: Maximum number of events to return
+
+        Returns:
+            List of event dicts ordered by created_at descending (newest first)
+        """
+        if not event_types:
+            return []
+        try:
+            since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+            since_str = since.isoformat()
+
+            with self.db_service.connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ','.join(['?'] * len(event_types))
+                cursor.execute(
+                    f"SELECT id, event_type, topic, exchange_id, session_id, source, "
+                    f"       payload, metadata, created_at "
+                    f"FROM interaction_log "
+                    f"WHERE event_type IN ({placeholders}) AND created_at > ? "
+                    f"ORDER BY created_at DESC LIMIT ?",
+                    (*event_types, since_str, limit),
+                )
+                rows = cursor.fetchall()
+                cursor.close()
+                return [self._row_to_dict(row) for row in rows]
+        except Exception as e:
+            logging.error(f"[INTERACTION LOG] Failed to get events by types: {e}")
+            return []
+
     def _row_to_dict(self, row) -> Dict[str, Any]:
         """Convert a database row to a dict."""
         return {

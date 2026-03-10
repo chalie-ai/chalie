@@ -61,9 +61,12 @@ class ReconcileAction(AutonomousAction):
             self.enabled = False
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
+        self.last_gate_result = None
+
         # Gate 1: activation energy floor (lower than other actions — reconcile
         # works even on low-energy drifts since it's background maintenance)
         if thought.activation_energy < self.min_activation_energy:
+            self.last_gate_result = {'gate': 'activation_energy', 'reason': f"energy {thought.activation_energy:.2f} < {self.min_activation_energy}"}
             return (0.0, False)
 
         # Gate 2: cooldown
@@ -77,6 +80,7 @@ class ReconcileAction(AutonomousAction):
                         f"{LOG_PREFIX} Skipping — {elapsed_min:.1f}m since last run "
                         f"(cooldown={self.cooldown_minutes}m)"
                     )
+                    self.last_gate_result = {'gate': 'cooldown', 'reason': f"{elapsed_min:.0f}m < {self.cooldown_minutes}m cooldown"}
                     return (0.0, False)
             except (ValueError, TypeError):
                 pass

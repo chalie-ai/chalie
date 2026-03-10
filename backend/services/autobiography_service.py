@@ -246,6 +246,31 @@ class AutobiographyService:
                         "strength": row[3]
                     })
 
+                # Gather constraint learning episodes (from idle consolidation)
+                result = session.execute(
+                    text("""
+                    SELECT gist, action, created_at, activation_score
+                    FROM episodes
+                    WHERE outcome = 'constraint_learned'
+                      AND deleted_at IS NULL
+                    ORDER BY activation_score DESC, created_at DESC
+                    LIMIT 10
+                    """),
+                    {}
+                )
+                constraint_episodes = []
+                for row in result.fetchall():
+                    created_at = row[2]
+                    if created_at and hasattr(created_at, 'isoformat'):
+                        created_at = created_at.isoformat()
+                    constraint_episodes.append({
+                        "gist": row[0],
+                        "action": row[1],
+                        "created_at": created_at,
+                        "activation_score": row[3],
+                    })
+                inputs["constraint_episodes"] = constraint_episodes
+
                 return inputs
         except Exception as e:
             logger.error(f"[AUTOBIOGRAPHY] Error gathering synthesis inputs: {e}")
@@ -254,6 +279,7 @@ class AutobiographyService:
                 "traits": [],
                 "concepts": [],
                 "relationships": [],
+                "constraint_episodes": [],
             }
 
     def synthesize(self) -> bool:
@@ -459,6 +485,16 @@ class AutobiographyService:
                     f"- {concept['name']}: {concept['definition']} "
                     f"(strength: {concept['strength']:.2f}, domain: {concept['domain']})"
                 )
+
+        constraint_episodes = inputs.get("constraint_episodes", [])
+        if constraint_episodes:
+            lines.append("\n## Learned Constraints\n")
+            lines.append(
+                "These are patterns I have discovered about my own limitations — "
+                "actions that were repeatedly blocked by my cognitive gates:"
+            )
+            for ep in constraint_episodes:
+                lines.append(f"- {ep['gist']}")
 
         return "\n".join(lines)
 

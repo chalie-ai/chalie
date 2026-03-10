@@ -45,12 +45,17 @@ class AutonomousAction(ABC):
       - should_execute(thought, context) -> (score, eligible)
       - execute(thought, context) -> ActionResult
       - on_outcome(result, user_feedback) -> None
+
+    Gate feedback: Actions set self.last_gate_result before returning
+    (0.0, False) so the decision router can feed rejection reasons into
+    the memory pipeline.
     """
 
     def __init__(self, name: str, enabled: bool = True, priority: int = 0):
         self.name = name
         self.enabled = enabled
         self.priority = priority  # Higher = wins ties
+        self.last_gate_result: Optional[Dict[str, Any]] = None
 
     @abstractmethod
     def should_execute(self, thought: ThoughtContext) -> tuple:

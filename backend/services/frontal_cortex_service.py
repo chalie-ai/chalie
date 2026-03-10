@@ -588,6 +588,18 @@ class FrontalCortexService:
             strategy_hints = self._get_strategy_hints(topic)
         result = result.replace('{{strategy_hints}}', strategy_hints)
 
+        # Constraint context — gate rejection patterns visible to LLM
+        constraint_context = ''
+        if _include('constraint_context') and '{{constraint_context}}' in result:
+            try:
+                from services.constraint_memory_service import ConstraintMemoryService
+                cms = ConstraintMemoryService()
+                mode_name = classification.get('mode', 'respond').lower()
+                constraint_context = cms.format_for_prompt(mode=mode_name)
+            except Exception:
+                pass
+        result = result.replace('{{constraint_context}}', constraint_context)
+
         # Identity modulation (voice mapper)
         if _include('identity_modulation'):
             identity_modulation = self._get_identity_modulation()

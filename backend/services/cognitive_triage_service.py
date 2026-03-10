@@ -141,7 +141,12 @@ class CognitiveTriageService:
         result = self._cognitive_triage(text, context)
 
         # 3. Self-eval sanity check (~0ms, deterministic)
+        original_mode = result.mode
         result = self._self_evaluate(result, text, context)
+
+        # Log self-eval overrides to interaction_log for constraint learning
+        if result.self_eval_override:
+            self._log_self_eval_override(result, original_mode, text)
 
         result.triage_time_ms = (time.time() - start) * 1000
         return result
@@ -463,6 +468,27 @@ class CognitiveTriageService:
                     result.self_eval_reason = 'effort_proportionality_underpowered'
 
         return result
+
+    @staticmethod
+    def _log_self_eval_override(result, original_mode: str, text: str):
+        """Log triage self-eval override to interaction_log for constraint learning."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+
+            db = get_shared_db_service()
+            InteractionLogService(db).log_event(
+                event_type='triage_override',
+                payload={
+                    'rule': result.self_eval_reason,
+                    'original_mode': original_mode,
+                    'final_mode': result.mode,
+                    'message_preview': text[:100],
+                },
+                source='cognitive_triage',
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _get_active_tasks_summary() -> str:
