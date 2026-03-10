@@ -131,11 +131,20 @@ class ClientContextService:
             lat_changed = abs(location.get("lat", 0) - cached_location.get("lat", 0)) > 0.05
             lon_changed = abs(location.get("lon", 0) - cached_location.get("lon", 0)) > 0.05
 
-            if lat_changed or lon_changed or "location_name" not in cached_ctx:
+            no_cached_name = "location_name" not in cached_ctx
+            cached_stale = cached_ctx.get("_location_name_stale", False)
+
+            if lat_changed or lon_changed or no_cached_name or cached_stale:
                 location_name = self._resolve_location_name(location["lat"], location["lon"])
                 if location_name:
                     ctx["location_name"] = location_name
+                    ctx.pop("_location_name_stale", None)
                     logging.debug(f"[CLIENT CONTEXT] Resolved location: {location_name}")
+                else:
+                    if "location_name" in cached_ctx:
+                        ctx["location_name"] = cached_ctx["location_name"]
+                    ctx["_location_name_stale"] = True
+                    logging.debug("[CLIENT CONTEXT] Location resolve failed, marked stale for retry")
             else:
                 if "location_name" in cached_ctx:
                     ctx["location_name"] = cached_ctx["location_name"]

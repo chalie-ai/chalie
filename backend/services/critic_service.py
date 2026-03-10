@@ -223,8 +223,12 @@ class CriticService:
         intent_str = json.dumps(action_intent, default=str, indent=2)
         result_str = json.dumps(action_result, default=str, indent=2)
 
+        from services.time_utils import utc_now
+        _current_datetime = utc_now().strftime('%A, %Y-%m-%d %H:%M UTC')
+
         return (
             template
+            .replace('{{current_datetime}}', _current_datetime)
             .replace('{{original_request}}', original_request)
             .replace('{{action_type}}', action_type)
             .replace('{{action_intent}}', intent_str)

@@ -485,6 +485,50 @@ class ACTOrchestrator:
             logger.debug(f"{LOG_PREFIX} Steering check failed: {e}")
         return act_history_str
 
+    def _escalate_and_wait(
+        self,
+        act_loop: ActLoopService,
+        escalation_text: str,
+        exchange_id: str,
+        poll_interval: float = 1.0,
+        max_wait: float = 30.0,
+    ) -> str | None:
+        """Send critic escalation to user and block until they respond or timeout."""
+        import time as _time
+        topic = act_loop.context_extras.get('topic', '')
+        try:
+            from services.output_service import OutputService
+            OutputService().enqueue_text(
+                topic=topic, response=escalation_text, mode='ACT',
+                confidence=0.0, generation_time=0.0,
+                original_metadata={'source': 'critic_escalation', 'exchange_id': exchange_id},
+            )
+        except Exception as _esc_err:
+            logger.warning(f"{LOG_PREFIX} Failed to send escalation: {_esc_err}")
+            return None
+
+        if not self._request_id:
+            logger.warning(f"{LOG_PREFIX} No request_id — cannot wait for user response")
+            return None
+
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        steer_key = f"steer:{self._request_id}"
+        deadline = _time.monotonic() + max_wait
+        logger.info(f"{LOG_PREFIX} Waiting up to {max_wait}s for user response on {steer_key}")
+
+        while _time.monotonic() < deadline:
+            _time.sleep(poll_interval)
+            steers = store.lrange(steer_key, 0, -1)
+            if steers:
+                store.delete(steer_key)
+                response = steers[0] if isinstance(steers[0], str) else steers[0].decode()
+                logger.info(f"{LOG_PREFIX} User responded to escalation: {response[:80]}")
+                return response
+
+        logger.info(f"{LOG_PREFIX} Escalation timed out after {max_wait}s")
+        return None
+
     def _run_critic(
         self,
         act_loop: ActLoopService,
@@ -527,30 +571,34 @@ class ACTOrchestrator:
                             f"{LOG_PREFIX} Critic escalation for {action_type}: "
                             f"{verdict.get('issue', 'unknown')}"
                         )
-                        # Notify user about the paused action
                         issue = verdict.get('issue', 'something unexpected')
                         action_desc = action_spec.get('description', action_type)
                         escalation_text = (
                             f"I was about to {action_desc}, but I paused — "
                             f"{issue}. Should I go ahead?"
                         )
-                        try:
-                            from services.output_service import OutputService
-                            OutputService().enqueue_text(
-                                topic=act_loop.context_extras.get('topic', ''),
-                                response=escalation_text,
-                                mode='ACT',
-                                confidence=0.0,
-                                generation_time=0.0,
-                                original_metadata={
-                                    'source': 'critic_escalation',
-                                    'exchange_id': exchange_id,
-                                },
-                            )
-                        except Exception as _esc_err:
-                            logger.warning(
-                                f"{LOG_PREFIX} Failed to send escalation: {_esc_err}"
-                            )
+                        user_response = self._escalate_and_wait(
+                            act_loop, escalation_text, exchange_id
+                        )
+                        if user_response:
+                            act_loop.append_results([{
+                                'action_type': 'critic_escalation',
+                                'status': 'user_responded',
+                                'result': f"Critic paused {action_type}: {issue}\nUser response: {user_response}",
+                                'execution_time': 0.0,
+                            }])
+                        else:
+                            current_result = {
+                                **current_result,
+                                'critic_blocked': True,
+                                'critic_issue': issue,
+                            }
+                            act_loop.append_results([{
+                                'action_type': 'critic_escalation',
+                                'status': 'timeout',
+                                'result': f"Critic paused {action_type}: {issue}\nNo user response within timeout — skipping action.",
+                                'execution_time': 0.0,
+                            }])
                     break
 
                 # Log correction entry
