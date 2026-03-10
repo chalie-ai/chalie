@@ -155,7 +155,22 @@
         "strength": "hard"
       }
     ],
-    "onboarding_nudge": []
+    "onboarding_nudge": [],
+    "identity_context": [
+      {
+        "when": {
+          "working_memory_turns_gte": 2,
+          "context_warmth_gte": 0.5
+        },
+        "strength": "soft"
+      },
+      {
+        "when": {
+          "working_memory_turns_gte": 3
+        },
+        "strength": "soft"
+      }
+    ]
   },
   "urgency_overrides": [
     "working_memory",
