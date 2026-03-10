@@ -103,7 +103,7 @@ class TriageContext:
 @dataclass
 class TriageResult:
     branch: str                   # 'social' | 'respond' | 'clarify' | 'act'
-    mode: str                     # 'ACKNOWLEDGE' | 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'
+    mode: str                     # 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'
     tools: List[str]              # tool names, only meaningful for ACT
     skills: List[str]             # innate skill names selected for ACT
     confidence_internal: float    # 0-1: confidence memory is sufficient
@@ -331,7 +331,6 @@ class CognitiveTriageService:
             'ACT': 'act',
             'RESPOND': 'respond',
             'CLARIFY': 'clarify',
-            'ACKNOWLEDGE': 'social',
             'IGNORE': 'social',
             'CANCEL': 'social',
         }.get(mode, 'respond')

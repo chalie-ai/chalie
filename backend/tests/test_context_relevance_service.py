@@ -47,10 +47,6 @@ class TestContextRelevanceService:
                     'gists': True,
                     'identity_context': True,
                 },
-                'ACKNOWLEDGE': {
-                    'identity_context': True,
-                    'communication_style': True,
-                },
             },
             'dependencies': {},
             'signal_rules': {},
@@ -62,19 +58,15 @@ class TestContextRelevanceService:
         }
 
     def test_template_mask_excludes_nodes(self, service):
-        """Test that template masks exclude nodes not in the template."""
-        result = service.compute_inclusion_map(mode='ACKNOWLEDGE')
+        """Test that template masks exclude nodes not in the CLARIFY template."""
+        result = service.compute_inclusion_map(mode='CLARIFY')
 
-        # ACKNOWLEDGE should exclude episodic_memory, working_memory, facts, gists
-        assert result.get('episodic_memory') is False
-        assert result.get('working_memory') is False
-        assert result.get('facts') is False
-        assert result.get('gists') is False
+        # CLARIFY should exclude available_tools
+        assert result.get('available_tools') is False
 
-        # ACKNOWLEDGE should include identity_context, communication_style, user_traits
+        # CLARIFY should include identity_context, communication_style
         assert result.get('identity_context') is True
         assert result.get('communication_style') is True
-        assert result.get('user_traits') is True
 
     def test_template_mask_respond_vs_act(self, service):
         """Test that different modes have different template masks."""
@@ -384,9 +376,9 @@ class TestContextRelevanceService:
         # Rule should match, episodic_memory soft-excluded but recovered due to budget
         assert 'episodic_memory' in result
 
-    def test_acknowledge_preserves_identity_and_style(self, service):
-        """Test ACKNOWLEDGE mode preserves identity_context and communication_style."""
-        result = service.compute_inclusion_map(mode='ACKNOWLEDGE')
+    def test_respond_preserves_identity_and_style(self, service):
+        """Test RESPOND mode preserves identity_context and communication_style."""
+        result = service.compute_inclusion_map(mode='RESPOND')
 
         assert result.get('identity_context') is True
         assert result.get('communication_style') is True

@@ -387,7 +387,7 @@ class FrontalCortexService:
                 mode = 'ACT'
 
             # Validate mode
-            valid_modes = ['ACT', 'RESPOND', 'CLARIFY', 'ACKNOWLEDGE', 'IGNORE']
+            valid_modes = ['ACT', 'RESPOND', 'CLARIFY', 'IGNORE']
             if mode not in valid_modes:
                 logging.warning(f"Invalid mode '{mode}', defaulting to RESPOND")
                 mode = 'RESPOND'
@@ -413,7 +413,7 @@ class FrontalCortexService:
                     path['expected_confidence'] = 0.5
                 # Validate downstream_mode for ACT paths
                 if mode == 'ACT' and path.get('mode') == 'ACT':
-                    valid_terminal = ['RESPOND', 'CLARIFY', 'ACKNOWLEDGE', 'IGNORE']
+                    valid_terminal = ['RESPOND', 'CLARIFY', 'IGNORE']
                     if path.get('downstream_mode') not in valid_terminal:
                         path['downstream_mode'] = 'RESPOND'
                 validated_alternatives.append(path)
@@ -625,7 +625,7 @@ class FrontalCortexService:
             onboarding_nudge = ''
         result = result.replace('{{onboarding_nudge}}', onboarding_nudge)
 
-        # Warm-return hint (ACKNOWLEDGE mode only)
+        # Warm-return hint (returning from silence)
         if _include('warm_return_hint'):
             warm_return_hint = ""
             if returning_from_silence:

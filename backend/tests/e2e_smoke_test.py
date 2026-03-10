@@ -45,8 +45,8 @@ TEST_MESSAGES = [
     },
     {
         "message": "Alright, talk to you later!",
-        "expect_modes": ["ACKNOWLEDGE", "RESPOND"],
-        "description": "Farewell - should acknowledge or respond",
+        "expect_modes": ["RESPOND"],
+        "description": "Farewell - should respond",
     },
 ]
 

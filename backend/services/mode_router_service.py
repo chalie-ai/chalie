@@ -220,13 +220,12 @@ class ModeRouterService:
     When top-2 are within margin, invokes small LLM for disambiguation.
     """
 
-    MODES = ['RESPOND', 'CLARIFY', 'ACT', 'ACKNOWLEDGE', 'IGNORE']
+    MODES = ['RESPOND', 'CLARIFY', 'ACT', 'IGNORE']
 
     MODE_DESCRIPTIONS = {
         'RESPOND': 'Answer the user with available context and knowledge',
         'CLARIFY': 'Ask one clarifying question to build understanding',
         'ACT': 'Use tools and skills (web search, memory lookup, research) to gather information before responding',
-        'ACKNOWLEDGE': 'Give a brief social acknowledgment (greeting, thanks, etc.)',
         'IGNORE': 'No response needed (empty or irrelevant input)',
     }
 
@@ -244,7 +243,6 @@ class ModeRouterService:
             'RESPOND': 0.50,
             'CLARIFY': 0.30,
             'ACT': 0.20,
-            'ACKNOWLEDGE': 0.10,
             'IGNORE': -0.50,
         })
 
@@ -403,10 +401,6 @@ class ModeRouterService:
             respond += w.get('respond.question_cold', 0.10)
         if is_cold:
             respond -= w.get('respond.cold_penalty', 0.15)
-        if greeting:
-            respond -= w.get('respond.greeting_penalty', 0.20)
-        if feedback == 'positive':
-            respond -= w.get('respond.feedback_penalty', 0.15)
         # Tool-needed penalty removed — tool dispatch now handled by CognitiveTriageService
 
         # ── CLARIFY ──────────────────────────────────────────────
@@ -453,15 +447,6 @@ class ModeRouterService:
             elif mem_conf < 0.30:
                 act += w.get('act.memory_confidence_low', 0.05)
 
-        # ── ACKNOWLEDGE ──────────────────────────────────────────
-        acknowledge = self.bases['ACKNOWLEDGE']
-        if greeting:
-            acknowledge += w.get('acknowledge.greeting', 0.60)
-        if feedback == 'positive':
-            acknowledge += w.get('acknowledge.positive_feedback', 0.40)
-        if is_question:
-            acknowledge -= w.get('acknowledge.question_penalty', 0.30)
-
         # ── IGNORE ───────────────────────────────────────────────
         ignore = self.bases['IGNORE']
         if is_empty:
@@ -471,7 +456,6 @@ class ModeRouterService:
             'RESPOND': respond,
             'CLARIFY': clarify,
             'ACT': act,
-            'ACKNOWLEDGE': acknowledge,
             'IGNORE': ignore,
         }
 

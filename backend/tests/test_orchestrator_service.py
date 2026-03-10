@@ -43,15 +43,6 @@ def _clarify_context(**overrides):
     return ctx
 
 
-def _acknowledge_context(**overrides):
-    ctx = {
-        'topic': 'test-topic',
-        'destination': 'user',
-    }
-    ctx.update(overrides)
-    return ctx
-
-
 def _ignore_context(**overrides):
     ctx = {
         'topic': 'test-topic',
@@ -77,13 +68,13 @@ def service():
 
 class TestAvailablePaths:
 
-    def test_returns_all_five_paths(self, service):
-        """get_available_paths returns exactly the 5 defined paths."""
+    def test_returns_all_four_paths(self, service):
+        """get_available_paths returns exactly the 4 defined paths."""
         paths = service.get_available_paths()
         names = [p['name'] for p in paths]
 
-        assert len(paths) == 5
-        assert set(names) == {'RESPOND', 'ACT', 'CLARIFY', 'ACKNOWLEDGE', 'IGNORE'}
+        assert len(paths) == 4
+        assert set(names) == {'RESPOND', 'ACT', 'CLARIFY', 'IGNORE'}
 
     def test_each_path_has_required_keys(self, service):
         """Every path definition contains name, type, required_fields, and description."""
@@ -168,19 +159,6 @@ class TestClarifyPath:
 
         assert result['status'] == 'success'
         assert result['mode'] == 'CLARIFY'
-
-
-# ── ACKNOWLEDGE Path ──────────────────────────────────────────
-
-
-class TestAcknowledgePath:
-
-    def test_acknowledge_with_valid_context_succeeds(self, service):
-        """ACKNOWLEDGE with topic and destination returns status=success."""
-        result = service.route_path('ACKNOWLEDGE', _acknowledge_context())
-
-        assert result['status'] == 'success'
-        assert result['mode'] == 'ACKNOWLEDGE'
 
 
 # ── IGNORE Path ───────────────────────────────────────────────

@@ -27,73 +27,73 @@ TIMEOUT = 300
 # Multiple UUIDs to test both cold starts and warm context accumulation
 PROMPTS = [
     # --- Session A: greetings + small talk (cold start) ---
-    ("smoke-a", "Hey there!", "ACKNOWLEDGE", "greeting"),
+    ("smoke-a", "Hey there!", "RESPOND", "greeting"),
     ("smoke-a", "How's it going?", "RESPOND", "question"),
-    ("smoke-a", "Not bad, just hanging out", "ACKNOWLEDGE", "feedback"),
+    ("smoke-a", "Not bad, just hanging out", "RESPOND", "feedback"),
     ("smoke-a", "What do you think about music?", "RESPOND", "question"),
-    ("smoke-a", "Cool, thanks!", "ACKNOWLEDGE", "feedback"),
+    ("smoke-a", "Cool, thanks!", "RESPOND", "feedback"),
 
     # --- Session B: knowledge questions (cold start) ---
-    ("smoke-b", "Hello", "ACKNOWLEDGE", "greeting"),
+    ("smoke-b", "Hello", "RESPOND", "greeting"),
     ("smoke-b", "What is photosynthesis?", "RESPOND", "question"),
     ("smoke-b", "Can you explain that in simpler terms?", "RESPOND", "question"),
-    ("smoke-b", "Got it, makes sense", "ACKNOWLEDGE", "feedback"),
+    ("smoke-b", "Got it, makes sense", "RESPOND", "feedback"),
     ("smoke-b", "What about cellular respiration?", "RESPOND", "question"),
 
     # --- Session C: memory probing (cold start) ---
-    ("smoke-c", "Hi!", "ACKNOWLEDGE", "greeting"),
+    ("smoke-c", "Hi!", "RESPOND", "greeting"),
     ("smoke-c", "Do you remember my name?", "CLARIFY", "memory"),
     ("smoke-c", "What did we talk about yesterday?", "ACT", "memory"),
     ("smoke-c", "You mentioned something about weather last time", "ACT", "memory"),
-    ("smoke-c", "Interesting", "ACKNOWLEDGE", "feedback"),
+    ("smoke-c", "Interesting", "RESPOND", "feedback"),
 
     # --- Session D: mixed intent (cold start) ---
-    ("smoke-d", "Good evening!", "ACKNOWLEDGE", "greeting"),
+    ("smoke-d", "Good evening!", "RESPOND", "greeting"),
     ("smoke-d", "I've been thinking about learning to code", "RESPOND", "statement"),
     ("smoke-d", "Where should I start?", "RESPOND", "question"),
-    ("smoke-d", "That's helpful, thank you", "ACKNOWLEDGE", "feedback"),
+    ("smoke-d", "That's helpful, thank you", "RESPOND", "feedback"),
     ("smoke-d", "What programming language do you recommend?", "RESPOND", "question"),
 
     # --- Session E: short/terse messages (cold start) ---
-    ("smoke-e", "yo", "ACKNOWLEDGE", "greeting"),
-    ("smoke-e", "sup", "ACKNOWLEDGE", "greeting"),
-    ("smoke-e", "ok", "ACKNOWLEDGE", "feedback"),
+    ("smoke-e", "yo", "RESPOND", "greeting"),
+    ("smoke-e", "sup", "RESPOND", "greeting"),
+    ("smoke-e", "ok", "RESPOND", "feedback"),
     ("smoke-e", "why?", "CLARIFY", "question"),
-    ("smoke-e", "hmm", "ACKNOWLEDGE", "feedback"),
+    ("smoke-e", "hmm", "RESPOND", "feedback"),
 
     # --- Session F: emotional/feedback heavy (cold start) ---
-    ("smoke-f", "Hey!", "ACKNOWLEDGE", "greeting"),
-    ("smoke-f", "That was amazing!", "ACKNOWLEDGE", "feedback"),
-    ("smoke-f", "You're really good at this", "ACKNOWLEDGE", "feedback"),
-    ("smoke-f", "I appreciate the help", "ACKNOWLEDGE", "feedback"),
+    ("smoke-f", "Hey!", "RESPOND", "greeting"),
+    ("smoke-f", "That was amazing!", "RESPOND", "feedback"),
+    ("smoke-f", "You're really good at this", "RESPOND", "feedback"),
+    ("smoke-f", "I appreciate the help", "RESPOND", "feedback"),
     ("smoke-f", "Can you help me with something else?", "RESPOND", "question"),
 
     # --- Session G: complex questions (cold start) ---
-    ("smoke-g", "Hi there", "ACKNOWLEDGE", "greeting"),
+    ("smoke-g", "Hi there", "RESPOND", "greeting"),
     ("smoke-g", "How does quantum computing work?", "RESPOND", "question"),
     ("smoke-g", "What are its practical applications?", "RESPOND", "question"),
     ("smoke-g", "Do you remember what we discussed about AI?", "ACT", "memory"),
-    ("smoke-g", "Perfect, that clarifies things", "ACKNOWLEDGE", "feedback"),
+    ("smoke-g", "Perfect, that clarifies things", "RESPOND", "feedback"),
 
     # --- Session H: longer conversation (warm context buildup) ---
-    ("smoke-h", "Good morning!", "ACKNOWLEDGE", "greeting"),
+    ("smoke-h", "Good morning!", "RESPOND", "greeting"),
     ("smoke-h", "I want to talk about cooking", "RESPOND", "statement"),
     ("smoke-h", "What's a good recipe for beginners?", "RESPOND", "question"),
     ("smoke-h", "Nice, any tips for seasoning?", "RESPOND", "question"),
     ("smoke-h", "What about baking?", "RESPOND", "question"),
-    ("smoke-h", "ok thanks for all the info", "ACKNOWLEDGE", "feedback"),
+    ("smoke-h", "ok thanks for all the info", "RESPOND", "feedback"),
     ("smoke-h", "You mentioned something earlier about herbs", "ACT", "memory"),
-    ("smoke-h", "Great, goodbye!", "ACKNOWLEDGE", "greeting"),
+    ("smoke-h", "Great, goodbye!", "RESPOND", "greeting"),
 
     # --- Session I: edge cases ---
-    ("smoke-i", "Greetings", "ACKNOWLEDGE", "greeting"),
+    ("smoke-i", "Greetings", "RESPOND", "greeting"),
     ("smoke-i", "Tell me something interesting", "RESPOND", "question"),
     ("smoke-i", "Go on", "RESPOND", "statement"),
     ("smoke-i", "That's not what I meant", "CLARIFY", "feedback"),
-    ("smoke-i", "Never mind, thanks anyway", "ACKNOWLEDGE", "feedback"),
+    ("smoke-i", "Never mind, thanks anyway", "RESPOND", "feedback"),
 
     # --- Session J: rapid fire (same uuid, context accumulates) ---
-    ("smoke-j", "Hiya!", "ACKNOWLEDGE", "greeting"),
+    ("smoke-j", "Hiya!", "RESPOND", "greeting"),
 ]
 
 
@@ -198,7 +198,7 @@ def run():
     print("=" * 70)
 
     print("\nMode distribution:")
-    for mode in ["RESPOND", "ACKNOWLEDGE", "CLARIFY", "ACT", "IGNORE", "ERROR"]:
+    for mode in ["RESPOND", "CLARIFY", "ACT", "IGNORE", "ERROR"]:
         count = mode_counts.get(mode, 0)
         if count > 0:
             print("  %-12s: %d/%d (%.0f%%)" % (mode, count, n, 100 * count / n))

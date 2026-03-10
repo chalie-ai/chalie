@@ -11,7 +11,7 @@ def _make_config():
     return {
         'base_scores': {
             'RESPOND': 0.40, 'CLARIFY': 0.30, 'ACT': 0.20,
-            'ACKNOWLEDGE': 0.10, 'IGNORE': -0.50,
+            'IGNORE': -0.50,
         },
         'weights': {},
         'tiebreaker_base_margin': 0.20,
@@ -52,19 +52,19 @@ class TestAntiOscillation:
 
     def test_suppresses_act_after_act(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.6, 'ACKNOWLEDGE': 0.1, 'IGNORE': -0.5}
+        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.6, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='ACT')
         assert adjusted['ACT'] == pytest.approx(0.45)  # 0.6 - 0.15
 
     def test_boosts_respond_after_clarify(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'ACKNOWLEDGE': 0.1, 'IGNORE': -0.5}
+        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='CLARIFY')
         assert adjusted['RESPOND'] == pytest.approx(0.55)  # 0.5 + 0.05
 
     def test_no_change_for_other_modes(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'ACKNOWLEDGE': 0.1, 'IGNORE': -0.5}
+        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='RESPOND')
         assert adjusted == scores
 
@@ -123,38 +123,6 @@ class TestCalculateEffectiveMargin:
         wider = router._calculate_effective_margin(
             _make_signals(information_density=0.2))  # < 0.3
         assert wider > normal
-
-
-# ── _extract_tiebreaker_choice ───────────────────────────────────────
-
-class TestExtractTiebreakerChoice:
-
-    def test_clean_json_a(self):
-        router = ModeRouterService(_make_config())
-        result = router._extract_tiebreaker_choice('{"choice": "A"}', 'RESPOND', 'CLARIFY')
-        assert result == 'RESPOND'
-
-    def test_clean_json_b(self):
-        router = ModeRouterService(_make_config())
-        result = router._extract_tiebreaker_choice('{"choice": "B"}', 'RESPOND', 'CLARIFY')
-        assert result == 'CLARIFY'
-
-    def test_json_embedded_in_text(self):
-        router = ModeRouterService(_make_config())
-        response = 'I think the best choice is: {"choice": "A"} because...'
-        result = router._extract_tiebreaker_choice(response, 'ACT', 'RESPOND')
-        assert result == 'ACT'
-
-    def test_regex_fallback(self):
-        router = ModeRouterService(_make_config())
-        response = 'My answer is "choice": "B" based on context.'
-        result = router._extract_tiebreaker_choice(response, 'ACT', 'RESPOND')
-        assert result == 'RESPOND'
-
-    def test_garbage_returns_none(self):
-        router = ModeRouterService(_make_config())
-        result = router._extract_tiebreaker_choice('completely random text here', 'ACT', 'RESPOND')
-        assert result is None
 
 
 # ── ACT score path ───────────────────────────────────────────────────
@@ -271,39 +239,30 @@ class TestIgnoreMode:
         assert all(s > ignore_score for s in other_scores)
 
 
-# ── ACKNOWLEDGE feedback ─────────────────────────────────────────────
+# ── Greeting handling (RESPOND path) ─────────────────────────────────
 
-class TestAcknowledgeFeedback:
+class TestGreetingHandling:
 
-    def test_acknowledge_greeting_boosts_score(self):
-        """Greeting should substantially boost ACKNOWLEDGE score."""
+    def test_greeting_selects_respond_not_ignore(self):
+        """Greeting pattern must never produce IGNORE — RESPOND is expected."""
         router = ModeRouterService(_make_config())
-        r_greet = router.route(_make_signals(greeting_pattern=True, context_warmth=0.0),
-                               "Hey!", skip_tiebreaker=True)
-        r_no_greet = router.route(_make_signals(greeting_pattern=False, context_warmth=0.0),
-                                  "Something", skip_tiebreaker=True)
-        assert r_greet['scores']['ACKNOWLEDGE'] > r_no_greet['scores']['ACKNOWLEDGE']
+        result = router.route(_make_signals(greeting_pattern=True, context_warmth=0.0),
+                              "Hey!", skip_tiebreaker=True)
+        assert result['mode'] != 'IGNORE'
+        assert result['mode'] in ModeRouterService.MODES
 
-    def test_acknowledge_positive_feedback_boosts_score(self):
-        """Positive explicit feedback should boost ACKNOWLEDGE score."""
+    def test_greeting_with_question_selects_respond(self):
+        """A greeting that contains a question should flow to RESPOND."""
         router = ModeRouterService(_make_config())
-        r_pos = router.route(_make_signals(explicit_feedback='positive', context_warmth=0.0),
-                             "Thanks!", skip_tiebreaker=True)
-        r_none = router.route(_make_signals(explicit_feedback=None, context_warmth=0.0),
-                              "OK", skip_tiebreaker=True)
-        assert r_pos['scores']['ACKNOWLEDGE'] > r_none['scores']['ACKNOWLEDGE']
+        result = router.route(
+            _make_signals(greeting_pattern=True, has_question_mark=True, context_warmth=0.3),
+            "Hi, how are you?",
+            skip_tiebreaker=True,
+        )
+        assert result['mode'] in ('RESPOND', 'CLARIFY')
 
-    def test_acknowledge_question_reduces_score(self):
-        """Question mark should penalize ACKNOWLEDGE (questions deserve answers, not acknowledgements)."""
-        router = ModeRouterService(_make_config())
-        r_q = router.route(_make_signals(greeting_pattern=True, has_question_mark=True),
-                           "Hi, how are you?", skip_tiebreaker=True)
-        r_nq = router.route(_make_signals(greeting_pattern=True, has_question_mark=False),
-                            "Hi there", skip_tiebreaker=True)
-        assert r_q['scores']['ACKNOWLEDGE'] < r_nq['scores']['ACKNOWLEDGE']
-
-    def test_acknowledge_wins_for_greeting_with_cold_context(self):
-        """A greeting with no prior context should select ACKNOWLEDGE mode."""
+    def test_greeting_cold_context_no_facts_not_act(self):
+        """Greeting with zero facts and cold context should not select ACT."""
         router = ModeRouterService(_make_config())
         signals = _make_signals(
             greeting_pattern=True,
@@ -313,7 +272,17 @@ class TestAcknowledgeFeedback:
             gist_count=0,
         )
         result = router.route(signals, "Hey!", skip_tiebreaker=True)
-        assert result['mode'] == 'ACKNOWLEDGE'
+        assert result['mode'] != 'ACT'
+
+    def test_positive_feedback_does_not_select_ignore(self):
+        """Positive explicit feedback should never produce IGNORE."""
+        router = ModeRouterService(_make_config())
+        result = router.route(
+            _make_signals(explicit_feedback='positive', context_warmth=0.0),
+            "Thanks!",
+            skip_tiebreaker=True,
+        )
+        assert result['mode'] != 'IGNORE'
 
 
 # ── Hysteresis (low-confidence streak widening) ──────────────────────

@@ -8,7 +8,6 @@ from .orchestrator.handlers import (
     RespondHandler,
     ActHandler,
     ClarifyHandler,
-    AcknowledgeHandler,
     IgnoreHandler,
 )
 
@@ -35,7 +34,6 @@ class OrchestratorService:
             'RESPOND': RespondHandler(self.output_service),
             'ACT': ActHandler(self.act_dispatcher_service),
             'CLARIFY': ClarifyHandler(self.output_service),
-            'ACKNOWLEDGE': AcknowledgeHandler(self.output_service),
             'IGNORE': IgnoreHandler(),
         }
 
