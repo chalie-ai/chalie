@@ -96,8 +96,6 @@ Your response is rendered as Markdown. Use formatting when it makes the answer c
 Previous Internal Actions (use these results to inform your response):
 {{act_history}}
 
-{{available_skills}}
-
 {{world_state}}
 
 ────────────────────────────────
