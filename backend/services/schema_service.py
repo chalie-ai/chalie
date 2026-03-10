@@ -69,6 +69,7 @@ class SchemaService:
             ("document_chunks_vec", self.embedding_dimensions),
             ("scheduled_items_vec", self.embedding_dimensions),
             ("persistent_tasks_vec", self.embedding_dimensions),
+            ("lists_vec", self.embedding_dimensions),
         ]
 
         for table_name, dims in vec_tables:

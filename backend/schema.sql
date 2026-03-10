@@ -911,3 +911,4 @@ CREATE INDEX IF NOT EXISTS idx_uncertainties_severity ON uncertainties(severity,
 -- ────────────────────────────────────────────────────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS persistent_tasks_vec USING vec0(embedding float[768]);
+CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
