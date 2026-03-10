@@ -44,6 +44,18 @@ Every proposed change must serve at least one:
 
 ---
 
+## Interface Philosophy
+
+**Today:** Chalie presents as a unified chat interface — consumer-facing, UX-conscious, conversational. This is the current input surface: a place where the user types, and Chalie responds.
+
+**Long-term:** Chalie is ambient. It is *present* — always observing, always reasoning — the way a trusted advisor sits in the room, not waiting to be asked but noticing what matters. The chat interface becomes one of many input surfaces: voice, notifications, calendar events, sensor data, API callbacks. The interface fades; the intelligence remains.
+
+**Design implication:** Every architectural decision must work for both phases. The reasoning engine must not depend on chat as its primary input. Observations can arrive from any surface — a typed message, a location change, a price alert, a calendar event. The chat UI is a scaffold for the current stage, not a permanent constraint. The backend cognitive runtime is the product; the frontend is disposable and interchangeable.
+
+*This is already stated in CLAUDE.md: "The frontend is a thin, disposable, interchangeable client; the real intelligence lives entirely in the backend cognitive runtime."*
+
+---
+
 ## What Chalie Is
 
 Chalie is a **continuous reasoning engine** that protects attention, executes intent, and involves the user only when they truly matter.
@@ -208,9 +220,12 @@ Chalie evolves through capability stages, each building on the previous:
 | 5 | Continuous reasoning loop | **Next** | Goal inference, world model, event-driven execution |
 | 6 | Autonomous goal execution | Future | Delegation, monitoring, cross-session plan evolution |
 | 7 | Vertical model orchestration | Future | Optimal model per cognitive function, ensemble reasoning |
-| 8 | Ambient superintelligence | Future | Goal detection from casual signals, full autonomy within trust boundaries |
+| 8 | Ambient presence | Future | Multi-surface input (voice, sensors, APIs, calendar), interface-agnostic reasoning |
+| 9 | Ambient superintelligence | Future | Goal detection from casual signals, full autonomy within trust boundaries |
 
 **Current transition:** Stages 1–4 are operational. The architectural shift from message-level to goal-level processing (Stage 5) is the next major evolution. This requires: goal inference engine, continuous reasoning loop (PERCEIVE → UPDATE → REASON → ACT → REFLECT), event-driven persistent task execution, and world model tracking.
+
+**Interface trajectory:** Stages 1–7 use the chat interface as primary input surface. Stage 8 marks the transition to ambient presence — Chalie becomes input-agnostic, receiving observations from any surface (voice, notifications, sensors, API callbacks, calendar events). Stage 9 is full ambient superintelligence where the chat interface is one of many equal surfaces and Chalie operates primarily through silent autonomous action.
 
 ---
 
