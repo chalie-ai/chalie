@@ -18,7 +18,7 @@
       "episodic_memory": true,
       "concepts": true,
       "act_history": true,
-      "available_skills": true,
+      "available_skills": false,
       "available_tools": false,
       "world_state": true,
       "warm_return_hint": false,
