@@ -16,6 +16,8 @@ and past experiences. Your job is to synthesize a brief, natural internal though
 ## Current Rhythm
 {{temporal_rhythm}}
 
+{{constraint_context}}
+
 ## Rules
 - Produce exactly ONE brief thought (1-2 sentences)
 - The thought should feel natural and human, like inner monologue

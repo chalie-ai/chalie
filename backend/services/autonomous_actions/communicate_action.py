@@ -638,12 +638,16 @@ class CommunicateAction(AutonomousAction):
         Always records activation energy for self-calibration.
         If quality passes but timing/engagement don't, adds to candidate queue.
         """
+        self.last_gate_result = None
+
         # Always record for calibration
         self.record_activation_energy(thought.activation_energy)
 
         # Gate 1: Quality
         quality_score, quality_passes, quality_details = self._quality_score(thought)
         if not quality_passes:
+            reason = quality_details.get('rejected', 'unknown')
+            self.last_gate_result = {'gate': 'quality', 'reason': reason, 'details': quality_details}
             return (0.0, False)
 
         # Gate 2: Timing
@@ -652,11 +656,14 @@ class CommunicateAction(AutonomousAction):
         # If timing fails due to quiet hours, defer the thought
         if not timing_passes and timing_details.get('rejected') == 'quiet_hours':
             self._add_deferred(thought, quality_score)
+            self.last_gate_result = {'gate': 'timing', 'reason': 'quiet_hours', 'deferred': True}
             return (0.0, False)
 
         if not timing_passes:
             # Quality passed but timing didn't — add to candidate queue
             self._add_candidate(thought, quality_score)
+            reason = timing_details.get('rejected', 'timing')
+            self.last_gate_result = {'gate': 'timing', 'reason': reason, 'queued': True}
             return (0.0, False)
 
         # Gate 3: Engagement
@@ -664,6 +671,8 @@ class CommunicateAction(AutonomousAction):
         if not engagement_passes:
             # Quality + timing passed but engagement blocked — add to candidate queue
             self._add_candidate(thought, quality_score)
+            reason = engagement_details.get('rejected', 'engagement')
+            self.last_gate_result = {'gate': 'engagement', 'reason': reason, 'queued': True}
             return (0.0, False)
 
         # Gate 4: Cognitive load — don't interrupt a disengaging user
@@ -671,6 +680,7 @@ class CommunicateAction(AutonomousAction):
         if not load_passes:
             logger.debug(f"{LOG_PREFIX} Cognitive load gate blocked: {load_details}")
             self._add_candidate(thought, quality_score)
+            self.last_gate_result = {'gate': 'cognitive_load', 'reason': 'user_disengaging', 'queued': True}
             return (0.0, False)
 
         # All gates pass — check if there's a better candidate waiting

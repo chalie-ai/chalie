@@ -39,15 +39,18 @@ class PlanDecompositionService:
         Decompose a goal into a step DAG via LLM.
 
         Returns plan dict with 'steps', 'decomposition_confidence', etc.
-        Returns None on failure.
+        Returns None on failure. Logs rejection reasons to interaction_log
+        so the memory pipeline can learn from structural failures.
         """
         prompt = self._build_prompt(goal, scope, memory_context)
         raw = self._call_llm(prompt)
         if not raw:
+            self._log_rejection(goal, 'llm_call_failed', 'LLM call returned empty')
             return None
 
         plan = self._parse_response(raw)
         if not plan:
+            self._log_rejection(goal, 'parse_failed', 'Could not parse LLM response as JSON')
             return None
 
         steps = plan.get('steps', [])
@@ -55,12 +58,16 @@ class PlanDecompositionService:
         # Validate DAG structure
         if not self.validate_dag(steps):
             logger.warning(f"{LOG_PREFIX} DAG validation failed for goal: {goal[:80]}")
+            self._log_rejection(goal, 'dag_invalid', 'Cycle detected, invalid refs, or no root steps',
+                                {'step_count': len(steps)})
             return None
 
         # Validate step quality
         quality_issues = self.validate_step_quality(steps)
         if quality_issues:
             logger.warning(f"{LOG_PREFIX} Step quality issues: {quality_issues}")
+            self._log_rejection(goal, 'step_quality', 'Step quality validation failed',
+                                {'issues': quality_issues})
             return None
 
         # Check step count bounds
@@ -69,6 +76,8 @@ class PlanDecompositionService:
                 f"{LOG_PREFIX} Step count {len(steps)} outside bounds "
                 f"[{self.min_steps}, {self.max_steps}]"
             )
+            self._log_rejection(goal, 'step_count_bounds',
+                                f"Step count {len(steps)} outside [{self.min_steps}, {self.max_steps}]")
             return None
 
         confidence = plan.get('decomposition_confidence', 0.0)
@@ -77,6 +86,9 @@ class PlanDecompositionService:
                 f"{LOG_PREFIX} Confidence {confidence:.2f} below threshold "
                 f"{self.confidence_threshold}"
             )
+            self._log_rejection(goal, 'low_confidence',
+                                f"Confidence {confidence:.2f} < {self.confidence_threshold}",
+                                {'confidence': confidence})
             return None
 
         # Initialize step statuses
@@ -354,6 +366,29 @@ class PlanDecompositionService:
 
         return plan
 
+    @staticmethod
+    def _log_rejection(goal: str, rejection_type: str, reason: str,
+                       details: Optional[Dict[str, Any]] = None):
+        """Log plan rejection to interaction_log for memory pipeline learning."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+
+            db = get_shared_db_service()
+            log_service = InteractionLogService(db)
+            log_service.log_event(
+                event_type='plan_rejected',
+                payload={
+                    'goal': goal[:200],
+                    'rejection_type': rejection_type,
+                    'reason': reason,
+                    **(details or {}),
+                },
+                source='plan_decomposition',
+            )
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to log rejection: {e}")
+
     def _build_prompt(self, goal: str, scope: Optional[str],
                       memory_context: str) -> str:
         """Fill the prompt template with context."""
@@ -369,6 +404,15 @@ class PlanDecompositionService:
         # Gather available tools
         tools_text = self._get_available_tools()
         prompt = prompt.replace('{{available_tools}}', tools_text)
+
+        # Inject constraint context (learned from previous rejections)
+        constraint_context = ''
+        try:
+            from services.constraint_memory_service import ConstraintMemoryService
+            constraint_context = ConstraintMemoryService().format_for_prompt(mode='plan')
+        except Exception:
+            pass
+        prompt = prompt.replace('{{constraint_context}}', constraint_context)
 
         return prompt
 

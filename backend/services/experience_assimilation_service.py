@@ -165,23 +165,30 @@ class ExperienceAssimilationService:
 
         if self._is_topic_on_cooldown(topic):
             logger.debug(f"{LOG_PREFIX} Topic '{topic}' on cooldown, skipping")
+            self._log_rejection(topic, 'topic_cooldown',
+                                f"Topic '{topic}' still on cooldown")
             return
 
         # Novelty gate layer 3: content hash dedup
         content_hash = self._content_hash(tool_outputs)
         if self._is_content_seen(content_hash):
             logger.debug(f"{LOG_PREFIX} Content hash {content_hash} already seen, skipping")
-            return
+            return  # Dedup is too noisy to log — identical content isn't interesting
 
         # Run LLM reflection
         try:
             reflected = self._reflect(user_prompt, tool_outputs)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} LLM reflection failed: {e}")
+            self._log_rejection(topic, 'llm_reflection_failed', str(e)[:200])
             return
 
         if not reflected.get('worth_reflecting'):
             logger.debug(f"{LOG_PREFIX} Topic '{topic}': nothing worth reflecting")
+            tool_names = [o.get('tool', 'unknown') for o in tool_outputs]
+            self._log_rejection(topic, 'not_worth_reflecting',
+                                f"LLM judged tool outputs not worth reflecting",
+                                {'tools': tool_names})
             return
 
         observations = reflected.get('observations', [])
@@ -212,6 +219,29 @@ class ExperienceAssimilationService:
             self._mark_topic_processed(topic)
             self.store.hincrby(STATE_KEY, 'sessions_today', 1)
             logger.info(f"{LOG_PREFIX} Stored {stored} episode(s) for topic '{topic}'")
+
+    @staticmethod
+    def _log_rejection(topic: str, rejection_type: str, reason: str,
+                       details: dict = None):
+        """Log assimilation rejection to interaction_log for memory pipeline."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+
+            db = get_shared_db_service()
+            log_service = InteractionLogService(db)
+            log_service.log_event(
+                event_type='assimilation_rejected',
+                payload={
+                    'rejection_type': rejection_type,
+                    'reason': reason,
+                    **(details or {}),
+                },
+                topic=topic,
+                source='experience_assimilation',
+            )
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to log rejection: {e}")
 
     def _reflect(self, user_prompt: str, tool_outputs: list) -> dict:
         """Call LLM to evaluate tool outputs for novel knowledge."""

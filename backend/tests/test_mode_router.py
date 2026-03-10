@@ -100,29 +100,27 @@ class TestModeRouter:
         assert result['mode'] == 'ACKNOWLEDGE'
 
     def test_tiebreaker_invoked_within_margin(self):
-        """When top-2 scores are within margin, tie-breaker LLM should be invoked."""
+        """When top-2 scores are within margin, tie-breaker should be invoked."""
         router = ModeRouterService(_make_config())
 
-        # Mock the tiebreaker to return a specific mode
-        router._tiebreaker_ollama = MagicMock()
-        router._tiebreaker_prompt = "test"
-        router._tiebreaker_ollama.send_message.return_value = '{"choice": "A"}'
+        # Mock the full tiebreaker pipeline (ONNX → LLM) to return RESPOND
+        with patch.object(router, '_invoke_tiebreaker', return_value='RESPOND') as mock_tb:
+            # Craft signals where RESPOND and CLARIFY are very close
+            signals = _make_signals(
+                context_warmth=0.35,
+                has_question_mark=True,
+                interrogative_words=True,
+                fact_count=0,
+                gist_count=0,
+            )
 
-        # Craft signals where RESPOND and CLARIFY are very close
-        signals = _make_signals(
-            context_warmth=0.35,
-            has_question_mark=True,
-            interrogative_words=True,
-            fact_count=0,
-            gist_count=0,
-        )
+            result = router.route(signals, "What can you tell me?")
 
-        result = router.route(signals, "What can you tell me?")
-
-        # Either tiebreaker was used, or scores were decisive.
-        # The key assertion is that the result is valid.
-        assert result['mode'] in ModeRouterService.MODES
-        assert isinstance(result['tiebreaker_used'], bool)
+            assert result['mode'] in ModeRouterService.MODES
+            assert isinstance(result['tiebreaker_used'], bool)
+            # If margin was close enough, tiebreaker should have been called
+            if result['tiebreaker_used']:
+                mock_tb.assert_called_once()
 
     def test_anti_oscillation_suppresses_act(self):
         """Previous ACT should suppress ACT re-selection by -0.15."""

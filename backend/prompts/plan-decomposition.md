@@ -17,6 +17,8 @@ You are a planning agent inside a cognitive system. Your job is to decompose a h
 ## Available Tools (external)
 {{available_tools}}
 
+{{constraint_context}}
+
 ────────────────────────────────
 
 ## Instructions

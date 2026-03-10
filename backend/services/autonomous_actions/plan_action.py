@@ -184,34 +184,42 @@ class PlanAction(AutonomousAction):
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
         """Evaluate all 7 gates. Returns (score, eligible)."""
+        self.last_gate_result = None
 
         # Gate 1: Thought type
         if not self._thought_type_gate(thought):
+            self.last_gate_result = {'gate': 'thought_type', 'reason': f"type '{thought.thought_type}' not in (hypothesis, question)"}
             return (0.0, False)
 
         # Gate 2: Activation energy
         if not self._activation_gate(thought):
+            self.last_gate_result = {'gate': 'activation_energy', 'reason': f"energy {thought.activation_energy:.2f} < {self.min_activation}"}
             return (0.0, False)
 
         # Gate 3: Signal persistence (always records signal, even if gate fails)
         persistence_passes, signal_count = self._signal_persistence_gate(thought)
         if not persistence_passes:
+            self.last_gate_result = {'gate': 'signal_persistence', 'reason': f"signals {signal_count} < {self.min_signals}", 'signal_count': signal_count}
             return (0.0, False)
 
         # Gate 4: Actionability
         if not self._actionability_gate(thought):
+            self.last_gate_result = {'gate': 'actionability', 'reason': 'no action verbs found'}
             return (0.0, False)
 
         # Gate 5: No duplicate task
         if not self._duplicate_gate(thought):
+            self.last_gate_result = {'gate': 'duplicate_task', 'reason': 'similar active task exists'}
             return (0.0, False)
 
         # Gate 6: Active task count
         if not self._active_count_gate():
+            self.last_gate_result = {'gate': 'active_count', 'reason': f"active tasks >= {self.max_active_tasks}"}
             return (0.0, False)
 
         # Gate 7: Cooldown
         if not self._cooldown_gate():
+            self.last_gate_result = {'gate': 'cooldown', 'reason': '48h cooldown active'}
             return (0.0, False)
 
         score = thought.activation_energy * 0.7

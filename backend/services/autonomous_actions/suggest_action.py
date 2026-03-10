@@ -210,32 +210,39 @@ class SuggestAction(AutonomousAction):
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
         """Evaluate all gates. Returns (score, eligible)."""
+        self.last_gate_result = None
 
         # Gate 1: Phase
         if not self._phase_gate():
+            self.last_gate_result = {'gate': 'phase', 'reason': 'not in connected/graduated phase'}
             return (0.0, False)
 
         # Gate 2: Traits
         trait_passes, traits = self._trait_gate()
         if not trait_passes:
+            self.last_gate_result = {'gate': 'traits', 'reason': 'insufficient high-confidence traits'}
             return (0.0, False)
 
         # Gate 3: Relevance
         rel_passes, best_trait, rel_score = self._relevance_gate(thought, traits)
         if not rel_passes:
+            self.last_gate_result = {'gate': 'relevance', 'reason': 'thought not relevant to any trait'}
             return (0.0, False)
 
         # Gate 4: Skill match
         skill = self._skill_match(best_trait, thought)
         if not skill:
+            self.last_gate_result = {'gate': 'skill_match', 'reason': 'no matching innate skill'}
             return (0.0, False)
 
         # Gate 5: Rate limit
         if not self._rate_limit_gate(thought.seed_topic):
+            self.last_gate_result = {'gate': 'rate_limit', 'reason': 'rate limit or topic cooldown active'}
             return (0.0, False)
 
         # Gate 6: Engagement
         if not self._engagement_gate():
+            self.last_gate_result = {'gate': 'engagement', 'reason': 'paused or low engagement'}
             return (0.0, False)
 
         # Store context for execute()

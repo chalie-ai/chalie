@@ -174,25 +174,33 @@ class NurtureAction(AutonomousAction):
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
         """Evaluate all gates. Returns (score, eligible)."""
+        self.last_gate_result = None
 
         # Gate 1: Phase
         phase_passes, phase = self._phase_gate()
         if not phase_passes:
+            self.last_gate_result = {'gate': 'phase', 'reason': 'wrong phase for nurture'}
             return (0.0, False)
 
         # Gate 2: Timing
         timing_passes, timing_details = self._timing_gate(phase)
         if not timing_passes:
+            reason = timing_details.get('rejected', 'timing')
+            self.last_gate_result = {'gate': 'timing', 'reason': reason, 'details': timing_details}
             return (0.0, False)
 
         # Gate 3: Backoff
         backoff_passes, backoff_details = self._backoff_gate()
         if not backoff_passes:
+            reason = backoff_details.get('rejected', 'backoff')
+            self.last_gate_result = {'gate': 'backoff', 'reason': reason, 'details': backoff_details}
             return (0.0, False)
 
         # Gate 4: Content
         content_passes, content_details = self._content_gate()
         if not content_passes:
+            reason = content_details.get('rejected', 'no_content')
+            self.last_gate_result = {'gate': 'content', 'reason': reason, 'details': content_details}
             return (0.0, False)
 
         # Store phase for execute()

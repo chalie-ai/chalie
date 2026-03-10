@@ -231,6 +231,29 @@ class CognitiveReflexService:
                 parts.append(f"stale={last_seen_days}d>{MAX_STALE_DAYS}d")
             reasoning = f"Cluster {match['id']} not ready: {', '.join(parts)}"
 
+        # Log cluster rejections (matched but not ready) to interaction_log
+        # for constraint learning. Skip heuristic pre-screen — too noisy.
+        if not can_activate:
+            try:
+                from services.database_service import get_shared_db_service
+                from services.interaction_log_service import InteractionLogService
+
+                db = get_shared_db_service()
+                InteractionLogService(db).log_event(
+                    event_type='reflex_rejected',
+                    payload={
+                        'cluster_id': match['id'],
+                        'confidence': round(confidence, 3),
+                        'times_seen': match['times_seen'],
+                        'times_succeeded': match['times_succeeded'],
+                        'failure_rate': round(failure_rate, 3),
+                        'reasoning': reasoning,
+                    },
+                    source='cognitive_reflex',
+                )
+            except Exception:
+                pass
+
         return ReflexResult(
             is_candidate=True,
             can_activate=can_activate,

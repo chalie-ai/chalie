@@ -179,6 +179,25 @@ class ActDispatcherService:
                 logging.warning(
                     f"[ACT DISPATCH] Unreliable source for {action_type}: {_reliability_warning}"
                 )
+                # Log to interaction_log for constraint learning
+                try:
+                    from services.database_service import get_shared_db_service
+                    from services.interaction_log_service import InteractionLogService
+                    source = action.get('source_memory', {})
+                    db = get_shared_db_service()
+                    InteractionLogService(db).log_event(
+                        event_type='reliability_warning',
+                        payload={
+                            'action_type': action_type,
+                            'memory_type': source.get('type', ''),
+                            'memory_id': source.get('id', ''),
+                            'reliability_state': _reliability_warning[:100],
+                            'confidence_reduction': 0.6,
+                        },
+                        source='act_dispatcher',
+                    )
+                except Exception:
+                    pass
             return dispatch_result
 
         except Exception as e:

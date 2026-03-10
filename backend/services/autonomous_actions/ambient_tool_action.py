@@ -127,26 +127,33 @@ class AmbientToolAction(AutonomousAction):
     # ── Main interface ─────────────────────────────────────────
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
+        self.last_gate_result = None
+
         # Gate 1: Phase
         if not self._phase_gate():
+            self.last_gate_result = {'gate': 'phase', 'reason': 'not in connected/graduated phase'}
             return (0.0, False)
 
         # Gate 2: Tools exist
         tool_passes, tools = self._tool_gate()
         if not tool_passes:
+            self.last_gate_result = {'gate': 'tools', 'reason': 'no ambient tools available'}
             return (0.0, False)
 
         # Gate 3: Relevance
         rel_passes, best_tool, rel_score = self._relevance_gate(thought, tools)
         if not rel_passes:
+            self.last_gate_result = {'gate': 'relevance', 'reason': 'thought not relevant to any tool'}
             return (0.0, False)
 
         # Gate 4: Rate limit
         if not self._rate_limit_gate(best_tool['name']):
+            self.last_gate_result = {'gate': 'rate_limit', 'reason': f"tool '{best_tool['name']}' on cooldown"}
             return (0.0, False)
 
         # Gate 5: Activation energy
         if thought.activation_energy < self.min_activation:
+            self.last_gate_result = {'gate': 'activation_energy', 'reason': f"energy {thought.activation_energy:.2f} < {self.min_activation}"}
             return (0.0, False)
 
         # Store for execute()

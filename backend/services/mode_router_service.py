@@ -254,13 +254,13 @@ class ModeRouterService:
         # Tie-breaker config
         self.tiebreaker_base_margin = config.get('tiebreaker_base_margin', 0.20)
         self.tiebreaker_min_margin = config.get('tiebreaker_min_margin', 0.08)
+        # onnx_confidence_threshold removed — ONNX always decides, no LLM fallback
 
         # Hysteresis tracking (in-memory, per topic)
         self._confidence_history: Dict[str, List[float]] = {}
 
         # LLM tie-breaker (lazy init)
-        self._tiebreaker = None
-        self._tiebreaker_prompt = None
+        # LLM tiebreaker removed — ONNX classifier is the sole tiebreaker
 
     def route(
         self,
@@ -278,7 +278,7 @@ class ModeRouterService:
             prompt_text: Raw user text (for tie-breaker context)
             previous_mode: Mode from last exchange (anti-oscillation)
             previous_router_confidence: Confidence from last routing decision
-            skip_tiebreaker: Skip LLM tie-breaker even when scores are close.
+            skip_tiebreaker: Skip ONNX tie-breaker even when scores are close.
                 Use for post-ACT re-routing where terminal mode is already implicit.
 
         Returns:
@@ -493,15 +493,40 @@ class ModeRouterService:
         """
         adjusted = dict(scores)
 
+        suppressed_mode = None
+        penalty = 0.0
+
         if previous_mode == 'ACT':
             # ACT just ran — suppress ACT re-selection
             adjusted['ACT'] -= 0.15
+            suppressed_mode = 'ACT'
+            penalty = -0.15
             logger.debug(f"{LOG_PREFIX} Anti-oscillation: ACT suppressed (previous was ACT)")
         elif previous_mode == 'CLARIFY':
             # User just answered a clarification — respond to it, don't re-clarify
             adjusted['RESPOND'] += 0.15
             adjusted['CLARIFY'] -= 0.20
+            suppressed_mode = 'CLARIFY'
+            penalty = -0.20
             logger.debug(f"{LOG_PREFIX} Anti-oscillation: RESPOND boosted, CLARIFY suppressed (previous was CLARIFY)")
+
+        if suppressed_mode:
+            try:
+                from services.database_service import get_shared_db_service
+                from services.interaction_log_service import InteractionLogService
+
+                db = get_shared_db_service()
+                InteractionLogService(db).log_event(
+                    event_type='routing_anti_oscillation',
+                    payload={
+                        'previous_mode': previous_mode,
+                        'suppressed_mode': suppressed_mode,
+                        'penalty': penalty,
+                    },
+                    source='mode_router',
+                )
+            except Exception:
+                pass
 
         return adjusted
 
@@ -576,90 +601,85 @@ class ModeRouterService:
         mode_b: str,
     ) -> Optional[str]:
         """
-        Invoke small LLM to break tie between top-2 modes.
+        Break tie between top-2 modes using the ONNX classifier.
 
-        Returns the selected mode, or None on failure (falls back to higher score).
+        The ONNX model is the sole tiebreaker — no LLM fallback. When the model
+        isn't available, returns None (caller falls back to the higher-scoring mode).
         """
         try:
-            if self._tiebreaker is None:
-                self._init_tiebreaker()
+            from services.onnx_inference_service import get_onnx_inference_service
 
-            # Build tie-breaker prompt
-            prompt = self._build_tiebreaker_prompt(prompt_text, signals, mode_a, mode_b)
+            svc = get_onnx_inference_service()
+            input_text = self._build_onnx_input(prompt_text, signals, mode_a, mode_b)
 
-            response = self._tiebreaker.send_message(
-                self._tiebreaker_prompt, prompt
-            ).text
+            start = time.time()
+            label, confidence = svc.predict("mode-tiebreaker", input_text)
+            elapsed_ms = (time.time() - start) * 1000
 
-            # Parse response with fallback tiers
-            selected = self._extract_tiebreaker_choice(response, mode_a, mode_b)
-            if selected:
-                return selected
-            logger.warning(f"{LOG_PREFIX} Tie-breaker returned unparseable response: '{response[:100]}'")
-            return None
+            if label is None:
+                logger.warning(f"{LOG_PREFIX} ONNX tiebreaker unavailable — using higher score")
+                return None
+
+            selected = mode_a if label == "A" else mode_b
+
+            # ACT subsumes RESPOND — ACT can fall back to RESPOND mid-execution,
+            # but RESPOND can't escalate to ACT. On low-confidence ties between
+            # these two, prefer ACT as the safer default.
+            if confidence < 0.65:
+                pair = {mode_a, mode_b}
+                if pair == {'ACT', 'RESPOND'}:
+                    logger.info(
+                        f"{LOG_PREFIX} ONNX tie-break: ACT (low-confidence "
+                        f"ACT/RESPOND, {confidence:.2f}) — ACT preferred "
+                        f"as safe default in {elapsed_ms:.1f}ms"
+                    )
+                    return 'ACT'
+
+            logger.info(
+                f"{LOG_PREFIX} ONNX tie-break: {selected} ({confidence:.2f}) "
+                f"in {elapsed_ms:.1f}ms"
+            )
+            return selected
 
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Tie-breaker failed: {e}")
+            logger.warning(f"{LOG_PREFIX} ONNX tiebreaker failed: {e}")
             return None
 
-    def _extract_tiebreaker_choice(self, response: str, mode_a: str, mode_b: str) -> Optional[str]:
-        """Extract choice from tie-breaker response with fallback parsing."""
-        # Tier 1: Direct JSON parse
-        try:
-            result = json.loads(response)
-            choice = result.get('choice', '').upper().strip()
-            if choice in ('A', 'B'):
-                return mode_a if choice == 'A' else mode_b
-        except (json.JSONDecodeError, AttributeError):
-            pass
-
-        # Tier 2: Extract JSON object from surrounding text
-        match = re.search(r'\{[^}]+\}', response)
-        if match:
-            try:
-                result = json.loads(match.group())
-                choice = result.get('choice', '').upper().strip()
-                if choice in ('A', 'B'):
-                    return mode_a if choice == 'A' else mode_b
-            except (json.JSONDecodeError, AttributeError):
-                pass
-
-        # Tier 3: Regex for raw "A" or "B" answer
-        match = re.search(r'"choice"\s*:\s*"([AB])"', response, re.IGNORECASE)
-        if match:
-            choice = match.group(1).upper()
-            return mode_a if choice == 'A' else mode_b
-
-        return None
-
-    def _init_tiebreaker(self):
-        """Lazy-initialize tie-breaker LLM."""
-        from services.llm_service import create_refreshable_llm_service
-        from services.config_service import ConfigService
-
-        self._tiebreaker = create_refreshable_llm_service("mode-tiebreaker")
-        self._tiebreaker_prompt = ConfigService.get_agent_prompt("mode-tiebreaker")
-
-    def _build_tiebreaker_prompt(
+    def _build_onnx_input(
         self,
         prompt_text: str,
         signals: Dict[str, Any],
         mode_a: str,
         mode_b: str,
     ) -> str:
-        """Build user message for tie-breaker LLM."""
-        context_lines = [
-            f"User message: \"{prompt_text}\"",
-            f"Context warmth: {signals['context_warmth']:.2f}",
-            f"Known facts: {signals['fact_count']}",
-            f"Working memory turns: {signals['working_memory_turns']}",
-            f"Topic: {signals.get('topic', 'unknown')} ({'new' if signals.get('is_new_topic') else 'existing'})",
-            f"Gist count: {signals['gist_count']}",
-        ]
+        """
+        Build input string for ONNX tie-breaker classifier.
 
-        return (
-            f"Context:\n" + "\n".join(context_lines) + "\n\n"
-            f"A: {mode_a} — {self.MODE_DESCRIPTIONS.get(mode_a, '')}\n"
-            f"B: {mode_b} — {self.MODE_DESCRIPTIONS.get(mode_b, '')}\n\n"
-            f"Pick the best engagement mode. Respond with: {{\"choice\": \"A\" or \"B\"}}"
-        )
+        Must match the exact format used during training
+        (see training/data/tasks/mode_tiebreaker/__init__.py _format_input).
+        """
+        def _bool(v):
+            return 'true' if v else 'false'
+
+        lines = [
+            f'User message: "{prompt_text}"',
+            f"context_warmth: {signals['context_warmth']:.2f}",
+            f"fact_count: {signals['fact_count']}",
+            f"working_memory_turns: {signals['working_memory_turns']}",
+            f"topic: {signals.get('topic', 'unknown')}",
+            f"is_new_topic: {_bool(signals.get('is_new_topic', False))}",
+            f"gist_count: {signals['gist_count']}",
+            f"has_question_mark: {_bool(signals['has_question_mark'])}",
+            f"interrogative_words: {_bool(signals['interrogative_words'])}",
+            f"greeting_pattern: {_bool(signals['greeting_pattern'])}",
+            f"explicit_feedback: {signals['explicit_feedback'] or 'null'}",
+            f"information_density: {signals['information_density']:.2f}",
+            f"implicit_reference: {_bool(signals['implicit_reference'])}",
+            f"intent_type: {signals.get('intent_type') or 'null'}",
+            f"memory_confidence: {signals.get('memory_confidence', 0.5):.2f}",
+            "",
+            f"A: {mode_a} — {self.MODE_DESCRIPTIONS.get(mode_a, '')}",
+            f"B: {mode_b} — {self.MODE_DESCRIPTIONS.get(mode_b, '')}",
+        ]
+        return "\n".join(lines)
+

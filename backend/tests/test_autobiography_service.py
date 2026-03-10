@@ -113,7 +113,8 @@ class TestAutobiographyService:
             [],  # episodes
             [],  # traits
             [],  # concepts
-            []   # relationships
+            [],  # relationships
+            [],  # constraint_episodes
         ]
 
         result = service.gather_synthesis_inputs()
@@ -122,6 +123,7 @@ class TestAutobiographyService:
         assert "traits" in result
         assert "concepts" in result
         assert "relationships" in result
+        assert "constraint_episodes" in result
         assert isinstance(result["episodes"], list)
 
     def test_gather_synthesis_inputs_truncates_long_gists(self, mock_db, service):
@@ -139,7 +141,8 @@ class TestAutobiographyService:
             episode_rows,
             [],  # traits
             [],  # concepts
-            []   # relationships
+            [],  # relationships
+            [],  # constraint_episodes
         ]
 
         result = service.gather_synthesis_inputs()
@@ -159,6 +162,7 @@ class TestAutobiographyService:
             [],  # traits
             [("Python", "knowledge", "A programming language", "tech", 0.9)],  # concepts
             [],  # relationships
+            [],  # constraint_episodes
         ]
 
         result = service.gather_synthesis_inputs()
@@ -183,6 +187,7 @@ class TestAutobiographyService:
             [],  # traits
             [],  # concepts
             [("Python", "Flask", "uses", 0.85)],  # relationships
+            [],  # constraint_episodes
         ]
 
         result = service.gather_synthesis_inputs()
@@ -206,6 +211,7 @@ class TestAutobiographyService:
             [],  # traits
             [],  # concepts
             [],  # relationships
+            [],  # constraint_episodes
         ]
 
         service.gather_synthesis_inputs()
@@ -228,3 +234,67 @@ class TestAutobiographyService:
         assert 'target_concept_id' in rels_sql[0], "Relationships query must join on 'target_concept_id'"
         assert 'relationship_type' in rels_sql[0], "Relationships query must select 'relationship_type'"
         assert 'user_id' not in rels_sql[0], "Relationships query must not reference 'user_id'"
+
+    def test_gather_synthesis_inputs_includes_constraint_episodes(self, mock_db, service):
+        """gather_synthesis_inputs should query constraint_learned episodes."""
+        mock_session = MagicMock()
+        mock_db.get_session.return_value.__enter__.return_value = mock_session
+        mock_db.get_session.return_value.__exit__.return_value = None
+
+        constraint_rows = [
+            ("Attempted communicate 15 times; blocked by timing_gate",
+             "learned constraint: communicate blocked by timing_gate",
+             "2026-03-07T12:00:00+00:00", 3),
+        ]
+
+        mock_session.execute.return_value.fetchall.side_effect = [
+            [],  # episodes
+            [],  # traits
+            [],  # concepts
+            [],  # relationships
+            constraint_rows,  # constraint_episodes
+        ]
+
+        result = service.gather_synthesis_inputs()
+
+        assert "constraint_episodes" in result
+        assert len(result["constraint_episodes"]) == 1
+        assert "communicate" in result["constraint_episodes"][0]["gist"]
+        assert result["constraint_episodes"][0]["activation_score"] == 3
+
+    def test_build_synthesis_prompt_includes_constraint_episodes(self, mock_db, service):
+        """_build_synthesis_prompt should include constraint episodes when present."""
+        inputs = {
+            "episodes": [],
+            "traits": [],
+            "concepts": [],
+            "relationships": [],
+            "constraint_episodes": [
+                {
+                    "gist": "Attempted communicate 15 times; blocked by timing_gate",
+                    "action": "learned constraint",
+                    "created_at": "2026-03-07T12:00:00",
+                    "activation_score": 3,
+                }
+            ],
+        }
+
+        prompt = service._build_synthesis_prompt(inputs, None)
+
+        assert "Learned Constraints" in prompt
+        assert "communicate" in prompt
+        assert "timing_gate" in prompt
+
+    def test_build_synthesis_prompt_omits_constraints_when_empty(self, mock_db, service):
+        """_build_synthesis_prompt should omit constraints section when no data."""
+        inputs = {
+            "episodes": [],
+            "traits": [],
+            "concepts": [],
+            "relationships": [],
+            "constraint_episodes": [],
+        }
+
+        prompt = service._build_synthesis_prompt(inputs, None)
+
+        assert "Learned Constraints" not in prompt

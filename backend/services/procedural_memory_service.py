@@ -173,6 +173,22 @@ class ProceduralMemoryService:
             logging.error(f"[PROCEDURAL] Failed to record outcome: {e}")
             return False
 
+    def record_gate_rejection(self, action_name: str, reason: str = '') -> bool:
+        """
+        Record a gate rejection as a soft failure in procedural memory.
+
+        Gate rejections are pre-execution blocks (the action was considered
+        but a deterministic gate prevented it). These count as lighter
+        failures than execution failures (reward=-0.3 vs -1.0) so the
+        action's weight decreases gradually as rejections accumulate.
+        """
+        return self.record_action_outcome(
+            action_name=action_name,
+            success=False,
+            reward=-0.3,
+            failure_class='gate_rejection',
+        )
+
     def get_action_weight(self, action_name: str) -> float:
         """
         Get the current policy weight for an action.

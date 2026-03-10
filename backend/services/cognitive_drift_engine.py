@@ -773,11 +773,20 @@ class CognitiveDriftEngine:
         except Exception:
             pass
 
+        # Inject constraint context so drift thoughts can factor in blocked paths
+        constraint_context = ''
+        try:
+            from services.constraint_memory_service import ConstraintMemoryService
+            constraint_context = ConstraintMemoryService().format_for_prompt(mode='drift')
+        except Exception:
+            pass
+
         user_message = self.prompt_template \
             .replace("{{seed_concept}}", seed_text) \
             .replace("{{activated_concepts}}", activated_text) \
             .replace("{{grounding_episode}}", episode_text) \
-            .replace("{{temporal_rhythm}}", rhythm_text)
+            .replace("{{temporal_rhythm}}", rhythm_text) \
+            .replace("{{constraint_context}}", constraint_context)
 
         # Soul axioms appended as stability anchor
         system_prompt = self.soul_axioms
@@ -1038,7 +1047,14 @@ class CognitiveDriftEngine:
         self._log_action_result(result.action_name, context, result, source='drift')
 
     def _log_action_result(self, action_name: str, context, result, source: str = 'drift'):
-        """Log the action result to interaction_log for observability."""
+        """Log the action result to interaction_log for observability.
+
+        Logs two event types:
+          1. The action outcome (proactive_sent, reflection_stored, proactive_candidate)
+          2. Gate rejections from ineligible actions (action_gate_rejected) — feeds
+             constraint decisions into the memory pipeline so Chalie can learn from
+             what it considered but couldn't do.
+        """
         try:
             db_service = get_lightweight_db_service()
             try:
@@ -1051,6 +1067,9 @@ class CognitiveDriftEngine:
                     event_type = 'reflection_stored'
                 else:
                     event_type = 'proactive_candidate'
+
+                # Extract gate rejections before logging (they're metadata, not action details)
+                gate_rejections = result.details.pop('gate_rejections', [])
 
                 log_service.log_event(
                     event_type=event_type,
@@ -1067,6 +1086,44 @@ class CognitiveDriftEngine:
                     topic=context.seed_topic,
                     source='cognitive_drift_engine',
                 )
+
+                # Log gate rejections as separate events — these are the
+                # constraint decisions that previously vanished into debug logs.
+                # Filtering out NOTHING (always eligible, no signal value) and
+                # generic phase/cooldown gates that fire constantly.
+                if gate_rejections:
+                    # Only log rejections with meaningful signal (not just disabled/nothing)
+                    meaningful = [
+                        r for r in gate_rejections
+                        if r.get('action') != 'NOTHING'
+                    ]
+                    if meaningful:
+                        log_service.log_event(
+                            event_type='action_gate_rejected',
+                            payload={
+                                'thought_type': context.thought_type,
+                                'thought_content': context.thought_content[:200],
+                                'activation_energy': context.activation_energy,
+                                'seed_concept': context.seed_concept,
+                                'action_selected': action_name,
+                                'rejections': meaningful,
+                                'source': source,
+                            },
+                            topic=context.seed_topic,
+                            source='cognitive_drift_engine',
+                        )
+
+                        # Feed gate rejections into procedural memory as soft failures
+                        try:
+                            from services.procedural_memory_service import ProceduralMemoryService
+                            proc = ProceduralMemoryService(db_service)
+                            for r in meaningful:
+                                proc.record_gate_rejection(
+                                    action_name=r.get('action', 'unknown'),
+                                    reason=r.get('reason', ''),
+                                )
+                        except Exception:
+                            pass
             finally:
                 db_service.close_pool()
         except Exception as e:
