@@ -118,5 +118,5 @@ class TestTopicClassifier:
 
         expected_keys = {'topic', 'confidence', 'switch_score', 'is_new_topic',
                          'classification_time', 'boundary_diagnostics',
-                         'just_reset_from_silence'}
+                         'just_reset_from_silence', 'message_embedding'}
         assert expected_keys == set(result.keys())

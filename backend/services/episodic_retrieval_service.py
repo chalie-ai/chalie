@@ -55,7 +55,8 @@ class EpisodicRetrievalService:
 
     def retrieve_episodes(self, query_text: str, topic: str = None,
                          intent: str = None, limit: int = 3,
-                         weights: dict = None, semantic_concepts: List[Dict] = None) -> List[dict]:
+                         weights: dict = None, semantic_concepts: List[Dict] = None,
+                         query_embedding=None) -> List[dict]:
         """
         Retrieve relevant episodes using hybrid search and composite scoring.
 
@@ -73,8 +74,9 @@ class EpisodicRetrievalService:
             # Use custom weights if provided
             scoring_weights = weights or self.weights
 
-            # Generate embedding for query
-            query_embedding = self._generate_embedding(query_text)
+            # Generate embedding for query (skip if pre-computed)
+            if query_embedding is None:
+                query_embedding = self._generate_embedding(query_text)
 
             # Stage 1: Hybrid prefilter (fast)
             prefilter_limit = self.config.get('prefilter_candidates', 50)

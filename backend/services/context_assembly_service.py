@@ -54,6 +54,7 @@ class ContextAssemblyService:
         act_history: str = "",
         thread_id: str = None,
         recent_visible_context: list = None,
+        message_embedding=None,
     ) -> Dict[str, str]:
         """
         Assemble context from all memory types.
@@ -85,9 +86,9 @@ class ContextAssemblyService:
         sections['moments'] = self._get_moments(prompt)
         sections['facts'] = self._get_facts(topic)
         sections['gists'] = self._get_gists(topic)
-        sections['episodes'] = self._get_episodes(prompt, topic, act_history)
+        sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding)
         sections['procedural'] = self._get_procedural_hints(topic)
-        sections['concepts'] = self._get_concepts(prompt, topic, act_history)
+        sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding)
 
         # Inject recent visible context from previous session (visual continuity bridge)
         if recent_visible_context:
@@ -214,7 +215,7 @@ class ContextAssemblyService:
             logging.debug(f"[CONTEXT] Gist store unavailable: {e}")
             return "No previous conversation context available"
 
-    def _get_episodes(self, prompt: str, topic: str, act_history: str = "") -> str:
+    def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
         """Retrieve episodic memory context."""
         try:
             from services.episodic_retrieval_service import EpisodicRetrievalService
@@ -232,7 +233,8 @@ class ContextAssemblyService:
                 query_text=prompt,
                 topic=topic,
                 limit=3,
-                semantic_concepts=semantic_concepts if semantic_concepts else None
+                semantic_concepts=semantic_concepts if semantic_concepts else None,
+                query_embedding=message_embedding,
             )
 
             if not episodes:
@@ -256,12 +258,12 @@ class ContextAssemblyService:
             logging.debug(f"[CONTEXT] Episodic memory unavailable: {e}")
             return ""
 
-    def _get_concepts(self, prompt: str, topic: str, act_history: str = "") -> str:
+    def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
         """Retrieve relevant semantic concepts for context injection."""
         try:
             from services.semantic_retrieval_service import SemanticRetrievalService
             retrieval = SemanticRetrievalService()
-            concepts = retrieval.retrieve_concepts(query=prompt, limit=5)
+            concepts = retrieval.retrieve_concepts(query=prompt, limit=5, query_embedding=message_embedding)
 
             if not concepts:
                 return ""
