@@ -770,6 +770,20 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
 
             if orchestrator_result['status'] == 'error':
                 logging.error(f"[ORCHESTRATOR] Error: {orchestrator_result['message']}")
+                # Handler never ran — deliver the response directly so the WebSocket
+                # doesn't hang waiting for output that will never arrive.
+                try:
+                    from services.output_service import OutputService
+                    OutputService().enqueue_text(
+                        topic=topic,
+                        response=response_data.get('response') or "I ran into an issue. Please try again.",
+                        mode='RESPOND',
+                        confidence=response_data.get('confidence', 0.0),
+                        generation_time=response_data.get('generation_time', 0.0),
+                        original_metadata=metadata,
+                    )
+                except Exception as oe:
+                    logging.warning(f"[ORCHESTRATOR] Failed to surface error to user: {oe}")
             else:
                 logging.info(f"[ORCHESTRATOR] Executed {mode}: {orchestrator_result.get('result', {})}")
         except Exception as e:
