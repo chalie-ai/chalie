@@ -529,6 +529,13 @@ class FrontalCortexService:
         result = result.replace('{{facts}}', facts_context if _include('facts') else '')
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 
+        # Active goals — persistent tasks the user is working toward
+        if _include('active_goals') and '{{active_goals}}' in result:
+            active_goals = self._get_active_goals_context()
+        else:
+            active_goals = ''
+        result = result.replace('{{active_goals}}', active_goals)
+
         # Phase 3 — Response weaving: inject contradiction context when flagged
         contradiction_ctx = _ctx.get('contradiction_context')
         if contradiction_ctx and '{{contradiction_context}}' in result:
@@ -1083,6 +1090,44 @@ class FrontalCortexService:
             return SelfModelService().format_for_prompt()
         except Exception as e:
             logging.debug(f"Self-awareness not available: {e}")
+            return ""
+
+    def _get_active_goals_context(self) -> str:
+        """Get active persistent tasks formatted for the RESPOND prompt.
+
+        Gives the frontal cortex awareness of what the user is working toward,
+        so it can connect conversational messages to active goals.
+
+        Returns:
+            str: Formatted active goals section or empty string. Never raises.
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            from services.persistent_task_service import PersistentTaskService
+
+            db = get_shared_db_service()
+            service = PersistentTaskService(db)
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM master_account LIMIT 1")
+                row = cursor.fetchone()
+                account_id = row[0] if row else 1
+
+            active = service.get_active_tasks(account_id)
+            if not active:
+                return ""
+
+            lines = ["## Active Goals"]
+            for t in active:
+                progress = t.get('progress', {}) or {}
+                coverage = progress.get('coverage_estimate', 0)
+                current_step = progress.get('current_step', '')
+                step_info = f" — current step: {current_step}" if current_step else ""
+                lines.append(f"- [{t['status']}] \"{t['goal'][:80]}\""
+                             f" ({coverage:.0%}){step_info}")
+            return '\n'.join(lines)
+        except Exception as e:
+            logging.debug(f"[FRONTAL CORTEX] Active goals unavailable: {e}")
             return ""
 
     def _get_spark_guidance(self) -> str:
