@@ -13,6 +13,7 @@
       "focus": true,
       "working_memory": true,
       "facts": true,
+      "active_goals": true,
       "gists": true,
       "episodic_memory": true,
       "concepts": true,
@@ -34,6 +35,7 @@
       "focus": true,
       "working_memory": true,
       "facts": true,
+      "active_goals": true,
       "gists": true,
       "episodic_memory": true,
       "concepts": true,
@@ -55,6 +57,7 @@
       "focus": true,
       "working_memory": true,
       "facts": true,
+      "active_goals": true,
       "gists": true,
       "episodic_memory": true,
       "concepts": true,
@@ -64,7 +67,7 @@
       "world_state": true,
       "warm_return_hint": false,
       "identity_modulation": false
-    },
+    }
   },
   "dependencies": {
     "episodic_memory": ["gists"],
