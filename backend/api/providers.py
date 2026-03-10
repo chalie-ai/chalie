@@ -64,7 +64,7 @@ def create_provider():
                 'frontal-cortex-proactive', 'frontal-cortex-reflexive',
                 'frontal-cortex-scheduled-tool', 'mode-reflection',
                 'semantic-memory', 'cognitive-triage', 'experience-assimilation',
-                'fact-store', 'frontal-cortex-acknowledge', 'memory-chunker',
+                'fact-store', 'memory-chunker',
                 'moment-enrichment', 'document-synthesis',
                 'document-classification',
             ]

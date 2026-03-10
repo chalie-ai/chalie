@@ -195,7 +195,7 @@ class TestSelfEvalRules:
     def test_rule3_social_with_question_becomes_respond(self):
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
-        result = self._make_result('social', 'ACKNOWLEDGE')
+        result = self._make_result('social', 'IGNORE')
         ctx = self._make_context()
         result = svc._self_evaluate(result, "hey what time is it?", ctx)
         assert result.branch == 'respond'
@@ -314,12 +314,12 @@ class TestTriageFull:
         import json
         mock_llm = MagicMock()
         mock_llm.send_message.return_value = MagicMock(text=json.dumps({
-            'mode': 'ACKNOWLEDGE',
+            'mode': 'RESPOND',
             'tools': [],
             'confidence_internal': 0.9,
             'confidence_tool_need': 0.0,
             'freshness_risk': 0.0,
-            'reasoning': 'Simple greeting',
+            'reasoning': 'Simple greeting — respond warmly',
         }))
         mock_get_llm.return_value = mock_llm
 
@@ -327,8 +327,8 @@ class TestTriageFull:
         svc = CognitiveTriageService()
         ctx = self._make_context()
         result = svc.triage("hey!", ctx)
-        assert result.branch == 'social'
-        assert result.mode == 'ACKNOWLEDGE'
+        assert result.branch == 'respond'
+        assert result.mode == 'RESPOND'
         assert result.fast_filtered is False  # Went through LLM
 
     @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')

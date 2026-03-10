@@ -81,15 +81,12 @@ class RoutingStabilityRegulator:
         'RESPOND.base': (0.30, 0.70),
         'CLARIFY.base': (0.10, 0.50),
         'ACT.base': (0.05, 0.40),
-        'ACKNOWLEDGE.base': (0.00, 0.30),
         'respond.warmth_boost': (0.05, 0.40),
         'respond.cold_penalty': (0.05, 0.30),
         'clarify.cold_boost': (0.10, 0.40),
         'clarify.warm_penalty': (0.05, 0.35),
         'act.question_moderate_context': (0.05, 0.35),
         'act.implicit_reference': (0.05, 0.30),
-        'acknowledge.greeting': (0.30, 0.80),
-        'acknowledge.question_penalty': (0.10, 0.50),
         'tiebreaker_base_margin': (0.05, 0.30),
     }
 
@@ -295,7 +292,7 @@ class RoutingStabilityRegulator:
         TYPE_TO_PARAM = {
             'missed_clarify': ('clarify.cold_boost', +1),
             'missed_act': ('act.question_moderate_context', +1),
-            'under_engagement': ('acknowledge.question_penalty', +1),
+            'under_engagement': ('respond.warmth_boost', +1),
         }
 
         return TYPE_TO_PARAM.get(dominant, (None, 0))
@@ -332,7 +329,7 @@ class RoutingStabilityRegulator:
             'intent_clarity': ('clarify.cold_boost', +1),
             'tone_ambiguity': ('tiebreaker_base_margin', +1),
             'context_sufficiency': ('respond.cold_penalty', +1),
-            'social_vs_substantive': ('acknowledge.question_penalty', +1),
+            'social_vs_substantive': ('respond.warmth_boost', +1),
         }
 
         return DIMENSION_TO_PARAM.get(dominant_dim, (None, 0))

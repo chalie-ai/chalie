@@ -161,7 +161,6 @@ def load_configs():
     # Ordering: values first, then voice, then behavioral nudges closest to generation
     respond_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-respond")
     clarify_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-clarify")
-    acknowledge_prompt = identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-acknowledge")
     # ACT does NOT get identity — reasoning stays pure
     act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
 
@@ -171,7 +170,6 @@ def load_configs():
             'prompt_map': {
                 'RESPOND': respond_prompt,
                 'CLARIFY': clarify_prompt,
-                'ACKNOWLEDGE': acknowledge_prompt,
                 'ACT': act_prompt,
             }
         },
@@ -249,7 +247,7 @@ def _format_visual_context(image_contexts: list) -> str:
 
 def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None):
     """
-    Generate response for a terminal mode (RESPOND, CLARIFY, ACKNOWLEDGE).
+    Generate response for a terminal mode (RESPOND, CLARIFY).
 
     Single LLM call with mode-specific prompt. No decision gate, no alternative paths.
 
@@ -383,9 +381,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
 
     # Ensure non-empty response for terminal modes
     if mode != 'IGNORE' and not response_data.get('response', '').strip():
-        if mode == 'ACKNOWLEDGE':
-            response_data['response'] = "Got it."
-        elif mode == 'CLARIFY':
+        if mode == 'CLARIFY':
             response_data['response'] = "Could you tell me more about what you mean?"
         else:
             response_data['response'] = "I understand. Let me think about that."
@@ -410,7 +406,7 @@ def _generate_reflexive_response(text, metadata, thread_id):
     try:
         config = ConfigService.resolve_agent_config('frontal-cortex-reflexive')
     except Exception:
-        config = ConfigService.resolve_agent_config('frontal-cortex-acknowledge')
+        config = ConfigService.resolve_agent_config('frontal-cortex')
 
     cortex_service = FrontalCortexService(config)
 
@@ -589,7 +585,7 @@ def _generate_with_act_orchestrator(
         and r.get('result') != '__CARD_ONLY__'
         for r in result.act_history
     )
-    if _has_substantive_results and terminal_mode in ('ACKNOWLEDGE', 'IGNORE'):
+    if _has_substantive_results and terminal_mode == 'IGNORE':
         logging.info(
             f"[MODE:ACT→{terminal_mode}→RESPOND] Overriding — "
             f"ACT loop has substantive results to synthesize"
@@ -803,7 +799,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             logging.error(f"[ORCHESTRATOR] Failed: {e}")
 
     # Signal completion for IGNORE mode on sync WebSocket channels.
-    # RESPOND/CLARIFY/ACKNOWLEDGE handlers call OutputService.enqueue_text()
+    # RESPOND/CLARIFY handlers call OutputService.enqueue_text()
     # which signals the WebSocket handler. IGNORE skips OutputService entirely,
     # so the handler never receives a completion signal — send a close signal
     # so it can emit "done" instead of "No response received".
@@ -981,8 +977,8 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         try:
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-scheduled-tool")
         except Exception:
-            logging.warning("[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using acknowledge config")
-            scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
+            logging.warning("[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config")
+            scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex")
 
         _cron_classification = {
             'topic': f'cron_tool:{tool_name}',
@@ -1228,8 +1224,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         try:
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex-proactive")
         except Exception:
-            logging.warning("[PROACTIVE] frontal-cortex-proactive.json not found, falling back to acknowledge config")
-            proactive_config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
+            logging.warning("[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config")
+            proactive_config = ConfigService.resolve_agent_config("frontal-cortex")
 
         inclusion_map = None
         try:
@@ -3204,9 +3200,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _forced_signals['_prompt_text'] = text
             # Update adaptive signals now that explicit_feedback is known
             _store_adaptive_signals(thread_id, text, signals=_forced_signals)
-            if triage_result.mode == 'ACKNOWLEDGE':
-                _forced_mode = 'ACKNOWLEDGE'
-            elif triage_result.branch == 'clarify':
+            if triage_result.branch == 'clarify':
                 _forced_mode = 'CLARIFY'
             else:
                 _forced_mode = 'RESPOND'
@@ -3221,8 +3215,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 returning_from_silence=returning_from_silence,
             )
 
-            # Social ACKNOWLEDGE — skip encoding (trivial content)
-            if triage_result.branch == 'social' and triage_result.mode == 'ACKNOWLEDGE':
+            # Social fast path (IGNORE) — skip encoding (trivial content)
+            if triage_result.branch == 'social' and triage_result.mode == 'IGNORE':
                 is_fast_path_ack = True
 
     except Exception as _triage_ex:

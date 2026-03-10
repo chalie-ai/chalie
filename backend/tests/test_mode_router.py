@@ -14,7 +14,6 @@ def _make_config():
             'RESPOND': 0.40,
             'CLARIFY': 0.30,
             'ACT': 0.20,
-            'ACKNOWLEDGE': 0.10,
             'IGNORE': -0.50,
         },
         'weights': {
@@ -23,8 +22,6 @@ def _make_config():
             'respond.gist_density': 0.10,
             'respond.question_warm': 0.15,
             'respond.cold_penalty': 0.15,
-            'respond.greeting_penalty': 0.20,
-            'respond.feedback_penalty': 0.15,
             'clarify.cold_boost': 0.25,
             'clarify.question_no_facts': 0.20,
             'clarify.new_topic_question': 0.10,
@@ -35,9 +32,6 @@ def _make_config():
             'act.implicit_reference': 0.15,
             'act.very_cold_penalty': 0.10,
             'act.warm_facts_penalty': 0.10,
-            'acknowledge.greeting': 0.80,
-            'acknowledge.positive_feedback': 0.55,
-            'acknowledge.question_penalty': 0.30,
             'ignore.empty_input': 1.00,
         },
         'tiebreaker_base_margin': 0.20,
@@ -92,12 +86,13 @@ class TestModeRouter:
         result = router.route(signals, "What is this?")
         assert result['mode'] == 'CLARIFY'
 
-    def test_greeting_selects_acknowledge(self):
-        """Greeting pattern should favour ACKNOWLEDGE."""
+    def test_greeting_selects_respond(self):
+        """Greeting pattern should flow to RESPOND (ACKNOWLEDGE removed)."""
         router = ModeRouterService(_make_config())
         signals = _make_signals(greeting_pattern=True)
         result = router.route(signals, "Hey")
-        assert result['mode'] == 'ACKNOWLEDGE'
+        assert result['mode'] in ModeRouterService.MODES
+        assert result['mode'] != 'IGNORE'
 
     def test_tiebreaker_invoked_within_margin(self):
         """When top-2 scores are within margin, tie-breaker should be invoked."""

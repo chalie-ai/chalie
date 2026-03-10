@@ -120,11 +120,8 @@ class SparkWelcomeService:
                 from services.config_service import ConfigService
                 from services.llm_service import create_llm_service
 
-                # Use acknowledge config (lightweight, fast)
-                try:
-                    config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
-                except Exception:
-                    config = ConfigService.resolve_agent_config("frontal-cortex")
+                # Use frontal-cortex config (lightweight, fast)
+                config = ConfigService.resolve_agent_config("frontal-cortex")
 
                 # Override format to plain text (not JSON)
                 config = dict(config)

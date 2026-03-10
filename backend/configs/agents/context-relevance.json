@@ -65,27 +65,6 @@
       "warm_return_hint": false,
       "identity_modulation": false
     },
-    "ACKNOWLEDGE": {
-      "identity_context": true,
-      "onboarding_nudge": false,
-      "user_traits": true,
-      "communication_style": true,
-      "adaptive_directives": true,
-      "active_lists": true,
-      "client_context": false,
-      "focus": false,
-      "working_memory": false,
-      "facts": false,
-      "gists": false,
-      "episodic_memory": false,
-      "concepts": false,
-      "act_history": false,
-      "available_skills": false,
-      "available_tools": false,
-      "world_state": false,
-      "warm_return_hint": true,
-      "identity_modulation": true
-    }
   },
   "dependencies": {
     "episodic_memory": ["gists"],

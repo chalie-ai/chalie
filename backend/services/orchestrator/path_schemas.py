@@ -79,11 +79,6 @@ def validate_clarify(ctx: Dict[str, Any]) -> bool:
     return bool(ctx.get('clarification_question'))
 
 
-def validate_acknowledge(ctx: Dict[str, Any]) -> bool:
-    """Validate ACKNOWLEDGE path context."""
-    return True  # Only requires topic and destination (checked in required_fields)
-
-
 def validate_ignore(ctx: Dict[str, Any]) -> bool:
     """Validate IGNORE path context."""
     return True  # Only requires topic
@@ -117,15 +112,6 @@ ORCHESTRATOR_PATHS: Dict[str, PathDefinition] = {
         validator=validate_clarify,
         handler=None,  # Will be set to ClarifyHandler
         description="Terminal path: Request clarification from user"
-    ),
-
-    "ACKNOWLEDGE": PathDefinition(
-        name="ACKNOWLEDGE",
-        path_type=PathType.TERMINAL,
-        required_fields=["topic", "destination"],
-        validator=validate_acknowledge,
-        handler=None,  # Will be set to AcknowledgeHandler
-        description="Terminal path: Acknowledge user input without further action"
     ),
 
     "IGNORE": PathDefinition(

@@ -17,7 +17,7 @@ def _make_decision(**overrides):
     base = {
         'selected_mode': 'RESPOND',
         'router_confidence': 0.82,
-        'scores': {'RESPOND': 0.82, 'ACT': 0.54, 'CLARIFY': 0.30, 'ACKNOWLEDGE': 0.15},
+        'scores': {'RESPOND': 0.82, 'ACT': 0.54, 'CLARIFY': 0.30, 'IGNORE': -0.50},
         'tiebreaker_used': False,
         'tiebreaker_candidates': None,
         'margin': 0.28,

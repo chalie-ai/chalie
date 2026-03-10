@@ -119,46 +119,6 @@ class ClarifyHandler:
         return {'status': 'success', 'queued': True, 'output_id': output_id}
 
 
-class AcknowledgeHandler:
-    """Handler for ACKNOWLEDGE path - queues acknowledgment to output-queue."""
-
-    def __init__(self, output_service):
-        """
-        Initialize handler.
-
-        Args:
-            output_service: OutputService instance
-        """
-        self.output_service = output_service
-
-    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute ACKNOWLEDGE path.
-
-        Args:
-            context: Must contain topic, destination, metadata
-
-        Returns:
-            dict: {status: "success", queued: True, output_id: str}
-        """
-        content = context.get('response', '')
-
-        # Enqueue text output (SSE delivery for web; notification tools for proactive drift)
-        output_id = self.output_service.enqueue_text(
-            topic=context['topic'],
-            response=content,
-            mode='ACKNOWLEDGE',
-            confidence=context.get('confidence', 0.0),
-            generation_time=context.get('generation_time', 0.0),
-            original_metadata=context.get('metadata'),
-            reply_actions=context.get('reply_actions'),
-        )
-
-        logger.info(f"[ACKNOWLEDGE] Queued acknowledgment {output_id} for topic '{context['topic']}'")
-
-        return {'status': 'success', 'queued': True, 'output_id': output_id}
-
-
 class IgnoreHandler:
     """Handler for IGNORE path - logs and does nothing."""
 

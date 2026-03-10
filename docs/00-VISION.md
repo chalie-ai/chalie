@@ -4,11 +4,51 @@ This document defines what Chalie is, why it exists, and how every design decisi
 
 ---
 
+## Mission Statement
+
+**Chalie is a continuous reasoning engine that amplifies any base model into a superintelligent cognitive runtime.**
+
+Intelligence emerges not from a single powerful model, but from the **vertical stacking** of specialized models through a persistent reasoning loop — perceive, update, reason, act, reflect — that runs continuously, not per-message.
+
+### Four Invariants
+
+1. **Reasoning is primary, communication is output.** Chalie reasons continuously. Responding to a user is one possible action, not the default. Goals, plans, and world state persist across sessions and evolve autonomously.
+
+2. **Memory creates intelligence.** Progressive abstraction — from raw observation to compressed episode to generalized concept — produces accumulated wisdom no single model call can replicate. Decay ensures relevance. Uncertainty prevents hallucination.
+
+3. **Models are stacked, not swapped.** Each cognitive function uses the model optimized for its task. A classifier, a planner, a verifier, and a communicator — working in sequence through deterministic gates — reason better together than any single model alone.
+
+4. **Determinism bounds probabilism.** Every probabilistic output flows through deterministic validation. Gates, budgets, reliability scores, and verification prevent runaway reasoning. The system knows what it doesn't know.
+
+5. **Plan once, execute cheaply, verify independently.** Never loop an LLM through plan-execute-observe-replan cycles. Reasoning produces a plan. Execution follows the plan mechanically. A separate model verifies results against success criteria. If the plan needs revision, that is a new reasoning event — not another iteration of the same loop. Agent loops degrade cognition and inflate tokens quadratically; structured pipelines preserve both.
+
+### Value Proposition
+
+Chalie does not make a base model marginally better at what it already does. It **unlocks problem classes that no single model can solve alone**, regardless of that model's capability:
+
+- **Persistent reasoning** — accumulated wisdom across months of compressed experience
+- **Autonomous goal execution** — detect intent, form plans, execute across sessions, self-correct
+- **Proactive goal inference** — notice goals forming across casual mentions over weeks
+- **World model maintenance** — track evolving external state (prices, deadlines, availability)
+- **Delegation and monitoring** — assign tasks to external agents and verify completion
+
+### Architectural Decision Filter
+
+Every proposed change must serve at least one:
+
+1. Does this move processing from message-level to goal-level?
+2. Does this make the reasoning loop more continuous?
+3. Does this enable vertical stacking (specialized models per function)?
+4. Does this reduce tokens while preserving reasoning quality?
+5. Does this add a deterministic gate to a probabilistic output?
+
+---
+
 ## What Chalie Is
 
-Chalie is a **personal intelligence layer** that protects attention, executes intent, and involves the user only when they truly matter.
+Chalie is a **continuous reasoning engine** that protects attention, executes intent, and involves the user only when they truly matter.
 
-It stands in for the user where their involvement adds little value, and involves them where judgment, identity, or values are required.
+It reasons continuously — observing, planning, executing, and reflecting — whether or not the user is actively engaged. User messages are one input to an ongoing cognitive process, not the trigger for a request-response cycle.
 
 ## The Problem
 
@@ -29,10 +69,11 @@ Existing software helps users **do more**. Chalie helps users **think less about
 
 Chalie exists to:
 
+- Reason continuously so the user doesn't have to
 - Filter noise into signal
-- Preserve attention for high-value thinking
-- Execute clear intent without supervision
-- Maintain continuity across life contexts
+- Detect goals from casual signals and execute them autonomously
+- Preserve attention for decisions that require human judgment
+- Maintain continuity across life contexts through accumulated wisdom
 
 ## Philosophy
 
@@ -40,14 +81,14 @@ Chalie exercises **judgment**, not just intelligence.
 
 It decides:
 
-- What deserves attention
-- How deeply to think
-- Whether action is worthwhile
-- When to involve the user
+- What goals are forming and whether to pursue them
+- How deeply to reason and which models to allocate
+- Whether action is worthwhile given accumulated evidence
+- When to involve the user and when to act silently
 
 ## North Star
 
-> Chalie handles what doesn't require the user and involves them when it truly matters.
+> Chalie reasons so the user doesn't have to. It acts when confident, escalates when uncertain, and learns from every outcome.
 
 ---
 
@@ -117,7 +158,7 @@ Reducing noise is as valuable as completing tasks. Every notification, prompt, a
 ### 3. Involve the User Only When Necessary
 Escalate based on importance and ambiguity, not system convenience. Silent autonomous handling is the default.
 
-*Codebase anchor: mode router's ACKNOWLEDGE mode (brief social response, minimal interruption), persistent task service's pause/resume for user input, event bridge's confidence gating.*
+*Codebase anchor: persistent task service's pause/resume for user input, event bridge's confidence gating, mode router's deterministic scoring.*
 
 ### 4. Intent to Execution
 Users express direction; Chalie handles operations. The gap between "I want X" and "X is done" should be as small as possible.
@@ -127,7 +168,7 @@ Users express direction; Chalie handles operations. The gap between "I want X" a
 ### 5. Calm Intelligence
 Brevity, timing, and restraint build trust. Verbosity erodes it.
 
-*Codebase anchor: Radiant design system's "restraint as luxury" principle, soul.md behavioral prompts, mode router's ACKNOWLEDGE for moments that need presence rather than substance.*
+*Codebase anchor: Radiant design system's "restraint as luxury" principle, soul.md behavioral prompts, frontal cortex adaptive directives for tone calibration.*
 
 ### 6. Continuity Over Transactions
 Each interaction builds long-term understanding. Memory, identity, and history are first-class concerns, not afterthoughts.
@@ -156,20 +197,20 @@ Each interaction builds long-term understanding. Memory, identity, and history a
 
 ## Product Evolution
 
-Chalie evolves through trust-building stages:
+Chalie evolves through capability stages, each building on the previous:
 
-| Stage | Capability | Status |
-|-------|-----------|--------|
-| 1 | Noise reduction and summarization | Active |
-| 2 | Intent execution and task completion | Active |
-| 3 | Context memory and continuity | Active |
-| 4 | Priority intelligence and timing judgment | Active |
-| 5 | Proactive guidance and insights | Active |
-| 6 | Trusted selective autonomy | Future |
-| 7 | Personal operating layer and ecosystem | Future |
-| 8 | Ambient intelligence | Future |
+| Stage | Capability | Status | Architectural Focus |
+|-------|-----------|--------|---------------------|
+| 1 | Memory & continuity | Active | Progressive abstraction, decay, uncertainty |
+| 2 | Intent execution | Active | ACT loop, persistent tasks, plan decomposition |
+| 3 | Judgment & attention protection | Active | Deterministic gates, critic, fatigue budgets |
+| 4 | Proactive reasoning | Active | Cognitive drift, curiosity, autonomous actions |
+| 5 | Continuous reasoning loop | **Next** | Goal inference, world model, event-driven execution |
+| 6 | Autonomous goal execution | Future | Delegation, monitoring, cross-session plan evolution |
+| 7 | Vertical model orchestration | Future | Optimal model per cognitive function, ensemble reasoning |
+| 8 | Ambient superintelligence | Future | Goal detection from casual signals, full autonomy within trust boundaries |
 
-**Reconciliation note:** The runtime uses a 5-phase trust model in `spark_state_service.py` that maps to stages 1–5 above. Stages 6–8 represent the long-term product vision and do not yet have runtime counterparts. Features should support this progression rather than skip stages prematurely.
+**Current transition:** Stages 1–4 are operational. The architectural shift from message-level to goal-level processing (Stage 5) is the next major evolution. This requires: goal inference engine, continuous reasoning loop (PERCEIVE → UPDATE → REASON → ACT → REFLECT), event-driven persistent task execution, and world model tracking.
 
 ---
 
@@ -191,4 +232,6 @@ If the answer to most is **no**, reconsider or simplify.
 
 ## Ultimate Goal
 
-Chalie is not a chatbot or productivity tool. It is a **cognitive layer** that restores human attention as a protected resource and enables people to operate with clarity, focus, and calm control.
+Chalie is not a chatbot, assistant, or productivity tool. It is a **continuous reasoning engine** pursuing superintelligence through architectural amplification — vertically stacking specialized models through persistent memory, deterministic gates, and a continuous reasoning loop to unlock problem classes no single model can solve alone.
+
+The measure of success is not response quality on any single interaction. It is the **scope of problems Chalie can solve autonomously** — from detecting a forming goal across casual mentions, to researching options, to executing a multi-session plan, to delegating and monitoring external work, to presenting a decision-ready shortlist — all while knowing what it doesn't know and escalating only when human judgment is required.
