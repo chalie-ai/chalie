@@ -1628,11 +1628,11 @@ def _log_cycle_event(event_type: str, payload: dict, topic: str):
         pass
 
 
-def _handle_social_triage(
+def _handle_ignore_branch(
     triage_result, text, topic, thread_id, metadata,
     intent, intent_classifier, working_memory, thread_conv_service,
 ):
-    """Handle social branch — CANCEL/IGNORE fast exits only."""
+    """Handle ignore branch — CANCEL/IGNORE fast exits only."""
 
     if triage_result.mode in ('CANCEL', 'IGNORE'):
         return {
@@ -1647,7 +1647,7 @@ def _handle_social_triage(
     # the gap rather than silently delivering an empty response.
     import logging as _log
     _log.warning(
-        f"[SOCIAL TRIAGE] Unexpected mode={triage_result.mode!r} for social branch — "
+        f"[IGNORE BRANCH] Unexpected mode={triage_result.mode!r} for ignore branch — "
         "caller should route through generate_for_mode instead."
     )
     return None
@@ -2941,13 +2941,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             except Exception:
                 pass
 
-        # Handle cancel / self-resolved from social filter
+        # Handle cancel / self-resolved
         if triage_result.mode == 'CANCEL':
             _cancel_active_tool_work(topic)
         elif triage_result.mode == 'IGNORE':
             _cancel_active_tool_work(topic)
 
-        # ── Active tool work dedup (before branching, skip for social fast exits) ──
+        # ── Active tool work dedup (before branching, skip for CANCEL/IGNORE fast exits) ──
         if triage_result.mode not in ('CANCEL', 'IGNORE'):
             if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
                 dedup_response = _check_active_tool_work(text, topic)
@@ -2965,9 +2965,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
         # ── Branch dispatch ──
-        if triage_result.branch == 'social' and triage_result.mode in ('CANCEL', 'IGNORE'):
-            # Social branch — CANCEL/IGNORE fast exits only
-            response_data = _handle_social_triage(
+        if triage_result.branch == 'ignore' and triage_result.mode in ('CANCEL', 'IGNORE'):
+            # Ignore branch — CANCEL/IGNORE fast exits only
+            response_data = _handle_ignore_branch(
                 triage_result, text, topic, thread_id, metadata,
                 intent, intent_classifier, working_memory, thread_conv_service,
             )
@@ -3169,8 +3169,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 returning_from_silence=returning_from_silence,
             )
 
-            # Social fast path (IGNORE) — skip encoding (trivial content)
-            if triage_result.branch == 'social' and triage_result.mode == 'IGNORE':
+            # Ignore fast path — skip encoding (trivial content)
+            if triage_result.branch == 'ignore' and triage_result.mode == 'IGNORE':
                 is_fast_path_ack = True
 
     except Exception as _triage_ex:

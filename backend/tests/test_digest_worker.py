@@ -1,9 +1,9 @@
-"""Tests for digest_worker — calculate_context_warmth, NLP signal patterns, social triage."""
+"""Tests for digest_worker — calculate_context_warmth, NLP signal patterns, ignore branch triage."""
 
 import pytest
 from unittest.mock import MagicMock
 
-from workers.digest_worker import calculate_context_warmth, _handle_social_triage, _is_innate_skill_only
+from workers.digest_worker import calculate_context_warmth, _handle_ignore_branch, _is_innate_skill_only
 from services.cognitive_triage_service import TriageResult
 from services.mode_router_service import (
     GREETING_PATTERNS,
@@ -119,7 +119,7 @@ class TestNlpSignalPatterns:
 
 def _make_triage(mode):
     return TriageResult(
-        branch='social', mode=mode, tools=[], skills=[],
+        branch='ignore', mode=mode, tools=[], skills=[],
         confidence_internal=1.0, confidence_tool_need=0.0,
         freshness_risk=0.0, decision_entropy=0.0,
         reasoning='test', triage_time_ms=0.0,
@@ -127,16 +127,16 @@ def _make_triage(mode):
     )
 
 
-class TestHandleSocialTriage:
+class TestHandleIgnoreBranch:
     """
-    _handle_social_triage must only fast-exit for CANCEL/IGNORE.
+    _handle_ignore_branch must only fast-exit for CANCEL/IGNORE.
     Any other mode (e.g. RESPOND) must return None so callers route
     through generate_for_mode — preventing the NoneType crash that
     caused 'No response received' for ambiguous requests like 'Schedule it'.
     """
 
     def test_cancel_returns_empty_response(self):
-        result = _handle_social_triage(
+        result = _handle_ignore_branch(
             _make_triage('CANCEL'), 'never mind', 'topic', None,
             None, {}, None, None, None,
         )
@@ -145,7 +145,7 @@ class TestHandleSocialTriage:
         assert result['response'] == ''
 
     def test_ignore_returns_empty_response(self):
-        result = _handle_social_triage(
+        result = _handle_ignore_branch(
             _make_triage('IGNORE'), '', 'topic', None,
             None, {}, None, None, None,
         )
@@ -155,18 +155,18 @@ class TestHandleSocialTriage:
 
     def test_respond_mode_returns_none(self):
         """RESPOND must not be handled here — callers route to generate_for_mode."""
-        result = _handle_social_triage(
+        result = _handle_ignore_branch(
             _make_triage('RESPOND'), 'Schedule it', 'topic', None,
             None, {}, None, None, None,
         )
         assert result is None, (
-            "RESPOND mode in social branch should return None so the dispatch "
+            "RESPOND mode in ignore branch should return None so the dispatch "
             "condition (mode in CANCEL/IGNORE) prevents this path from being reached, "
             "not silently produce an empty response."
         )
 
     def test_clarify_mode_returns_none(self):
-        result = _handle_social_triage(
+        result = _handle_ignore_branch(
             _make_triage('CLARIFY'), 'Schedule it', 'topic', None,
             None, {}, None, None, None,
         )

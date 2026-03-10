@@ -38,7 +38,7 @@ class TestEmptyInputGuard:
         )
         result = svc.triage("", ctx)
         assert result.mode == 'IGNORE'
-        assert result.branch == 'social'
+        assert result.branch == 'ignore'
         assert result.fast_filtered is True
 
     def test_whitespace_returns_ignore(self):
@@ -192,14 +192,14 @@ class TestSelfEvalRules:
         result = svc._self_evaluate(result, "What is the current Bitcoin price?", ctx)
         assert result.branch == 'respond'  # No tools available, can't escalate
 
-    def test_rule3_social_with_question_becomes_respond(self):
+    def test_rule3_ignore_with_question_becomes_respond(self):
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
-        result = self._make_result('social', 'IGNORE')
+        result = self._make_result('ignore', 'IGNORE')
         ctx = self._make_context()
         result = svc._self_evaluate(result, "hey what time is it?", ctx)
         assert result.branch == 'respond'
-        assert result.self_eval_reason == 'social_with_question'
+        assert result.self_eval_reason == 'ignore_with_question'
 
     def test_rule4_anti_oscillation_same_tool(self):
         from services.cognitive_triage_service import CognitiveTriageService
@@ -350,7 +350,7 @@ class TestTriageFull:
         svc = CognitiveTriageService()
         ctx = self._make_context()
         result = svc.triage("never mind", ctx)
-        assert result.branch == 'social'
+        assert result.branch == 'ignore'
         assert result.mode == 'CANCEL'
         assert result.fast_filtered is False  # Went through LLM
 
@@ -435,7 +435,7 @@ class TestTriageFull:
         ctx = self._make_context()
         result = svc.triage("search for Python tutorials", ctx)
         # Should fall back gracefully, not raise
-        assert result.branch in ('act', 'respond', 'clarify', 'social')
+        assert result.branch in ('act', 'respond', 'clarify', 'ignore')
         assert result.triage_time_ms >= 0
 
 

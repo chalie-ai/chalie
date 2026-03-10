@@ -102,7 +102,7 @@ class TriageContext:
 
 @dataclass
 class TriageResult:
-    branch: str                   # 'social' | 'respond' | 'clarify' | 'act'
+    branch: str                   # 'ignore' | 'respond' | 'clarify' | 'act'
     mode: str                     # 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'
     tools: List[str]              # tool names, only meaningful for ACT
     skills: List[str]             # innate skill names selected for ACT
@@ -128,7 +128,7 @@ class CognitiveTriageService:
         # 1. Empty-input guard (~0ms)
         if not text.strip():
             result = TriageResult(
-                branch='social', mode='IGNORE', tools=[], skills=[],
+                branch='ignore', mode='IGNORE', tools=[], skills=[],
                 confidence_internal=1.0, confidence_tool_need=0.0,
                 freshness_risk=0.0, decision_entropy=0.0,
                 reasoning='empty_input', triage_time_ms=(time.time() - start) * 1000,
@@ -331,8 +331,8 @@ class CognitiveTriageService:
             'ACT': 'act',
             'RESPOND': 'respond',
             'CLARIFY': 'clarify',
-            'IGNORE': 'social',
-            'CANCEL': 'social',
+            'IGNORE': 'ignore',
+            'CANCEL': 'ignore',
         }.get(mode, 'respond')
 
     def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext) -> TriageResult:
@@ -418,13 +418,13 @@ class CognitiveTriageService:
             result.self_eval_override = True
             result.self_eval_reason = 'act_url_detected'
 
-        # Rule 3: LLM classified as social but message has a substantive question
-        if result.branch == 'social' and '?' in text and len(text.split()) > 3:
-            if result.mode not in ('CANCEL', 'IGNORE'):
-                result.branch = 'respond'
-                result.mode = 'RESPOND'
-                result.self_eval_override = True
-                result.self_eval_reason = 'social_with_question'
+        # Rule 3: LLM classified as ignore but message has a substantive question
+        # CANCEL is protected (user explicitly cancelled); IGNORE with a real question gets upgraded
+        if result.branch == 'ignore' and result.mode != 'CANCEL' and '?' in text and len(text.split()) > 3:
+            result.branch = 'respond'
+            result.mode = 'RESPOND'
+            result.self_eval_override = True
+            result.self_eval_reason = 'ignore_with_question'
 
         # Rule 4: Anti-oscillation — only suppress if SAME TOOL re-selected
         if (result.branch == 'act'
