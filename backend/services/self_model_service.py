@@ -30,7 +30,7 @@ REFRESH_INTERVAL = 30  # background thread cycle
 
 # Critical cognitive jobs — if any lack an assigned provider, that's noteworthy
 CRITICAL_JOBS = frozenset({
-    'frontal-cortex', 'cognitive-triage', 'cognitive-drift', 'mode-tiebreaker',
+    'frontal-cortex', 'cognitive-triage', 'cognitive-drift',
 })
 
 # Tool-agnostic capability categories derived from manifest documentation keywords

@@ -220,7 +220,7 @@ class TestFormatForPrompt:
         mock_provider.get_all_providers.return_value = [{"is_active": True, "platform": "anthropic"}]
         mock_provider.get_all_job_assignments.return_value = [
             {"job_name": j, "provider_id": 1} for j in
-            ['frontal-cortex', 'cognitive-triage', 'cognitive-drift', 'mode-tiebreaker']
+            ['frontal-cortex', 'cognitive-triage', 'cognitive-drift']
         ]
 
         with patch('services.provider_db_service.ProviderDbService', return_value=mock_provider):

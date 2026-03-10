@@ -61,10 +61,12 @@ def create_provider():
                 'autobiography', 'frontal-cortex', 'frontal-cortex-act',
                 'plan-decomposition', 'frontal-cortex-respond',
                 'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
-                'frontal-cortex-proactive', 'mode-reflection', 'semantic-memory',
-                'cognitive-triage', 'experience-assimilation', 'fact-store',
-                'frontal-cortex-acknowledge', 'memory-chunker', 'moment-enrichment',
-                'mode-tiebreaker', 'topic-namer',
+                'frontal-cortex-proactive', 'frontal-cortex-reflexive',
+                'frontal-cortex-scheduled-tool', 'mode-reflection',
+                'semantic-memory', 'cognitive-triage', 'experience-assimilation',
+                'fact-store', 'frontal-cortex-acknowledge', 'memory-chunker',
+                'moment-enrichment', 'document-synthesis',
+                'document-classification',
             ]
             try:
                 for job in all_jobs:

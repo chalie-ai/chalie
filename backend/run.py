@@ -19,6 +19,24 @@ import os
 import sys
 import logging
 
+# Force numpy to fully initialize before any background thread imports it.
+# Python's import system isn't fully thread-safe for nested imports — concurrent
+# first-imports of numpy from multiple threads cause a circular import in
+# numpy._typing (NDArray not yet available from the partially-initialized module),
+# which poisons sys.modules and makes every subsequent embedding call fail with
+# "maximum recursion depth exceeded".
+try:
+    import numpy  # noqa: F401
+    import torch  # noqa: F401
+    import transformers  # noqa: F401
+    # These heavy imports must complete in the main thread before any background
+    # thread tries to import them. Python's import system isn't fully thread-safe
+    # for complex nested imports — concurrent first-imports from multiple threads
+    # cause circular import errors in numpy._typing that poison sys.modules.
+except Exception as _e:
+    import sys as _sys
+    print(f"[BOOT] CRITICAL: import failed: {_e}", file=_sys.stderr, flush=True)
+
 # Ensure backend/ is on the Python path
 _backend_dir = os.path.dirname(os.path.abspath(__file__))
 if _backend_dir not in sys.path:
@@ -176,6 +194,7 @@ def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    parser.add_argument("--models-dir", default=None, help="ONNX models directory (default: /models or MODELS_DIR env)")
     args = parser.parse_args()
 
     port = args.port
@@ -183,7 +202,10 @@ def main():
 
     # Store in runtime_config so any module can access these values
     import runtime_config
-    runtime_config.set({"port": port, "host": host})
+    config = {"port": port, "host": host}
+    if args.models_dir:
+        config["models_dir"] = args.models_dir
+    runtime_config.set(config)
 
     # Ensure encryption key
     from services.encryption_key_service import get_encryption_key
@@ -203,10 +225,31 @@ def main():
             svc.generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
+            import traceback
             logger.warning(f"[System] Embedding model preload failed: {e}")
+            logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
     import threading as _threading
     _threading.Thread(target=_preload_embedding_model, name="embedding-preload", daemon=True).start()
+
+    # Download/update ONNX classifiers, then warm the inference path.
+    def _preload_onnx_models():
+        try:
+            logger.info("[System] Checking ONNX models (background)...")
+            from services.onnx_inference_service import get_onnx_inference_service
+            svc = get_onnx_inference_service()
+            # Download missing models / version-check existing ones
+            svc.ensure_models()
+            # Warm the mode-tiebreaker — load session + tokenizer + throwaway inference
+            label, _ = svc.predict("mode-tiebreaker", "warmup")
+            if label is not None:
+                logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
+            else:
+                logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+        except Exception as e:
+            logger.warning(f"[System] ONNX preload failed: {e}")
+
+    _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
 
     # Initialize SQLite database
     from services.database_service import get_shared_db_service

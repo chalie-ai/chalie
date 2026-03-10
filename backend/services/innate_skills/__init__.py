@@ -99,3 +99,4 @@ def register_innate_skills(dispatcher) -> None:
             )
     except Exception as e:
         logging.warning(f"[INNATE SKILLS] Tool registry failed to load: {e}")
+

@@ -69,27 +69,35 @@ else
 fi
 
 # ─── Incremental Dep Sync ────────────────────────────────────────────────────
-# Skipped entirely in Docker — deps are baked into the image at build time.
+# Runs everywhere, including Docker. When backend/ is volume-mounted, the image's
+# baked-in packages can drift from the current requirements.txt. The stamp file
+# ensures we only run pip when requirements.txt actually changes.
 
-if [[ "$_IN_DOCKER" == "false" ]]; then
-  REQ="$SCRIPT_DIR/backend/requirements.txt"
-  STAMP="$SCRIPT_DIR/.deps-installed"
+# In Docker the stamp lives in /tmp (writable, ephemeral per container lifecycle)
+# so a fresh container always syncs once on first start.
+if [[ "$_IN_DOCKER" == "true" ]]; then
+  _STAMP_DIR="/tmp"
+else
+  _STAMP_DIR="$SCRIPT_DIR"
+fi
 
-  if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
-    echo "→ Syncing dependencies from requirements.txt …"
-    "$PIP" install --quiet -r "$REQ"
-    touch "$STAMP"
-  fi
+REQ="$SCRIPT_DIR/backend/requirements.txt"
+STAMP="$_STAMP_DIR/.deps-installed"
 
-  if [[ "$_VOICE" == "true" ]]; then
-    VOICE_REQ="$SCRIPT_DIR/backend/requirements-voice.txt"
-    VOICE_STAMP="$SCRIPT_DIR/.voice-deps-installed"
-    if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
-      echo "→ Syncing voice dependencies …"
-      "$PIP" install --quiet -r "$VOICE_REQ" 2>/dev/null \
-        || echo "  ⚠ Voice dep install failed — voice will be unavailable"
-      touch "$VOICE_STAMP"
-    fi
+if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
+  echo "→ Syncing dependencies from requirements.txt …"
+  "$PIP" install --quiet -r "$REQ"
+  touch "$STAMP"
+fi
+
+if [[ "$_VOICE" == "true" ]]; then
+  VOICE_REQ="$SCRIPT_DIR/backend/requirements-voice.txt"
+  VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
+  if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
+    echo "→ Syncing voice dependencies …"
+    "$PIP" install --quiet -r "$VOICE_REQ" 2>/dev/null \
+      || echo "  ⚠ Voice dep install failed — voice will be unavailable"
+    touch "$VOICE_STAMP"
   fi
 fi
 

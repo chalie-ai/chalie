@@ -527,6 +527,9 @@ class ToolRegistryService:
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
 
+        # Purge DB entries for tools that no longer exist on disk
+        self._purge_stale_db_entries()
+
         # Deferred pip install for trusted tools — runs in background so Flask
         # starts without waiting for potentially slow package downloads.
         if trusted_dirs:
@@ -537,6 +540,76 @@ class ToolRegistryService:
             import threading as _threading
             t = _threading.Thread(target=_install_all, name="tool-dep-installer", daemon=True)
             t.start()
+
+    def _purge_stale_db_entries(self):
+        """Remove DB records for tools that no longer exist on disk.
+
+        Called once after discovery completes. Cleans tool_capability_profiles
+        (and its vec companion), tool_configs, and user_tool_preferences so
+        stale tool names are never surfaced to the LLM or user.
+        """
+        live_tools = set(self.tools.keys())
+        if not live_tools:
+            return  # Bail out — something went wrong with discovery; don't wipe everything
+
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # tool_capability_profiles (type='tool' only — leave skill profiles alone)
+                cursor.execute(
+                    "SELECT tool_name FROM tool_capability_profiles WHERE tool_type = 'tool'"
+                )
+                db_tools = {row[0] for row in cursor.fetchall()}
+                stale = db_tools - live_tools
+
+                if stale:
+                    for name in stale:
+                        # Remove vec entry first (rowid join)
+                        cursor.execute(
+                            """DELETE FROM tool_capability_profiles_vec
+                               WHERE rowid = (
+                                   SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?
+                               )""",
+                            (name,),
+                        )
+                        cursor.execute(
+                            "DELETE FROM tool_capability_profiles WHERE tool_name = ?", (name,)
+                        )
+                    conn.commit()
+                    logger.info(
+                        f"[TOOL REGISTRY] Purged {len(stale)} stale profile(s): {', '.join(sorted(stale))}"
+                    )
+
+                # tool_configs — configs for removed tools are orphaned and confusing
+                cursor.execute("SELECT tool_name FROM tool_configs")
+                cfg_tools = {row[0] for row in cursor.fetchall()}
+                stale_cfg = cfg_tools - live_tools
+                if stale_cfg:
+                    for name in stale_cfg:
+                        cursor.execute("DELETE FROM tool_configs WHERE tool_name = ?", (name,))
+                    conn.commit()
+                    logger.info(
+                        f"[TOOL REGISTRY] Purged {len(stale_cfg)} stale config(s): {', '.join(sorted(stale_cfg))}"
+                    )
+
+                # user_tool_preferences — stale prefs are harmless but noisy; clean them too
+                cursor.execute("SELECT DISTINCT tool_name FROM user_tool_preferences")
+                pref_tools = {row[0] for row in cursor.fetchall()}
+                stale_prefs = pref_tools - live_tools
+                if stale_prefs:
+                    for name in stale_prefs:
+                        cursor.execute("DELETE FROM user_tool_preferences WHERE tool_name = ?", (name,))
+                    conn.commit()
+                    logger.info(
+                        f"[TOOL REGISTRY] Purged {len(stale_prefs)} stale preference(s): {', '.join(sorted(stale_prefs))}"
+                    )
+
+        except Exception as e:
+            logger.warning(f"[TOOL REGISTRY] Stale DB purge failed (non-fatal): {e}")
 
     def _compute_tool_hash(self, tool_dir: Path) -> str:
         """Compute MD5 of all source files in a tool directory for staleness detection."""
