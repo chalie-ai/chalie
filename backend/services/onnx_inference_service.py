@@ -53,6 +53,7 @@ DEFAULT_MODELS_REPO = "chalie-ai/models"
 # The asset is expected as a tarball: {prefix}.tar.gz in the latest release.
 MODEL_REGISTRY = [
     ("mode-tiebreaker", None, "mode-tiebreaker"),
+    ("contradiction", None, "contradiction"),
 ]
 
 
