@@ -36,7 +36,7 @@ class SemanticRetrievalService:
         self.config = ConfigService.get_agent_config("semantic-memory")
         self.min_confidence_threshold = self.config.get('min_confidence_threshold', 0.4)
 
-    def retrieve_concepts(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def retrieve_concepts(self, query: str, limit: int = 10, query_embedding=None) -> List[Dict[str, Any]]:
         """
         Retrieve relevant concepts using hybrid search with confidence filtering.
 
@@ -47,8 +47,9 @@ class SemanticRetrievalService:
         Returns:
             List of concept dictionaries with scores, filtered by confidence threshold
         """
-        # Generate query embedding
-        query_embedding = self.embedding_service.generate_embedding(query)
+        # Generate query embedding (skip if pre-computed)
+        if query_embedding is None:
+            query_embedding = self.embedding_service.generate_embedding(query)
 
         # Get all concepts from storage
         all_concepts = self.storage_service.get_all_concepts()

@@ -198,6 +198,7 @@ class TopicClassifierService:
                 'classification_time': classification_time,
                 'boundary_diagnostics': {},
                 'just_reset_from_silence': False,
+                'message_embedding': current_embedding.tolist() if hasattr(current_embedding, 'tolist') else list(current_embedding),
             }
 
         # Stage 1: Calculate similarities to all topics
@@ -285,6 +286,7 @@ class TopicClassifierService:
                 'classification_time': classification_time,
                 'boundary_diagnostics': boundary_diagnostics,
                 'just_reset_from_silence': _just_reset_from_silence,
+                'message_embedding': current_embedding.tolist() if hasattr(current_embedding, 'tolist') else list(current_embedding),
             }
 
         # Stage 2: Rank top-k candidates by switch_score
@@ -347,6 +349,7 @@ class TopicClassifierService:
             'classification_time': classification_time,
             'boundary_diagnostics': boundary_diagnostics,
             'just_reset_from_silence': _just_reset_from_silence,
+            'message_embedding': current_embedding.tolist() if hasattr(current_embedding, 'tolist') else list(current_embedding),
         }
 
     def _normalize(self, embedding: np.ndarray) -> np.ndarray:

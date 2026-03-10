@@ -292,6 +292,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
             prompt=text,
             topic=topic,
             thread_id=thread_id,
+            message_embedding=message_embedding,
         )
     except Exception as e:
         logging.warning(f"[Mode:{mode}] Context assembly failed: {e}")
@@ -2675,17 +2676,15 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     }
     classification_time = classification_result['classification_time']
 
-    # Store user message embedding for proactive relevance scoring (256-dim, matches drift engine)
-    msg_embedding = None
-    try:
-        from services.embedding_service import get_embedding_service
-        emb_service = get_embedding_service()
-        msg_embedding = emb_service.generate_embedding(text)
-        from services.autonomous_actions.communicate_action import CommunicateAction
-        communicate = CommunicateAction()
-        communicate.record_user_interaction(message_embedding=msg_embedding)
-    except Exception as e:
-        logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
+    # Reuse the embedding already computed by topic classifier — no redundant cache lookup
+    msg_embedding = classification_result.get('message_embedding')
+    if msg_embedding is not None:
+        try:
+            from services.autonomous_actions.communicate_action import CommunicateAction
+            communicate = CommunicateAction()
+            communicate.record_user_interaction(message_embedding=msg_embedding)
+        except Exception as e:
+            logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
 
 
     metrics.record_timing(trace_id, 'classification', classification_time * 1000)
