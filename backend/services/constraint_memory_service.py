@@ -27,7 +27,6 @@ ALL_REJECTION_TYPES = (
     'assimilation_rejected',
     'triage_override',
     'routing_anti_oscillation',
-    'reflex_rejected',
     'reliability_warning',
     'uncertainty_downgraded',
 )
@@ -203,8 +202,6 @@ class ConstraintMemoryService:
                 reason_counts[payload.get('rejection_type', 'unknown')] += 1
             elif event_type == 'triage_override':
                 reason_counts[payload.get('rule', 'unknown')] += 1
-            elif event_type == 'reflex_rejected':
-                reason_counts[payload.get('reasoning', 'unknown')[:60]] += 1
             elif event_type == 'routing_anti_oscillation':
                 reason_counts[f"anti_oscillation_{payload.get('suppressed_mode', '?')}"] += 1
             elif event_type == 'reliability_warning':

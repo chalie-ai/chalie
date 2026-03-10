@@ -4,6 +4,10 @@ Tests for CognitiveReflexService — learned fast path via semantic abstraction.
 Covers: heuristic pre-screen, cold start, clustering, generalization,
 activation thresholds, correction feedback, auto-disable, warmth gate,
 pipeline utility, cluster isolation, shadow validation.
+
+NOTE: The cognitive reflex system has been disconnected from the pipeline.
+The service file is kept for potential reuse of its clustering logic.
+These tests are skipped to preserve the service code without running it.
 """
 
 import json
@@ -12,6 +16,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import numpy as np
 import pytest
+
+pytestmark = pytest.mark.skip(reason="Cognitive reflex system disabled — disconnected from pipeline")
 
 from services.cognitive_reflex_service import (
     CognitiveReflexService,
