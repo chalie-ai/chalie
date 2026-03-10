@@ -455,6 +455,14 @@ class ACTOrchestrator:
         except Exception:
             pass
 
+        # ── Post-loop: automatic reflection (fire-and-forget) ────────
+        _maybe_auto_reflect(
+            topic=topic,
+            iteration_logs=act_loop.iteration_logs,
+            termination_reason=termination_reason,
+            iterations_used=act_loop.iteration_number,
+        )
+
         return ACTResult(
             act_history=act_loop.act_history,
             iteration_logs=act_loop.iteration_logs,
@@ -757,6 +765,87 @@ class ACTOrchestrator:
                 f"{_dc_err}"
             )
         return act_history_str
+
+
+# ── Auto-reflection (post-loop, fire-and-forget) ────────────────────
+
+# Thresholds for triggering automatic reflection
+_AUTO_REFLECT_HIGH_VALUE = 3.0    # Total net value above this → "what worked"
+_AUTO_REFLECT_LOW_VALUE = -1.0    # Total net value below this → "what didn't"
+_AUTO_REFLECT_COOLDOWN_S = 1800   # 30 min cooldown per topic
+_AUTO_REFLECT_MIN_ITERATIONS = 2  # Skip trivial 1-iteration loops
+
+# Termination reasons that indicate degraded exits worth reflecting on
+_DEGRADED_EXITS = frozenset({
+    'fatigue_exhausted', 'repetition_detected', 'smart_repetition',
+})
+
+
+def _maybe_auto_reflect(
+    topic: str,
+    iteration_logs: list,
+    termination_reason: str | None,
+    iterations_used: int,
+) -> None:
+    """
+    Fire background reflection after significant ACT loops.
+
+    Triggers on: high-value loops, negative-value loops, or degraded exits.
+    Uses MemoryStore cooldown to prevent spam (1 per topic per 30 min).
+    Never blocks — runs in a daemon thread.
+    """
+    import threading
+
+    if iterations_used < _AUTO_REFLECT_MIN_ITERATIONS:
+        return
+
+    # Aggregate net value from iteration logs
+    total_net_value = sum(
+        log.get('net_value', 0.0) for log in iteration_logs
+    )
+
+    should_reflect = (
+        total_net_value >= _AUTO_REFLECT_HIGH_VALUE
+        or total_net_value <= _AUTO_REFLECT_LOW_VALUE
+        or (termination_reason or '') in _DEGRADED_EXITS
+    )
+
+    if not should_reflect:
+        return
+
+    # Check cooldown
+    try:
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        cooldown_key = f"auto_reflect_cooldown:{topic}"
+        if store.get(cooldown_key):
+            logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown active for {topic}")
+            return
+        store.setex(cooldown_key, _AUTO_REFLECT_COOLDOWN_S, '1')
+    except Exception:
+        pass  # If cooldown check fails, proceed anyway
+
+    reason = (
+        f"high_value({total_net_value:.1f})" if total_net_value >= _AUTO_REFLECT_HIGH_VALUE
+        else f"low_value({total_net_value:.1f})" if total_net_value <= _AUTO_REFLECT_LOW_VALUE
+        else f"degraded_exit({termination_reason})"
+    )
+    logger.info(f"{LOG_PREFIX} Triggering auto-reflect: {reason}")
+
+    def _run_reflect():
+        try:
+            from services.innate_skills.reflect_skill import handle_reflect
+            handle_reflect(topic, {
+                'query': f'automatic reflection triggered by: {reason}',
+                'scope': 'recent',
+                'store': True,
+            })
+            logger.info(f"{LOG_PREFIX} Auto-reflect completed for {topic}")
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Auto-reflect failed: {e}")
+
+    t = threading.Thread(target=_run_reflect, daemon=True, name=f"auto-reflect-{topic[:20]}")
+    t.start()
 
 
 # ── Fingerprinting utilities (shared across all loop callers) ───────

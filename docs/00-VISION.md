@@ -129,7 +129,7 @@ Remembers context and priorities, understands recurring patterns, avoids requiri
 ### 5. Provides Reflective Intelligence
 Offers perspective and advice when appropriate, supports decision clarity.
 
-*Codebase: cognitive drift engine (DMN), curiosity thread service, introspect skill.*
+*Codebase: cognitive drift engine (DMN), curiosity thread service, introspect skill, reflect skill (on-demand + automatic post-loop), ACT orchestrator auto-reflection trigger.*
 
 ---
 
