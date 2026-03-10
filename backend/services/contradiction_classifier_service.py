@@ -544,23 +544,21 @@ class ContradictionClassifierService:
         meta_b: dict,
     ) -> Optional[dict]:
         """
-        Call the LLM to classify a memory pair.
+        Classify a memory pair — ONNX primary, LLM fallback.
+
+        Flow:
+          1. Try ONNX model (< 5ms, no context_hint needed)
+          2. If ONNX unavailable or confidence < 0.80 → fall through to LLM
+          3. LLM provides richer output (reasoning, surface_context, resolution)
 
         Returns parsed JSON dict or None on failure.
-
-        ONNX INJECTION POINT
-        ====================
-        This method is the single callsite where classification happens.
-        When the ONNX model is deployed, this method will:
-          1. Try ONNX first via _classify_pair_onnx()
-          2. If ONNX unavailable or confidence < threshold, fall back to LLM
-
-        The ONNX path does NOT use context_hint — the model was trained without it.
-        The ONNX path maps meta_a['source'] values like 'consolidation_new' and
-        'consolidation_existing' to the model's vocabulary ('concept').
-
-        See _classify_pair_onnx() for the wrapper contract.
         """
+        # ── ONNX primary path ──
+        onnx_result = self._classify_pair_onnx(text_a, text_b, meta_a, meta_b)
+        if onnx_result is not None:
+            return onnx_result
+
+        # ── LLM fallback ──
         user_parts = [
             f"Memory A: {text_a}",
             f"Memory B: {text_b}",
