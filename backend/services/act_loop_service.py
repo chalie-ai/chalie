@@ -226,13 +226,17 @@ class ActLoopService:
             result_text = result['result']
             exec_time = result['execution_time']
 
+            card_note = ""
             if result_text == "__CARD_ONLY__":
-                display_text = "(card emitted)"
+                display_text = "(card emitted — no text available)"
             elif isinstance(result_text, dict) and result_text.get("card_emitted"):
-                display_text = "(card emitted)"
+                display_text = "(card emitted — no text available)"
+            elif isinstance(result_text, str) and result_text.startswith("__CARD_EMITTED__\n"):
+                card_note = " [card delivered to user]"
+                display_text = _strip_tool_markers(result_text.split("\n", 1)[1])
             else:
                 display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
-            lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
+            lines.append(f"{idx}. [{action_type}] {status.upper()}{card_note}: {display_text} ({exec_time:.2f}s)")
 
         full_text = "\n".join(lines)
 
@@ -252,13 +256,17 @@ class ActLoopService:
                     status = result['status']
                     result_text = result['result']
                     exec_time = result['execution_time']
+                    card_note = ""
                     if result_text == "__CARD_ONLY__":
-                        display_text = "(card emitted)"
+                        display_text = "(card emitted — no text available)"
                     elif isinstance(result_text, dict) and result_text.get("card_emitted"):
-                        display_text = "(card emitted)"
+                        display_text = "(card emitted — no text available)"
+                    elif isinstance(result_text, str) and result_text.startswith("__CARD_EMITTED__\n"):
+                        card_note = " [card delivered to user]"
+                        display_text = _strip_tool_markers(result_text.split("\n", 1)[1])
                     else:
                         display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
-                    lines.append(f"{idx}. [{action_type}] {status.upper()}: {display_text} ({exec_time:.2f}s)")
+                    lines.append(f"{idx}. [{action_type}] {status.upper()}{card_note}: {display_text} ({exec_time:.2f}s)")
                 return "\n".join(lines)
 
         return full_text

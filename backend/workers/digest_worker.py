@@ -540,6 +540,7 @@ def _generate_with_act_orchestrator(
         r.get('status') == 'success'
         and r.get('result')
         and r.get('result') != '__CARD_ONLY__'
+        and not (isinstance(r.get('result'), str) and r['result'].startswith('__CARD_EMITTED__\n'))
         for r in result.act_history
     )
     if _has_substantive_results and terminal_mode == 'IGNORE':
@@ -560,15 +561,25 @@ def _generate_with_act_orchestrator(
 
     # Card-only detection
     _history = result.act_history
+    def _is_card_result(r):
+        rt = r.get('result')
+        return rt == '__CARD_ONLY__' or (isinstance(rt, str) and rt.startswith('__CARD_EMITTED__\n'))
+
     _all_card_only = (
         bool(_history)
         and all(r.get('status') == 'success' for r in _history)
-        and all(r.get('result') == '__CARD_ONLY__' for r in _history)
+        and all(_is_card_result(r) for r in _history)
     )
 
-    if _all_card_only:
+    # Card-emitted results WITH text should still go through RESPOND
+    _has_card_text = any(
+        isinstance(r.get('result'), str) and r['result'].startswith('__CARD_EMITTED__\n')
+        for r in _history
+    ) if _all_card_only else False
+
+    if _all_card_only and not _has_card_text:
         logging.info(
-            "[MODE:ACT→IGNORE] All actions emitted cards — skipping text response"
+            "[MODE:ACT→IGNORE] All actions emitted cards (no text) — skipping text response"
         )
         terminal_response = {
             'mode': 'IGNORE',
@@ -1757,10 +1768,14 @@ def _handle_innate_skill_dispatch(
         )
 
     # Check if ALL results are card-only (schedule, list emit cards; document search returns text)
+    def _is_card_res(r):
+        rt = r.get('result')
+        return rt == '__CARD_ONLY__' or (isinstance(rt, str) and rt.startswith('__CARD_EMITTED__\n'))
+
     all_card_only = (
         bool(act_results)
         and all(r.get('status') == 'success' for r in act_results)
-        and all(r.get('result') == '__CARD_ONLY__' for r in act_results)
+        and all(_is_card_res(r) for r in act_results)
     )
 
     ws_uuid = metadata.get('uuid')
@@ -1893,6 +1908,29 @@ def _handle_direct_tool_dispatch(
     # Build action dict matching the format the LLM produces in the ACT loop:
     # flat params alongside 'type', NOT nested under a 'params' key.
     # The registry lambda strips 'type' and passes the rest to invoke() as params.
+    #
+    # Direct dispatch can only map raw user text to a 'query' param safely.
+    # Tools with other param schemas (weather→location, etc.) need LLM extraction
+    # that only the ACT orchestrator provides. Check if this tool accepts 'query'
+    # as its primary param — if not, bail out and let the caller fall through
+    # to the full ACT orchestrator.
+    _can_direct = True
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        _tool = ToolRegistryService().tools.get(tool_name, {})
+        _params_schema = _tool.get('manifest', {}).get('parameters', {})
+        if _params_schema and 'query' not in _params_schema:
+            _can_direct = False
+            logging.info(
+                f"[DIGEST] Direct dispatch skipped for {tool_name}: "
+                f"tool params {list(_params_schema.keys())} need LLM extraction"
+            )
+    except Exception:
+        pass
+
+    if not _can_direct:
+        return None  # Caller falls through to ACT orchestrator
+
     action_spec = {
         'type': tool_name,
         'query': text,
@@ -1927,12 +1965,15 @@ def _handle_direct_tool_dispatch(
         logging.debug(f"[DIGEST] Direct dispatch critic skipped: {_ce}")
 
     # ── Card-only detection ───────────────────────────────────────────
+    _rt = result.get('result')
     is_card_only = (
         result.get('status') == 'success'
-        and result.get('result') == '__CARD_ONLY__'
+        and (_rt == '__CARD_ONLY__' or (isinstance(_rt, str) and _rt.startswith('__CARD_EMITTED__\n')))
     )
+    # Card-emitted with text should still go through RESPOND for synthesis
+    _card_has_text = isinstance(_rt, str) and _rt.startswith('__CARD_EMITTED__\n')
 
-    if is_card_only:
+    if is_card_only and not _card_has_text:
         logging.info(
             "[DIGEST] Direct dispatch: card-only result — closing channel"
         )
@@ -3006,13 +3047,52 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             }
             _dt_signals.update(_dt_nlp)
             _dt_signals['_prompt_text'] = text
-            response_data, routing_result = _handle_direct_tool_dispatch(
+            _direct_result = _handle_direct_tool_dispatch(
                 triage_result, text, topic, thread_id, metadata,
                 intent, working_memory, thread_conv_service,
                 cortex_config, cortex_prompt_map, mode_router, _dt_signals,
                 context_warmth, exchange_id,
             )
-            is_fast_path_ack = True
+            if _direct_result is not None:
+                response_data, routing_result = _direct_result
+                is_fast_path_ack = True
+            else:
+                # Tool needs LLM param extraction — route through full ACT loop
+                logging.info("[DIGEST] Direct dispatch declined — routing to ACT orchestrator")
+                _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
+                if _use_unified:
+                    _act_nlp = compute_nlp_signals(text, intent)
+                    _act_signals = {
+                        'context_warmth': context_warmth,
+                        'working_memory_turns': working_memory_turns,
+                        'gist_count': gist_count,
+                        'fact_count': fact_count,
+                        'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                        'world_state_present': bool(world_state and world_state.strip()),
+                        'topic_confidence': classification_result.get('confidence', 0.5),
+                        'is_new_topic': classification_result.get('is_new_topic', False),
+                        'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+                        'memory_confidence': memory_confidence,
+                    }
+                    _act_signals.update(_act_nlp)
+                    _act_signals['_prompt_text'] = text
+                    response_data, routing_result = route_and_generate(
+                        topic, text, classification, thread_conv_service,
+                        cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
+                        metadata=metadata, context_warmth=context_warmth,
+                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
+                        selected_tools=triage_result.tools if triage_result.tools else None,
+                        selected_skills=triage_result.skills if triage_result.skills else None,
+                        thread_id=thread_id,
+                    )
+                else:
+                    response_data = _handle_act_triage(
+                        triage_result, text, topic, thread_id, metadata,
+                        intent, intent_classifier, working_memory, thread_conv_service,
+                        context_warmth, exchange_id,
+                    )
+                    routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
+                is_fast_path_ack = True
 
         elif triage_result.branch == 'act':
             # Full ACT loop — complex multi-step tasks with external tools
