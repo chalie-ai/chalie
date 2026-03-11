@@ -77,7 +77,15 @@ class ExperienceAssimilationService:
         )
 
     def run(self, shared_state: Optional[dict] = None) -> None:
-        """Main service loop."""
+        """Run the main experience assimilation service loop.
+
+        Sleeps for ``check_interval`` seconds between cycles, skips when the
+        daily session cap is exceeded or the pending list is empty, and calls
+        :meth:`_run_cycle` otherwise.
+
+        Args:
+            shared_state: Optional shared state dict from the consumer harness.
+        """
         logger.info(f"{LOG_PREFIX} Service started")
 
         while True:
@@ -161,7 +169,17 @@ class ExperienceAssimilationService:
         return hashlib.md5(combined.encode()).hexdigest()[:16]
 
     def _is_content_seen(self, content_hash: str) -> bool:
-        """Check if identical content was processed in the last 24h."""
+        """Check and register a content hash for 24-hour deduplication.
+
+        If the hash has not been seen before, marks it as seen and returns ``False``.
+        If already seen, returns ``True`` without modifying the MemoryStore.
+
+        Args:
+            content_hash: 16-character MD5 hex digest of the tool outputs.
+
+        Returns:
+            ``True`` if this content hash was processed within the last 24 hours.
+        """
         key = f"tool_reflection:hash:{content_hash}"
         if self.store.exists(key):
             return True
@@ -169,7 +187,18 @@ class ExperienceAssimilationService:
         return False
 
     def _is_duplicate_observation(self, observation_text: str) -> bool:
-        """Check if we've already stored a similar observation."""
+        """Check and register an observation text hash for deduplication.
+
+        Marks the observation as seen on first call.  Subsequent calls with
+        identical (case-insensitive, stripped) text return ``True`` for the
+        configured ``dedup_ttl`` window.
+
+        Args:
+            observation_text: Raw observation string from the LLM reflection.
+
+        Returns:
+            ``True`` if a similar observation was stored within the dedup window.
+        """
         obs_hash = hashlib.md5(observation_text.lower().strip().encode()).hexdigest()[:12]
         key = f"tool_reflection:obs:{obs_hash}"
         if self.store.exists(key):
@@ -360,6 +389,13 @@ class ExperienceAssimilationService:
 
 
 def experience_assimilation_worker(shared_state: Optional[dict] = None):
-    """Entry point for run.py service registration."""
+    """Entry point for run.py service thread registration.
+
+    Instantiates :class:`ExperienceAssimilationService` inside the child
+    thread and starts the main service loop.
+
+    Args:
+        shared_state: Optional shared state dict from the consumer harness.
+    """
     service = ExperienceAssimilationService()
     service.run(shared_state)

@@ -163,7 +163,15 @@ class GrowthPatternService:
         return result
 
     def _get_baseline(self, db_service) -> Optional[dict]:
-        """Read stored style baseline from user_traits."""
+        """Read the stored communication style baseline from the user_traits table.
+
+        Args:
+            db_service: :class:`~services.database_service.DatabaseService` instance.
+
+        Returns:
+            Dict mapping dimension names to baseline float values, or ``None``
+            if no baseline has been stored yet.
+        """
         try:
             with db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -395,7 +403,15 @@ class GrowthPatternService:
             return False
 
     def _log_growth_signal(self, delta: dict) -> None:
-        """Log growth signal detection to interaction_log for observability."""
+        """Log a growth signal detection event to the interaction log.
+
+        Non-fatal — failures are silently swallowed so the detection cycle
+        is not interrupted by logging errors.
+
+        Args:
+            delta: Delta dict from :meth:`_compute_deltas` containing
+                ``dimension``, ``direction``, and ``magnitude`` keys.
+        """
         try:
             from services.interaction_log_service import InteractionLogService
             log_service = InteractionLogService()

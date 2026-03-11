@@ -93,11 +93,24 @@ class IdentityService:
 
     def update_activation(self, vector_name: str, emotion_signal: float, reward_signal: float, topic: str = None):
         """
-        Dual-channel reinforcement update.
+        Apply a dual-channel reinforcement update to an identity vector.
 
-        total_signal = (emotion_signal * 0.6) + (reward_signal * 0.4)
-        delta = total_signal * plasticity_rate
-        current_activation = clamp(current_activation + delta, min_cap, max_cap)
+        Computes:
+        ``total_signal = (emotion_signal × emotion_weight) + (reward_signal × reward_weight)``
+        ``delta = total_signal × plasticity_rate``
+        ``new_activation = clamp(activation + delta, min_cap, max_cap)``
+
+        Also appends the total signal to the vector's ring-buffer history and
+        may trigger baseline drift evaluation once the reinforcement threshold
+        is reached.
+
+        Args:
+            vector_name: Name of the identity vector to update (e.g.
+                ``'warmth'``, ``'assertiveness'``).
+            emotion_signal: Emotion-channel signal in any float range.
+                Positive values reinforce the vector; negative values suppress it.
+            reward_signal: Reward-channel signal (outcome quality) in any float range.
+            topic: Optional topic string stored in the event log for observability.
         """
         try:
             with self.db.connection() as conn:
@@ -401,7 +414,18 @@ class IdentityService:
     def _log_event(self, cursor, vector_name: str, old_activation: float,
                    new_activation: float, signal_source: str,
                    signal_value: float = None, topic: str = None):
-        """Append to identity_events for observability."""
+        """Append a structured entry to the ``identity_events`` audit table.
+
+        Args:
+            cursor: Open sqlite3 cursor within the current transaction.
+            vector_name: Name of the identity vector that changed.
+            old_activation: Activation value before the change.
+            new_activation: Activation value after the change.
+            signal_source: Change cause label (``'reinforcement'``, ``'inertia'``,
+                ``'drift'``, or ``'coherence'``).
+            signal_value: Optional numeric magnitude of the change signal.
+            topic: Optional conversation topic associated with the change.
+        """
         try:
             cursor.execute("""
                 INSERT INTO identity_events

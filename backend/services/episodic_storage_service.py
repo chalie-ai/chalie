@@ -89,7 +89,16 @@ class EpisodicStorageService:
             raise
 
     def _store_embedding(self, conn, episode_id: str, embedding):
-        """Store embedding in the companion vec table."""
+        """Store an embedding blob in the ``episodes_vec`` virtual table.
+
+        Retrieves the episode's integer rowid and inserts (or replaces) the blob
+        in the companion vec table for MATCH queries.
+
+        Args:
+            conn: Open database connection (already in a transaction).
+            episode_id: UUID string of the episode.
+            embedding: Embedding data as list, tuple, or bytes.
+        """
         try:
             import struct
             if isinstance(embedding, (list, tuple)):
@@ -114,7 +123,21 @@ class EpisodicStorageService:
             logging.warning(f"Failed to store episode embedding: {e}")
 
     def update_episode(self, episode_id: str, updates: dict) -> bool:
-        """Update an existing episode."""
+        """Update an existing episode with the provided field values.
+
+        Handles JSON serialization for structured fields (``intent``,
+        ``context``, ``emotion``, ``salience_factors``, ``open_loops``) and
+        optionally refreshes the embedding in ``episodes_vec``.
+
+        Args:
+            episode_id: UUID string identifying the episode to update.
+            updates: Dict mapping field names to new values.  The special key
+                ``'embedding'`` triggers a vec-table upsert.
+
+        Returns:
+            ``True`` if at least one row was updated, ``False`` on error or
+            if no rows matched.
+        """
         if not updates:
             return True
 
@@ -159,7 +182,15 @@ class EpisodicStorageService:
             return False
 
     def soft_delete_episode(self, episode_id: str) -> bool:
-        """Soft delete an episode (set deleted_at timestamp)."""
+        """Soft-delete an episode by setting its ``deleted_at`` timestamp.
+
+        Args:
+            episode_id: UUID string of the episode to soft-delete.
+
+        Returns:
+            ``True`` if the episode was found and deleted, ``False`` if not
+            found, already deleted, or on database error.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -185,7 +216,21 @@ class EpisodicStorageService:
             return False
 
     def get_episode_by_id(self, episode_id: str) -> Optional[dict]:
-        """Retrieve an episode by ID."""
+        """Retrieve a single non-deleted episode by its UUID.
+
+        Also triggers a reconsolidation update (access count + activation score).
+
+        Args:
+            episode_id: UUID string of the episode to retrieve.
+
+        Returns:
+            Episode dict with keys ``id``, ``intent``, ``context``, ``action``,
+            ``emotion``, ``outcome``, ``gist``, ``salience``, ``freshness``,
+            ``topic``, ``exchange_id``, ``created_at``, ``updated_at``,
+            ``last_accessed_at``, ``access_count``, ``activation_score``,
+            ``salience_factors``, and ``open_loops``.  Returns ``None`` if
+            not found or on error.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
