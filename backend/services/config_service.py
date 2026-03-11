@@ -24,13 +24,31 @@ class ConfigService:
 
     @staticmethod
     def load_json(file_path: str) -> Dict[str, Any]:
-        """Load JSON configuration file."""
+        """Load and parse a JSON configuration file.
+
+        Args:
+            file_path: Absolute or relative path to the JSON file.
+
+        Returns:
+            Parsed dict from the JSON file contents.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            json.JSONDecodeError: If the file is not valid JSON.
+        """
         with open(file_path, 'r') as f:
             return json.load(f)
 
     @staticmethod
     def load_text(file_path: str) -> str:
-        """Load text file content."""
+        """Load the text content of a file, returning empty string if missing.
+
+        Args:
+            file_path: Absolute or relative path to the text file.
+
+        Returns:
+            Stripped text content of the file, or empty string if it does not exist.
+        """
         path = Path(file_path)
         if not path.exists():
             return ""
@@ -42,6 +60,10 @@ class ConfigService:
 
         Returns only the memory block from connections.json. Server bind address
         is managed by CLI args via runtime_config, not here.
+
+        Returns:
+            Dict with a single ``"memory"`` key containing the MemoryStore
+            connection configuration dict.
         """
         try:
             base_config = ConfigService.load_json(ConfigService.CONNECTIONS_CONFIG)
@@ -56,7 +78,11 @@ class ConfigService:
 
     @staticmethod
     def get_providers() -> Dict[str, Any]:
-        """Load providers from cache (with MemoryStore-backed invalidation)."""
+        """Load providers from cache (with MemoryStore-backed invalidation).
+
+        Returns:
+            Dict mapping provider name to provider config dict.
+        """
         from services.provider_cache_service import ProviderCacheService
         return ProviderCacheService.get_providers()
 
