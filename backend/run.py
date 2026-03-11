@@ -356,7 +356,7 @@ def main():
     _try_register(manager, "tool-update-checker",
                   "services.tool_update_service", "tool_update_worker")
 
-    # Auto-install any missing default tools (background thread, non-blocking)
+    # Auto-install any missing default tools (synchronous, blocks until complete)
     _install_default_tools()
 
     # Register cron-triggered tools
