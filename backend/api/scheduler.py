@@ -251,12 +251,16 @@ def create_scheduler():
             row = cursor.fetchone()
             conn.commit()
 
-        # Embed for semantic world state retrieval (non-fatal)
-        try:
-            from services.scheduler_service import embed_scheduled_item
-            embed_scheduled_item(item_id, clean["message"], db)
-        except Exception as emb_err:
-            logger.warning(f"[SCHEDULER API] Embedding failed (non-fatal): {emb_err}")
+        # Embed for semantic world state retrieval — fire-and-forget background thread
+        # (non-fatal: world state salience degrades gracefully without embedding)
+        def _embed():
+            try:
+                from services.scheduler_service import embed_scheduled_item
+                embed_scheduled_item(item_id, clean["message"], db)
+            except Exception as emb_err:
+                logger.warning(f"[SCHEDULER API] Embedding failed (non-fatal): {emb_err}")
+        import threading
+        threading.Thread(target=_embed, daemon=True, name="scheduler-embed").start()
 
         item = _serialize_item(_row_to_dict(row, cols))
         return jsonify({"item": item}), 201
