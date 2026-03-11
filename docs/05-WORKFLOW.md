@@ -1,5 +1,32 @@
 # System Workflow
 
+## Git Workflow
+
+**Merging to main and releasing must always be done manually — never automated.**
+
+### Branch Strategy
+```
+Big features:   feature/<name> → rc-<version> → main → release tag
+Bug fixes:      rc-<version> → main → release tag
+```
+
+| Branch | Purpose | Merge Target |
+|--------|---------|--------------|
+| `rc-*` (release candidate) | Active development. Default working branch for all commits. | `main` (manual) |
+| `feature/*` | Large features needing isolation. | Current `rc-*` branch |
+| `main` | Stable branch. Never commit directly. | Release tags only |
+| `v*.*.*` tags | Release. Triggers Docker publish + installer. | — |
+
+### CI Triggers
+
+| Workflow | Trigger | Notes |
+|----------|---------|-------|
+| Build log entries | Every push (any branch) | Ensures all activity is recorded for backup |
+| Build log sync to website | Push to `main` only | Published entries visible on chalie.ai |
+| Docker publish | `v*.*.*` tags | Multi-arch image to Docker Hub |
+| Installer publish | `v*.*.*` tags | Updates install script on chalie-web |
+| Docs sync | Push to `main` touching `docs/` | Syncs to chalie-web |
+
 ## Overview
 The application processes user prompts through a pipeline of workers, queues, and services. Each component is responsible for a single concern, following the **Single Responsibility Principle**.
 
