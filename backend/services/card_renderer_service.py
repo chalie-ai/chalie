@@ -232,10 +232,18 @@ class CardRendererService:
         return result
 
     def _sanitize_html(self, html: str) -> str:
-        """
-        Strip dangerous HTML patterns: <script> tags and on* event handlers.
+        """Strip dangerous HTML patterns from template-rendered output.
 
-        Allowlist: div, span, p, h1-h4, ul, ol, li, strong, em, b, i, img, br, hr
+        Removes ``<script>`` tags, ``on*`` event handler attributes,
+        ``<iframe>``, ``<form>``, ``<object>``, ``<embed>``, ``<link>``,
+        ``<meta>``, and ``<style>`` tags, as well as ``javascript:`` and
+        ``data:`` URIs from non-img ``src`` attributes.
+
+        Args:
+            html: Raw HTML string from template rendering.
+
+        Returns:
+            Sanitized HTML string with dangerous patterns removed.
         """
         # Strip <script>...</script>
         html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
@@ -257,10 +265,18 @@ class CardRendererService:
         return html
 
     def _scope_css(self, css: str, scope_id: str) -> str:
-        """
-        Scope all CSS selectors to [data-card-scope="{scope_id}"].
+        """Scope all CSS selectors to a data attribute for card isolation.
 
-        Simple approach: split on '{' to find selectors, prepend scope attribute.
+        Prepends ``[data-card-scope='{scope_id}']`` to every CSS selector found
+        by splitting on ``{``. This prevents card styles from leaking into the
+        rest of the page.
+
+        Args:
+            css: Raw CSS string from the tool's card/styles.css file.
+            scope_id: Short unique identifier to use as the scoping attribute value.
+
+        Returns:
+            CSS string with all selectors prefixed by the scope attribute.
         """
         if not css:
             return ""
@@ -293,8 +309,16 @@ class CardRendererService:
         return "".join(result)
 
     def _sanitize_css(self, css: str) -> str:
-        """
-        Strip dangerous CSS patterns: expression(), url(data:), @import, <script>.
+        """Strip dangerous CSS patterns from scoped card styles.
+
+        Removes ``@import`` rules, ``expression(...)`` calls,
+        ``url(data:...)`` data URIs, and any stray ``<script>`` tags.
+
+        Args:
+            css: CSS string (may already be scope-prefixed) to sanitize.
+
+        Returns:
+            Sanitized CSS string with dangerous patterns removed.
         """
         # Strip @import
         css = re.sub(r"@import[^;]*;", "", css, flags=re.IGNORECASE)

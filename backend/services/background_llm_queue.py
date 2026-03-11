@@ -151,11 +151,19 @@ class BackgroundLLMProxy:
 
 
 def create_background_llm_proxy(agent_name: str) -> BackgroundLLMProxy:
-    """
+    """Create a BackgroundLLMProxy for a background service.
+
     Factory matching create_refreshable_llm_service() signature.
 
     Drop-in replacement for background services that do not need
     low-latency LLM access. All calls are serialized through the
     background queue with adaptive back-off and retry.
+
+    Args:
+        agent_name: Logical name of the calling background service
+            (e.g. ``"autobiography"``, ``"cognitive-drift"``).
+
+    Returns:
+        BackgroundLLMProxy instance ready to accept send_message() calls.
     """
     return BackgroundLLMProxy(agent_name)
