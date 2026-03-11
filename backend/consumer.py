@@ -242,7 +242,11 @@ class ToolScannerThread:
         for entry in sorted(self._tools_dir.iterdir()):
             if not entry.is_dir() or entry.name.startswith(("_", ".")):
                 continue
-            if not (entry / "manifest.json").exists() or not (entry / "Dockerfile").exists():
+            if not (entry / "manifest.json").exists():
+                continue
+            # Trusted tools use runner.py (no Docker); sandboxed tools use Dockerfile.
+            # Accept either — reject dirs that have neither.
+            if not (entry / "runner.py").exists() and not (entry / "Dockerfile").exists():
                 continue
             try:
                 with open(entry / "manifest.json") as f:
