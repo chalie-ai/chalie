@@ -7,12 +7,13 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-ONNX Inference Service — generic single-token classifier inference.
+ONNX Inference Service — generic classifier inference (single-label & multi-label).
 
 Loads ONNX models from a configurable directory and runs classification
 inference on CPU.  Model-agnostic: each subdirectory holds a model's
 ONNX weights and metadata.  Tokenizer is loaded from HuggingFace via
-the ``base_model`` field in ``classifier_meta.json``.
+the ``base_model`` field in ``classifier_meta.json`` and shared across
+models that use the same base.
 
 On first boot (or version mismatch), models are downloaded from their
 GitHub release assets (ONNX weights + meta JSON).
@@ -21,9 +22,21 @@ Directory layout (after download):
     <MODELS_DIR>/
         mode-tiebreaker/
             model.onnx
-            classifier_meta.json   {"labels": ["A","B"], "base_model": "...", ...}
+            classifier_meta.json   {"labels": [...], "base_model": "...", ...}
         contradiction/
             ...
+        skill-selector/
+            ...
+
+Supports two model types (via ``model_type`` in metadata):
+  - ``single_label``: N-class softmax classification (CrossEntropy-trained)
+  - ``multi_label``: K independent sigmoid outputs (BCE-trained)
+
+Supports two output formats:
+  - **Pruned** (``pruned: true``): output shape ``(batch, num_classes)`` — logits
+    are already class-specific, no vocab extraction needed.
+  - **Legacy** (``pruned: false`` or absent): output shape ``(batch, seq, vocab)`` —
+    extract last-token logits at label token IDs.
 
 Thread-safe — multiple workers can call predict() concurrently.
 """
@@ -50,10 +63,10 @@ DEFAULT_MODELS_REPO = "chalie-ai/models"
 
 # Models that should be auto-downloaded on boot.
 # Each entry: (subdirectory_name, github_repo_or_None_for_default, release_asset_prefix)
-# The asset is expected as a tarball: {prefix}.tar.gz in the latest release.
 MODEL_REGISTRY = [
     ("mode-tiebreaker", None, "mode-tiebreaker"),
     ("contradiction", None, "contradiction"),
+    ("skill-selector", None, "skill-selector"),
 ]
 
 
@@ -61,15 +74,20 @@ class _CachedModel:
     """Holds a loaded ONNX session, tokenizer, and label metadata."""
 
     __slots__ = ("session", "tokenizer", "labels", "label_token_ids", "version",
-                 "_extra_inputs")
+                 "pruned", "model_type", "thresholds", "_extra_inputs")
 
     def __init__(self, session, tokenizer, labels: List[str],
-                 label_token_ids: List[int], version: str):
+                 label_token_ids: List[int], version: str,
+                 pruned: bool = False, model_type: str = "single_label",
+                 thresholds: Optional[Dict[str, float]] = None):
         self.session = session
         self.tokenizer = tokenizer
         self.labels = labels
         self.label_token_ids = label_token_ids
         self.version = version
+        self.pruned = pruned
+        self.model_type = model_type
+        self.thresholds = thresholds or {}
         # Cache extra ONNX inputs (e.g. RoPE internals traced as graph inputs).
         # These need zero tensors at inference time.
         known = {"input_ids", "attention_mask"}
@@ -88,6 +106,34 @@ class _CachedModel:
         return feed
 
 
+# Shared tokenizer cache: base_model_name → tokenizer instance
+_tokenizer_cache: Dict[str, object] = {}
+_tokenizer_lock = threading.Lock()
+
+
+def _get_shared_tokenizer(base_model: str, model_dir: Path):
+    """Load tokenizer from HuggingFace, sharing across models with same base."""
+    if base_model in _tokenizer_cache:
+        return _tokenizer_cache[base_model]
+
+    with _tokenizer_lock:
+        if base_model in _tokenizer_cache:
+            return _tokenizer_cache[base_model]
+
+        from transformers import AutoTokenizer
+
+        # Prefer local tokenizer files if present, otherwise download from HF
+        if (model_dir / "tokenizer.json").exists():
+            tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
+            logger.info(f"{LOG_PREFIX} Loaded tokenizer from {model_dir}")
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(base_model)
+            logger.info(f"{LOG_PREFIX} Loaded tokenizer from HuggingFace: {base_model}")
+
+        _tokenizer_cache[base_model] = tokenizer
+        return tokenizer
+
+
 class OnnxInferenceService:
     """
     Generic ONNX classifier inference with auto-download.
@@ -96,6 +142,7 @@ class OnnxInferenceService:
         svc = OnnxInferenceService("/models")
         svc.ensure_models()                       # download / version-check
         label, confidence = svc.predict("mode-tiebreaker", input_text)
+        skills = svc.predict_multi_label("skill-selector", input_text)
     """
 
     def __init__(self, models_dir: str):
@@ -267,7 +314,9 @@ class OnnxInferenceService:
 
     def predict(self, model_name: str, text: str) -> Tuple[Optional[str], float]:
         """
-        Run single-token classification.
+        Run single-label classification (softmax → argmax).
+
+        Works with both pruned and legacy output formats.
 
         Args:
             model_name: Subdirectory name under MODELS_DIR (e.g. "mode-tiebreaker")
@@ -296,23 +345,25 @@ class OnnxInferenceService:
             input_ids = encoded["input_ids"]
             attention_mask = encoded["attention_mask"]
 
-            # Run ONNX inference (build_feed handles extra traced inputs like RoPE)
+            # Run ONNX inference
             outputs = model.session.run(
                 None,
                 model.build_feed(input_ids, attention_mask),
             )
 
-            # Extract logits: shape (batch, seq_len, vocab_size)
             logits = outputs[0]
 
-            # Last real token position
-            seq_len = int(attention_mask.sum()) - 1
-            last_logits = logits[0, seq_len, :]
+            # Extract label logits based on model format
+            if model.pruned:
+                # Pruned: output is (batch, num_classes) — already class-specific
+                label_logits = logits[0]
+            else:
+                # Legacy: output is (batch, seq_len, vocab_size)
+                seq_len = int(attention_mask.sum()) - 1
+                last_logits = logits[0, seq_len, :]
+                label_logits = np.array([last_logits[tid] for tid in model.label_token_ids])
 
-            # Compare logits for each label's token ID
-            label_logits = np.array([last_logits[tid] for tid in model.label_token_ids])
-
-            # Softmax over label logits only
+            # Softmax over label logits
             label_logits_shifted = label_logits - label_logits.max()
             exp_logits = np.exp(label_logits_shifted)
             probs = exp_logits / exp_logits.sum()
@@ -332,9 +383,83 @@ class OnnxInferenceService:
             logger.warning(f"{LOG_PREFIX} Inference failed for {model_name}: {e}")
             return None, 0.0
 
+    def predict_multi_label(
+        self, model_name: str, text: str,
+        threshold_overrides: Optional[Dict[str, float]] = None,
+    ) -> List[Tuple[str, float]]:
+        """
+        Run multi-label classification (sigmoid per output, threshold per label).
+
+        Args:
+            model_name: Subdirectory name (e.g. "skill-selector")
+            text: Full input text
+            threshold_overrides: Optional per-label threshold overrides.
+                Falls back to thresholds from classifier_meta.json, then 0.5.
+
+        Returns:
+            List of (label, confidence) tuples for labels above threshold,
+            sorted by confidence descending. Empty list if no labels fire
+            or model unavailable.
+        """
+        model = self._get_model(model_name)
+        if model is None:
+            return []
+
+        try:
+            start = time.perf_counter()
+
+            encoded = model.tokenizer(
+                text,
+                return_tensors="np",
+                padding=False,
+                truncation=True,
+                max_length=256,
+            )
+
+            input_ids = encoded["input_ids"]
+            attention_mask = encoded["attention_mask"]
+
+            outputs = model.session.run(
+                None,
+                model.build_feed(input_ids, attention_mask),
+            )
+
+            logits = outputs[0]
+
+            if model.pruned:
+                raw_logits = logits[0]
+            else:
+                seq_len = int(attention_mask.sum()) - 1
+                raw_logits = logits[0, seq_len, :]
+
+            # Sigmoid per output
+            probs = 1.0 / (1.0 + np.exp(-raw_logits.astype(np.float64)))
+
+            # Apply per-label thresholds
+            thresholds = threshold_overrides or model.thresholds
+            results = []
+            for i, label in enumerate(model.labels):
+                t = thresholds.get(label, 0.5)
+                if probs[i] >= t:
+                    results.append((label, float(probs[i])))
+
+            results.sort(key=lambda x: x[1], reverse=True)
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            active = [r[0] for r in results]
+            logger.debug(
+                f"{LOG_PREFIX} {model_name}: {active} in {elapsed_ms:.1f}ms"
+            )
+
+            return results
+
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Multi-label inference failed for {model_name}: {e}")
+            return []
+
     def predict_batch(self, model_name: str, texts: List[str]) -> List[Tuple[Optional[str], float]]:
         """
-        Run classification on a batch of inputs.
+        Run single-label classification on a batch of inputs.
 
         Returns list of (label, confidence) tuples, one per input.
         """
@@ -363,10 +488,15 @@ class OnnxInferenceService:
             results = []
 
             for i in range(len(texts)):
-                seq_len = int(attention_mask[i].sum()) - 1
-                last_logits = logits[i, seq_len, :]
+                if model.pruned:
+                    # Pruned: (batch, num_classes)
+                    label_logits = logits[i]
+                else:
+                    # Legacy: (batch, seq_len, vocab_size)
+                    seq_len = int(attention_mask[i].sum()) - 1
+                    last_logits = logits[i, seq_len, :]
+                    label_logits = np.array([last_logits[tid] for tid in model.label_token_ids])
 
-                label_logits = np.array([last_logits[tid] for tid in model.label_token_ids])
                 label_logits_shifted = label_logits - label_logits.max()
                 exp_logits = np.exp(label_logits_shifted)
                 probs = exp_logits / exp_logits.sum()
@@ -433,6 +563,9 @@ class OnnxInferenceService:
             labels = meta["labels"]
             version = meta.get("version", "unknown")
             base_model = meta.get("base_model")
+            pruned = meta.get("pruned", False)
+            model_type = meta.get("model_type", "single_label")
+            thresholds = meta.get("thresholds", {})
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"{LOG_PREFIX} Invalid classifier_meta.json in {model_dir}: {e}")
             return None
@@ -458,17 +591,14 @@ class OnnxInferenceService:
             logger.warning(f"{LOG_PREFIX} Failed to load ONNX session from {onnx_path}: {e}")
             return None
 
-        # Load tokenizer — bundled in model directory (no HF download needed).
-        # Falls back to HuggingFace base model name if local tokenizer missing.
+        # Load tokenizer — shared across models with same base_model
         try:
-            from transformers import AutoTokenizer
-
-            if (model_dir / "tokenizer.json").exists():
+            if base_model:
+                tokenizer = _get_shared_tokenizer(base_model, model_dir)
+            elif (model_dir / "tokenizer.json").exists():
+                from transformers import AutoTokenizer
                 tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
                 logger.info(f"{LOG_PREFIX} Loaded tokenizer from {model_dir}")
-            elif base_model:
-                tokenizer = AutoTokenizer.from_pretrained(base_model)
-                logger.info(f"{LOG_PREFIX} Loaded tokenizer from HuggingFace: {base_model}")
             else:
                 logger.warning(f"{LOG_PREFIX} No tokenizer found for {model_name}")
                 return None
@@ -479,18 +609,19 @@ class OnnxInferenceService:
             logger.warning(f"{LOG_PREFIX} Failed to load tokenizer for {model_name}: {e}")
             return None
 
-        # Map labels to token IDs
+        # Map labels to token IDs (only needed for legacy unpruned models)
         label_token_ids = []
-        for label in labels:
-            token_ids = tokenizer.encode(label, add_special_tokens=False)
-            if not token_ids:
-                logger.warning(f"{LOG_PREFIX} Label '{label}' has no token ID in tokenizer")
-                return None
-            label_token_ids.append(token_ids[0])
+        if not pruned:
+            for label in labels:
+                token_ids = tokenizer.encode(label, add_special_tokens=False)
+                if not token_ids:
+                    logger.warning(f"{LOG_PREFIX} Label '{label}' has no token ID in tokenizer")
+                    return None
+                label_token_ids.append(token_ids[0])
 
         logger.info(
             f"{LOG_PREFIX} Loaded {model_name} ({version}): {onnx_path.name}, "
-            f"labels={labels}, token_ids={label_token_ids}"
+            f"type={model_type}, pruned={pruned}, labels={labels}"
         )
 
         return _CachedModel(
@@ -499,6 +630,9 @@ class OnnxInferenceService:
             labels=labels,
             label_token_ids=label_token_ids,
             version=version,
+            pruned=pruned,
+            model_type=model_type,
+            thresholds=thresholds,
         )
 
 
