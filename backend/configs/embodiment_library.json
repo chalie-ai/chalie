@@ -99,6 +99,50 @@
     "installs_by_default": true
   },
   {
+    "name": "tvmaze",
+    "title": "TV Shows",
+    "icon": "fa-tv",
+    "repo": "chalie-ai/chalie-tool-tvmaze",
+    "summary": "Search TV shows, episodes, schedules, and cast info via TVmaze. No API key required.",
+    "category": "entertainment",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "itunes_search",
+    "title": "iTunes Search",
+    "icon": "fa-brands fa-apple",
+    "repo": "chalie-ai/chalie-tool-itunes-search",
+    "summary": "Search Apple's catalog for podcasts, music, movies, audiobooks, and apps. No API key required.",
+    "category": "entertainment",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "mealdb",
+    "title": "Recipes",
+    "icon": "fa-utensils",
+    "repo": "chalie-ai/chalie-tool-mealdb",
+    "summary": "Search recipes by name, ingredient, category, or cuisine. Full instructions and ingredients. No API key required.",
+    "category": "lifestyle",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "cocktaildb",
+    "title": "Cocktails",
+    "icon": "fa-martini-glass",
+    "repo": "chalie-ai/chalie-tool-cocktaildb",
+    "summary": "Search cocktail recipes by name, ingredient, or category. Full instructions with glassware and measurements. No API key required.",
+    "category": "lifestyle",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
     "name": "searxng",
     "title": "SearXNG",
     "icon": "https://www.vectorlogo.zone/logos/google/google-icon.svg",
