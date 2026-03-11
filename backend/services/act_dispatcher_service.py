@@ -17,7 +17,18 @@ from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINIST
 
 
 def _estimate_confidence(action_type: str, raw_result: Any) -> float:
-    """Estimate confidence based on action type and result richness."""
+    """Estimate confidence based on action type and result richness.
+
+    Deterministic actions always return 0.92.  Read actions are scored by the
+    length of the result string.  All other action types default to 0.50.
+
+    Args:
+        action_type: The action category string (e.g. ``"recall"``, ``"memorize"``).
+        raw_result: Raw result value returned by the action handler.
+
+    Returns:
+        Confidence score in the range [0.0, 1.0].
+    """
     if action_type in _DETERMINISTIC_ACTIONS:
         return 0.92
     if action_type in _READ_ACTIONS:
@@ -31,7 +42,19 @@ def _estimate_confidence(action_type: str, raw_result: Any) -> float:
 
 
 def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) -> str:
-    """Extract contextual notes from an action result for critic review."""
+    """Extract contextual notes from an action result for critic review.
+
+    Currently produces notes for ``schedule`` (parsed date, recurrence) and
+    ``recall`` (query string) action types.
+
+    Args:
+        action_type: The action category string.
+        action: Full action specification dict.
+        raw_result: Raw result value returned by the action handler.
+
+    Returns:
+        Semicolon-delimited notes string, or empty string if none apply.
+    """
     notes_parts = []
     if action_type == 'schedule':
         if isinstance(raw_result, dict):
@@ -117,6 +140,7 @@ class ActDispatcherService:
             result_container = {'result': None, 'error': None}
 
             def target():
+                """Thread target: invoke the action handler and capture the result."""
                 try:
                     result_container['result'] = handler(topic, action)
                 except Exception as e:

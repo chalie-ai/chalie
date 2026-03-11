@@ -47,6 +47,11 @@ class CuriosityThreadService:
     MAX_DAILY_REINFORCEMENT = 0.2
 
     def __init__(self, db_service=None):
+        """Initialize the curiosity thread service.
+
+        Args:
+            db_service: DatabaseService instance. Uses the shared service if None.
+        """
         if db_service is None:
             from services.database_service import get_shared_db_service
             db_service = get_shared_db_service()
@@ -527,11 +532,17 @@ class CuriosityThreadService:
             return False
 
     def _count_user_episodes_for_topic(self, seed_topic: str, hours: int = 24) -> int:
-        """
-        Count user-generated episodes matching the seed topic in last N hours.
+        """Count user-generated episodes matching the seed topic in the last N hours.
 
         CRITICAL: excludes episodes from pursuit/tool_reflection/drift/curiosity_thread
         to prevent self-reinforcement loops.
+
+        Args:
+            seed_topic: Topic string to compare against episode embeddings.
+            hours: Look-back window in hours (default: 24).
+
+        Returns:
+            Count of matching user-generated episodes.
         """
         if not seed_topic:
             return 0
@@ -574,7 +585,14 @@ class CuriosityThreadService:
             return 0
 
     def _row_to_dict(self, row) -> Dict:
-        """Convert a database row tuple to a thread dict."""
+        """Convert a curiosity_threads database row tuple to a thread dict.
+
+        Args:
+            row: Tuple of column values from the curiosity_threads SELECT query.
+
+        Returns:
+            Dict with thread fields keyed by name.
+        """
         return {
             'id': row[0],
             'title': row[1],

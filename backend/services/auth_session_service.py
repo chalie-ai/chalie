@@ -15,7 +15,19 @@ SESSION_KEY_PREFIX = 'auth_session:'
 
 
 def create_session(response) -> str:
-    """Create a new session, set cookie on response, return token."""
+    """Create a new session, set cookie on response, return token.
+
+    Generates a cryptographically secure random token, stores it in MemoryStore
+    with a 30-day TTL, and attaches the ``chalie_session`` HTTP-only cookie to
+    the given response object.
+
+    Args:
+        response: Flask (or compatible) response object on which the session
+            cookie will be set.
+
+    Returns:
+        The newly created session token string.
+    """
     from services.memory_client import MemoryClientService
 
     token = secrets.token_urlsafe(32)
@@ -36,7 +48,18 @@ def create_session(response) -> str:
 
 
 def validate_session(request) -> bool:
-    """Return True if the request carries a valid session cookie."""
+    """Return True if the request carries a valid session cookie.
+
+    Reads the ``chalie_session`` cookie from the request, checks that the
+    corresponding key exists in MemoryStore, and slides the TTL on a hit.
+
+    Args:
+        request: Flask (or compatible) request object providing access to
+            cookies.
+
+    Returns:
+        True if the session token is present and valid, False otherwise.
+    """
     from services.memory_client import MemoryClientService
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
@@ -51,7 +74,18 @@ def validate_session(request) -> bool:
 
 
 def destroy_session(request, response):
-    """Invalidate the session and clear the cookie."""
+    """Invalidate the session and clear the cookie.
+
+    Deletes the MemoryStore key for the session token found in the request
+    cookie, then instructs the response to delete the ``chalie_session`` cookie
+    from the client.
+
+    Args:
+        request: Flask (or compatible) request object providing access to
+            cookies.
+        response: Flask (or compatible) response object on which the cookie
+            deletion will be applied.
+    """
     from services.memory_client import MemoryClientService
 
     token = request.cookies.get(SESSION_COOKIE_NAME)

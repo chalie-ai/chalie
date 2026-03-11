@@ -1,3 +1,11 @@
+"""
+Config Service — Centralized configuration loading and provider resolution.
+
+Loads agent configs from JSON files, resolves provider references for LLM and
+embedding backends, and exposes helpers for prompt text, connection settings,
+and registered agent names.
+"""
+
 import json
 import logging
 from pathlib import Path
@@ -7,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigService:
+    """Static configuration service for agents, providers, prompts, and connections."""
+
     CONFIGS_DIR         = Path(__file__).resolve().parent.parent / "configs"
     PROMPTS_DIR         = Path(__file__).resolve().parent.parent / "prompts"
     CONNECTIONS_CONFIG  = str(CONFIGS_DIR / "connections.json")
@@ -95,6 +105,14 @@ class ConfigService:
 
     @staticmethod
     def get_agent_config(agent_name: str) -> Dict[str, Any]:
+        """Load raw agent config JSON without provider resolution.
+
+        Args:
+            agent_name: Agent config name (filename stem under configs/agents/)
+
+        Returns:
+            Dict containing the raw agent configuration.
+        """
         return ConfigService.load_json(str(ConfigService.AGENTS_CONFIGS / (agent_name + ".json")))
 
     @staticmethod
@@ -128,10 +146,23 @@ class ConfigService:
 
     @staticmethod
     def get_agent_prompt(agent_name: str) -> str:
+        """Load the markdown prompt for a named agent.
+
+        Args:
+            agent_name: Agent prompt name (filename stem under prompts/)
+
+        Returns:
+            Prompt text as a string, or empty string if file not found.
+        """
         return ConfigService.load_text(str(ConfigService.PROMPTS_DIR / (agent_name + ".md")))
 
     @staticmethod
     def get_all_agents() -> list[str]:
+        """List the names of all registered agent configs.
+
+        Returns:
+            List of agent name strings (filename stems from configs/agents/).
+        """
         agents = []
 
         for entry in ConfigService.AGENTS_CONFIGS.iterdir():
