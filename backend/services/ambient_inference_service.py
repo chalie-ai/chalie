@@ -38,6 +38,17 @@ class AmbientInferenceService:
     """Deterministic ambient inference from client context + behavioral signals."""
 
     def __init__(self, place_learning_service=None, temporal_pattern_service=None):
+        """Initialize the ambient inference service.
+
+        Args:
+            place_learning_service: Optional ``PlaceLearningService`` instance
+                used to look up learned place patterns before falling back to
+                heuristics. When ``None``, only heuristics are used for place
+                inference.
+            temporal_pattern_service: Optional ``TemporalPatternService``
+                instance used to supply learned energy predictions. When
+                ``None``, the config-based circadian curve is used instead.
+        """
         self._config = _load_config()
         self._store = MemoryClientService.create_connection()
         self._place_learning = place_learning_service
@@ -493,8 +504,18 @@ class AmbientInferenceService:
 
     @staticmethod
     def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """
-        Calculate distance between two coordinates in meters.
+        """Calculate the great-circle distance between two coordinates in metres.
+
+        Uses the haversine formula with Earth radius 6 371 000 m.
+
+        Args:
+            lat1: Latitude of the first point in decimal degrees.
+            lon1: Longitude of the first point in decimal degrees.
+            lat2: Latitude of the second point in decimal degrees.
+            lon2: Longitude of the second point in decimal degrees.
+
+        Returns:
+            Distance in metres as a float.
         """
         R = 6371000  # Earth radius in meters
         phi1 = math.radians(lat1)
