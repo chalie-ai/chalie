@@ -229,8 +229,9 @@ class CognitiveDriftEngine:
                     if richness < 0.1:
                         logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.1, skipping drift")
                         continue
-                except Exception:
-                    pass  # fail-open
+                except Exception as e:
+                    logger.warning(f"{LOG_PREFIX} Richness check failed, skipping drift cycle: {e}")
+                    continue
 
                 self._run_drift_cycle()
 
