@@ -184,6 +184,12 @@ class ACTOrchestrator:
         pivot_hint_injected = False
         recent_action_entries = []  # (fingerprint, types_set) for smart repetition
 
+        # ── Tool health tracking (cross-loop via MemoryStore) ─────────
+        from services.tool_health_service import (
+            get_potential, record_outcome as _record_health,
+            classify_result as _classify_health, format_health_hint,
+        )
+
         termination_reason = None
 
         # ── Main loop ───────────────────────────────────────────────────
@@ -200,6 +206,21 @@ class ACTOrchestrator:
             # ── Inject user steering input (if any) ──────────────────────
             if self._request_id:
                 act_history_str = self._inject_steering(act_history_str)
+
+            # ── Inject tool health signals (degraded tools only) ──────
+            _tool_names = set()
+            if selected_tools:
+                _tool_names.update(selected_tools)
+            if relevant_tools:
+                _tool_names.update(
+                    item['name'] for item in relevant_tools
+                    if isinstance(item, dict) and item.get('type') == 'tool'
+                )
+            if _tool_names:
+                _potentials = {t: get_potential(t) for t in _tool_names}
+                _health_hint = format_health_hint(_potentials)
+                if _health_hint:
+                    act_history_str += f"\n\n[Tool Health]\n{_health_hint}"
 
             # Generate action plan via LLM
             response_data = cortex_service.generate_response(
@@ -339,6 +360,20 @@ class ACTOrchestrator:
                 actions_executed = self._run_critic(
                     act_loop, critic, text, actions, actions_executed, exchange_id
                 )
+
+            # ── Tool health: record outcomes + check exhaustion ────────
+            for _exec_r in actions_executed:
+                _atype = _exec_r.get('action_type', '')
+                if _atype in COGNITIVE_PRIMITIVES or _atype == 'system':
+                    continue  # Only track external tools
+                _outcome = _classify_health(_exec_r)
+                _new_potential = _record_health(_atype, _outcome)
+                if _new_potential < 0.15 and not termination_reason:
+                    logger.warning(
+                        f"{LOG_PREFIX} Tool '{_atype}' exhausted "
+                        f"(potential={_new_potential:.2f}) — forcing exit"
+                    )
+                    termination_reason = 'tool_exhausted'
 
             act_loop.append_results(actions_executed)
 
@@ -792,6 +827,7 @@ _AUTO_REFLECT_MIN_ITERATIONS = 2  # Skip trivial 1-iteration loops
 # Termination reasons that indicate degraded exits worth reflecting on
 _DEGRADED_EXITS = frozenset({
     'fatigue_exhausted', 'repetition_detected', 'smart_repetition',
+    'tool_exhausted',
 })
 
 

@@ -267,7 +267,7 @@ class EpisodicRetrievalService:
                 # strip all FTS5 operators so user messages containing URLs, questions,
                 # timestamps, or structured text don't trigger parse errors.
                 import re as _re
-                fts_safe = _re.sub(r'[:\(\)\*\^"\\?]', ' ', query_text)
+                fts_safe = _re.sub(r'[:\(\)\*\^"\\?,]', ' ', query_text)
                 fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
                 fts_params = [fts_safe or '*']
 
