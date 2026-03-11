@@ -153,6 +153,10 @@ def idle_consolidation_process(shared_state):
 
     Creates the service instance inside the child process to avoid
     pickling MemoryStore connections (which contain _thread.lock objects).
+
+    Args:
+        shared_state: Shared state dict passed from the consumer harness.
+            Currently unused but accepted for interface compatibility.
     """
     service = IdleConsolidationService()
     service.run(shared_state)

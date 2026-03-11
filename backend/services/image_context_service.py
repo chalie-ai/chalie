@@ -118,12 +118,24 @@ def analyze(image_bytes: bytes, mime_type: str = 'image/png') -> dict:
 
 
 def has_vision_provider() -> bool:
-    """Return True if a vision-capable provider is available for chat-vision."""
+    """Check whether a vision-capable provider is configured for image analysis.
+
+    Returns:
+        ``True`` if at least one Gemini, Anthropic, or OpenAI provider is
+        assigned to the ``chat-vision`` or ``document-ocr`` job.
+    """
     return _get_vision_provider() is not None
 
 
 def compute_hash(image_bytes: bytes) -> str:
-    """Compute SHA-256 hash of image bytes for deduplication."""
+    """Compute the SHA-256 hash of image bytes for within-session deduplication.
+
+    Args:
+        image_bytes: Raw image bytes to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     return hashlib.sha256(image_bytes).hexdigest()
 
 
@@ -193,14 +205,30 @@ def _get_vision_provider() -> Optional[dict]:
 # ─── Image Helpers ────────────────────────────────────────────────────────────
 
 def _img_to_base64(img, format='PNG') -> str:
-    """Convert PIL Image to base64-encoded string."""
+    """Encode a PIL Image as a base64 string for API payloads.
+
+    Args:
+        img: PIL Image object to encode.
+        format: Target image format (default ``'PNG'``).
+
+    Returns:
+        Base64-encoded string of the image bytes.
+    """
     buf = io.BytesIO()
     img.save(buf, format=format)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
 def _img_to_bytes(img, format='PNG') -> bytes:
-    """Convert PIL Image to raw bytes."""
+    """Serialize a PIL Image to raw bytes.
+
+    Args:
+        img: PIL Image object to serialize.
+        format: Target image format (default ``'PNG'``).
+
+    Returns:
+        Bytes object containing the encoded image data.
+    """
     buf = io.BytesIO()
     img.save(buf, format=format)
     return buf.getvalue()
@@ -209,7 +237,16 @@ def _img_to_bytes(img, format='PNG') -> bytes:
 # ─── Provider Implementations ─────────────────────────────────────────────────
 
 def _analyze_gemini(config: dict, img) -> tuple:
-    """Analyze image via Google Gemini. Returns (description, ocr_text)."""
+    """Analyze an image using Google Gemini for visual description and OCR.
+
+    Args:
+        config: Provider config dict with ``model`` and API credential keys.
+        img: Pre-processed PIL Image (EXIF-stripped, dimension-normalized).
+
+    Returns:
+        Tuple of ``(description, ocr_text)`` strings.  Each may be empty on
+        provider failure.
+    """
     from google import genai
     from services.llm_service import _resolve_api_key
 
@@ -248,7 +285,16 @@ def _analyze_gemini(config: dict, img) -> tuple:
 
 
 def _analyze_anthropic(config: dict, img) -> tuple:
-    """Analyze image via Anthropic Claude. Returns (description, ocr_text)."""
+    """Analyze an image using Anthropic Claude for visual description and OCR.
+
+    Args:
+        config: Provider config dict with ``model`` and API credential keys.
+        img: Pre-processed PIL Image (EXIF-stripped, dimension-normalized).
+
+    Returns:
+        Tuple of ``(description, ocr_text)`` strings.  Each may be empty on
+        provider failure.
+    """
     import anthropic
     from services.llm_service import _resolve_api_key
 
@@ -295,7 +341,16 @@ def _analyze_anthropic(config: dict, img) -> tuple:
 
 
 def _analyze_openai(config: dict, img) -> tuple:
-    """Analyze image via OpenAI GPT-4 Vision. Returns (description, ocr_text)."""
+    """Analyze an image using OpenAI GPT-4 Vision for visual description and OCR.
+
+    Args:
+        config: Provider config dict with ``model`` and API credential keys.
+        img: Pre-processed PIL Image (EXIF-stripped, dimension-normalized).
+
+    Returns:
+        Tuple of ``(description, ocr_text)`` strings.  Each may be empty on
+        provider failure.
+    """
     import openai
     from services.llm_service import _resolve_api_key
 
