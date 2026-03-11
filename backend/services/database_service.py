@@ -21,11 +21,21 @@ class _TextClause:
     """Lightweight replacement for sqlalchemy.text().
     Just wraps a SQL string so SessionProxy.execute(str(obj)) works."""
     __slots__ = ('_sql',)
+
     def __init__(self, sql: str):
+        """Initialize with a raw SQL string.
+
+        Args:
+            sql: The SQL statement to wrap.
+        """
         self._sql = sql
+
     def __str__(self):
+        """Return the underlying SQL string."""
         return self._sql
+
     def __repr__(self):
+        """Return a developer-friendly representation."""
         return f"text({self._sql!r})"
 
 
@@ -130,19 +140,27 @@ class ResultProxy:
 
     @property
     def rowcount(self):
+        """Number of rows affected by the last statement."""
         return self._cursor.rowcount
 
     @property
     def lastrowid(self):
+        """Row ID of the last inserted row."""
         return self._cursor.lastrowid
 
     def scalar(self):
+        """Fetch the first column of the first row, or None if no rows.
+
+        Returns:
+            The scalar value or None.
+        """
         row = self.fetchone()
         if row is None:
             return None
         return row[0]
 
     def close(self):
+        """Close the underlying cursor, releasing its resources."""
         self._cursor.close()
 
 
@@ -150,9 +168,23 @@ class DictCursor:
     """Wraps sqlite3.Cursor to return list[dict] from fetchall()."""
 
     def __init__(self, cursor: sqlite3.Cursor):
+        """Wrap an existing sqlite3.Cursor.
+
+        Args:
+            cursor: An open sqlite3.Cursor to delegate all operations to.
+        """
         self._cursor = cursor
 
     def execute(self, sql, params=None):
+        """Execute a single SQL statement.
+
+        Args:
+            sql: SQL statement string.
+            params: Optional sequence or mapping of bind parameters.
+
+        Returns:
+            self, for chaining.
+        """
         if params is None:
             self._cursor.execute(sql)
         else:
@@ -160,34 +192,58 @@ class DictCursor:
         return self
 
     def executemany(self, sql, params_list):
+        """Execute a SQL statement against a sequence of parameter sets.
+
+        Args:
+            sql: SQL statement string.
+            params_list: Iterable of parameter sequences or mappings.
+
+        Returns:
+            self, for chaining.
+        """
         self._cursor.executemany(sql, params_list)
         return self
 
     def fetchone(self):
+        """Fetch the next row as a dict, or None if no more rows.
+
+        Returns:
+            dict of column→value for the next row, or None.
+        """
         row = self._cursor.fetchone()
         if row is None:
             return None
         return dict(row)
 
     def fetchall(self):
+        """Fetch all remaining rows as a list of dicts.
+
+        Returns:
+            List of column→value dicts.
+        """
         return [dict(row) for row in self._cursor.fetchall()]
 
     @property
     def lastrowid(self):
+        """Row ID of the last inserted row."""
         return self._cursor.lastrowid
 
     @property
     def rowcount(self):
+        """Number of rows affected by the last statement."""
         return self._cursor.rowcount
 
     @property
     def description(self):
+        """Sequence of 7-item sequences describing each result column."""
         return self._cursor.description
 
     def close(self):
+        """Close the cursor, releasing database resources."""
         self._cursor.close()
 
     def __iter__(self):
+        """Iterate over result rows as dicts."""
         return (dict(row) for row in self._cursor)
 
 
@@ -195,6 +251,12 @@ class DatabaseService:
     """Manages SQLite connections with thread-local isolation and WAL mode."""
 
     def __init__(self, db_path: str = None):
+        """Initialize the service and ensure the database directory exists.
+
+        Args:
+            db_path: Absolute path to the SQLite file. Defaults to the value
+                returned by :func:`get_db_path` (env var or built-in default).
+        """
         self.db_path = db_path or get_db_path()
         # Ensure the directory exists
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)

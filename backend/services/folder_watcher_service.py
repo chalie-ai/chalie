@@ -44,6 +44,12 @@ class FolderWatcherService:
     """Manages watched folder CRUD, directory browsing, and file scanning."""
 
     def __init__(self, db_service):
+        """Initialize the folder watcher service.
+
+        Args:
+            db_service: :class:`~services.database_service.DatabaseService`
+                instance for all watched-folder database operations.
+        """
         self.db = db_service
 
     # ─────────────────────────────────────────────

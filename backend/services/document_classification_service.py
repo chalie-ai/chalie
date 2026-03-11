@@ -18,6 +18,12 @@ class DocumentClassificationService:
     """Infer doc_category, doc_project, and doc_date for a document."""
 
     def __init__(self, db_service=None):
+        """Initialize the classification service.
+
+        Args:
+            db_service: Optional :class:`~services.database_service.DatabaseService`
+                instance. Falls back to the shared singleton when ``None``.
+        """
         self.db = db_service
 
     def classify_document(

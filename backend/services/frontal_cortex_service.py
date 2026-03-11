@@ -6,6 +6,17 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+"""
+Frontal Cortex Service — LLM response generation and context assembly.
+
+Assembles the full system prompt from 60+ context injection placeholders
+(memory, identity, user traits, calendar, tool results, etc.) and invokes
+the configured LLM provider to generate a structured JSON response.
+
+Also hosts :class:`ChatHistoryProcessor`, a lightweight helper that
+truncates and serialises chat history for prompt injection.
+"""
+
 import re
 import time
 import json
@@ -121,10 +132,29 @@ class ChatHistoryProcessor:
     """Processes chat history for context injection into prompts."""
 
     def __init__(self, max_exchanges: int = None, max_tokens: int = None):
+        """Initialize the chat history processor with optional window limits.
+
+        Args:
+            max_exchanges: Maximum number of most-recent exchanges to include.
+                ``None`` means no exchange-count limit.
+            max_tokens: Maximum token budget for the serialised history.
+                ``None`` means no token limit (not yet enforced).
+        """
         self.max_exchanges = max_exchanges
         self.max_tokens = max_tokens
 
     def process(self, chat_history: list) -> str:
+        """Serialise chat history into a plain-text prompt snippet.
+
+        Args:
+            chat_history: List of exchange dicts, each with a ``'prompt'``
+                sub-dict containing ``'message'`` and an optional ``'response'``
+                value (dict or string).
+
+        Returns:
+            A newline-joined string of ``"User: …"`` / ``"Assistant: …"`` lines,
+            or ``"No previous conversation"`` when the list is empty.
+        """
         if not chat_history:
             return "No previous conversation"
 
@@ -146,6 +176,15 @@ class ChatHistoryProcessor:
         return "\n".join(lines) if lines else "No previous conversation"
 
     def _apply_limits(self, chat_history: list) -> list:
+        """Trim the history list to ``max_exchanges`` most-recent entries.
+
+        Args:
+            chat_history: Full chat history list.
+
+        Returns:
+            A (possibly truncated) list containing at most ``max_exchanges``
+            entries from the tail of ``chat_history``.
+        """
         if self.max_exchanges and len(chat_history) > self.max_exchanges:
             chat_history = chat_history[-self.max_exchanges:]
         return chat_history
