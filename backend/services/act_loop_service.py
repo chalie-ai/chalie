@@ -137,7 +137,18 @@ class ActLoopService:
         return True, None
 
     def accumulate_fatigue(self, actions_executed: list, iteration_number: int) -> float:
-        """Accumulate fatigue from executed actions with non-linear growth."""
+        """Accumulate fatigue from executed actions with non-linear growth.
+
+        Each action's base cost is scaled by ``1.0 + fatigue_growth_rate * iteration_number``
+        so deeper iterations are proportionally more expensive.
+
+        Args:
+            actions_executed: List of action result dicts from the dispatcher.
+            iteration_number: Current 0-based iteration index.
+
+        Returns:
+            Total fatigue added by this batch of actions.
+        """
         added = 0.0
         for result in actions_executed:
             action_type = result.get('action_type', 'unknown')
@@ -151,7 +162,19 @@ class ActLoopService:
 
     @staticmethod
     def estimate_net_value(actions_executed: list, iteration_number: int) -> float:
-        """Heuristic net value of actions — logs to cortex_iterations for strategy analysis."""
+        """Heuristic net value of actions — logs to cortex_iterations for strategy analysis.
+
+        Successful actions with rich results contribute positively; timeouts and
+        errors contribute negatively.  Net value is discounted by iteration depth
+        to penalise redundant late-loop work.
+
+        Args:
+            actions_executed: List of action result dicts from the dispatcher.
+            iteration_number: Current 0-based iteration index (used for discounting).
+
+        Returns:
+            Estimated net value of the action batch (may be negative).
+        """
         value = 0.0
         for result in actions_executed:
             if result['status'] == 'success':
@@ -167,17 +190,32 @@ class ActLoopService:
         return value * (1.0 / (1.0 + 0.2 * iteration_number))
 
     def charge_critic_fatigue(self, cost: float) -> None:
-        """Charge fatigue for a critic evaluation. Encapsulates external fatigue mutation."""
+        """Charge fatigue for a critic evaluation. Encapsulates external fatigue mutation.
+
+        Args:
+            cost: Fatigue units to add for this critic call.
+        """
         self.fatigue += cost
 
     def get_critic_telemetry(self) -> dict:
-        """Return critic telemetry if a critic was attached, else empty dict."""
+        """Return critic telemetry if a critic was attached, else empty dict.
+
+        Returns:
+            Dict of critic telemetry metrics, or an empty dict when no critic
+            was injected.
+        """
         if self._critic is not None:
             return self._critic.get_telemetry()
         return {}
 
     def get_fatigue_telemetry(self) -> dict:
-        """Return fatigue metrics for telemetry logging."""
+        """Return fatigue metrics for telemetry logging.
+
+        Returns:
+            Dict containing fatigue_total, fatigue_budget, fatigue_utilization,
+            iterations_used, max_iterations, elapsed_seconds, actions_total, and
+            budget_headroom.
+        """
         return {
             'fatigue_total': round(self.fatigue, 2),
             'fatigue_budget': self.fatigue_budget,

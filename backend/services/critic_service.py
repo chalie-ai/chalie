@@ -44,6 +44,7 @@ class CriticService:
     """Post-action verification with skip logic, confidence calibration, and telemetry."""
 
     def __init__(self):
+        """Initialize the critic service with empty telemetry counters and calibration state."""
         self._llm = None
         self._prompt_template = None
 
@@ -150,11 +151,19 @@ class CriticService:
         correction: str,
         final_result: str,
     ) -> str:
-        """
-        Format a correction for injection into act_history.
+        """Format a correction event for injection into act_history.
 
         Corrections are additive — the failed attempt is retained so the planner
         avoids repeating the same mistake.
+
+        Args:
+            action_type: The type of action that was corrected.
+            original_result: The flawed result string before correction.
+            correction: The correction description from the critic verdict.
+            final_result: The corrected result string after applying the fix.
+
+        Returns:
+            Formatted string describing the correction event.
         """
         return (
             f"[CRITIC CORRECTION] Action '{action_type}' result was corrected. "
@@ -164,11 +173,22 @@ class CriticService:
         )
 
     def is_safe_action(self, action_type: str) -> bool:
-        """Check if an action type can be silently corrected without user confirmation."""
+        """Check if an action type can be silently corrected without user confirmation.
+
+        Args:
+            action_type: Action type string to check against the safe actions set.
+
+        Returns:
+            True if the action is in SAFE_ACTIONS and can be corrected silently.
+        """
         return action_type in SAFE_ACTIONS
 
     def get_telemetry(self) -> Dict[str, Any]:
-        """Return critic telemetry for logging to cortex_iterations."""
+        """Return critic telemetry metrics for logging to cortex_iterations.
+
+        Returns:
+            Dict containing counts, rates, severity distribution, and calibration state.
+        """
         total = self.total_evaluations + self.skipped
         return {
             'critic_total_checks': total,

@@ -33,6 +33,18 @@ STALE_GAP_SECONDS = 2700  # 45 minutes
 
 @dataclass
 class BoundaryResult:
+    """Result of a single boundary-detection update step.
+
+    Attributes:
+        is_boundary: True if a topic boundary was detected on this message.
+        accumulator: Current leaky-accumulator value after this step.
+        boundary: Dynamic firing threshold used for this step.
+        newma_signal: Normalised NEWMA drift signal (Layer 1).
+        surprise_signal: Normalised transient surprise signal (Layer 2).
+        confidence: Fraction of the way to the boundary (0–1).
+        just_reset_from_silence: True when stale-gap dishabituation fired.
+    """
+
     is_boundary: bool
     accumulator: float
     boundary: float
@@ -74,6 +86,18 @@ class AdaptiveBoundaryDetector:
         regulator_params: Optional[dict] = None,
         focus_modifier: float = 0.0,
     ):
+        """Initialize the boundary detector and load persisted state.
+
+        Args:
+            thread_id: Conversation thread identifier used as part of the
+                MemoryStore state key.
+            regulator_params: Optional overrides for detector hyper-parameters.
+                Recognised keys: ``newma_window_fast``, ``newma_window_slow``,
+                ``accumulator_leak_rate``, ``accumulator_boundary_base``.
+            focus_modifier: Additive offset applied to the dynamic boundary
+                threshold.  Positive values make the detector harder to fire
+                (used when a focus session is active).
+        """
         self.thread_id = thread_id
         self._store_key = f"adaptive_boundary:{thread_id}"
 
@@ -227,7 +251,12 @@ class AdaptiveBoundaryDetector:
         )
 
     def save_state(self):
-        """Persist current state to MemoryStore with 24h TTL."""
+        """Persist current state to MemoryStore with 24h TTL.
+
+        Serialises the internal state dict as JSON and writes it to the key
+        ``adaptive_boundary:{thread_id}`` with a 24-hour expiry.  Failures are
+        logged as warnings but do not propagate to callers.
+        """
         try:
             store = MemoryClientService.create_connection()
             store.setex(self._store_key, self._STORE_TTL, json.dumps(self._state))
