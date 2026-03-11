@@ -45,6 +45,13 @@ class BackgroundLLMProxy:
     """
 
     def __init__(self, agent_name: str):
+        """Initialize the proxy for the given background agent.
+
+        Args:
+            agent_name: Logical name of the calling background service
+                (e.g. ``"autobiography"``, ``"cognitive-drift"``).
+                Used for queue-depth logging and job tracking.
+        """
         self.agent_name = agent_name
         self._store = MemoryClientService.create_connection()
 
@@ -54,10 +61,17 @@ class BackgroundLLMProxy:
         user_message: str,
         stream: bool = False,
     ) -> Optional[LLMResponse]:
-        """
-        Enqueue the LLM call and block until the worker returns a result.
+        """Enqueue the LLM call and block until the worker returns a result.
 
-        Returns LLMResponse on success, None on queue full / timeout / error.
+        Args:
+            system_prompt: System-level instruction prompt for the LLM.
+            user_message: User-facing message content for the LLM.
+            stream: Unused — included for interface compatibility with
+                RefreshableLLMService.
+
+        Returns:
+            LLMResponse on success, or None if the queue is full, the worker
+            times out, or any other error occurs.
         """
         # Watchdog: warn if worker heartbeat is stale
         try:

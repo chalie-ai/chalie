@@ -339,7 +339,14 @@ class ContextAssemblyService:
             return ""
 
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
-        """Parse semantic_query results from act_history string."""
+        """Parse semantic_query results from an act_history string.
+
+        Args:
+            act_history: Accumulated ACT loop history text.
+
+        Returns:
+            List of dicts with 'name' and 'definition' keys for matched concepts.
+        """
         import re
         concepts = []
         pattern = r'-\s+([^:]+):\s+([^(]+)\s+\((?:strength[:=]|confidence=)'
@@ -352,7 +359,14 @@ class ContextAssemblyService:
         return concepts
 
     def _estimate_tokens(self, text: str) -> int:
-        """Rough token estimate (4 chars per token)."""
+        """Produce a rough token estimate using 4 characters per token.
+
+        Args:
+            text: Text to estimate token count for.
+
+        Returns:
+            Estimated token count as an integer.
+        """
         if not text:
             return 0
         return len(text) // 4
