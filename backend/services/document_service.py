@@ -666,7 +666,9 @@ class DocumentService:
                 semantic_results = cursor.fetchall()
 
                 # Stage 2b: Full-text search within candidate docs via FTS5
-                fts_query = query_text
+                import re as _re
+                fts_query = _re.sub(r'[:\(\)\*\^"\\?,]', ' ', query_text)
+                fts_query = _re.sub(r'\s+', ' ', fts_query).strip() or '*'
                 cursor.execute(f"""
                     SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
                            dc.page_number, dc.section_title, dc.token_count,
