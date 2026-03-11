@@ -375,7 +375,8 @@ class SemanticStorageService:
                         sc.verification_status, sc.context_constraints, sc.examples,
                         sc.first_learned_at, sc.last_accessed_at, sc.last_reinforced_at,
                         sc.utility_score, sc.decay_resistance, sc.created_at, sc.updated_at,
-                        COALESCE(sc.reliability, 'reliable') AS reliability
+                        COALESCE(sc.reliability, 'reliable') AS reliability,
+                        v.embedding
                     FROM semantic_concepts sc
                     JOIN semantic_concepts_vec v ON v.rowid = sc.rowid
                     WHERE sc.deleted_at IS NULL
@@ -387,12 +388,19 @@ class SemanticStorageService:
 
                 concepts = []
                 for row in rows:
+                    # Unpack embedding blob from vec table (float32, 768d)
+                    raw_emb = row[23] if len(row) > 23 else None
+                    if raw_emb and isinstance(raw_emb, (bytes, bytearray)):
+                        n = len(raw_emb) // 4
+                        embedding = list(struct.unpack(f'{n}f', raw_emb))
+                    else:
+                        embedding = None
                     concepts.append({
                         'id': str(row[0]),
                         'concept_name': row[1],
                         'concept_type': row[2],
                         'definition': row[3],
-                        'embedding': None,  # Embeddings live in vec table
+                        'embedding': embedding,
                         'abstraction_level': row[4],
                         'domain': row[5],
                         'strength': row[6],
