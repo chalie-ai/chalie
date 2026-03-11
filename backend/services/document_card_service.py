@@ -93,6 +93,14 @@ class DocumentCardService:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _emit(self, topic: str, html: str, card_type: str, title: str) -> None:
+        """Publish a card payload via OutputService.
+
+        Args:
+            topic: MemoryStore topic (thread/channel identifier).
+            html: Rendered HTML string for the card body.
+            card_type: Short label used for debug logging (e.g. ``'search'``).
+            title: Human-readable card title shown in the UI.
+        """
         from services.output_service import OutputService
 
         scope_id = uuid.uuid4().hex[:8]
@@ -221,6 +229,16 @@ class DocumentCardService:
         )
 
     def _build_upload_html(self, doc_name: str, status: str) -> str:
+        """Build upload-confirmation card HTML.
+
+        Args:
+            doc_name: Original filename to display.
+            status: Processing status string (``'pending'``, ``'processing'``,
+                ``'ready'``, or ``'failed'``).
+
+        Returns:
+            HTML string for the upload card.
+        """
         scope_id = uuid.uuid4().hex[:8]
         created_at = datetime.now(timezone.utc).isoformat()
 
@@ -251,6 +269,17 @@ class DocumentCardService:
         )
 
     def _build_view_html(self, doc_metadata: dict, preview_chunks: list) -> str:
+        """Build document-preview card HTML.
+
+        Args:
+            doc_metadata: Document dict containing ``original_name``,
+                ``chunk_count``, ``page_count``, and ``extracted_metadata``.
+            preview_chunks: Up to 3 chunk dicts with ``content`` and
+                optional ``page_number`` fields.
+
+        Returns:
+            HTML string for the view card.
+        """
         scope_id = uuid.uuid4().hex[:8]
         created_at = datetime.now(timezone.utc).isoformat()
 
@@ -308,6 +337,14 @@ class DocumentCardService:
         )
 
     def _build_delete_html(self, doc_name: str) -> str:
+        """Build deletion-confirmation card HTML.
+
+        Args:
+            doc_name: Original filename to show with a strikethrough style.
+
+        Returns:
+            HTML string for the delete card.
+        """
         scope_id = uuid.uuid4().hex[:8]
         created_at = datetime.now(timezone.utc).isoformat()
 
@@ -329,6 +366,14 @@ class DocumentCardService:
         )
 
     def _build_restore_html(self, doc_name: str) -> str:
+        """Build restore-confirmation card HTML.
+
+        Args:
+            doc_name: Original filename to display with a restored badge.
+
+        Returns:
+            HTML string for the restore card.
+        """
         scope_id = uuid.uuid4().hex[:8]
         created_at = datetime.now(timezone.utc).isoformat()
 

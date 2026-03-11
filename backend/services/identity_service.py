@@ -22,6 +22,12 @@ class IdentityService:
     """Manages identity control vectors: read, update, inertia, drift, coherence."""
 
     def __init__(self, database_service):
+        """Initialize the identity service and load personality dimension config.
+
+        Args:
+            database_service: :class:`~services.database_service.DatabaseService`
+                instance used to load and persist identity vectors and signal history.
+        """
         self.db = database_service
 
         # Load config
