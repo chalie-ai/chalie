@@ -36,7 +36,7 @@
     "name": "reddit",
     "title": "Reddit",
     "icon": "fa-brands fa-reddit",
-    "repo": "chalie-ai/chalie-tool-reddit",
+    "repo": "chalie-ai/reddit-tool",
     "summary": "Search Reddit for community discussions, opinions, recommendations, and troubleshooting. No API key required.",
     "category": "research",
     "trigger": "on_demand",
