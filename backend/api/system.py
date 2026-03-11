@@ -296,7 +296,7 @@ def observability_tools():
             entry = {
                 'tool_name': r['tool_name'],
                 'tool_type': r.get('tool_type', 'tool'),
-                'summary': r.get('short_summary', ''),
+                'summary': f"{r.get('short_summary', '')} (effort: {r.get('effort') or 'moderate'})",
                 'domain': r.get('domain') or 'Other',
                 'effort': r.get('effort') or 'moderate',
                 'reliability_score': r.get('reliability_score', 1.0),
