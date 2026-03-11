@@ -144,14 +144,15 @@ def _auto_install_from_release(name, repo, tools_dir):
 
 
 def _install_default_tools():
-    """Kick off background install of any missing tools marked installs_by_default.
+    """Install any missing tools marked installs_by_default, blocking until complete.
+
+    Chalie must not accept traffic until all trusted tools are present and
+    registered — an instance without its default tools is not fully functional.
 
     Skipped entirely if backend/data/.no-default-tools exists (written by the
     installer when --disable-default-tools was passed).
-    Returns immediately — actual downloads happen in a daemon thread.
     """
     import json as _json
-    import threading
     from pathlib import Path as _Path
 
     backend_dir = _Path(__file__).parent
@@ -179,13 +180,15 @@ def _install_default_tools():
     if not pending:
         return
 
-    def _bg():
-        for name, repo in pending:
-            _auto_install_from_release(name, repo, tools_dir)
-        logger.info(f"[Startup] Default tool install complete ({len(pending)} installed)")
-
-    t = threading.Thread(target=_bg, name="default-tool-installer", daemon=True)
-    t.start()
+    logger.info(
+        f"[Startup] Downloading {len(pending)} default tool(s) — "
+        f"Chalie will be available once all tools are ready: "
+        f"{[name for name, _ in pending]}"
+    )
+    for name, repo in pending:
+        _auto_install_from_release(name, repo, tools_dir)
+    installed = sum(1 for name, _ in pending if (tools_dir / name).exists())
+    logger.info(f"[Startup] Default tool install complete ({installed}/{len(pending)} ready)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
