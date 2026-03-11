@@ -21,8 +21,7 @@ Bug fixes:      rc-<version> → main → release tag
 
 | Workflow | Trigger | Notes |
 |----------|---------|-------|
-| Build log entries | Every push (any branch) | Ensures all activity is recorded for backup |
-| Build log sync to website | Push to `main` only | Published entries visible on chalie.ai |
+| Build log | Every push (any branch) | Generated and synced to chalie.ai on every push |
 | Docker publish | `v*.*.*` tags | Multi-arch image to Docker Hub |
 | Installer publish | `v*.*.*` tags | Updates install script on chalie-web |
 | Docs sync | Push to `main` touching `docs/` | Syncs to chalie-web |
