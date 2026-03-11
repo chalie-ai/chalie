@@ -40,7 +40,14 @@ class _TextClause:
 
 
 def text(sql: str) -> _TextClause:
-    """Drop-in replacement for sqlalchemy.text()."""
+    """Wrap a raw SQL string as a text clause (drop-in for sqlalchemy.text()).
+
+    Args:
+        sql: The SQL statement string to wrap.
+
+    Returns:
+        A :class:`_TextClause` instance whose ``str()`` yields the SQL.
+    """
     return _TextClause(sql)
 
 # Default database path
@@ -55,12 +62,23 @@ _shared_lock = threading.Lock()
 
 
 def get_db_path() -> str:
-    """Get database file path from env or default."""
+    """Return the database file path from the environment or the built-in default.
+
+    Returns:
+        Absolute path to the SQLite file, sourced from the ``CHALIE_DB_PATH``
+        environment variable when set, otherwise the default path inside the
+        Docker data volume.
+    """
     return os.environ.get("CHALIE_DB_PATH", _DEFAULT_DB_PATH)
 
 
 def get_shared_db_service() -> 'DatabaseService':
-    """Get or create the shared DatabaseService singleton."""
+    """Return the process-wide shared DatabaseService singleton, creating it if needed.
+
+    Returns:
+        The singleton :class:`DatabaseService` instance.  Thread-safe via a
+        double-checked lock pattern.
+    """
     global _shared_db_service
     if _shared_db_service is None:
         with _shared_lock:
@@ -86,6 +104,11 @@ class SessionProxy:
     """
 
     def __init__(self, conn: sqlite3.Connection):
+        """Wrap an existing sqlite3.Connection for SQL execution.
+
+        Args:
+            conn: An open sqlite3.Connection to delegate all SQL operations to.
+        """
         self._conn = conn
 
     def execute(self, sql_or_text, params=None):
@@ -127,6 +150,11 @@ class ResultProxy:
     """Wraps sqlite3.Cursor to mimic SQLAlchemy result set."""
 
     def __init__(self, cursor: sqlite3.Cursor):
+        """Wrap an existing sqlite3.Cursor to mimic SQLAlchemy result sets.
+
+        Args:
+            cursor: An open sqlite3.Cursor used for all fetch operations.
+        """
         self._cursor = cursor
 
     def fetchone(self):
@@ -300,7 +328,12 @@ class DatabaseService:
         return self._get_connection()
 
     def release_connection(self, conn):
-        """No-op for SQLite — connections are thread-local and reused."""
+        """No-op compatibility shim — SQLite connections are thread-local and reused.
+
+        Args:
+            conn: Ignored.  Present for API compatibility with the old PostgreSQL
+                connection-pool pattern.
+        """
         pass
 
     @contextmanager
@@ -318,7 +351,12 @@ class DatabaseService:
             raise
 
     def execute(self, sql, params=None):
-        """Execute a write statement (INSERT/UPDATE/DELETE) with auto-commit."""
+        """Execute a write statement (INSERT/UPDATE/DELETE) with auto-commit.
+
+        Args:
+            sql: SQL statement string to execute.
+            params: Optional sequence or mapping of bind parameters.
+        """
         with self.connection() as conn:
             cursor = conn.cursor()
             try:
@@ -330,7 +368,15 @@ class DatabaseService:
                 cursor.close()
 
     def fetch_all(self, sql, params=None):
-        """Execute a SELECT and return all rows as list[dict]."""
+        """Execute a SELECT statement and return all rows as a list of dicts.
+
+        Args:
+            sql: SQL SELECT string to execute.
+            params: Optional sequence or mapping of bind parameters.
+
+        Returns:
+            List of column→value dicts, one per result row.
+        """
         with self.connection() as conn:
             cursor = DictCursor(conn.cursor())
             try:

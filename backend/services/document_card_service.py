@@ -31,7 +31,14 @@ class DocumentCardService:
         query: str,
         results: list,
     ) -> None:
-        """Emit source attribution card showing search results."""
+        """Emit a source attribution card showing document search results.
+
+        Args:
+            topic: MemoryStore topic identifying the conversation thread.
+            query: The original search query to display in the card header.
+            results: List of chunk dicts returned by
+                :meth:`~services.document_service.DocumentService.search_chunks`.
+        """
         try:
             html = self._build_search_results_html(query, results)
             self._emit(topic, html, "search", "Document Search")
@@ -39,7 +46,14 @@ class DocumentCardService:
             logger.warning(f"{LOG_PREFIX} emit_search_results_card failed: {e}")
 
     def emit_upload_card(self, topic: str, doc_name: str, status: str) -> None:
-        """Emit upload confirmation card."""
+        """Emit an upload confirmation card for a newly ingested document.
+
+        Args:
+            topic: MemoryStore topic identifying the conversation thread.
+            doc_name: Original filename to display on the card.
+            status: Processing status string (``'pending'``, ``'processing'``,
+                ``'ready'``, or ``'failed'``).
+        """
         try:
             html = self._build_upload_html(doc_name, status)
             self._emit(topic, html, "upload", "Document Uploaded")
@@ -52,7 +66,15 @@ class DocumentCardService:
         doc_metadata: dict,
         preview_chunks: list,
     ) -> None:
-        """Emit document preview card."""
+        """Emit a document preview card showing metadata and chunk snippets.
+
+        Args:
+            topic: MemoryStore topic identifying the conversation thread.
+            doc_metadata: Document dict containing at minimum ``original_name``,
+                ``chunk_count``, ``page_count``, and ``extracted_metadata``.
+            preview_chunks: Up to 3 chunk dicts with ``content`` and optional
+                ``page_number`` fields to display as preview snippets.
+        """
         try:
             html = self._build_view_html(doc_metadata, preview_chunks)
             self._emit(topic, html, "view", doc_metadata.get('original_name', 'Document'))
@@ -60,7 +82,12 @@ class DocumentCardService:
             logger.warning(f"{LOG_PREFIX} emit_view_card failed: {e}")
 
     def emit_delete_card(self, topic: str, doc_name: str) -> None:
-        """Emit deletion confirmation card."""
+        """Emit a deletion confirmation card for a soft-deleted document.
+
+        Args:
+            topic: MemoryStore topic identifying the conversation thread.
+            doc_name: Original filename to show with a strikethrough style.
+        """
         try:
             html = self._build_delete_html(doc_name)
             self._emit(topic, html, "delete", "Document Deleted")
@@ -68,7 +95,12 @@ class DocumentCardService:
             logger.warning(f"{LOG_PREFIX} emit_delete_card failed: {e}")
 
     def emit_restore_card(self, topic: str, doc_name: str) -> None:
-        """Emit restore confirmation card."""
+        """Emit a restore confirmation card for a recovered document.
+
+        Args:
+            topic: MemoryStore topic identifying the conversation thread.
+            doc_name: Original filename to display with a restored badge.
+        """
         try:
             html = self._build_restore_html(doc_name)
             self._emit(topic, html, "restore", "Document Restored")
@@ -81,7 +113,13 @@ class DocumentCardService:
         content_type: str,
         thread_id: str,
     ) -> None:
-        """Emit a card suggesting the user save conversation content as a document."""
+        """Emit a card prompting the user to save conversation content as a document.
+
+        Args:
+            topic: MemoryStore topic identifying the conversation thread.
+            content_type: Human-readable content type label (e.g. ``'code snippet'``).
+            thread_id: Thread identifier embedded in the action payload buttons.
+        """
         try:
             html = self._build_save_suggestion_html(topic, content_type, thread_id)
             self._emit(topic, html, "save_suggestion", "Save Document")
@@ -400,7 +438,16 @@ class DocumentCardService:
         content_type: str,
         thread_id: str,
     ) -> str:
-        """Build save suggestion card with accept/dismiss buttons."""
+        """Build save suggestion card HTML with accept/dismiss action buttons.
+
+        Args:
+            topic: MemoryStore topic for the action payload.
+            content_type: Content type label (underscores converted to spaces for display).
+            thread_id: Thread identifier for accept/dismiss payloads.
+
+        Returns:
+            HTML string for the save suggestion card.
+        """
         import json as _json
 
         scope_id = uuid.uuid4().hex[:8]

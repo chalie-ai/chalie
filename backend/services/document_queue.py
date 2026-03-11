@@ -24,7 +24,12 @@ _start_lock = threading.Lock()
 
 
 def enqueue_document_processing(doc_id: str):
-    """Add a document to the processing queue. Deduplicates."""
+    """Add a document to the background processing queue, deduplicating in-flight IDs.
+
+    Args:
+        doc_id: Document ID to enqueue.  Silently no-ops if the same ID is
+            already queued or currently being processed.
+    """
     with _active_lock:
         if doc_id in _active:
             logger.debug(f"[DOC QUEUE] {doc_id} already queued/processing, skipping")
@@ -74,7 +79,16 @@ def _worker_loop():
 
 
 def _process_with_timeout(doc_id: str):
-    """Process a single document with a hard timeout."""
+    """Process a single document inside a daemon thread with a hard timeout.
+
+    Spawns a daemon thread that calls
+    :meth:`~services.document_processing_service.DocumentProcessingService.process_document`.
+    Blocks until the thread completes or ``PROCESSING_TIMEOUT`` seconds elapse,
+    then marks the document as failed if the thread is still alive.
+
+    Args:
+        doc_id: Document ID to process.
+    """
     result = {}
 
     def _run():
@@ -104,7 +118,12 @@ def _process_with_timeout(doc_id: str):
 
 
 def _mark_failed(doc_id: str, error: str):
-    """Mark a document as failed (best-effort)."""
+    """Mark a document as failed in the database, best-effort.
+
+    Args:
+        doc_id: Document ID to mark as failed.
+        error: Error message string to store (truncated by the caller).
+    """
     try:
         from services.document_service import DocumentService
         from services.database_service import get_shared_db_service

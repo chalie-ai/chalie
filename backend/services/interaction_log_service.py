@@ -351,7 +351,18 @@ class InteractionLogService:
         return {'items': items, 'total': total, 'since_hours': since_hours}
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
-        """Convert a database row to a dict."""
+        """Convert an interaction_log table row to an event dict.
+
+        Args:
+            row: sqlite3 row (sequence) with positional columns matching the
+                SELECT column order used in this service's queries.
+
+        Returns:
+            Event dict with keys ``id``, ``event_type``, ``topic``,
+            ``exchange_id``, ``session_id``, ``source``, ``payload``
+            (parsed from JSON), ``metadata`` (parsed from JSON), and
+            ``created_at``.
+        """
         return {
             'id': str(row[0]),
             'event_type': row[1],

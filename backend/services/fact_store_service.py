@@ -28,11 +28,26 @@ class FactStoreService:
         self.max_facts_per_topic = max_facts_per_topic
 
     def _get_fact_key(self, topic: str, key: str) -> str:
-        """Generate MemoryStore key for a fact."""
+        """Generate the MemoryStore key for a specific fact.
+
+        Args:
+            topic: Topic namespace for the fact.
+            key: Fact key within the topic (e.g. ``'name'``).
+
+        Returns:
+            MemoryStore key string in the format ``fact:<topic>:<key>``.
+        """
         return f"fact:{topic}:{key}"
 
     def _get_fact_index_key(self, topic: str) -> str:
-        """Generate MemoryStore key for the sorted set index of facts."""
+        """Generate the MemoryStore key for the sorted-set index of facts in a topic.
+
+        Args:
+            topic: Topic namespace whose facts are being indexed.
+
+        Returns:
+            MemoryStore key string in the format ``fact_index:<topic>``.
+        """
         return f"fact_index:{topic}"
 
     def store_fact(

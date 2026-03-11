@@ -89,6 +89,12 @@ class DecayEngineService:
         """Run one full decay cycle across all memory types.
 
         When richness < 0.3, only essential sub-cycles run (episodic + traits).
+        Non-essential sub-cycles (semantic, identity, external knowledge, thread
+        dormancy) are skipped to conserve resources on sparse memory systems.
+
+        Args:
+            richness: Current memory richness score in [0.0, 1.0].  Values below
+                0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
         trait_stats = self._decay_user_traits()
@@ -381,7 +387,11 @@ class DecayEngineService:
             return 0
 
     def _apply_identity_inertia(self) -> int:
-        """Apply inertia: pull identity activations toward baselines."""
+        """Pull identity activations toward their baselines via the inertia mechanism.
+
+        Returns:
+            Number of identity vectors whose activation was adjusted.
+        """
         try:
             from .database_service import get_lightweight_db_service
             db_service = get_lightweight_db_service()

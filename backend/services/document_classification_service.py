@@ -102,7 +102,21 @@ class DocumentClassificationService:
         folder_context: str,
         existing_groups: dict,
     ) -> Optional[dict]:
-        """Send classification request to the assigned LLM provider."""
+        """Send a classification request to the assigned LLM provider.
+
+        Args:
+            summary: Document summary text.
+            clean_text: Normalized full document text (truncated to 2000 chars).
+            metadata: Extracted metadata dict (companies, dates, document_type, etc.).
+            original_name: Original filename of the document.
+            folder_context: Optional watched-folder label for context.
+            existing_groups: Dict with ``categories`` and ``projects`` lists for
+                consistency nudging.
+
+        Returns:
+            Parsed JSON dict with ``category``, ``project``, and ``date`` keys,
+            or ``None`` on LLM or parse failure.
+        """
         try:
             from services.config_service import ConfigService
             from services.llm_service import create_llm_service
@@ -171,7 +185,16 @@ class DocumentClassificationService:
             return None
 
     def _get_existing_groups(self, doc_service) -> dict:
-        """Fetch existing category and project values for LLM context."""
+        """Fetch existing document category and project values for LLM context.
+
+        Args:
+            doc_service: :class:`~services.document_service.DocumentService` instance
+                used to query existing classification groups.
+
+        Returns:
+            Dict with ``categories`` (list of str) and ``projects`` (list of str),
+            each capped at 20 entries.
+        """
         categories = doc_service.get_classification_groups('doc_category')
         projects = doc_service.get_classification_groups('doc_project')
         return {
@@ -180,7 +203,15 @@ class DocumentClassificationService:
         }
 
     def _fallback_date(self, metadata: dict, doc: dict) -> str:
-        """Date cascade: extracted dates → file created_at."""
+        """Apply date cascade: extracted dates → document created_at.
+
+        Args:
+            metadata: Extracted metadata dict with optional ``dates`` list.
+            doc: Document dict with ``created_at`` field.
+
+        Returns:
+            Normalized date string (``YYYY-MM-DD``) or empty string if no date found.
+        """
         # Try extracted dates
         dates = metadata.get('dates', [])
         if dates:
@@ -200,7 +231,16 @@ class DocumentClassificationService:
         return ''
 
     def _normalize_date(self, date_str: str) -> str:
-        """Attempt to normalize a date string to YYYY-MM-DD."""
+        """Attempt to normalize a date string to ISO ``YYYY-MM-DD`` format.
+
+        Args:
+            date_str: Raw date string in any of the supported formats
+                (ISO, ``DD/MM/YYYY``, ``MM/DD/YYYY``, ``DD-MM-YYYY``).
+
+        Returns:
+            Normalized date string in ``YYYY-MM-DD`` format, or empty string
+            if the input cannot be parsed.
+        """
         if not date_str:
             return ''
         # Already in ISO format

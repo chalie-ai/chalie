@@ -184,7 +184,17 @@ class IntentClassifierService:
         return result
 
     def _classify_type(self, text: str, tokens: list) -> str:
-        """Classify the intent type."""
+        """Classify the primary intent type of a user message.
+
+        Args:
+            text: Raw user prompt string.
+            tokens: Pre-split token list from the prompt.
+
+        Returns:
+            Intent type string: one of ``'empty'``, ``'greeting'``, ``'feedback'``,
+            ``'action'``, ``'command'``, ``'question'``, ``'continuation'``, or
+            ``'statement'``.
+        """
         stripped = text.strip()
 
         if not stripped:
@@ -211,7 +221,15 @@ class IntentClassifierService:
         return 'statement'
 
     def _estimate_complexity(self, text: str, tokens: list) -> str:
-        """Estimate effort needed to answer."""
+        """Estimate the effort level required to answer the user's message.
+
+        Args:
+            text: Raw user prompt string.
+            tokens: Pre-split token list from the prompt.
+
+        Returns:
+            Complexity label: ``'simple'``, ``'moderate'``, or ``'complex'``.
+        """
         token_count = len(tokens)
 
         if token_count > COMPLEXITY_LONG_THRESHOLD:
@@ -228,7 +246,16 @@ class IntentClassifierService:
         context_warmth: float,
         token_count: int,
     ) -> float:
-        """Calculate confidence in the classification."""
+        """Calculate the classifier's confidence in its intent type determination.
+
+        Args:
+            intent_type: Intent type string from :meth:`_classify_type`.
+            context_warmth: Pre-computed context warmth score in [0.0, 1.0].
+            token_count: Number of tokens in the user's message.
+
+        Returns:
+            Confidence score in [0.1, 1.0].
+        """
         confidence = 0.5
 
         # Clear type signals boost confidence
@@ -250,7 +277,14 @@ class IntentClassifierService:
         return max(0.1, min(1.0, confidence))
 
     def _detect_register(self, text: str) -> str:
-        """Detect user's communication register."""
+        """Detect the user's communication register (formality level).
+
+        Args:
+            text: Raw user prompt string.
+
+        Returns:
+            Register label: ``'casual'``, ``'formal'``, or ``'neutral'``.
+        """
         words = text.lower().split()
         casual_count = sum(1 for w in words if w in CASUAL_MARKERS)
         formal_count = sum(1 for w in words if w in FORMAL_MARKERS)
@@ -263,12 +297,29 @@ class IntentClassifierService:
         return 'neutral'
 
     def _is_cancel_intent(self, text: str) -> bool:
-        """Check if user wants to cancel active work."""
+        """Check whether the user's message is a cancellation request.
+
+        Self-resolved messages take priority — they are not treated as cancellations.
+
+        Args:
+            text: Raw user prompt string.
+
+        Returns:
+            ``True`` if a cancel pattern is matched and the message is not
+            self-resolved.
+        """
         # Self-resolved takes priority over cancel
         if self._is_self_resolved(text):
             return False
         return any(p.search(text) for p in CANCEL_PATTERNS)
 
     def _is_self_resolved(self, text: str) -> bool:
-        """Check if user solved it themselves."""
+        """Check whether the user indicates they have resolved the issue themselves.
+
+        Args:
+            text: Raw user prompt string.
+
+        Returns:
+            ``True`` if a self-resolved pattern is matched (e.g. "figured it out").
+        """
         return any(p.search(text) for p in SELF_RESOLVED_PATTERNS)
