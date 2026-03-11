@@ -386,7 +386,8 @@ class ToolRegistryService:
         # Lifecycle management
         self._build_status: Dict[str, dict] = {}  # name -> {status, error}
         self._install_locks: Set[str] = set()      # names currently being installed
-        self._lock = threading.Lock()              # protects build_status, install_locks, and tools mutations
+        self._deps_ready: Set[str] = set()         # trusted tools whose pip deps are installed
+        self._lock = threading.Lock()              # protects build_status, install_locks, deps_ready, and tools mutations
         self._on_tool_registered = None  # Optional[callable] set by consumer for cron worker spawning
 
         try:
@@ -532,6 +533,8 @@ class ToolRegistryService:
 
         # Deferred pip install for trusted tools — runs in background so Flask
         # starts without waiting for potentially slow package downloads.
+        # Tools are excluded from get_tool_names/get_on_demand_tools until
+        # deps are installed (see _is_ready / _deps_ready).
         if trusted_dirs:
             def _install_all():
                 for tool_name, tool_dir in trusted_dirs:
@@ -629,6 +632,8 @@ class ToolRegistryService:
         """
         req_path = tool_dir / "requirements.txt"
         if not req_path.exists():
+            with self._lock:
+                self._deps_ready.add(tool_name)
             return
 
         try:
@@ -642,6 +647,8 @@ class ToolRegistryService:
                 logger.info(
                     f"[TOOL REGISTRY] Deps installed for trusted tool '{tool_name}'"
                 )
+                with self._lock:
+                    self._deps_ready.add(tool_name)
             else:
                 logger.warning(
                     f"[TOOL REGISTRY] Dep install failed for '{tool_name}': "
@@ -835,6 +842,16 @@ class ToolRegistryService:
             "telemetry": flattened_telemetry,
         }
         timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
+
+        # Gate: trusted tools must have deps installed before invocation
+        if tool.get("trust") == "trusted":
+            with self._lock:
+                deps_ok = tool_name in self._deps_ready
+            if not deps_ok:
+                return (
+                    f"[TOOL:{tool_name}] Tool '{tool_name}' is still installing "
+                    f"dependencies — please try again in a moment. [/TOOL]"
+                )
 
         start_time = time.time()
         success = False
@@ -1252,13 +1269,22 @@ class ToolRegistryService:
         """Called by consumer to register a hook for post-build cron worker spawning."""
         self._on_tool_registered = callback
 
+    def _is_ready(self, name: str, tool: dict) -> bool:
+        """Check if a tool is ready for invocation (deps installed)."""
+        if tool.get("trust") != "trusted":
+            return True  # sandboxed tools bundle deps in Docker
+        with self._lock:
+            return name in self._deps_ready
+
     def get_tool_names(self) -> List[str]:
-        return list(self.tools.keys())
+        return [name for name, tool in self.tools.items()
+                if self._is_ready(name, tool)]
 
     def get_on_demand_tools(self) -> List[str]:
         return [
             name for name, tool in self.tools.items()
             if tool["manifest"].get("trigger", {}).get("type") == "on_demand"
+            and self._is_ready(name, tool)
         ]
 
     def get_ambient_tools(self) -> List[dict]:
@@ -1275,6 +1301,8 @@ class ToolRegistryService:
         for name, tool in self.tools.items():
             trigger_type = tool["manifest"].get("trigger", {}).get("type")
             if trigger_type != "on_demand":
+                continue
+            if not self._is_ready(name, tool):
                 continue
 
             ambient = tool["manifest"].get("ambient", {})
