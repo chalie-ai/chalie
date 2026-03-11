@@ -59,6 +59,14 @@ class EmbeddingService:
     """Unified embedding service using sentence-transformers (no external service required)."""
 
     def __init__(self, config: dict = None):
+        """Initialize the embedding service.
+
+        Args:
+            config: Optional configuration dict. When ``None`` the config is
+                resolved from the ``'semantic-memory'`` agent entry. Supported
+                keys: ``embedding_dimensions`` (int, default 768) and
+                ``embedding_model`` (str, default ``'all-mpnet-base-v2'``).
+        """
         self.config = config or ConfigService.resolve_agent_config("semantic-memory")
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
         self.model_name = self.config.get('embedding_model', 'all-mpnet-base-v2')

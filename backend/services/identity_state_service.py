@@ -40,6 +40,7 @@ class IdentityStateService:
     MAX_PREVIOUS_HISTORY = 5
 
     def __init__(self):
+        """Initialize the identity state service, setting the MemoryStore key."""
         self._store_key = self._STORE_KEY_PREFIX
 
     def set_field(

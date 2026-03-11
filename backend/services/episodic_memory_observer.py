@@ -55,6 +55,13 @@ class EpisodicMemoryObserver:
     """Periodic thread scanner that triggers episodic consolidation based on signal density."""
 
     def __init__(self, scan_interval=SCAN_INTERVAL, density_threshold=DENSITY_THRESHOLD):
+        """Initialize the episodic memory observer.
+
+        Args:
+            scan_interval: Seconds between scan cycles (default: ``SCAN_INTERVAL`` = 60).
+            density_threshold: Minimum weighted signal density required to
+                trigger consolidation (default: ``DENSITY_THRESHOLD`` = 0.5).
+        """
         self.scan_interval = scan_interval
         self.density_threshold = density_threshold
         self.store = MemoryClientService.create_connection()

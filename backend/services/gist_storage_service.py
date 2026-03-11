@@ -1,3 +1,11 @@
+"""
+Gist Storage Service — Short-term working-memory store for conversation gists.
+
+Persists extracted gist dicts (content, type, confidence) in MemoryStore with
+a configurable TTL (default 30 min). Enforces deduplication via Jaccard similarity
+and per-type caps so the context window stays focused.
+"""
+
 import json
 import logging
 import time
@@ -196,7 +204,14 @@ class GistStorageService:
         return best_match
 
     def _replace_gist(self, topic: str, old_id: str, new_data: Dict):
-        """Replace an existing gist's data in-place (same ID, refreshed TTL)."""
+        """Replace an existing gist's data in-place, keeping the same ID but refreshing TTL.
+
+        Args:
+            topic: Topic name that owns the gist.
+            old_id: UUID of the gist to overwrite.
+            new_data: New gist payload dict with keys ``content``, ``type``,
+                ``confidence``, and ``created_at``.
+        """
         gist_key = self._get_gist_key(topic, old_id)
         self.store.setex(gist_key, self.attention_span_seconds, json.dumps(new_data))
         # Update score in index to current time
@@ -205,7 +220,15 @@ class GistStorageService:
         self.store.expire(index_key, self.attention_span_seconds)
 
     def _enforce_type_caps(self, topic: str, all_gists: List[Tuple[str, Dict]], max_per_type: int):
-        """Remove lowest-confidence excess gists per type."""
+        """Remove lowest-confidence excess gists so each type stays within its cap.
+
+        Args:
+            topic: Topic name that owns the gists.
+            all_gists: Full list of ``(gist_id, gist_data)`` tuples currently in
+                the MemoryStore index.
+            max_per_type: Maximum number of gists of each type to retain; excess
+                entries (lowest confidence first) are deleted from MemoryStore.
+        """
         by_type = defaultdict(list)
         for gist_id, gist_data in all_gists:
             gist_type = gist_data.get('type', 'unknown')

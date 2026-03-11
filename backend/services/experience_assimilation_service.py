@@ -54,6 +54,13 @@ class ExperienceAssimilationService:
     """
 
     def __init__(self, check_interval: int = 60):
+        """Initialize the experience assimilation service.
+
+        Args:
+            check_interval: Seconds between polling cycles (default: 60).
+                Overridden by ``check_interval`` from the
+                ``experience-assimilation`` agent config when present.
+        """
         self.store = MemoryClientService.create_connection()
         self.config = ConfigService.resolve_agent_config("experience-assimilation")
         self.check_interval = self.config.get("check_interval", check_interval)
@@ -94,7 +101,15 @@ class ExperienceAssimilationService:
                 time.sleep(60)
 
     def _daily_sessions_exceeded(self) -> bool:
-        """Check if we've hit the daily session cap."""
+        """Check whether the daily session cap has been reached.
+
+        Resets the counter automatically at midnight (UTC). The cap is
+        configured via ``max_sessions_per_day`` in the agent config
+        (default: 20).
+
+        Returns:
+            ``True`` if the number of sessions today is at or above the cap.
+        """
         count = int(self.store.hget(STATE_KEY, 'sessions_today') or 0)
         day_key = self.store.hget(STATE_KEY, 'session_day')
         today = time.strftime('%Y-%m-%d')
@@ -109,18 +124,39 @@ class ExperienceAssimilationService:
         return count >= self.max_sessions
 
     def _is_topic_on_cooldown(self, topic: str) -> bool:
-        """Check per-topic cooldown."""
+        """Check whether a topic is within its post-processing cooldown window.
+
+        Args:
+            topic: The conversation topic string to check.
+
+        Returns:
+            ``True`` if the topic was processed within ``cooldown_per_topic``
+            seconds ago and should be skipped this cycle.
+        """
         last_time = self.store.zscore(COOLDOWN_ZSET_KEY, topic)
         if last_time and (time.time() - float(last_time)) < self.cooldown_per_topic:
             return True
         return False
 
     def _mark_topic_processed(self, topic: str):
-        """Record topic cooldown."""
+        """Record the current timestamp for a topic, starting its cooldown window.
+
+        Args:
+            topic: The conversation topic that was just successfully processed.
+        """
         self.store.zadd(COOLDOWN_ZSET_KEY, {topic: time.time()})
 
     def _content_hash(self, tool_outputs: list) -> str:
-        """Hash tool outputs for dedup (novelty gate layer 3)."""
+        """Compute a short MD5 fingerprint of tool outputs for content-level deduplication.
+
+        This is novelty-gate layer 3 (layers 1 and 2 are applied at enqueue time).
+
+        Args:
+            tool_outputs: List of tool output dicts from the ACT loop.
+
+        Returns:
+            A 16-character hex string uniquely identifying this set of outputs.
+        """
         combined = json.dumps(tool_outputs, sort_keys=True)
         return hashlib.md5(combined.encode()).hexdigest()[:16]
 
@@ -142,7 +178,11 @@ class ExperienceAssimilationService:
         return False
 
     def _run_cycle(self):
-        """Pop and process up to 3 items from the pending list."""
+        """Pop and process up to 3 items from the pending reflection list.
+
+        Each item is deserialized from JSON and passed to :meth:`_process_item`.
+        Errors on individual items are logged and do not abort the cycle.
+        """
         for _ in range(3):
             raw = self.store.lpop(PENDING_LIST_KEY)
             if not raw:
@@ -155,7 +195,14 @@ class ExperienceAssimilationService:
                 logger.error(f"{LOG_PREFIX} Failed to process item: {e}")
 
     def _process_item(self, item: dict):
-        """Process one tool reflection item."""
+        """Process one pending tool reflection item through the full novelty-gate pipeline.
+
+        Applies cooldown, content-hash dedup, LLM reflection, and observation
+        dedup before storing any episodic memories.
+
+        Args:
+            item: Dict with keys ``topic``, ``user_prompt``, and ``tool_outputs``.
+        """
         topic = item.get('topic', 'general')
         user_prompt = item.get('user_prompt', '')
         tool_outputs = item.get('tool_outputs', [])
@@ -214,7 +261,20 @@ class ExperienceAssimilationService:
             logger.info(f"{LOG_PREFIX} Stored {stored} episode(s) for topic '{topic}'")
 
     def _reflect(self, user_prompt: str, tool_outputs: list) -> dict:
-        """Call LLM to evaluate tool outputs for novel knowledge."""
+        """Invoke the LLM to evaluate whether tool outputs contain novel, memorable knowledge.
+
+        Args:
+            user_prompt: The original user message that triggered the ACT loop.
+            tool_outputs: List of tool output dicts (each has ``tool`` and ``result``).
+
+        Returns:
+            Parsed JSON dict from the LLM containing ``worth_reflecting`` (bool)
+            and ``observations`` (list of dicts with ``text`` and ``durability``).
+
+        Raises:
+            json.JSONDecodeError: If the LLM response is not valid JSON.
+            Exception: On LLM provider errors.
+        """
         from services.background_llm_queue import create_background_llm_proxy
 
         tool_outputs_text = "\n\n".join(
@@ -231,7 +291,19 @@ class ExperienceAssimilationService:
         return json.loads(response)
 
     def _store_episode(self, observation: dict, topic: str, user_prompt: str, tool_outputs: list):
-        """Store a reflection observation as an episodic memory."""
+        """Persist a single reflection observation as an episodic memory entry.
+
+        Embeds the observation text, builds the episode payload, and writes it
+        via :class:`~services.episodic_storage_service.EpisodicStorageService`.
+        Also triggers profile enrichment for high-salience episodes.
+
+        Args:
+            observation: Observation dict from the LLM with ``text`` and
+                ``durability`` (``'stable'``, ``'evolving'``, or ``'transient'``).
+            topic: The conversation topic associated with this episode.
+            user_prompt: Original user prompt that triggered the ACT loop.
+            tool_outputs: List of tool output dicts used to produce the observation.
+        """
         from services.database_service import get_lightweight_db_service
         from services.episodic_storage_service import EpisodicStorageService
         from services.embedding_service import get_embedding_service

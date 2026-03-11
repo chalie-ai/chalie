@@ -51,6 +51,12 @@ class DocumentProcessingService:
     """Processes uploaded documents: extract, analyze, chunk, embed."""
 
     def __init__(self, db_service=None):
+        """Initialize the document processing service.
+
+        Args:
+            db_service: Optional :class:`~services.database_service.DatabaseService`
+                instance. Falls back to the shared singleton when ``None``.
+        """
         self.db = db_service
 
     def process_document(self, doc_id: str) -> bool:

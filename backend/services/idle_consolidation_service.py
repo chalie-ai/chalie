@@ -1,3 +1,11 @@
+"""
+Idle Consolidation Service — Batch memory consolidation triggered during idle periods.
+
+Monitors all memory worker queues and fires a consolidation pass when every queue
+is empty and at least one hour has elapsed since the last consolidation. Prevents
+stale working memory from accumulating between active conversation sessions.
+"""
+
 import time
 import logging
 from typing import Optional

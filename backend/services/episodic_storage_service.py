@@ -15,6 +15,12 @@ class EpisodicStorageService:
     """Manages episode storage and retrieval operations."""
 
     def __init__(self, database_service: DatabaseService):
+        """Initialize the episodic storage service.
+
+        Args:
+            database_service: :class:`~services.database_service.DatabaseService`
+                instance used for all episode persistence operations.
+        """
         self.db_service = database_service
 
     def store_episode(self, episode_data: dict) -> str:

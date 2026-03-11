@@ -79,6 +79,7 @@ class EventBridgeService:
     """Connects ambient context changes to autonomous actions."""
 
     def __init__(self):
+        """Initialize the event bridge, loading config and opening the MemoryStore connection."""
         self._config = _load_config()
         self._store = MemoryClientService.create_connection()
 

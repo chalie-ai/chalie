@@ -109,6 +109,7 @@ class IntentClassifierService:
     """
 
     def __init__(self):
+        """Initialize the intent classifier (no external resources needed at construction time)."""
         pass
 
     def classify(

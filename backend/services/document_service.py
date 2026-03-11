@@ -44,6 +44,12 @@ class DocumentService:
     """Manages document storage, chunk retrieval, and hybrid search."""
 
     def __init__(self, db_service):
+        """Initialize the document service with a database connection.
+
+        Args:
+            db_service: :class:`~services.database_service.DatabaseService`
+                instance used for all document storage and retrieval operations.
+        """
         self.db = db_service
 
     # ─────────────────────────────────────────────
