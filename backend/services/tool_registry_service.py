@@ -1061,14 +1061,15 @@ class ToolRegistryService:
         from services.tool_output_utils import format_tool_result
         return format_tool_result(result)
 
-    def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None):
-        """Log tool invocation outcome to procedural memory.
+    def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
+        """Log tool invocation outcome to procedural memory and performance metrics.
 
         Args:
             failure_class: 'external' for rate limits / network / upstream errors;
                            'internal' for container crashes / tool bugs.
                            None implies success. External failures receive an
                            attenuated penalty to avoid unjust weight degradation.
+            exchange_id: Optional exchange ID for cross-referencing with interactions.
         """
         try:
             from services.procedural_memory_service import ProceduralMemoryService
@@ -1084,6 +1085,20 @@ class ToolRegistryService:
             service.record_action_outcome(tool_name, success, reward, topic, failure_class=failure_class)
         except Exception as e:
             logger.debug(f"[TOOL REGISTRY] Failed to log outcome: {e}")
+
+        # Also record to tool_performance_metrics so ToolPerformanceService
+        # has complete observability — including registry-level failures.
+        try:
+            from services.tool_performance_service import ToolPerformanceService
+            ToolPerformanceService().record_invocation(
+                tool_name=tool_name,
+                exchange_id=exchange_id,
+                success=success,
+                latency_ms=float(elapsed_ms),
+                cost=0.0,
+            )
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] Failed to record performance metric: {e}")
 
     def register_tool_async(self, tool_dir: Path) -> bool:
         """
