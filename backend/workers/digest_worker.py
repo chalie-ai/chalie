@@ -1908,24 +1908,6 @@ def _handle_direct_tool_dispatch(
         f"confidence={triage_result.confidence_tool_need:.2f})"
     )
 
-    # ── Emit status so frontend shows progress ────────────────────────
-    ws_uuid = metadata.get('uuid')
-    if ws_uuid:
-        try:
-            import json as _json
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            from uuid import uuid4
-            status_id = f"narr_{uuid4().hex[:12]}"
-            store.set(f"output:{status_id}", _json.dumps({
-                'type': 'act_narration',
-                'text': f"Using {tool_name}…",
-                'step': 0,
-            }), ex=300)
-            store.publish(f"sse:{ws_uuid}", status_id)
-        except Exception as _e:
-            logging.debug(f"[DIGEST] Direct dispatch narration failed: {_e}")
-
     # ── Execute the tool via dispatcher ───────────────────────────────
     per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
     dispatcher = ActDispatcherService(timeout=per_action_timeout)
@@ -1955,6 +1937,26 @@ def _handle_direct_tool_dispatch(
 
     if not _can_direct:
         return None  # Caller falls through to ACT orchestrator
+
+    # ── Emit narration only after confirming we can dispatch ──────────
+    # Narration is emitted here (not earlier) to avoid "Using X…" messages
+    # appearing when the tool turns out to need LLM param extraction.
+    ws_uuid = metadata.get('uuid')
+    if ws_uuid:
+        try:
+            import json as _json
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            from uuid import uuid4
+            status_id = f"narr_{uuid4().hex[:12]}"
+            store.set(f"output:{status_id}", _json.dumps({
+                'type': 'act_narration',
+                'text': f"Using {tool_name}…",
+                'step': 0,
+            }), ex=300)
+            store.publish(f"sse:{ws_uuid}", status_id)
+        except Exception as _e:
+            logging.debug(f"[DIGEST] Direct dispatch narration failed: {_e}")
 
     action_spec = {
         'type': tool_name,
