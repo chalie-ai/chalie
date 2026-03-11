@@ -2,7 +2,7 @@ name: Update build log
 
 on:
   push:
-    branches: [main, master]
+    branches: ['**']
 
 jobs:
   update-build-log:
@@ -32,6 +32,7 @@ jobs:
         run: node scripts/update-build-log.js
 
       - name: Commit and push
+        if: github.ref == 'refs/heads/main'
         working-directory: chalie-web
         run: |
           git config user.name "github-actions[bot]"
