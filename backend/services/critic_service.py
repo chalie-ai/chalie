@@ -222,7 +222,16 @@ class CriticService:
         return DEFAULT_CONFIDENCE_SKIP_THRESHOLD
 
     def _update_calibration(self, action_type: str, corrected: bool):
-        """Update EMA correction rate for confidence calibration."""
+        """Update the EMA correction rate for confidence calibration.
+
+        Uses an exponential moving average with alpha = CALIBRATION_EMA_ALPHA
+        to track the rate of corrections for each action type. Higher rates
+        raise the effective skip threshold, making the critic harder to bypass.
+
+        Args:
+            action_type: The action type string whose calibration to update.
+            corrected: True if this evaluation resulted in a correction.
+        """
         current = self._calibration.get(action_type, 0.0)
         value = 1.0 if corrected else 0.0
         self._calibration[action_type] = (
@@ -236,7 +245,20 @@ class CriticService:
         action_intent: Dict[str, Any],
         action_result: Dict[str, Any],
     ) -> str:
-        """Build the critic evaluation prompt."""
+        """Build the critic evaluation prompt from the template.
+
+        Substitutes ``{{original_request}}``, ``{{action_type}}``,
+        ``{{action_intent}}``, and ``{{action_result}}`` placeholders.
+
+        Args:
+            original_request: The user's original prompt text.
+            action_type: The type of action being verified.
+            action_intent: The action specification dict that was dispatched.
+            action_result: The structured result dict from the dispatcher.
+
+        Returns:
+            Fully rendered prompt string ready for the LLM.
+        """
         template = self._load_prompt()
 
         # Serialize intent and result for the prompt
@@ -252,7 +274,19 @@ class CriticService:
         )
 
     def _parse_verdict(self, response_text: str) -> Dict[str, Any]:
-        """Parse the LLM verdict response into a structured dict."""
+        """Parse the LLM verdict response into a structured dict.
+
+        Attempts JSON parsing directly, then from a markdown code fence,
+        then falls back to keyword detection for obvious failure signals.
+        Returns ``{'verified': True}`` when no failure is detected.
+
+        Args:
+            response_text: Raw text response from the critic LLM call.
+
+        Returns:
+            Verdict dict with at minimum a ``'verified'`` boolean key.
+            May also include ``'severity'``, ``'issue'``, and ``'correction'``.
+        """
         try:
             # Try direct JSON parse first
             return json.loads(response_text)
@@ -282,7 +316,13 @@ class CriticService:
         return {'verified': True}
 
     def _load_prompt(self) -> str:
-        """Load the critic prompt template."""
+        """Load the critic prompt template from prompts/act-critic.md.
+
+        Result is cached on first call; subsequent calls return the cached value.
+
+        Returns:
+            Prompt template string with ``{{...}}`` placeholders for substitution.
+        """
         if self._prompt_template is None:
             import os
             prompts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts')
@@ -292,7 +332,14 @@ class CriticService:
         return self._prompt_template
 
     def _get_llm(self):
-        """Get or create the LLM service for critic evaluations."""
+        """Get or create the LLM service for critic evaluations.
+
+        Lazily instantiates using the cognitive-triage agent config (lightweight model).
+        Result is cached on the instance for reuse across multiple evaluations.
+
+        Returns:
+            LLM service instance configured for critic evaluations.
+        """
         if self._llm is None:
             from services.llm_service import create_llm_service
             from services.config_service import ConfigService

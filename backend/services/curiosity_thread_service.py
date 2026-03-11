@@ -64,13 +64,20 @@ class CuriosityThreadService:
         thread_type: str,
         seed_topic: str,
     ) -> Optional[str]:
-        """
-        Create a new curiosity thread.
+        """Create a new curiosity thread.
 
-        Dedup: if an active thread exists for the same seed_topic, returns None.
+        Dedup: if an active thread already exists for the same seed_topic,
+        returns None without creating a duplicate.
+
+        Args:
+            title: Short human-readable title for the thread.
+            rationale: Explanation of why this thread was seeded.
+            thread_type: Either 'learning' or 'behavioral'.
+            seed_topic: Topic string used for dedup checks and exploration prompts.
 
         Returns:
-            8-char hex thread ID, or None if deduplicated.
+            8-character hex thread ID on success, or None if deduplicated
+            or thread_type is invalid.
         """
         if thread_type not in ('learning', 'behavioral'):
             logger.warning(f"{LOG_PREFIX} Invalid thread_type: {thread_type}")
@@ -110,11 +117,18 @@ class CuriosityThreadService:
             return None
 
     def get_threads_for_exploration(self, limit: int = 1) -> List[Dict]:
-        """
-        Get active threads eligible for exploration.
+        """Get active threads eligible for exploration.
 
         Skips threads whose last_explored_at is within their effective
         exploration interval (adaptive based on engagement).
+
+        Args:
+            limit: Maximum number of eligible threads to return (default: 1).
+
+        Returns:
+            List of thread dicts eligible for exploration, ordered by
+            last_explored_at ascending (never-explored first). Returns
+            an empty list on error.
         """
         try:
             with self.db.connection() as conn:
@@ -157,7 +171,12 @@ class CuriosityThreadService:
             return []
 
     def get_active_threads(self) -> List[Dict]:
-        """Get all active threads."""
+        """Get all active curiosity threads ordered by creation time.
+
+        Returns:
+            List of thread dicts for all threads with status 'active',
+            ordered by created_at ascending. Returns an empty list on error.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -236,10 +255,14 @@ class CuriosityThreadService:
             return False
 
     def get_surfacing_candidate(self, thread_id: str) -> Optional[str]:
-        """
-        Get last 2-3 learning notes as formatted summary for surfacing.
+        """Get the last 2-3 learning notes as a formatted summary for surfacing.
 
-        Returns None if too thin (<50 chars total).
+        Args:
+            thread_id: Identifier of the thread to summarise.
+
+        Returns:
+            Concatenated summary string from recent learning notes, or None if
+            the thread has no notes or the combined text is shorter than 50 characters.
         """
         try:
             with self.db.connection() as conn:
@@ -273,10 +296,16 @@ class CuriosityThreadService:
             return None
 
     def update_engagement(self, thread_id: str, score: float) -> bool:
-        """
-        Update engagement score with rolling average (0.3 weight on new).
+        """Update engagement score using a rolling average (0.3 weight on new score).
 
-        If score drops below 0.2, thread goes dormant.
+        If the resulting score drops below 0.2, the thread status is set to 'dormant'.
+
+        Args:
+            thread_id: Identifier of the thread to update.
+            score: New engagement sample in [0.0, 1.0].
+
+        Returns:
+            True if the update succeeded, False if the thread was not found or on error.
         """
         try:
             with self.db.connection() as conn:
@@ -320,11 +349,18 @@ class CuriosityThreadService:
             return False
 
     def reinforce_from_conversation(self, seed_topic: str) -> bool:
-        """
-        Boost engagement_score by +0.1 (capped at 1.0).
+        """Boost engagement score by up to +0.1 when a user episode aligns with a thread.
 
-        Rate-limited to max +0.2/day per thread via MemoryStore daily counter.
-        Called when user-generated episodes align with a thread's seed_topic.
+        Rate-limited to a maximum of +0.2 per thread per day via a MemoryStore
+        daily counter. Called when user-generated episodes align with the thread's
+        seed_topic (detected by cosine similarity in CuriosityPursuitService.on_new_episode).
+
+        Args:
+            seed_topic: Seed topic string used to look up the active thread.
+
+        Returns:
+            True if the boost was applied, False if the thread was not found,
+            the daily cap was reached, or an error occurred.
         """
         try:
             from services.memory_client import MemoryClientService
@@ -382,13 +418,15 @@ class CuriosityThreadService:
             return False
 
     def apply_dormancy(self) -> int:
-        """
-        Apply dormancy rules:
-          - Active threads not explored in 45 days → dormant
-          - Dormant + engagement < 0.2 + dormant > 60 days → abandoned
+        """Apply lifecycle dormancy rules to all threads.
+
+        Rules applied in order:
+
+        1. Active threads not explored in 45 days → dormant
+        2. Dormant threads with engagement < 0.2 AND dormant for > 60 days → abandoned
 
         Returns:
-            Number of threads transitioned
+            Total number of threads transitioned (dormant + abandoned combined).
         """
         try:
             with self.db.connection() as conn:
@@ -426,7 +464,11 @@ class CuriosityThreadService:
             return 0
 
     def count_active(self) -> int:
-        """Count active threads for rate limiting."""
+        """Count active curiosity threads for rate limiting.
+
+        Returns:
+            Integer count of threads with status 'active', or 0 on error.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -441,12 +483,17 @@ class CuriosityThreadService:
             return 0
 
     def get_effective_explore_interval(self, thread: Dict) -> float:
-        """
-        Adaptive exploration interval based on engagement.
+        """Compute the adaptive exploration interval based on thread engagement.
 
-        High engagement → explore more often (down to 3h).
-        Low engagement → slow down (up to 12h).
+        High engagement (>0.7) → explore more often, down to 3h minimum.
+        Low engagement (<0.3) → slow down, up to 12h.
         Default: 8h.
+
+        Args:
+            thread: Thread dict containing at minimum 'engagement_score'.
+
+        Returns:
+            Effective exploration interval in seconds, floored at MIN_EXPLORE_INTERVAL.
         """
         engagement = thread.get('engagement_score', 0.5)
 
@@ -461,11 +508,16 @@ class CuriosityThreadService:
         return max(effective, self.MIN_EXPLORE_INTERVAL)
 
     def get_effective_surface_interval(self, thread: Dict) -> float:
-        """
-        Adaptive surfacing interval modulated by user conversation activity.
+        """Compute the adaptive surfacing interval modulated by conversation activity.
 
-        When user talks about the topic more → surface sooner.
-        High engagement → 30% faster surfacing.
+        When the user discusses the topic more frequently, the interval shrinks.
+        High engagement (>0.7) also shortens the interval by 30%.
+
+        Args:
+            thread: Thread dict containing at minimum 'engagement_score' and 'seed_topic'.
+
+        Returns:
+            Effective surfacing interval in seconds.
         """
         engagement = thread.get('engagement_score', 0.5)
         seed_topic = thread.get('seed_topic', '')
@@ -484,12 +536,17 @@ class CuriosityThreadService:
         return effective
 
     def get_fatigue_budget(self, thread: Dict) -> float:
-        """
-        Adaptive ACT budget for pursuit based on engagement.
+        """Compute the adaptive ACT loop fatigue budget for this pursuit cycle.
 
-        High engagement → invest more (7.0).
-        Low engagement → lighter touch (3.0).
-        Default: 5.0 (vs 10.0 for user ACT).
+        High engagement (>0.7) → invest more cognitive effort (7.0).
+        Low engagement (<0.3) → lighter touch (3.0).
+        Default: 5.0 (half of the 10.0 budget used for user-driven ACT).
+
+        Args:
+            thread: Thread dict containing at minimum 'engagement_score'.
+
+        Returns:
+            Fatigue budget float to pass to ActLoopService.
         """
         engagement = thread.get('engagement_score', 0.5)
 
@@ -500,7 +557,18 @@ class CuriosityThreadService:
         return 5.0
 
     def mark_explored(self, thread_id: str) -> bool:
-        """Set last_explored_at = datetime('now') immediately (prevent double-pickup)."""
+        """Set last_explored_at to the current time to prevent double-pickup.
+
+        Should be called immediately when a thread is selected for exploration,
+        before the ACT loop runs, to ensure concurrent workers do not pick the
+        same thread.
+
+        Args:
+            thread_id: Identifier of the thread to mark as explored.
+
+        Returns:
+            True if the update succeeded, False if the thread was not found or on error.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -516,7 +584,14 @@ class CuriosityThreadService:
             return False
 
     def mark_surfaced(self, thread_id: str) -> bool:
-        """Set last_surfaced_at = datetime('now')."""
+        """Set last_surfaced_at to the current time after delivering a surprise.
+
+        Args:
+            thread_id: Identifier of the thread that was surfaced to the user.
+
+        Returns:
+            True if the update succeeded, False if the thread was not found or on error.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()

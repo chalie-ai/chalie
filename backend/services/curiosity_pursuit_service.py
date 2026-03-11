@@ -218,11 +218,19 @@ class CuriosityPursuitService:
             )
 
     def _run_act_loop(self, self_prompt: str, thread: Dict, fatigue_budget: float) -> Optional[str]:
-        """
-        Route self-prompt through ACT loop machinery.
+        """Route a self-prompt through the ACT loop machinery.
+
+        Builds an ActLoopService with an adaptive fatigue budget derived from
+        the thread's engagement score, runs up to max_iterations cycles, then
+        summarises the resulting act_history into a learning note.
+
+        Args:
+            self_prompt: Internally generated exploration prompt string.
+            thread: Thread dict containing at minimum 'thread_type' and 'seed_topic'.
+            fatigue_budget: ACT loop fatigue budget scaled by thread engagement.
 
         Returns:
-            1-3 sentence learning note summary, or None on failure.
+            1-3 sentence learning note summary string, or None on failure.
         """
         try:
             from services.act_loop_service import ActLoopService
@@ -309,10 +317,18 @@ class CuriosityPursuitService:
             return None
 
     def _summarize_learning(self, act_history: str, thread: Dict) -> Optional[str]:
-        """
-        Summarize ACT loop results into a 1-3 sentence learning note.
+        """Summarize ACT loop results into a 1-3 sentence learning note.
 
-        Uses the same LLM as drift for lightweight summarization.
+        Uses the cognitive-drift LLM proxy for lightweight summarization.
+        Returns None if the act_history is too short to summarize meaningfully.
+
+        Args:
+            act_history: Formatted ACT loop history string from get_history_context().
+            thread: Thread dict containing at minimum 'seed_topic'.
+
+        Returns:
+            Summarized learning note string, or None if the history is too thin
+            or the LLM call fails.
         """
         if not act_history or len(str(act_history)) < 20:
             return None
