@@ -35,6 +35,11 @@ class CycleService:
     """Manages message cycle lifecycle in SQLite."""
 
     def __init__(self, db_service: DatabaseService):
+        """Initialize the cycle service.
+
+        Args:
+            db_service: DatabaseService instance used for all SQLite operations.
+        """
         self.db_service = db_service
 
     def create_cycle(
@@ -115,7 +120,17 @@ class CycleService:
             return None
 
     def complete_cycle(self, cycle_id: str, status: str = 'completed') -> bool:
-        """Mark a cycle as completed (or failed/cancelled/suppressed)."""
+        """Mark a cycle as completed, failed, cancelled, or suppressed.
+
+        Sets the completed_at timestamp and updates status in a single query.
+
+        Args:
+            cycle_id: UUID string of the cycle to complete.
+            status: Terminal status to set (default: 'completed').
+
+        Returns:
+            True on success, False if the database update fails.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -132,7 +147,15 @@ class CycleService:
             return False
 
     def update_cycle_status(self, cycle_id: str, status: str) -> bool:
-        """Update cycle status without setting completed_at."""
+        """Update cycle status without setting the completed_at timestamp.
+
+        Args:
+            cycle_id: UUID string of the cycle to update.
+            status: New status string to set.
+
+        Returns:
+            True on success, False if the database update fails.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -147,7 +170,14 @@ class CycleService:
             return False
 
     def get_cycle(self, cycle_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single cycle by ID."""
+        """Retrieve a single cycle record by its ID.
+
+        Args:
+            cycle_id: UUID string of the cycle to retrieve.
+
+        Returns:
+            Cycle dict, or None if not found or on error.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -165,7 +195,14 @@ class CycleService:
             return None
 
     def get_cycle_chain(self, root_cycle_id: str) -> List[Dict[str, Any]]:
-        """Get all cycles in a lineage, ordered by creation time."""
+        """Get all cycles belonging to a lineage tree, ordered by creation time.
+
+        Args:
+            root_cycle_id: UUID string of the root cycle whose lineage to retrieve.
+
+        Returns:
+            List of cycle dicts ordered by created_at ascending, or [] on error.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -185,7 +222,15 @@ class CycleService:
             return []
 
     def get_recent_cycles(self, topic: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get recent cycles for a topic."""
+        """Get the most recent cycles for a given topic.
+
+        Args:
+            topic: Topic name to filter by.
+            limit: Maximum number of cycles to return (default: 10).
+
+        Returns:
+            List of cycle dicts ordered by created_at descending, or [] on error.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -211,7 +256,16 @@ class CycleService:
         cycle_type: Optional[str] = None,
         status: str = 'processing',
     ) -> List[Dict[str, Any]]:
-        """Get active cycles, optionally filtered by topic and type."""
+        """Get cycles matching a given status, optionally filtered by topic and type.
+
+        Args:
+            topic: Optional topic name to filter by.
+            cycle_type: Optional cycle type to filter by.
+            status: Status string to match (default: 'processing').
+
+        Returns:
+            List of matching cycle dicts ordered by created_at descending, or [] on error.
+        """
         try:
             conditions = ["status = ?"]
             params = [status]
@@ -298,14 +352,28 @@ class CycleService:
             return False
 
     def get_defer_count(self, cycle_id: str) -> int:
-        """Get the number of times a cycle has been deferred."""
+        """Get the number of times a cycle has been deferred.
+
+        Args:
+            cycle_id: UUID string of the cycle to check.
+
+        Returns:
+            Defer count integer, or 0 if the cycle is not found.
+        """
         cycle = self.get_cycle(cycle_id)
         if cycle and cycle.get('metadata'):
             return cycle['metadata'].get('defer_count', 0)
         return 0
 
     def increment_defer_count(self, cycle_id: str) -> bool:
-        """Increment the defer count in cycle metadata."""
+        """Increment the defer count stored in the cycle's metadata JSON.
+
+        Args:
+            cycle_id: UUID string of the cycle to update.
+
+        Returns:
+            True on success, False if the cycle is not found or on error.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -334,7 +402,11 @@ class CycleService:
             return False
 
     def expire_stale_cycles(self) -> int:
-        """Mark stale cycles as expired. Returns count of expired cycles."""
+        """Mark stale pending/processing cycles older than 10 minutes as expired.
+
+        Returns:
+            Count of cycles transitioned to 'expired' status.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -356,14 +428,28 @@ class CycleService:
 
 
 def _json_or_none(obj):
-    """Convert dict to JSON string for SQLite TEXT, or None."""
+    """Convert a dict to a JSON string for SQLite TEXT storage, or return None.
+
+    Args:
+        obj: Dict to serialise, or None.
+
+    Returns:
+        JSON string representation of obj, or None if obj is None.
+    """
     if obj is None:
         return None
     return json.dumps(obj)
 
 
 def _row_to_dict(row) -> Dict[str, Any]:
-    """Convert a database row to a dict."""
+    """Convert a database row tuple to a cycle dict.
+
+    Args:
+        row: Tuple of column values from the message_cycles SELECT query.
+
+    Returns:
+        Dict with cycle fields keyed by name.
+    """
     return {
         'cycle_id': str(row[0]),
         'parent_cycle_id': str(row[1]) if row[1] else None,

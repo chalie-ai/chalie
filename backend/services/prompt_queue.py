@@ -19,6 +19,21 @@ class PromptQueue:
     _lock_guard = threading.Lock()
 
     def __init__(self, queue_name: str = None, worker_func=None):
+        """Initialise the queue and acquire (or create) its serialization lock.
+
+        A class-level lock registry ensures that all ``PromptQueue`` instances
+        sharing the same *queue_name* contend on a single
+        :class:`threading.Lock`, so only one job per logical queue runs at a
+        time across the process.
+
+        Args:
+            queue_name: Logical queue identifier used for lock sharing and log
+                messages.  Defaults to ``"prompt-queue"`` when *None*.
+            worker_func: Callable invoked by background threads dispatched via
+                :meth:`enqueue`.  May be ``None`` if the queue is used purely
+                for lock sharing; calling :meth:`enqueue` without a worker
+                raises :class:`ValueError`.
+        """
         self._queue_name = queue_name or "prompt-queue"
         self._worker_func = worker_func
 
@@ -30,7 +45,13 @@ class PromptQueue:
         self._lock = self._locks[self._queue_name]
 
     @property
-    def queue_name(self):
+    def queue_name(self) -> str:
+        """The logical name of this queue, used for lock sharing and logging.
+
+        Returns:
+            The queue name string passed at construction, or ``"prompt-queue"``
+            if none was provided.
+        """
         return self._queue_name
 
     def enqueue(self, *args, **kwargs):

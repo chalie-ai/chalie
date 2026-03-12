@@ -35,8 +35,39 @@ def _key(suffix: str) -> str:
 
 
 class AmbientToolAction(AutonomousAction):
+    """Proactive ambient tool invocation driven by cognitive drift thoughts.
+
+    Evaluates each drift thought against available ambient-capable tools
+    (e.g., Reddit, News, Wikipedia) using embedding similarity.  When a
+    thought is sufficiently relevant and all gate conditions are met, the
+    matching tool is invoked and its findings are persisted as gists for
+    future drift or recall cycles.
+
+    Priority: 6 (same as SEED_THREAD — ties broken by score).  Lower than
+    direct user-facing actions because ambient lookups are speculative.
+    """
 
     def __init__(self, config: dict = None):
+        """Initialize the ambient tool action with configurable thresholds.
+
+        Args:
+            config: Optional configuration dict.  Recognised keys:
+
+                - ``relevance_threshold`` (float, default 0.35): Minimum
+                  cosine similarity between a drift thought embedding and a
+                  tool's documentation to pass the relevance gate.
+                - ``min_activation`` (float, default 0.5): Minimum activation
+                  energy on the ``ThoughtContext`` required to proceed.
+                - ``per_tool_cooldown`` (int, default 43200): Seconds between
+                  consecutive invocations of the same tool (12 h).
+                - ``signal_threshold`` (float, default 0.4): Minimum signal
+                  score to store a finding gist.
+                - ``llm_timeout`` (float, default 8.0): Seconds to wait for
+                  the query-generation LLM call.
+                - ``surface_high_signal`` (bool, default False): When True,
+                  high-signal findings are surfaced to the user in addition
+                  to being stored as gists.
+        """
         # Disabled: ambient tool invocation from drift produced low-quality content
         # (world events, places) on weak similarity matching. Re-enable when
         # signal-driven reasoning provides better context.
@@ -59,6 +90,15 @@ class AmbientToolAction(AutonomousAction):
 
     @property
     def embedding_service(self):
+        """Lazily-initialised shared :class:`EmbeddingService` instance.
+
+        The service is imported and constructed on first access so that the
+        heavy sentence-transformer model is not loaded until actually needed.
+
+        Returns:
+            The singleton embedding service obtained via
+            :func:`~services.embedding_service.get_embedding_service`.
+        """
         if self._embedding_service is None:
             from services.embedding_service import get_embedding_service
             self._embedding_service = get_embedding_service()
@@ -130,6 +170,23 @@ class AmbientToolAction(AutonomousAction):
     # ── Main interface ─────────────────────────────────────────
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
+        """Evaluate whether an ambient tool invocation should be scheduled.
+
+        Runs five sequential gates (phase, tool availability, embedding
+        relevance, per-tool rate limit, and activation energy).  If all
+        gates pass, the best matching tool and its relevance score are cached
+        on the instance for the subsequent :meth:`execute` call.
+
+        Args:
+            thought: The current drift thought context, including its
+                embedding, activation energy, and seed topic.
+
+        Returns:
+            A ``(score, eligible)`` tuple.  ``score`` is a float in [0, 1]
+            representing action priority (``relevance * 0.5``).  ``eligible``
+            is ``True`` only when every gate passes.  Returns ``(0.0, False)``
+            whenever any gate fails.
+        """
         self.last_gate_result = None
 
         # Gate 1: Phase
@@ -168,6 +225,26 @@ class AmbientToolAction(AutonomousAction):
         return (score, True)
 
     def execute(self, thought: ThoughtContext) -> ActionResult:
+        """Invoke the pending ambient tool and persist findings as a gist.
+
+        Expects :meth:`should_execute` to have been called first so that
+        ``_pending_tool`` is populated.  The method:
+
+        1. Generates a focused search query from the drift thought via a
+           short-timeout LLM call.
+        2. Invokes the tool through :class:`~services.tool_registry_service.ToolRegistryService`.
+        3. Updates the per-tool rate-limit timestamp in the memory store.
+        4. Stores the raw finding as a gist for future drift/recall.
+
+        Args:
+            thought: The drift thought context that triggered this action.
+
+        Returns:
+            An :class:`~services.autonomous_actions.base.ActionResult` with
+            ``action_name='AMBIENT_TOOL'``.  ``success`` is ``True`` when the
+            tool was invoked without error; ``details`` always contains at
+            minimum a ``'reason'`` key on failure.
+        """
         tool = self._pending_tool
         if not tool:
             return ActionResult(action_name='AMBIENT_TOOL', success=False,

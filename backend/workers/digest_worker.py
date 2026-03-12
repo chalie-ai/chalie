@@ -6,6 +6,20 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+"""
+Digest Worker — Fast-path message processing pipeline for the assistant.
+
+This module implements the primary worker function (``digest_worker``) that
+consumes items from the ``prompt-queue`` and orchestrates the full LLM
+response cycle: topic classification, context assembly, mode routing, intent
+detection, LLM inference, memory chunking, and output delivery.
+
+It also provides lightweight helpers used by cron-tool and other workers for
+interactive tool dialog (``process_tool_dialog``, ``store_tool_dialog_memory``)
+and a lazy singleton accessor for the shared ``ContextAssemblyService``
+(``get_context_assembly_service``).
+"""
+
 import json
 import os
 import re
@@ -64,6 +78,16 @@ _context_assembly_service = None
 
 
 def get_context_assembly_service():
+    """Return the module-level singleton ``ContextAssemblyService`` instance.
+
+    The service is created lazily on first access and reused for the lifetime
+    of the worker process, avoiding repeated initialisation overhead across
+    queue items.
+
+    Returns:
+        ContextAssemblyService: Shared context assembly service instance
+            initialised with an empty configuration override dict.
+    """
     global _context_assembly_service
     if _context_assembly_service is None:
         _context_assembly_service = ContextAssemblyService({})

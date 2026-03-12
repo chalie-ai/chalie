@@ -153,10 +153,15 @@ class GraphService:
 
         Args:
             concept_id: UUID of the concept
-            direction: 'outgoing', 'incoming', or 'both'
+            direction: Direction filter — ``'outgoing'`` (default), ``'incoming'``,
+                or ``'both'``.  ``'both'`` returns a UNION of outgoing + incoming
+                relationships via two separate queries.
 
         Returns:
-            List of relationship dictionaries with target concept details
+            List of relationship dicts with keys ``id``, ``source_concept_id``,
+            ``target_concept_id``, ``target_id`` (alias), ``relationship_type``,
+            ``strength``, ``bidirectional``, ``source_episodes``, ``confidence``,
+            ``target_name``, ``target_type``, and ``target_definition``.
         """
         try:
             with self.db_service.connection() as conn:

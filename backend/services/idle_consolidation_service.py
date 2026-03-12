@@ -1,4 +1,11 @@
-import json
+"""
+Idle Consolidation Service — Batch memory consolidation triggered during idle periods.
+
+Monitors all memory worker queues and fires a consolidation pass when every queue
+is empty and at least one hour has elapsed since the last consolidation. Prevents
+stale working memory from accumulating between active conversation sessions.
+"""
+
 import time
 import logging
 from typing import Optional
@@ -360,6 +367,10 @@ def idle_consolidation_process(shared_state):
 
     Creates the service instance inside the child process to avoid
     pickling MemoryStore connections (which contain _thread.lock objects).
+
+    Args:
+        shared_state: Shared state dict passed from the consumer harness.
+            Currently unused but accepted for interface compatibility.
     """
     service = IdleConsolidationService()
     service.run(shared_state)

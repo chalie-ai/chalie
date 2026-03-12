@@ -59,6 +59,23 @@ class SuggestAction(AutonomousAction):
     """
 
     def __init__(self, config: dict = None):
+        """
+        Initialize SuggestAction with configurable gate thresholds.
+
+        Args:
+            config: Optional configuration overrides. Supported keys:
+                - min_trait_confidence (float): Minimum trait confidence required
+                  for a trait to be considered. Defaults to 0.7.
+                - relevance_threshold (float): Minimum cosine similarity between
+                  the drift thought and a trait to pass the relevance gate.
+                  Defaults to 0.4.
+                - min_traits_for_suggestion (int): Minimum number of
+                  high-confidence traits that must exist before suggestions are
+                  attempted. Defaults to 3.
+                - reject_pause_threshold (float): Rejection rate (0–1) above
+                  which suggestions are automatically paused for 14 days.
+                  Defaults to 0.4.
+        """
         super().__init__(name='SUGGEST', enabled=True, priority=8)
 
         config = config or {}
@@ -73,6 +90,16 @@ class SuggestAction(AutonomousAction):
 
     @property
     def embedding_service(self):
+        """
+        Lazily initialized EmbeddingService instance.
+
+        Created on first access and cached for the lifetime of the action so
+        that the heavy import and model initialisation only happen when an
+        embedding comparison is actually required.
+
+        Returns:
+            EmbeddingService: The shared embedding service instance.
+        """
         if self._embedding_service is None:
             from services.embedding_service import EmbeddingService
             self._embedding_service = EmbeddingService()

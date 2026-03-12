@@ -26,7 +26,15 @@ _ACTIVITY_EVENT_TYPES = (
 
 
 def _summarize_event(event_type: str, payload: dict) -> str:
-    """One-line human-readable summary of an autonomous event."""
+    """One-line human-readable summary of an autonomous event.
+
+    Args:
+        event_type: The event type string (e.g. ``'proactive_sent'``).
+        payload: Event payload dict; may be ``None`` or empty.
+
+    Returns:
+        A concise human-readable string describing the event.
+    """
     p = payload or {}
     summaries = {
         'proactive_sent': lambda: f"Shared a thought: {p.get('response', '')[:80]}",
@@ -384,7 +392,18 @@ class InteractionLogService:
             return []
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
-        """Convert a database row to a dict."""
+        """Convert an interaction_log table row to an event dict.
+
+        Args:
+            row: sqlite3 row (sequence) with positional columns matching the
+                SELECT column order used in this service's queries.
+
+        Returns:
+            Event dict with keys ``id``, ``event_type``, ``topic``,
+            ``exchange_id``, ``session_id``, ``source``, ``payload``
+            (parsed from JSON), ``metadata`` (parsed from JSON), and
+            ``created_at``.
+        """
         return {
             'id': str(row[0]),
             'event_type': row[1],

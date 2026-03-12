@@ -49,7 +49,21 @@ def _get_latest_tag(repo_url: str) -> str | None:
 
 
 class ToolUpdateService:
+    """Checks installed embodiment tools for newer upstream git tags.
+
+    Scans every subdirectory of ``backend/tools/`` that carries ``_source_url``
+    and ``_installed_tag`` metadata, queries the remote repo for its latest tag,
+    and writes ``_latest_tag`` via :class:`ToolConfigService` when an update is
+    available.  The service is purely informational — it never modifies the tool
+    directory or triggers an install.
+    """
+
     def __init__(self):
+        """Initialise the service with shared config and database dependencies.
+
+        Resolves the tools directory relative to this file so the service works
+        regardless of the working directory when the process was started.
+        """
         from services.tool_config_service import ToolConfigService
         from services.database_service import get_shared_db_service
         self._config_svc = ToolConfigService(get_shared_db_service())

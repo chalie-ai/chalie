@@ -40,6 +40,7 @@ class IdentityStateService:
     MAX_PREVIOUS_HISTORY = 5
 
     def __init__(self):
+        """Initialize the identity state service, setting the MemoryStore key."""
         self._store_key = self._STORE_KEY_PREFIX
 
     def set_field(
@@ -104,11 +105,14 @@ class IdentityStateService:
 
     def get_all(self) -> dict:
         """
-        Get the full identity state blob from MemoryStore.
+        Retrieve the full identity state blob from MemoryStore.
 
         Returns:
-            dict: Full blob (may include '_onboarding' key), or {} on missing
-                  key or MemoryStore error. Never raises.
+            dict: Full blob mapping field names to their field dicts (each with
+                  keys ``value``, ``normalized``, ``display``, ``confidence``,
+                  ``updated_at``, ``provisional``, and ``previous``).  May also
+                  include the reserved ``_onboarding`` tracking key.  Returns
+                  ``{}`` on missing key or MemoryStore error.  Never raises.
         """
         try:
             r = MemoryClientService.create_connection()

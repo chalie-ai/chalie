@@ -32,7 +32,18 @@ _CACHE_PREFIX = 'emb:'
 
 
 def _get_st_model(model_name: str = 'all-mpnet-base-v2'):
-    """Get or create the sentence-transformers model (singleton, thread-safe)."""
+    """Return the shared sentence-transformers model, loading it on first call.
+
+    Uses a double-checked locking pattern so only one thread triggers the
+    (potentially expensive) model load.
+
+    Args:
+        model_name: HuggingFace model identifier
+            (default ``'all-mpnet-base-v2'``).
+
+    Returns:
+        A loaded :class:`~sentence_transformers.SentenceTransformer` instance.
+    """
     global _st_model
     if _st_model is not None:
         return _st_model
@@ -69,7 +80,11 @@ _embedding_service_instance = None
 
 
 def get_embedding_service() -> 'EmbeddingService':
-    """Get or create the EmbeddingService singleton."""
+    """Return the process-wide EmbeddingService singleton, creating it if needed.
+
+    Returns:
+        The singleton :class:`EmbeddingService` instance.
+    """
     global _embedding_service_instance
     if _embedding_service_instance is None:
         _embedding_service_instance = EmbeddingService()
@@ -85,6 +100,14 @@ class EmbeddingService:
     """
 
     def __init__(self, config: dict = None):
+        """Initialize the embedding service.
+
+        Args:
+            config: Optional configuration dict. When ``None`` the config is
+                resolved from the ``'semantic-memory'`` agent entry. Supported
+                keys: ``embedding_dimensions`` (int, default 768) and
+                ``embedding_model`` (str, default ``'all-mpnet-base-v2'``).
+        """
         self.config = config or ConfigService.resolve_agent_config("semantic-memory")
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
         self.model_name = self.config.get('embedding_model', 'all-mpnet-base-v2')
@@ -109,7 +132,17 @@ class EmbeddingService:
             pass  # Non-fatal — next call will just recompute
 
     def generate_embedding(self, text: str) -> list:
-        """Single embedding → list (for SQLite storage). L2-normalized. Cached."""
+        """Generate a single L2-normalized embedding vector as a list. Cached.
+
+        Args:
+            text: Text string to embed.
+
+        Returns:
+            Embedding as a plain Python list of floats suitable for SQLite storage.
+
+        Raises:
+            Exception: Propagates embedding generation errors to the caller.
+        """
         cached = self._cache_get(text)
         if cached is not None:
             return cached
@@ -125,7 +158,17 @@ class EmbeddingService:
             raise
 
     def generate_embedding_np(self, text: str) -> np.ndarray:
-        """Single embedding → numpy array (for cosine similarity math). L2-normalized. Cached."""
+        """Generate a single L2-normalized embedding vector as a numpy array. Cached.
+
+        Args:
+            text: Text string to embed.
+
+        Returns:
+            Embedding as a ``float32`` numpy array for cosine similarity math.
+
+        Raises:
+            Exception: Propagates embedding generation errors to the caller.
+        """
         cached = self._cache_get(text)
         if cached is not None:
             return np.array(cached, dtype=np.float32)
@@ -142,11 +185,20 @@ class EmbeddingService:
             raise
 
     def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
-        """Batch embed → list of numpy arrays. L2-normalized.
+        """Generate L2-normalized embeddings for a batch of texts.
 
         Batch operations (document chunking, bulk consolidation) bypass per-text
         caching — the overhead of N cache lookups + JSON serialization would negate
         the benefit for large batches.
+
+        Args:
+            texts: List of text strings to embed.
+
+        Returns:
+            List of ``float32`` numpy arrays, one per input text.
+
+        Raises:
+            Exception: Propagates batch embedding errors to the caller.
         """
         if not texts:
             return []

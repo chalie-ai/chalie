@@ -62,6 +62,12 @@ class GrowthPatternService:
     """
 
     def __init__(self, interval: int = DEFAULT_INTERVAL):
+        """Initialize the growth pattern service.
+
+        Args:
+            interval: Seconds between detection cycles (default:
+                ``DEFAULT_INTERVAL`` = 1800 = 30 minutes).
+        """
         self.interval = interval
         logger.info(f"[GROWTH PATTERN] Initialized (interval={interval}s)")
 
@@ -158,7 +164,15 @@ class GrowthPatternService:
         return result
 
     def _get_baseline(self, db_service) -> Optional[dict]:
-        """Read stored style baseline from user_traits."""
+        """Read the stored communication style baseline from the user_traits table.
+
+        Args:
+            db_service: :class:`~services.database_service.DatabaseService` instance.
+
+        Returns:
+            Dict mapping dimension names to baseline float values, or ``None``
+            if no baseline has been stored yet.
+        """
         try:
             with db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -176,7 +190,16 @@ class GrowthPatternService:
             return None
 
     def _store_baseline(self, style: dict, db_service) -> None:
-        """Store communication style as the initial baseline."""
+        """Persist the current communication style as the growth-detection baseline.
+
+        Only the numeric ``TRACKED_DIMENSIONS`` values are stored (metadata keys
+        such as ``_observation_count`` are excluded).
+
+        Args:
+            style: Communication style dict returned by
+                :meth:`~services.user_trait_service.UserTraitService.get_communication_style`.
+            db_service: :class:`~services.database_service.DatabaseService` instance.
+        """
         try:
             from services.user_trait_service import UserTraitService
             trait_service = UserTraitService(db_service)
@@ -197,7 +220,17 @@ class GrowthPatternService:
             logger.warning(f"[GROWTH PATTERN] Failed to store baseline: {e}")
 
     def _compute_deltas(self, current: dict, baseline: dict) -> list:
-        """Compute per-dimension deltas between current style and baseline."""
+        """Compute per-dimension deltas between the current style and the stored baseline.
+
+        Args:
+            current: Current communication style dict (numeric values per dimension).
+            baseline: Previously stored baseline dict.
+
+        Returns:
+            List of dicts, one per tracked dimension that has both a current and
+            baseline value, each containing ``dimension``, ``current``,
+            ``baseline``, ``magnitude``, and ``direction`` keys.
+        """
         deltas = []
         for dim in TRACKED_DIMENSIONS:
             current_val = current.get(dim)
@@ -293,9 +326,15 @@ class GrowthPatternService:
             return False
 
     def _prune_reversed_signals(self, current_deltas: list, db_service) -> None:
-        """
-        Remove growth signals for dimensions that are no longer showing a significant shift
-        (magnitude has dropped below threshold, indicating the user reverted).
+        """Identify growth signals whose dimension no longer shows a significant shift.
+
+        For dimensions that have dropped below ``SIGNIFICANCE_MAGNITUDE`` the
+        existing ``growth_signal:{dim}`` trait is left to the decay engine
+        (which will reduce its confidence gradually rather than hard-deleting it).
+
+        Args:
+            current_deltas: List of delta dicts from :meth:`_compute_deltas`.
+            db_service: :class:`~services.database_service.DatabaseService` instance.
         """
         try:
             significant_dims = {d['dimension'] for d in current_deltas if d['magnitude'] >= SIGNIFICANCE_MAGNITUDE}
@@ -322,7 +361,19 @@ class GrowthPatternService:
     def _update_baseline_slowly(
         self, current: dict, baseline: dict, db_service
     ) -> bool:
-        """Slowly move baseline toward current style using a very slow EMA."""
+        """Move the stored baseline toward the current style via a slow exponential moving average.
+
+        Uses ``BASELINE_EMA_WEIGHT`` (0.1) so the baseline shifts very gradually,
+        requiring sustained change before the reference point moves significantly.
+
+        Args:
+            current: Current communication style dict.
+            baseline: Previously stored baseline dict.
+            db_service: :class:`~services.database_service.DatabaseService` instance.
+
+        Returns:
+            ``True`` if the baseline was successfully updated; ``False`` on error.
+        """
         try:
             updated_baseline = {}
             for dim in TRACKED_DIMENSIONS:
@@ -353,7 +404,15 @@ class GrowthPatternService:
             return False
 
     def _log_growth_signal(self, delta: dict) -> None:
-        """Log growth signal detection to interaction_log for observability."""
+        """Log a growth signal detection event to the interaction log.
+
+        Non-fatal — failures are silently swallowed so the detection cycle
+        is not interrupted by logging errors.
+
+        Args:
+            delta: Delta dict from :meth:`_compute_deltas` containing
+                ``dimension``, ``direction``, and ``magnitude`` keys.
+        """
         try:
             from services.interaction_log_service import InteractionLogService
             log_service = InteractionLogService()
