@@ -75,7 +75,7 @@ frontend/
 - **`moment_card_service.py`** — Inline HTML card emission for moment display in the conversation spine
 
 #### Autonomous Behavior
-- **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle; attention-gated (skips when user in deep focus)
+- **`cognitive_drift_engine.py`** — Signal-driven reasoning engine; processes signals from decay engine, semantic consolidation, experience assimilation, and event bridge via `reasoning:signals` queue (blpop); falls back to salient/insight discovery on idle timeout (10min); attention-gated (skips when user in deep focus)
 - **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, SuggestAction (skill-matched proactive suggestions), NurtureAction (gentle phase-appropriate presence), PlanAction (proactive plan proposals from recurring topics, 7-gate eligibility with signal persistence), ReflectAction, SeedThreadAction
 - **`spark_state_service.py`** — Tracks relationship phase progression (first_contact → surface → exploratory → connected → graduated)
 - **`spark_welcome_service.py`** — First-contact welcome message triggered on first WebSocket connection; runs once per lifecycle
@@ -171,7 +171,7 @@ frontend/
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081
-- **Cognitive Drift Engine** — Generates spontaneous thoughts during worker idle (attention-gated: skips when user in deep focus)
+- **Cognitive Drift Engine** — Signal-driven reasoning; blocks on `reasoning:signals` queue, processes memory_pressure/new_knowledge/novel_observation/ambient_context signals; idle timeout (10min) triggers salient/insight discovery (attention-gated)
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
 - **Decay Engine** — Periodic memory decay cycle; applies `contradicted`/`uncertain` reliability multipliers (×0.5/×0.75) so unreliable memories decay faster
@@ -228,10 +228,11 @@ frontend/
     ├─ Semantic decay (strength-weighted)
     └─ User trait decay (category-specific)
 
-[Cognitive Drift Engine] → during worker idle
-    ├─ Seed selection (weighted random)
-    ├─ Spreading activation (depth 2, decay 0.7/level)
-    └─ LLM synthesis → stores as drift gist
+[Cognitive Drift Engine] → signal-driven (blpop on reasoning:signals)
+    ├─ Signal sources: decay_engine, semantic_consolidation, experience_assimilation, event_bridge
+    ├─ Idle timeout (10min) → salient/insight discovery fallback
+    ├─ Signal → seed → spreading activation (depth 2, decay 0.7/level)
+    └─ LLM synthesis → stores as drift gist → action routing
 ```
 
 ## Key Architectural Decisions
@@ -428,7 +429,7 @@ No external services required. SQLite and MemoryStore are embedded — everythin
 - **Router Confidence**: Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal**: Metric logged by monitors, consumed by the single regulator
 - **Context Warmth**: Signal (0.0-1.0) measuring how much context is available for current topic
-- **Drift Gist**: Spontaneous thought stored during idle periods (DMN)
+- **Drift Gist**: Spontaneous thought from signal-driven reasoning (formerly DMN)
 - **Episode**: Narrative memory unit with intent, context, action, emotion, outcome, salience
 - **Concept**: Knowledge node with strength decay and spreading activation
 - **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment
