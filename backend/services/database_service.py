@@ -112,8 +112,22 @@ class SessionProxy:
         self._conn = conn
 
     def execute(self, sql_or_text, params=None):
-        """Execute SQL. Accepts sqlalchemy.text() or plain strings.
-        Named params (:name) are converted to positional (?) for SQLite."""
+        """Execute a SQL statement and return a :class:`ResultProxy`.
+
+        Accepts either a raw SQL string or a :class:`_TextClause` produced by
+        :func:`text`.  Dict-style named parameters (``":name"`` placeholders)
+        are transparently converted to SQLite positional ``"?"`` parameters.
+
+        Args:
+            sql_or_text: SQL string or :class:`_TextClause` instance to execute.
+            params: Optional dict of named bind values (``{"name": value}``) or
+                a sequence for positional binding.  Pass ``None`` for statements
+                with no parameters.
+
+        Returns:
+            A :class:`ResultProxy` wrapping the executed ``sqlite3.Cursor``,
+            supporting ``fetchone()``, ``fetchall()``, and ``scalar()``.
+        """
         # Extract the string from sqlalchemy text() objects
         sql = str(sql_or_text)
 
@@ -290,7 +304,18 @@ class DatabaseService:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get or create a thread-local connection."""
+        """Return the thread-local SQLite connection, creating it if necessary.
+
+        On first call from a given thread (or when ``db_path`` has changed)
+        opens a new connection, enables WAL journalling, foreign-key enforcement,
+        a 5-second busy timeout, ``NORMAL`` synchronisation, and in-memory temp
+        storage, then attempts to load the ``sqlite-vec`` extension.
+        Subsequent calls from the same thread return the cached connection.
+
+        Returns:
+            An open ``sqlite3.Connection`` with ``row_factory`` set to
+            ``sqlite3.Row`` so columns are accessible by name.
+        """
         conn = getattr(_local, 'conn', None)
         db_path = getattr(_local, 'db_path', None)
 
@@ -338,9 +363,17 @@ class DatabaseService:
 
     @contextmanager
     def connection(self):
-        """
-        Context manager for database operations.
-        Auto-commits on success, auto-rolls-back on exception.
+        """Yield a thread-local connection, committing or rolling back on exit.
+
+        Intended for direct cursor operations.  Use :meth:`get_session` when
+        the calling code expects an SQLAlchemy-style ``session.execute()`` API.
+
+        Yields:
+            The thread-local ``sqlite3.Connection`` (see :meth:`_get_connection`).
+
+        Raises:
+            Exception: Re-raises any exception thrown inside the ``with`` block
+                after rolling back the current transaction.
         """
         conn = self._get_connection()
         try:
@@ -387,10 +420,20 @@ class DatabaseService:
 
     @contextmanager
     def get_session(self):
-        """
-        Compatibility shim for code that used SQLAlchemy sessions.
-        Yields a SessionProxy that mimics session.execute(text("SQL"), params).
-        Auto-commits on success, auto-rolls-back on exception.
+        """Yield a :class:`SessionProxy` compatible with SQLAlchemy session usage.
+
+        Provides a drop-in shim for callers that previously used
+        ``with db.get_session() as session: session.execute(text(...), params)``.
+        The underlying connection is committed on clean exit and rolled back if
+        an exception propagates out of the ``with`` block.
+
+        Yields:
+            A :class:`SessionProxy` wrapping the current thread's
+            ``sqlite3.Connection``.
+
+        Raises:
+            Exception: Re-raises any exception thrown inside the ``with`` block
+                after rolling back the active transaction.
         """
         conn = self._get_connection()
         proxy = SessionProxy(conn)
@@ -413,9 +456,22 @@ class DatabaseService:
             _local.db_path = None
 
     def run_pending_migrations(self):
-        """
-        Run any pending database migrations from migrations/ directory.
-        Creates migrations tracking table if needed.
+        """Apply unapplied SQL migration files and add any missing schema columns.
+
+        Discovers ``*.sql`` files under ``backend/migrations/``, sorted
+        lexicographically (so filenames should be prefixed with a zero-padded
+        sequence number, e.g. ``001_init.sql``).  Already-applied filenames are
+        recorded in the ``schema_migrations`` table; only new files are executed.
+
+        After running file-based migrations the method also performs a set of
+        idempotent ``ALTER TABLE … ADD COLUMN`` statements guarded by
+        ``PRAGMA table_info`` checks, providing a forward-compatible way to
+        introduce columns that ``sqlite`` cannot add via ``IF NOT EXISTS``.
+
+        Raises:
+            sqlite3.OperationalError: If a migration file contains invalid SQL
+                or references a table/column that does not exist.
+            OSError: If a migration file cannot be read from disk.
         """
         migrations_dir = Path(__file__).resolve().parent.parent / "migrations"
 
