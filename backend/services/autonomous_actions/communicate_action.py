@@ -47,6 +47,36 @@ class CommunicateAction(AutonomousAction):
     """
 
     def __init__(self, config: dict = None):
+        """Initialize CommunicateAction with four-gate configuration.
+
+        Args:
+            config: Optional configuration overrides. Supported keys:
+
+                *Quality gate* — ``type_bonuses`` (dict, maps thought type to a
+                score multiplier), ``bootstrap_threshold`` (float, default 0.6),
+                ``bootstrap_cycles`` (int, default 20), ``relevance_threshold``
+                (float, default 0.4), ``novelty_threshold`` (float, default 0.7),
+                ``lookback_hours_active`` (int, default 24),
+                ``lookback_hours_infrequent`` (int, default 72).
+
+                *Timing gate* — ``min_idle_seconds`` (int, default 1800),
+                ``max_idle_seconds`` (int, default 86400),
+                ``quiet_hours_start`` (int, default 23),
+                ``quiet_hours_end`` (int, default 8).
+
+                *Engagement gate* — ``pending_timeout_seconds`` (int, default
+                14400), ``auto_pause_threshold`` (float, default 0.3),
+                ``max_backoff_multiplier`` (int, default 16),
+                ``suppression_recovery_days`` (int, default 7).
+
+                *Candidate queue* — ``max_candidates`` (int, default 3),
+                ``max_deferred`` (int, default 3), ``deferred_ttl`` (int,
+                default 172800).
+
+                *Circuit breaker* — ``circuit_breaker_window`` (int, default
+                14400), ``circuit_breaker_threshold`` (int, default 2),
+                ``circuit_breaker_pause`` (int, default 28800).
+        """
         super().__init__(name='COMMUNICATE', enabled=True, priority=10)
 
         config = config or {}
@@ -92,6 +122,14 @@ class CommunicateAction(AutonomousAction):
 
     @property
     def embedding_service(self):
+        """Lazily initialized EmbeddingService instance.
+
+        The service is created on first access so the embedding model is not
+        loaded at startup for every drift cycle.
+
+        Returns:
+            EmbeddingService: The shared embedding service instance.
+        """
         if self._embedding_service is None:
             self._embedding_service = EmbeddingService()
         return self._embedding_service
