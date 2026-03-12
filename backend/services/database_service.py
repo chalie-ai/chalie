@@ -172,12 +172,24 @@ class ResultProxy:
         self._cursor = cursor
 
     def fetchone(self):
-        """Return row as sqlite3.Row (supports both row[0] and row['col'] access)."""
+        """Fetch the next row from the result set.
+
+        Returns:
+            A ``sqlite3.Row`` that supports both integer index (``row[0]``) and
+            column-name access (``row["col"]``), or ``None`` if no further rows
+            are available.
+        """
         row = self._cursor.fetchone()
         return row  # sqlite3.Row already supports int and key indexing
 
     def fetchall(self):
-        """Return rows as sqlite3.Row objects."""
+        """Fetch all remaining rows from the result set.
+
+        Returns:
+            A list of ``sqlite3.Row`` objects, each supporting both integer
+            index and column-name access.  Returns an empty list when no rows
+            remain.
+        """
         return self._cursor.fetchall()
 
     @property
@@ -444,8 +456,24 @@ class DatabaseService:
             conn.rollback()
             raise
 
+    def close(self):
+        """Close the calling thread's SQLite connection and clear thread-local state.
+
+        After this call the thread will obtain a fresh connection on the next
+        database operation.  Safe to call even when no connection has been
+        opened yet on the current thread (no-op in that case).
+        """
+        self.close_pool()
+
     def close_pool(self):
-        """Close the thread-local connection if it exists."""
+        """Close the calling thread's SQLite connection and clear thread-local state.
+
+        Silently ignores errors from ``sqlite3.Connection.close()`` so that
+        worker teardown paths remain exception-safe.  After this call
+        ``_local.conn`` and ``_local.db_path`` are both reset to ``None``,
+        ensuring the next call to :meth:`_get_connection` opens a new
+        connection.
+        """
         conn = getattr(_local, 'conn', None)
         if conn:
             try:
