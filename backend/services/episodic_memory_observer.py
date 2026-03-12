@@ -55,6 +55,13 @@ class EpisodicMemoryObserver:
     """Periodic thread scanner that triggers episodic consolidation based on signal density."""
 
     def __init__(self, scan_interval=SCAN_INTERVAL, density_threshold=DENSITY_THRESHOLD):
+        """Initialize the episodic memory observer.
+
+        Args:
+            scan_interval: Seconds between scan cycles (default: ``SCAN_INTERVAL`` = 60).
+            density_threshold: Minimum weighted signal density required to
+                trigger consolidation (default: ``DENSITY_THRESHOLD`` = 0.5).
+        """
         self.scan_interval = scan_interval
         self.density_threshold = density_threshold
         self.store = MemoryClientService.create_connection()
@@ -217,7 +224,16 @@ class EpisodicMemoryObserver:
         return round(score, 3)
 
     def _trigger_consolidation(self, thread_id: str, topic: str, exchanges: list):
-        """Trigger episodic memory consolidation via PromptQueue thread."""
+        """Trigger episodic memory consolidation for a thread via PromptQueue.
+
+        Enqueues a consolidation job and sets a cooldown key to prevent double-firing
+        within the same hour.
+
+        Args:
+            thread_id: Conversation thread identifier.
+            topic: Current topic string for the consolidation job payload.
+            exchanges: List of enriched exchange dicts (used for logging only).
+        """
         try:
             from workers.episodic_memory_worker import episodic_memory_worker
             from services.prompt_queue import PromptQueue
@@ -246,15 +262,34 @@ class EpisodicMemoryObserver:
             logger.warning(f"{LOG_PREFIX} Consolidation trigger failed: {e}")
 
     def _is_on_cooldown(self, thread_id: str) -> bool:
-        """Check if thread was recently consolidated (dedup)."""
+        """Check whether a thread is within the post-consolidation cooldown window.
+
+        Args:
+            thread_id: Conversation thread identifier to check.
+
+        Returns:
+            ``True`` if a consolidation cooldown key exists for the thread.
+        """
         return self.store.get(f"last_consolidation:{thread_id}") is not None
 
     def _is_thread_busy(self, thread_id: str) -> bool:
-        """Check if digest worker is currently processing this thread."""
+        """Check whether a digest worker is actively processing this thread.
+
+        Args:
+            thread_id: Conversation thread identifier to check.
+
+        Returns:
+            ``True`` if a ``thread_busy`` key exists in the MemoryStore for the thread.
+        """
         return self.store.get(f"thread_busy:{thread_id}") is not None
 
 
 def episodic_memory_observer_worker(shared_state=None):
-    """Module-level wrapper for threading. Instantiates and runs the observer."""
+    """Entry point for thread spawn — instantiates and runs EpisodicMemoryObserver.
+
+    Args:
+        shared_state: Optional shared state dict passed by the consumer thread
+            harness.  Currently unused but accepted for interface compatibility.
+    """
     observer = EpisodicMemoryObserver()
     observer.run(shared_state)

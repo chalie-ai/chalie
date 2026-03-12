@@ -23,6 +23,19 @@ class CronToolWorker:
     """Picklable callable for cron-triggered tool service processes."""
 
     def __init__(self, tool_config: dict):
+        """Initialise the worker from a resolved tool configuration dict.
+
+        Extracts all fields required for scheduling, container execution,
+        OAuth token refresh, and output routing so that the instance can be
+        pickled and sent to a child process via Python's ``multiprocessing``
+        spawn start method.
+
+        Args:
+            tool_config: Fully-resolved tool configuration dictionary as
+                produced by ``ToolRegistryService``.  Expected keys include
+                ``name``, ``schedule``, ``prompt``, ``image``, ``sandbox``,
+                ``manifest``, and ``dir``.
+        """
         self.tool_name = tool_config["name"]
         self.schedule = tool_config["schedule"]
         self.prompt_template = tool_config["prompt"]
@@ -37,6 +50,26 @@ class CronToolWorker:
         self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 
     def __call__(self, shared_state=None):
+        """Run the cron worker loop, executing the tool on its configured schedule.
+
+        Blocks indefinitely, sleeping for the interval derived from
+        ``self.schedule`` between executions.  Each iteration:
+
+        1. Checks prompt-queue depth and defers if the queue is busy.
+        2. Loads live tool settings and refreshes OAuth tokens when needed.
+        3. Invokes the tool container via ``ToolContainerService.run_interactive``.
+        4. Persists any returned ``_state`` to MemoryStore (7-day TTL).
+        5. Routes output via the formalised ``output`` field contract
+           (``"card"``, ``"prompt"``, ``"tool"``) or falls back to legacy
+           routing for backward compatibility.
+
+        The loop exits cleanly on ``KeyboardInterrupt`` and logs errors before
+        sleeping for 60 seconds on unexpected exceptions.
+
+        Args:
+            shared_state: Unused placeholder kept for interface compatibility
+                with other worker callables.  Defaults to ``None``.
+        """
         _log = logging.getLogger(__name__)
         _log.info(f"[TOOL CRON] {self.tool_name} worker started (schedule: {self.schedule})")
         interval = self._parse_cron_interval(self.schedule)

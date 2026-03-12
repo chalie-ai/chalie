@@ -36,7 +36,14 @@ class CuriosityPursuitService:
         self.jitter = 0.3  # ±30%
 
     def run(self, shared_state: Optional[dict] = None) -> None:
-        """Main service loop."""
+        """Run the background exploration loop indefinitely.
+
+        Sleeps between cycles using the configured interval plus ±30% jitter.
+        Catches and logs unexpected exceptions, backing off 5 minutes on error.
+
+        Args:
+            shared_state: Optional shared dict passed from the process manager.
+        """
         logger.info(f"{LOG_PREFIX} Service started (cycle={self.cycle_interval}s)")
 
         while True:
@@ -56,7 +63,11 @@ class CuriosityPursuitService:
                 time.sleep(300)  # 5min backoff on error
 
     def _are_workers_idle(self) -> bool:
-        """Check if main worker queues are empty (avoid competing with user-facing work)."""
+        """Check if the main worker queues are empty to avoid competing with user-facing work.
+
+        Returns:
+            True if all monitored queues are empty or on connection error (fail-open).
+        """
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
@@ -144,7 +155,14 @@ class CuriosityPursuitService:
             return None
 
     def _seed_from_capability_gaps(self, thread_service) -> None:
-        """Seed behavioral curiosity threads from recurring capability gaps."""
+        """Seed behavioral curiosity threads from recurring capability gaps.
+
+        Fetches gaps that have occurred 3+ times from SelfModelService and creates
+        a curiosity thread for any gap not yet linked to an existing thread.
+
+        Args:
+            thread_service: CuriosityThreadService instance used to create threads.
+        """
         try:
             from services.self_model_service import SelfModelService
             sm = SelfModelService()
@@ -177,7 +195,15 @@ class CuriosityPursuitService:
             logger.debug(f"{LOG_PREFIX} Capability gap seeding failed: {e}")
 
     def _build_self_prompt(self, thread: Dict) -> str:
-        """Generate a self-prompt based on thread type."""
+        """Generate an internal self-prompt string based on thread type.
+
+        Args:
+            thread: Thread dict containing at least 'thread_type', 'seed_topic',
+                'title', and 'rationale' keys.
+
+        Returns:
+            Self-prompt string to feed into the ACT loop.
+        """
         if thread['thread_type'] == 'learning':
             return (
                 f"I've been curious about {thread['seed_topic']}. "
@@ -192,11 +218,19 @@ class CuriosityPursuitService:
             )
 
     def _run_act_loop(self, self_prompt: str, thread: Dict, fatigue_budget: float) -> Optional[str]:
-        """
-        Route self-prompt through ACT loop machinery.
+        """Route a self-prompt through the ACT loop machinery.
+
+        Builds an ActLoopService with an adaptive fatigue budget derived from
+        the thread's engagement score, runs up to max_iterations cycles, then
+        summarises the resulting act_history into a learning note.
+
+        Args:
+            self_prompt: Internally generated exploration prompt string.
+            thread: Thread dict containing at minimum 'thread_type' and 'seed_topic'.
+            fatigue_budget: ACT loop fatigue budget scaled by thread engagement.
 
         Returns:
-            1-3 sentence learning note summary, or None on failure.
+            1-3 sentence learning note summary string, or None on failure.
         """
         try:
             from services.act_loop_service import ActLoopService
@@ -283,10 +317,18 @@ class CuriosityPursuitService:
             return None
 
     def _summarize_learning(self, act_history: str, thread: Dict) -> Optional[str]:
-        """
-        Summarize ACT loop results into a 1-3 sentence learning note.
+        """Summarize ACT loop results into a 1-3 sentence learning note.
 
-        Uses the same LLM as drift for lightweight summarization.
+        Uses the cognitive-drift LLM proxy for lightweight summarization.
+        Returns None if the act_history is too short to summarize meaningfully.
+
+        Args:
+            act_history: Formatted ACT loop history string from get_history_context().
+            thread: Thread dict containing at minimum 'seed_topic'.
+
+        Returns:
+            Summarized learning note string, or None if the history is too thin
+            or the LLM call fails.
         """
         if not act_history or len(str(act_history)) < 20:
             return None
@@ -321,13 +363,16 @@ class CuriosityPursuitService:
             return None
 
     def _check_surfacing(self, thread: Dict, thread_service) -> None:
-        """
-        Check if this thread should be surfaced to the user.
+        """Check whether the thread meets surfacing conditions and enqueue if so.
 
         Conditions:
           - exploration_count >= 2
           - last_surfaced_at is None OR now - last_surfaced_at > effective_surface_interval
           - get_surfacing_candidate() returns non-empty content
+
+        Args:
+            thread: Thread dict from the database.
+            thread_service: CuriosityThreadService instance for state updates.
         """
         thread_id = thread['id']
 
@@ -360,10 +405,14 @@ class CuriosityPursuitService:
         logger.info(f"{LOG_PREFIX} Surfacing thread {thread_id} to user")
 
     def _generate_surprise(self, thread: Dict, learning_summary: str) -> Optional[str]:
-        """
-        Run learning summary through curiosity-thread-surprise.md prompt.
+        """Run the learning summary through the curiosity-thread-surprise prompt.
 
-        Returns the surprise message or None if too thin/boring.
+        Args:
+            thread: Thread dict containing at least 'title' and 'seed_topic'.
+            learning_summary: Aggregated learning notes text.
+
+        Returns:
+            Surprise message string, or None if the content is too thin or on error.
         """
         try:
             from services.background_llm_queue import create_background_llm_proxy
@@ -420,7 +469,15 @@ class CuriosityPursuitService:
             return None
 
     def _enqueue_proactive(self, thread: Dict, message: str) -> None:
-        """Enqueue the surprise message as a proactive candidate."""
+        """Enqueue the surprise message as a proactive candidate for delivery.
+
+        Pushes the message onto the prompt queue and records pending response
+        tracking state in MemoryStore.
+
+        Args:
+            thread: Thread dict providing metadata for the proactive payload.
+            message: The surprise message text to deliver to the user.
+        """
         try:
             from services.prompt_queue import PromptQueue
             from workers.digest_worker import digest_worker
@@ -532,7 +589,17 @@ class CuriosityPursuitService:
 
     @staticmethod
     def _cosine_similarity(a, b) -> float:
-        """Compute cosine similarity."""
+        """Compute the cosine similarity between two embedding vectors.
+
+        Accepts lists, flat bracket-formatted strings, or mixed combinations.
+
+        Args:
+            a: First embedding (list of floats or bracket-formatted string).
+            b: Second embedding (list of floats or bracket-formatted string).
+
+        Returns:
+            Cosine similarity as a float in [0.0, 1.0], or 0.0 on error.
+        """
         import math
 
         if not a or not b:
@@ -553,7 +620,14 @@ class CuriosityPursuitService:
 
 
 def curiosity_pursuit_worker(shared_state=None):
-    """Module-level wrapper for threading."""
+    """Module-level entry point for running CuriosityPursuitService in a thread.
+
+    Loads the cycle interval from the cognitive-drift agent config and starts
+    the service loop.
+
+    Args:
+        shared_state: Optional shared dict passed from the process manager.
+    """
     logging.basicConfig(level=logging.INFO)
     try:
         config = ConfigService.resolve_agent_config("cognitive-drift")

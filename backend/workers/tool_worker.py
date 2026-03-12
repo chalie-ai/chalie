@@ -195,6 +195,26 @@ def _tool_worker_orchestrator(
     heartbeat_state = {'last': _last_heartbeat}
 
     def on_iteration_complete(act_loop, iteration_start, actions_executed, termination_reason):
+        """
+        Callback invoked by ACTOrchestrator after each iteration completes.
+
+        Checks whether the current cycle has been cancelled by the user and,
+        if so, marks it ``cancelled`` in CycleService and signals the
+        orchestrator to stop. Also emits a heartbeat key to MemoryStore every
+        10 seconds so external health monitors can detect stalled workers.
+
+        Args:
+            act_loop: The ACTOrchestrator loop instance invoking the callback.
+            iteration_start: Unix timestamp when the current iteration began.
+            actions_executed: List of action dicts executed during this
+                iteration.
+            termination_reason: Non-None reason string when the orchestrator
+                is already terminating; None during a normal mid-loop callback.
+
+        Returns:
+            str or None: ``'cancelled'`` if the cycle was cancelled by the
+                user, ``None`` otherwise (loop continues normally).
+        """
         # Cancellation check
         if _is_cancelled(cycle_id):
             logger.info(f"[TOOL WORKER] Cycle {cycle_id[:8]} cancelled by user")

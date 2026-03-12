@@ -95,6 +95,12 @@ class TemporalObservationBuffer:
     """
 
     def __init__(self, max_buffer: int = 50):
+        """Initialize the observation buffer.
+
+        Args:
+            max_buffer: Maximum number of observations to hold before an
+                automatic flush is triggered. Defaults to 50.
+        """
         self._buffer: List[Dict] = []
         self._lock = threading.Lock()
         self._max_buffer = max_buffer
@@ -115,10 +121,12 @@ class TemporalObservationBuffer:
 
     @property
     def write_errors_count(self) -> int:
+        """Total number of flush attempts that encountered a database error."""
         return self._write_errors
 
     @property
     def pending_count(self) -> int:
+        """Number of observations currently buffered and awaiting flush."""
         with self._lock:
             return len(self._buffer)
 
@@ -203,17 +211,34 @@ class TemporalPatternService:
     and ambient inference signals."""
 
     def __init__(self, database_service):
+        """Initialize the temporal pattern service.
+
+        Args:
+            database_service: A database service instance that exposes a
+                ``connection()`` context manager for SQLite access.
+        """
         self.db = database_service
         self._last_mining_duration = 0.0
 
     # ── Public API ──────────────────────────────────────────────────
 
     def mine_patterns(self, lookback_days: int = 30) -> List[Dict]:
-        """
-        Main entry point. Mines patterns from both interaction_log and
-        ambient aggregates, stores as user traits.
+        """Mine patterns from interaction_log and ambient aggregates, store as user traits.
 
-        Returns list of discovered patterns for logging.
+        Runs five passes in order: peak hours, peak days, topic-time associations,
+        ambient rhythm patterns (weekday + weekend per observation type), and
+        hour-to-hour transition patterns. All discovered patterns are persisted
+        via ``UserTraitService.store_trait()``, which handles conflict resolution
+        internally.
+
+        Args:
+            lookback_days: Number of days of interaction history to analyze.
+                Defaults to 30.
+
+        Returns:
+            A list of pattern dicts, each containing ``key``, ``value``, and
+            ``confidence`` fields. Returned for logging/observability only;
+            persistence is handled internally.
         """
         start = _time.monotonic()
         cutoff = datetime.utcnow() - timedelta(days=lookback_days)
@@ -312,12 +337,19 @@ class TemporalPatternService:
         }
 
     def get_upcoming_transitions(self, lookahead_minutes: int = 60) -> List[Dict]:
-        """Predict state changes at hour boundaries within lookahead window.
+        """Predict state changes at hour boundaries within the lookahead window.
 
-        Operates at hour granularity for reliable statistics.
+        Operates at hour granularity for reliable statistics. Only the first
+        anticipated transition per observation type is returned.
+
+        Args:
+            lookahead_minutes: How many minutes ahead to scan for transitions.
+                Rounded down to the nearest whole hour. Defaults to 60.
 
         Returns:
-            [{obs_type, from_value, to_value, expected_hour, confidence}]
+            A list of transition dicts, each containing:
+            ``obs_type``, ``from_value``, ``to_value``, ``expected_hour``,
+            and ``confidence``. Empty if no transitions are predicted.
         """
         now = datetime.utcnow()
         current_day = now.weekday()
@@ -441,9 +473,15 @@ class TemporalPatternService:
         }
 
     def cleanup_old_observations(self, retention_days: int = DEFAULT_RETENTION_DAYS):
-        """Delete raw observations older than retention period.
+        """Delete raw observations older than the retention period.
 
-        Aggregates are permanent (bounded by value space, not time).
+        Only the ``temporal_observations`` table is pruned. The
+        ``temporal_aggregate`` table is permanent because its row-count is
+        bounded by the observation-type value space rather than by time.
+
+        Args:
+            retention_days: Observations older than this many days are deleted.
+                Defaults to ``DEFAULT_RETENTION_DAYS`` (90).
         """
         cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
         try:
@@ -1010,7 +1048,24 @@ class TemporalPatternService:
 # ── Worker ──────────────────────────────────────────────────────────
 
 def temporal_pattern_worker(shared_state):
-    """6h cycle: mine temporal patterns + flush observation buffer + cleanup."""
+    """Long-running worker: mine temporal patterns, flush buffer, and clean up.
+
+    Executes a 6-hour cycle (±30 % jitter) that:
+
+    1. Flushes any pending in-memory observations to SQLite.
+    2. Mines behavioral patterns from the aggregates and stores them as user
+       traits via ``TemporalPatternService.mine_patterns()``.
+    3. Removes raw observations older than the configured retention window.
+
+    Starts with a 5-minute warmup sleep to avoid competing with other workers
+    during application startup. Honors a Redis throttle key
+    ``"temporal:mining_throttle"`` that operators can set to skip a cycle
+    during heavy load.
+
+    Args:
+        shared_state: Shared state dict passed by the worker harness (not used
+            directly, but accepted for interface consistency).
+    """
     import random
     from services.database_service import get_shared_db_service
     from services.memory_client import MemoryClientService

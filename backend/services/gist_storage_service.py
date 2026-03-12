@@ -1,3 +1,11 @@
+"""
+Gist Storage Service — Short-term working-memory store for conversation gists.
+
+Persists extracted gist dicts (content, type, confidence) in MemoryStore with
+a configurable TTL (default 30 min). Enforces deduplication via Jaccard similarity
+and per-type caps so the context window stays focused.
+"""
+
 import json
 import logging
 import time
@@ -32,15 +40,37 @@ class GistStorageService:
         self.max_per_type = max_per_type
 
     def _get_gist_key(self, topic: str, gist_id: str) -> str:
-        """Generate MemoryStore key for a gist."""
+        """Generate the MemoryStore key for a single gist entry.
+
+        Args:
+            topic: Topic namespace for the gist.
+            gist_id: UUID string identifying the specific gist.
+
+        Returns:
+            MemoryStore key string in the format ``gist:<topic>:<gist_id>``.
+        """
         return f"gist:{topic}:{gist_id}"
 
     def _get_gist_index_key(self, topic: str) -> str:
-        """Generate MemoryStore key for the sorted set index of gists."""
+        """Generate the MemoryStore key for the sorted-set index of gists in a topic.
+
+        Args:
+            topic: Topic namespace whose gist IDs are indexed.
+
+        Returns:
+            MemoryStore key string in the format ``gist_index:<topic>``.
+        """
         return f"gist_index:{topic}"
 
     def _get_last_message_key(self, topic: str) -> str:
-        """Generate MemoryStore key for last message fallback."""
+        """Generate the MemoryStore key for the last-message fallback value.
+
+        Args:
+            topic: Topic namespace.
+
+        Returns:
+            MemoryStore key string in the format ``last_message:<topic>``.
+        """
         return f"last_message:{topic}"
 
     def store_gists(self, topic: str, gists: List[Dict], prompt: str, response: str) -> int:
@@ -152,7 +182,16 @@ class GistStorageService:
         return stored_count
 
     def _get_all_gists_with_ids(self, topic: str) -> List[Tuple[str, Dict]]:
-        """Load all gists from MemoryStore with their IDs for dedup comparison."""
+        """Load all stored gists for a topic with their IDs for deduplication.
+
+        Cleans up stale index entries (whose data keys have expired) as a side effect.
+
+        Args:
+            topic: Topic namespace to load gists for.
+
+        Returns:
+            List of ``(gist_id, gist_data_dict)`` tuples ordered by insertion time.
+        """
         index_key = self._get_gist_index_key(topic)
         gist_ids = self.store.zrange(index_key, 0, -1)
 
@@ -171,7 +210,16 @@ class GistStorageService:
 
     @staticmethod
     def _calculate_jaccard_similarity(text_a: str, text_b: str) -> float:
-        """Word-level Jaccard similarity between two strings."""
+        """Compute word-level Jaccard similarity between two text strings.
+
+        Args:
+            text_a: First text string.
+            text_b: Second text string.
+
+        Returns:
+            Similarity score in [0.0, 1.0].  Returns 0.0 when either string
+            has no words.
+        """
         words_a = set(text_a.lower().split())
         words_b = set(text_b.lower().split())
         if not words_a or not words_b:
@@ -182,7 +230,17 @@ class GistStorageService:
 
     def _find_duplicate(self, new_gist: Dict, existing_gists: List[Tuple[str, Dict]],
                         threshold: float) -> Optional[Tuple[str, Dict]]:
-        """Find the best matching duplicate above threshold. Returns (id, data) or None."""
+        """Find the best Jaccard-similar duplicate among existing gists.
+
+        Args:
+            new_gist: Candidate gist dict with a ``content`` key.
+            existing_gists: List of ``(gist_id, gist_data)`` tuples to compare against.
+            threshold: Minimum Jaccard similarity score to qualify as a duplicate.
+
+        Returns:
+            ``(gist_id, gist_data)`` tuple for the best match above the threshold,
+            or ``None`` if no duplicate is found.
+        """
         new_content = new_gist.get('content', '')
         best_match = None
         best_similarity = 0.0
@@ -196,7 +254,14 @@ class GistStorageService:
         return best_match
 
     def _replace_gist(self, topic: str, old_id: str, new_data: Dict):
-        """Replace an existing gist's data in-place (same ID, refreshed TTL)."""
+        """Replace an existing gist's data in-place, keeping the same ID but refreshing TTL.
+
+        Args:
+            topic: Topic name that owns the gist.
+            old_id: UUID of the gist to overwrite.
+            new_data: New gist payload dict with keys ``content``, ``type``,
+                ``confidence``, and ``created_at``.
+        """
         gist_key = self._get_gist_key(topic, old_id)
         self.store.setex(gist_key, self.attention_span_seconds, json.dumps(new_data))
         # Update score in index to current time
@@ -205,7 +270,15 @@ class GistStorageService:
         self.store.expire(index_key, self.attention_span_seconds)
 
     def _enforce_type_caps(self, topic: str, all_gists: List[Tuple[str, Dict]], max_per_type: int):
-        """Remove lowest-confidence excess gists per type."""
+        """Remove lowest-confidence excess gists so each type stays within its cap.
+
+        Args:
+            topic: Topic name that owns the gists.
+            all_gists: Full list of ``(gist_id, gist_data)`` tuples currently in
+                the MemoryStore index.
+            max_per_type: Maximum number of gists of each type to retain; excess
+                entries (lowest confidence first) are deleted from MemoryStore.
+        """
         by_type = defaultdict(list)
         for gist_id, gist_data in all_gists:
             gist_type = gist_data.get('type', 'unknown')

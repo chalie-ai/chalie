@@ -32,7 +32,22 @@ def inject_no_action_signal(
 ) -> str:
     """If action-oriented tools were expected but none succeeded, prepend a signal.
 
-    Returns the (possibly modified) act_history_context string.
+    Inspects ``relevant_tools_list`` for non-ephemeral tool entries and checks
+    whether any of those tools recorded a successful result in ``act_history``.
+    When action tools were expected but none succeeded, a ``[NO_ACTION_TAKEN]``
+    sentinel is prepended to the context string so the follow-up LLM prompt
+    knows not to claim the action was performed.
+
+    Args:
+        act_history: List of action result dicts from the ACT loop.
+        act_history_context: Formatted context string to be injected into the
+            follow-up prompt.
+        relevant_tools_list: List of tool spec dicts (type, name) that were
+            offered to the dispatcher.
+
+    Returns:
+        The (possibly modified) act_history_context string with a
+        ``[NO_ACTION_TAKEN]`` prefix prepended when appropriate.
     """
     expected_action_tools = [
         t['name'] for t in relevant_tools_list

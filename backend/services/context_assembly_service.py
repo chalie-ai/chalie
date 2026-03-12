@@ -121,7 +121,14 @@ class ContextAssemblyService:
         return sections
 
     def _get_working_memory(self, identifier: str) -> str:
-        """Retrieve working memory context. Accepts thread_id or topic."""
+        """Retrieve working memory context for a thread or topic.
+
+        Args:
+            identifier: Thread ID or topic string used to scope the working memory lookup.
+
+        Returns:
+            Formatted working memory string, or empty string on error.
+        """
         try:
             from services.working_memory_service import WorkingMemoryService
             max_turns = self.config.get('max_working_memory_turns', 10)
@@ -132,7 +139,14 @@ class ContextAssemblyService:
             return ""
 
     def _get_moments(self, prompt: str) -> str:
-        """Retrieve relevant pinned moments via semantic search."""
+        """Retrieve relevant pinned moments via semantic search.
+
+        Args:
+            prompt: Current user prompt used as the semantic search query.
+
+        Returns:
+            Formatted moments string with header, or empty string if none found.
+        """
         try:
             from services.moment_service import MomentService
             from services.database_service import get_shared_db_service
@@ -170,7 +184,14 @@ class ContextAssemblyService:
             return ""
 
     def _get_facts(self, topic: str) -> str:
-        """Retrieve facts context."""
+        """Retrieve formatted facts for the given topic from FactStoreService.
+
+        Args:
+            topic: Conversation topic used to scope fact retrieval.
+
+        Returns:
+            Formatted facts string, or empty string on error or when no facts exist.
+        """
         try:
             from services.fact_store_service import FactStoreService
             fs = FactStoreService()
@@ -180,7 +201,16 @@ class ContextAssemblyService:
             return ""
 
     def _get_gists(self, topic: str) -> str:
-        """Retrieve gist context."""
+        """Retrieve conversation gist summaries for the given topic.
+
+        Falls back to the last exchange when no gists meet the confidence threshold.
+
+        Args:
+            topic: Conversation topic used to scope gist retrieval.
+
+        Returns:
+            Formatted gist context string, or a fallback last-exchange string.
+        """
         try:
             from services.gist_storage_service import GistStorageService
             min_confidence = self.config.get('min_gist_confidence', 7)
@@ -215,7 +245,18 @@ class ContextAssemblyService:
             return "No previous conversation context available"
 
     def _get_episodes(self, prompt: str, topic: str, act_history: str = "") -> str:
-        """Retrieve episodic memory context."""
+        """Retrieve relevant episodic memories via semantic search.
+
+        Downweights unreliable or contradicted episodes before returning results.
+
+        Args:
+            prompt: Current user prompt used as the semantic query.
+            topic: Conversation topic for additional scoping.
+            act_history: Accumulated ACT loop history used to boost relevant episodes.
+
+        Returns:
+            Formatted episodic memory string, or empty string when nothing relevant is found.
+        """
         try:
             from services.episodic_retrieval_service import EpisodicRetrievalService
             from services.database_service import get_shared_db_service
@@ -257,7 +298,18 @@ class ContextAssemblyService:
             return ""
 
     def _get_concepts(self, prompt: str, topic: str, act_history: str = "") -> str:
-        """Retrieve relevant semantic concepts for context injection."""
+        """Retrieve relevant semantic concepts for context injection.
+
+        Downweights unreliable or contradicted concepts before applying the strength filter.
+
+        Args:
+            prompt: Current user prompt used as the semantic query.
+            topic: Conversation topic (currently unused; reserved for future scoping).
+            act_history: Accumulated ACT loop history (currently unused).
+
+        Returns:
+            Formatted concepts string with header, or empty string when nothing qualifies.
+        """
         try:
             from services.semantic_retrieval_service import SemanticRetrievalService
             retrieval = SemanticRetrievalService()
@@ -339,7 +391,14 @@ class ContextAssemblyService:
             return ""
 
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:
-        """Parse semantic_query results from act_history string."""
+        """Parse semantic_query results from an act_history string.
+
+        Args:
+            act_history: Accumulated ACT loop history text.
+
+        Returns:
+            List of dicts with 'name' and 'definition' keys for matched concepts.
+        """
         import re
         concepts = []
         pattern = r'-\s+([^:]+):\s+([^(]+)\s+\((?:strength[:=]|confidence=)'
@@ -352,7 +411,14 @@ class ContextAssemblyService:
         return concepts
 
     def _estimate_tokens(self, text: str) -> int:
-        """Rough token estimate (4 chars per token)."""
+        """Produce a rough token estimate using 4 characters per token.
+
+        Args:
+            text: Text to estimate token count for.
+
+        Returns:
+            Estimated token count as an integer.
+        """
         if not text:
             return 0
         return len(text) // 4

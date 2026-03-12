@@ -45,7 +45,10 @@ class CostCalculatorService:
         self._load_procedural_weights()
 
     def _load_procedural_weights(self):
-        """Load action weights from procedural memory."""
+        """Load action policy weights from procedural memory into _procedural_weights.
+
+        Falls back to None silently when procedural memory is unavailable.
+        """
         try:
             from services.procedural_memory_service import ProceduralMemoryService
             from services.database_service import get_shared_db_service
@@ -80,10 +83,15 @@ class CostCalculatorService:
         return self.ACTION_COMPLEXITY.get(action_type, 1.5)
 
     def calculate_iteration_cost(self, iteration_number: int) -> float:
-        """
-        Calculate base iteration cost with exponential growth.
+        """Calculate base iteration cost with exponential growth.
 
         Formula: base × (growth_factor ^ iteration_number)
+
+        Args:
+            iteration_number: Zero-based index of the current ACT loop iteration.
+
+        Returns:
+            Iteration cost as a float.
         """
         return self.cost_base * (self.cost_growth_factor ** iteration_number)
 
@@ -109,11 +117,22 @@ class CostCalculatorService:
         return total
 
     def record_path_efficiency(self, efficiency: float) -> None:
-        """Record efficiency of chosen path for tracking."""
+        """Append an efficiency score to the history buffer.
+
+        Args:
+            efficiency: Efficiency score for the path taken in the ACT loop.
+        """
         self.path_efficiency_history.append(efficiency)
 
     def map_effort_to_multiplier(self, effort_estimate: str) -> float:
-        """Map effort estimate to cognitive effort multiplier."""
+        """Map a textual effort estimate to a numeric cognitive effort multiplier.
+
+        Args:
+            effort_estimate: One of 'low', 'medium', 'high', or 'very_high'.
+
+        Returns:
+            Multiplier float (0.8–1.5), defaulting to 1.0 for unknown values.
+        """
         effort_map = {
             'low': 0.8,
             'medium': 1.0,
