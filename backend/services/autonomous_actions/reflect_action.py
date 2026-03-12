@@ -32,8 +32,8 @@ LOG_PREFIX = "[REFLECT]"
 # MemoryStore key namespace — per-topic
 _NS = "reflection"
 
-# Shared fatigue key (same as cognitive_drift_engine.py)
-FATIGUE_KEY = "cognitive_drift_activations"
+# Shared fatigue key (same as reasoning_loop_service.py)
+FATIGUE_KEY = "reasoning_loop:activations"
 
 
 def _key(topic: str, suffix: str) -> str:

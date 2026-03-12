@@ -44,7 +44,7 @@ Every service belongs to exactly one of three layers. Failures are contained wit
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
 **Cognitive services:**
-DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, CognitiveDriftEngine, ContextAssembly, CognitiveTriage, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, RoutingStabilityRegulator, RoutingReflection, TopicStabilityRegulator, TriageCalibration, SelfModel
+DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, CognitiveTriage, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, RoutingStabilityRegulator, RoutingReflection, TopicStabilityRegulator, TriageCalibration, SelfModel
 
 **Embodiment services:**
 AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, SparkState, EpisodicMemoryObserver, ThreadExpiry
@@ -92,7 +92,7 @@ class ReasoningSignal:
 | `new_knowledge` | New concept formed from experience | semantic_consolidation | 0.6 |
 | `novel_observation` | Surprising tool output stored as episode | experience_assimilation | 0.6 |
 | `ambient_context` | Environment changed (place, attention, energy) | event_bridge | From confidence |
-| `idle_discovery` | Nothing happened, engine self-seeds | cognitive_drift_engine (internal) | 0.4–0.5 |
+| `idle_discovery` | Nothing happened, engine self-seeds | reasoning_loop (internal) | 0.4–0.5 |
 | `gist_stored` | Active conversation gists stored | gist_storage | 0.3 |
 | `episode_created` | New narrative episode consolidated | episodic_memory_worker | 0.5 |
 | `trait_changed` | User trait created, updated, or corrected | user_trait_service | 0.3–0.7 |
@@ -119,7 +119,7 @@ New signal types require:
 
 - Emission is always **fire-and-forget** — the emitter never waits for a response
 - Emission is always **wrapped in try/except** — a failed emit is logged at DEBUG, never raised
-- Emission uses **lazy imports** (`from services.cognitive_drift_engine import ...`) to avoid import cycles
+- Emission uses **lazy imports** (`from services.cognitive_drift_engine import ...` or `from services.reasoning_loop_service import ...`) to avoid import cycles
 - Emitters never instantiate the consumer — they push to the queue and forget
 
 ---
@@ -226,7 +226,7 @@ def run_signal_loop(self):
 
 | Service | Signals Consumed | Idle Fallback | Nightly Scenario |
 |---|---|---|---|
-| **CognitiveDriftEngine** | All signal types | 10min → salient/insight | 965, 968, 969 |
+| **ReasoningLoopService** | All signal types | 10min → salient/insight | 965, 968, 969 |
 
 ### Not Yet Started
 
@@ -277,7 +277,7 @@ def run_signal_loop(self):
 
 ## 7. The Spine (Future)
 
-The current architecture has a single consumer (CognitiveDriftEngine) reading from a single queue (`reasoning:signals`). The future spine will:
+The current architecture has a single consumer (ReasoningLoopService) reading from a single queue (`reasoning:signals`). The future spine will:
 
 1. **Route signals to multiple consumers** — each service registers interest in specific signal types
 2. **Priority scheduling** — user-facing signals preempt background maintenance
