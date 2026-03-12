@@ -266,6 +266,7 @@ def delete_all():
             "reasoning:last_processed",
             "goal_inference:signal_topics",
             "goal_inference:last_run",
+            "world_model:items",
             "drift:*",
             "experience_assimilation_state",
             "experience_assimilation_cooldowns",

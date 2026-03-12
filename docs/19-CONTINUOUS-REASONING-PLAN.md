@@ -186,22 +186,25 @@ WebSocket → signal(user_message) → ReasoningLoop → route to response pipel
 
 ---
 
-### Milestone 5: World Model
+### Milestone 5: World Model (COMPLETE)
 
 **Goal:** WorldStateService becomes actively maintained by the reasoning loop, not passively queried.
 
-**Today:** WorldStateService computes salience at query time (per-request). It surfaces scheduled items and tasks based on temporal + semantic proximity.
+**Delivered:**
+- WorldStateService gains a MemoryStore-backed cache (`world_model:items`) refreshed during idle periods
+- Signal handlers in the reasoning loop update the cache incrementally:
+  - `_handle_task_state_changed()` → `ws.notify_task_changed()`
+  - `_handle_schedule_fired()` → `ws.notify_schedule_changed()`
+- `get_world_state()` reads from cache first (temporal + semantic scoring), falls back to DB if stale (> 5min)
+- Three new world state sections:
+  - **Ambient context**: place, attention, energy, mobility, tempo from `ambient:prev_inferences`
+  - **Active topics**: conversation topics from `reasoning_loop:active_topics`
+  - **Reasoning focus**: current thought seed from `reasoning_loop:state`
+- `get_world_model_summary()` provides structured data for reasoning loop context enrichment
+- `_get_loop_context()` includes world model summary — reasoning sees the full world when processing signals
+- Nightly scenario: 979
 
-**After:** The reasoning loop continuously updates a world model:
-- Active goals and their progress
-- Scheduled upcoming events
-- Ambient state (place, energy, attention)
-- Recent conversation topics
-- Pending tasks and blockers
-
-**The world model is injected into every response**, replacing the current per-request context assembly scatter. Instead of 6 separate context slots (working memory, episodes, concepts, traits, world state, identity), the reasoning loop maintains a single coherent world model that it updates with every signal.
-
-**This is where the loop pays off:** because the loop sees every signal, it can maintain the world model incrementally (O(1) per signal) instead of reconstructing it from scratch per request (O(n) per query).
+**Architecture**: Cache stores raw item data; temporal scoring is recomputed per-request (always fresh). Semantic scoring uses a single DB connection for all KNN lookups. Cache misses fall back to the existing DB query path. All updates are fail-open.
 
 ---
 
