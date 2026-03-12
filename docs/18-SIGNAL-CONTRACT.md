@@ -33,7 +33,32 @@ Every service must be testable in complete isolation:
 - Every service is covered by at least one `chalie-nightly-test` blackbox scenario
 - Integration between services is tested by the nightly suite, not by unit tests
 
-### 1.4 Minimal Surface Area
+### 1.4 Service Layers (Fault Domains)
+
+Every service belongs to exactly one of three layers. Failures are contained within a layer — they never cascade across layer boundaries.
+
+| Layer | Analogy | What it does | If it fails... |
+|---|---|---|---|
+| **Cognitive** | Brain | Reasoning, memory formation, consolidation, decay, planning, reflection | ...you stop reasoning well, but you still perceive and can still use tools |
+| **Embodiment** | Body/Senses | Perception, ambient awareness, place learning, context tracking, voice I/O | ...you lose awareness of surroundings, but you can still think and act on what you know |
+| **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
+
+**Cognitive services:**
+DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, CognitiveDriftEngine, ContextAssembly, CognitiveTriage, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, RoutingStabilityRegulator, RoutingReflection, TopicStabilityRegulator, TriageCalibration, SelfModel
+
+**Embodiment services:**
+AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, SparkState, EpisodicMemoryObserver, ThreadExpiry
+
+**Capability services:**
+ToolRegistry, ToolWorker, ToolContainer, ToolConfig, ToolProfile, ToolPerformance, ToolUpdateChecker, ACTLoop, ACTDispatcher, DocumentService, DocumentProcessing, DocumentPurge, SchedulerService, ListService, PersistentTaskWorker, MomentEnrichment, ProfileEnrichment
+
+**Cross-layer rules:**
+- Cognitive services never import embodiment or capability services at module level (lazy imports only)
+- Embodiment services write to MemoryStore; cognitive services read from MemoryStore. Never direct calls.
+- Capability failures surface as "tool unavailable" — the cognitive layer plans around them, never crashes
+- A full embodiment outage means ambient signals stop arriving. The cognitive layer treats this as "nothing interesting is happening" (idle), not as an error
+
+### 1.5 Minimal Surface Area
 
 Each service exposes the minimum interface needed:
 - One public method for its primary job (e.g., `process()`, `consolidate()`, `decay()`)
