@@ -100,6 +100,7 @@ class ReasoningSignal:
 | `schedule_fired` | Scheduled reminder/task fired | scheduler_service | 0.5 |
 | `thread_expired` | Conversation thread expired | thread_expiry_service | 0.3 |
 | `curiosity_finding` | Curiosity thread produced a finding | curiosity_pursuit_service | 0.5 |
+| `user_message` | User sent a chat message | websocket | 1.0 |
 
 New signal types require:
 1. Addition to this table
@@ -108,12 +109,14 @@ New signal types require:
 
 ### 2.2 Signal Transport
 
-- **Queue:** MemoryStore list at key `reasoning:signals`
+- **Priority queue:** `reasoning:priority` (user messages — processed first)
+- **Background queue:** `reasoning:signals` (all other signal types)
+- **Pop:** `blpop([priority, signals], timeout=idle_timeout)` — tries priority first
 - **Push:** `rpush(key, signal.to_json())`
-- **Pop:** `blpop(key, timeout=idle_timeout)` — blocking, at-most-once
-- **Max depth:** 50 signals (oldest dropped on overflow)
-- **Debounce:** 30s minimum between processed signals
+- **Max depth:** 50 signals (oldest dropped on overflow, background queue only)
+- **Debounce:** 30s minimum between processed background signals (user messages bypass)
 - **Serialization:** JSON via `dataclasses.asdict()`
+- **Yield points:** Background signal processing checks priority queue before expensive operations (LLM calls); if a user message is waiting, background reasoning aborts and the loop picks up the priority signal
 
 ### 2.3 Emission Rules
 
