@@ -1,3 +1,12 @@
+"""
+Listener for ACT (action) outputs produced by the autonomous action pipeline.
+
+Consumes ACT-typed items from the shared output queue in a blocking loop,
+delegates each item to ``_process_output``, and keeps a liveness heartbeat
+registered with the output service.  The processing logic is a Phase 2 stub —
+actions are logged and acknowledged but not yet dispatched to external systems.
+"""
+
 import logging
 import time
 
