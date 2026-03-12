@@ -1,3 +1,13 @@
+"""
+Ollama LLM service — local model inference via the Ollama HTTP API.
+
+Wraps the Ollama ``/api/generate`` endpoint with retry logic (exponential
+back-off on connection errors and 5xx responses), rate-limit handling
+(HTTP 429 → :class:`~services.llm_service.RateLimitError`), and a thin
+delegation to the shared :class:`~services.embedding_service.EmbeddingService`
+for embedding generation.
+"""
+
 import logging
 import time
 
@@ -6,9 +16,41 @@ import json
 import ollama
 from services.llm_service import LLMResponse, RateLimitError
 
+
 class OllamaService:
+    """LLM service backed by a locally-running Ollama instance.
+
+    Communicates with the Ollama HTTP API (``/api/generate``) and supports
+    automatic retries with exponential back-off for transient network and
+    server errors.  Embedding generation is delegated to the unified
+    :class:`~services.embedding_service.EmbeddingService` rather than
+    performing a separate Ollama embed call.
+    """
 
     def __init__(self, config: dict):
+        """Initialize the Ollama service with connection and inference settings.
+
+        Args:
+            config: Configuration dict.  Recognised keys:
+
+                - ``platform`` (str): Must be ``'ollama'``; raises
+                  :exc:`ValueError` otherwise.
+                - ``host`` (str): Base URL of the Ollama server
+                  (e.g., ``'http://localhost:11434'``).
+                - ``model`` (str): Name of the Ollama model to use.
+                - ``keep_alive`` (str, default ``'0'``): Ollama keep-alive
+                  duration passed verbatim to the API.
+                - ``temperature`` (float, default 0.5): Sampling temperature.
+                - ``timeout`` (int, default 60): HTTP request timeout in
+                  seconds.
+                - ``format`` (str, default ``'json'``): Response format.
+                  Pass ``'text'`` to omit the format field from the request.
+                - ``max_retries`` (int, default 2): Number of additional
+                  attempts after an initial failure.
+
+        Raises:
+            ValueError: If ``config['platform']`` is not ``'ollama'``.
+        """
         platform = config.get('platform', 'ollama')
         if platform != 'ollama':
             raise ValueError(f"OllamaService does not support platform '{platform}'")
