@@ -34,6 +34,7 @@ class MemoryStore:
     """Thread-safe in-memory store with MemoryStore-compatible API."""
 
     def __init__(self):
+        """Initialise all keyspace dicts, per-keyspace locks, pub/sub state, and the background reaper thread."""
         # Keyspaces
         self._strings: Dict[str, Tuple[Any, Optional[float]]] = {}
         self._lists: Dict[str, Tuple[list, Optional[float]]] = {}
@@ -60,9 +61,18 @@ class MemoryStore:
     # ── TTL helpers ────────────────────────────────────────────
 
     def _is_expired(self, expiry: Optional[float]) -> bool:
+        """Return ``True`` if ``expiry`` is set and has already passed."""
         return expiry is not None and time.time() > expiry
 
     def _expiry_from_seconds(self, seconds: Optional[int]) -> Optional[float]:
+        """Convert a TTL in seconds to an absolute UNIX timestamp, or ``None`` for no expiry.
+
+        Args:
+            seconds: Relative TTL in seconds. ``None`` or ``<= 0`` means no expiry.
+
+        Returns:
+            Absolute expiry timestamp (``time.time() + seconds``) or ``None``.
+        """
         if seconds is None or seconds <= 0:
             return None
         return time.time() + seconds
@@ -81,6 +91,12 @@ class MemoryStore:
                 logger.debug(f"[MemoryStore] Reaper error: {e}")
 
     def _reap_keyspace(self, store: dict, lock: threading.RLock):
+        """Delete all expired entries from a single keyspace dict under its lock.
+
+        Args:
+            store: One of the internal keyspace dicts (e.g. ``_strings``).
+            lock: The ``RLock`` that guards ``store``.
+        """
         now = time.time()
         with lock:
             expired = [k for k, (_, exp) in store.items() if exp is not None and now > exp]
@@ -96,6 +112,14 @@ class MemoryStore:
     # ── STRING operations ──────────────────────────────────────
 
     def get(self, key: str) -> Optional[str]:
+        """Return the string value stored at ``key``, or ``None`` if absent or expired.
+
+        Args:
+            key: The string key to look up.
+
+        Returns:
+            The stored string value, or ``None`` if the key does not exist or has expired.
+        """
         with self._str_lock:
             entry = self._strings.get(key)
             if entry is None:
@@ -107,6 +131,17 @@ class MemoryStore:
             return val
 
     def set(self, key: str, value: str, ex: Optional[int] = None, nx: bool = False):
+        """Store ``value`` at ``key`` with an optional TTL and NX (set-if-not-exists) flag.
+
+        Args:
+            key: Destination key.
+            value: Value to store (coerced to ``str``).
+            ex: Optional TTL in seconds. ``None`` means no expiry.
+            nx: If ``True``, only set the key when it does not already exist (or is expired).
+
+        Returns:
+            ``True`` on success, ``False`` if ``nx=True`` and the key already exists.
+        """
         with self._str_lock:
             if nx and key in self._strings:
                 _, expiry = self._strings[key]
@@ -116,14 +151,44 @@ class MemoryStore:
             return True
 
     def setex(self, key: str, seconds: int, value: str):
+        """Store ``value`` at ``key`` with a mandatory TTL (set + expire in one operation).
+
+        Args:
+            key: Destination key.
+            seconds: TTL in seconds (must be > 0).
+            value: Value to store (coerced to ``str``).
+
+        Returns:
+            ``True`` always.
+        """
         with self._str_lock:
             self._strings[key] = (str(value), self._expiry_from_seconds(seconds))
             return True
 
     def setnx(self, key: str, value: str) -> bool:
+        """Set ``key`` to ``value`` only if the key does not already exist.
+
+        Args:
+            key: Destination key.
+            value: Value to store (coerced to ``str``).
+
+        Returns:
+            ``True`` if the key was set, ``False`` if it already existed.
+        """
         return self.set(key, value, nx=True)
 
     def incr(self, key: str) -> int:
+        """Atomically increment the integer value at ``key`` by 1.
+
+        If the key does not exist or has expired it is initialised to ``0`` before
+        incrementing, mirroring Redis semantics.
+
+        Args:
+            key: The key whose value should be incremented.
+
+        Returns:
+            The new integer value after incrementing.
+        """
         with self._str_lock:
             entry = self._strings.get(key)
             if entry is None or self._is_expired(entry[1]):
@@ -135,6 +200,17 @@ class MemoryStore:
             return new_val
 
     def decr(self, key: str) -> int:
+        """Atomically decrement the integer value at ``key`` by 1.
+
+        If the key does not exist or has expired it is initialised to ``0`` before
+        decrementing, mirroring Redis semantics.
+
+        Args:
+            key: The key whose value should be decremented.
+
+        Returns:
+            The new integer value after decrementing.
+        """
         with self._str_lock:
             entry = self._strings.get(key)
             if entry is None or self._is_expired(entry[1]):
@@ -148,6 +224,16 @@ class MemoryStore:
     # ── LIST operations ────────────────────────────────────────
 
     def _get_list(self, key: str) -> Optional[list]:
+        """Return the live list object for ``key``, evicting it on expiry.
+
+        Must be called while ``_list_lock`` is held.
+
+        Args:
+            key: List key to look up.
+
+        Returns:
+            The mutable list, or ``None`` if the key is absent or expired.
+        """
         entry = self._lists.get(key)
         if entry is None:
             return None
@@ -158,6 +244,17 @@ class MemoryStore:
         return lst
 
     def rpush(self, key: str, *values) -> int:
+        """Append one or more values to the tail of the list at ``key``.
+
+        Creates the list if it does not exist.
+
+        Args:
+            key: List key.
+            *values: One or more values to append (coerced to ``str``).
+
+        Returns:
+            The length of the list after the push.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -168,6 +265,18 @@ class MemoryStore:
             return len(lst)
 
     def lpush(self, key: str, *values) -> int:
+        """Prepend one or more values to the head of the list at ``key``.
+
+        Creates the list if it does not exist. Values are inserted one at a time
+        in argument order, so the last argument ends up at index 0.
+
+        Args:
+            key: List key.
+            *values: One or more values to prepend (coerced to ``str``).
+
+        Returns:
+            The length of the list after the push.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -178,6 +287,19 @@ class MemoryStore:
             return len(lst)
 
     def ltrim(self, key: str, start: int, stop: int):
+        """Trim the list at ``key`` so it only contains elements in [``start``, ``stop``].
+
+        Supports negative indices (Redis-compatible semantics).
+        Is a no-op if the key does not exist.
+
+        Args:
+            key: List key.
+            start: Inclusive start index (may be negative).
+            stop: Inclusive stop index (may be negative).
+
+        Returns:
+            ``True`` always.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -192,6 +314,18 @@ class MemoryStore:
             return True
 
     def lrange(self, key: str, start: int, stop: int) -> list:
+        """Return a slice of the list at ``key`` between indices ``start`` and ``stop`` (inclusive).
+
+        Supports negative indices (Redis-compatible semantics).
+
+        Args:
+            key: List key.
+            start: Inclusive start index (may be negative).
+            stop: Inclusive stop index (may be negative).
+
+        Returns:
+            A new list containing the requested elements, or ``[]`` if the key is absent.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -204,11 +338,27 @@ class MemoryStore:
             return lst[start:stop + 1]
 
     def llen(self, key: str) -> int:
+        """Return the number of elements in the list at ``key``, or ``0`` if absent.
+
+        Args:
+            key: List key.
+
+        Returns:
+            Length of the list, or ``0`` if the key does not exist or has expired.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             return len(lst) if lst is not None else 0
 
     def lpop(self, key: str) -> Optional[str]:
+        """Remove and return the first (head) element of the list at ``key``.
+
+        Args:
+            key: List key.
+
+        Returns:
+            The removed element, or ``None`` if the list is empty or does not exist.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if not lst:
@@ -216,6 +366,17 @@ class MemoryStore:
             return lst.pop(0)
 
     def lindex(self, key: str, index: int) -> Optional[str]:
+        """Return the element at ``index`` in the list at ``key``.
+
+        Supports negative indices.
+
+        Args:
+            key: List key.
+            index: Zero-based position (may be negative).
+
+        Returns:
+            The element at the given position, or ``None`` if out of range or key absent.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -226,6 +387,20 @@ class MemoryStore:
                 return None
 
     def lset(self, key: str, index: int, value: str):
+        """Set the list element at ``index`` to ``value``.
+
+        Args:
+            key: List key.
+            index: Zero-based position to update (may be negative).
+            value: New value (coerced to ``str``).
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            Exception: If the key does not exist.
+            IndexError: If ``index`` is out of range.
+        """
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -265,6 +440,16 @@ class MemoryStore:
     # ── HASH operations ────────────────────────────────────────
 
     def _get_hash(self, key: str) -> Optional[dict]:
+        """Return the live hash dict for ``key``, evicting it on expiry.
+
+        Must be called while ``_hash_lock`` is held.
+
+        Args:
+            key: Hash key to look up.
+
+        Returns:
+            The mutable dict, or ``None`` if the key is absent or expired.
+        """
         entry = self._hashes.get(key)
         if entry is None:
             return None
@@ -275,6 +460,20 @@ class MemoryStore:
         return d
 
     def hset(self, key: str, field: str = None, value: str = None, mapping: dict = None):
+        """Set one field (or multiple via ``mapping``) in the hash at ``key``.
+
+        Creates the hash if it does not exist. Mirrors the Redis 4+ ``HSET`` signature
+        that accepts either a single ``field``/``value`` pair or a ``mapping`` dict.
+
+        Args:
+            key: Hash key.
+            field: Field name (used when ``mapping`` is ``None``).
+            value: Field value (coerced to ``str``; used when ``mapping`` is ``None``).
+            mapping: Optional dict of ``{field: value}`` pairs to set in bulk.
+
+        Returns:
+            ``1`` always (simplified; Redis returns the number of *new* fields added).
+        """
         with self._hash_lock:
             d = self._get_hash(key)
             if d is None:
@@ -288,6 +487,15 @@ class MemoryStore:
             return 1
 
     def hget(self, key: str, field: str) -> Optional[str]:
+        """Return the value of ``field`` in the hash at ``key``.
+
+        Args:
+            key: Hash key.
+            field: Field name.
+
+        Returns:
+            The field value as a string, or ``None`` if the key or field does not exist.
+        """
         with self._hash_lock:
             d = self._get_hash(key)
             if d is None:
@@ -295,11 +503,29 @@ class MemoryStore:
             return d.get(str(field))
 
     def hgetall(self, key: str) -> dict:
+        """Return all field-value pairs in the hash at ``key``.
+
+        Args:
+            key: Hash key.
+
+        Returns:
+            A shallow copy of the hash dict, or ``{}`` if the key does not exist.
+        """
         with self._hash_lock:
             d = self._get_hash(key)
             return dict(d) if d else {}
 
-    def hdel(self, key: str, *fields):
+    def hdel(self, key: str, *fields) -> int:
+        """Delete one or more ``fields`` from the hash at ``key``.
+
+        Args:
+            key: Hash key.
+            *fields: Field names to remove.
+
+        Returns:
+            The number of fields that were actually removed (fields that did not
+            exist are not counted).
+        """
         with self._hash_lock:
             d = self._get_hash(key)
             if d is None:
@@ -312,6 +538,18 @@ class MemoryStore:
             return count
 
     def hincrby(self, key: str, field: str, amount: int = 1) -> int:
+        """Increment the integer value of ``field`` in the hash at ``key`` by ``amount``.
+
+        Initialises the field to ``0`` before incrementing when it does not exist.
+
+        Args:
+            key: Hash key.
+            field: Field whose integer value should be incremented.
+            amount: Amount to add (default ``1``; may be negative).
+
+        Returns:
+            The new integer value of the field.
+        """
         with self._hash_lock:
             d = self._get_hash(key)
             if d is None:
@@ -323,6 +561,15 @@ class MemoryStore:
             return new_val
 
     def hexists(self, key: str, field: str) -> bool:
+        """Return ``True`` if ``field`` exists in the hash at ``key``.
+
+        Args:
+            key: Hash key.
+            field: Field name to check.
+
+        Returns:
+            ``True`` if the field is present, ``False`` otherwise.
+        """
         with self._hash_lock:
             d = self._get_hash(key)
             return str(field) in d if d else False
@@ -330,6 +577,17 @@ class MemoryStore:
     # ── SORTED SET operations ──────────────────────────────────
 
     def _get_zset(self, key: str) -> Optional[Any]:
+        """Return the live sorted-set list for ``key``, evicting it on expiry.
+
+        Must be called while ``_zset_lock`` is held.
+
+        Args:
+            key: Sorted-set key to look up.
+
+        Returns:
+            The mutable list of ``(score, member)`` tuples sorted by score,
+            or ``None`` if the key is absent or expired.
+        """
         entry = self._sorted_sets.get(key)
         if entry is None:
             return None
@@ -356,6 +614,19 @@ class MemoryStore:
             return len(mapping)
 
     def zrange(self, key: str, start: int, stop: int, withscores: bool = False) -> list:
+        """Return members of the sorted set at ``key`` ordered by ascending score.
+
+        Args:
+            key: Sorted-set key.
+            start: Inclusive start rank (0-based; negative indices supported).
+            stop: Inclusive stop rank (negative indices supported).
+            withscores: If ``True``, returns ``[(member, score), ...]`` instead of
+                just ``[member, ...]``.
+
+        Returns:
+            A list of members (strings), or ``(member, score)`` tuples when
+            ``withscores=True``. Returns ``[]`` if the key does not exist.
+        """
         with self._zset_lock:
             zset = self._get_zset(key)
             if zset is None:
@@ -370,6 +641,23 @@ class MemoryStore:
 
     def zrangebyscore(self, key: str, min_score: float, max_score: float,
                       start: int = None, num: int = None, withscores: bool = False) -> list:
+        """Return members of the sorted set at ``key`` with scores in [``min_score``, ``max_score``].
+
+        Accepts the special string values ``'-inf'`` and ``'+inf'`` for unbounded ranges,
+        mirroring Redis behaviour.
+
+        Args:
+            key: Sorted-set key.
+            min_score: Minimum score (inclusive), or the string ``'-inf'``.
+            max_score: Maximum score (inclusive), or the string ``'+inf'``.
+            start: Optional offset into the filtered result list (LIMIT offset).
+            num: Optional maximum number of results to return (LIMIT count).
+            withscores: If ``True``, returns ``[(member, score), ...]``.
+
+        Returns:
+            A list of members, or ``(member, score)`` tuples when ``withscores=True``.
+            Returns ``[]`` if the key does not exist.
+        """
         with self._zset_lock:
             zset = self._get_zset(key)
             if zset is None:
@@ -389,6 +677,18 @@ class MemoryStore:
             return [m for s, m in items]
 
     def zrevrange(self, key: str, start: int, stop: int, withscores: bool = False) -> list:
+        """Return members of the sorted set at ``key`` ordered by descending score.
+
+        Args:
+            key: Sorted-set key.
+            start: Inclusive start rank in the reversed ordering (0-based).
+            stop: Inclusive stop rank in the reversed ordering (negative indices supported).
+            withscores: If ``True``, returns ``[(member, score), ...]``.
+
+        Returns:
+            A list of members, or ``(member, score)`` tuples when ``withscores=True``.
+            Returns ``[]`` if the key does not exist.
+        """
         with self._zset_lock:
             zset = self._get_zset(key)
             if zset is None:
@@ -402,6 +702,16 @@ class MemoryStore:
             return [m for s, m in items]
 
     def zrem(self, key: str, *members) -> int:
+        """Remove one or more ``members`` from the sorted set at ``key``.
+
+        Args:
+            key: Sorted-set key.
+            *members: Member values to remove (coerced to ``str``).
+
+        Returns:
+            The number of members actually removed (non-existent members are not counted).
+            Returns ``0`` if the key does not exist.
+        """
         with self._zset_lock:
             zset = self._get_zset(key)
             if zset is None:
@@ -412,6 +722,14 @@ class MemoryStore:
             return before - len(zset)
 
     def zcard(self, key: str) -> int:
+        """Return the number of members in the sorted set at ``key``.
+
+        Args:
+            key: Sorted-set key.
+
+        Returns:
+            Cardinality of the set, or ``0`` if the key does not exist.
+        """
         with self._zset_lock:
             zset = self._get_zset(key)
             return len(zset) if zset is not None else 0
@@ -445,6 +763,16 @@ class MemoryStore:
     # ── SET operations ─────────────────────────────────────────
 
     def _get_set(self, key: str) -> Optional[set]:
+        """Return the live set object for ``key``, evicting it on expiry.
+
+        Must be called while ``_set_lock`` is held.
+
+        Args:
+            key: Set key to look up.
+
+        Returns:
+            The mutable ``set``, or ``None`` if the key is absent or expired.
+        """
         entry = self._sets.get(key)
         if entry is None:
             return None
@@ -455,6 +783,17 @@ class MemoryStore:
         return s
 
     def sadd(self, key: str, *values) -> int:
+        """Add one or more ``values`` to the set at ``key``.
+
+        Creates the set if it does not exist. Values already present are silently ignored.
+
+        Args:
+            key: Set key.
+            *values: Values to add (coerced to ``str``).
+
+        Returns:
+            The number of elements that were newly added to the set.
+        """
         with self._set_lock:
             s = self._get_set(key)
             if s is None:
@@ -469,6 +808,16 @@ class MemoryStore:
             return added
 
     def srem(self, key: str, *values) -> int:
+        """Remove one or more ``values`` from the set at ``key``.
+
+        Args:
+            key: Set key.
+            *values: Values to remove (coerced to ``str``).
+
+        Returns:
+            The number of elements that were actually removed.
+            Returns ``0`` if the key does not exist.
+        """
         with self._set_lock:
             s = self._get_set(key)
             if s is None:
@@ -482,16 +831,41 @@ class MemoryStore:
             return removed
 
     def smembers(self, key: str) -> set:
+        """Return all members of the set at ``key``.
+
+        Args:
+            key: Set key.
+
+        Returns:
+            A shallow copy of the set, or an empty ``set`` if the key does not exist.
+        """
         with self._set_lock:
             s = self._get_set(key)
             return set(s) if s is not None else set()
 
     def sismember(self, key: str, value: str) -> bool:
+        """Return ``True`` if ``value`` is a member of the set at ``key``.
+
+        Args:
+            key: Set key.
+            value: Value to check (coerced to ``str``).
+
+        Returns:
+            ``True`` if the value is present, ``False`` otherwise.
+        """
         with self._set_lock:
             s = self._get_set(key)
             return str(value) in s if s else False
 
     def scard(self, key: str) -> int:
+        """Return the number of members in the set at ``key``.
+
+        Args:
+            key: Set key.
+
+        Returns:
+            Cardinality of the set, or ``0`` if the key does not exist.
+        """
         with self._set_lock:
             s = self._get_set(key)
             return len(s) if s is not None else 0
@@ -499,6 +873,18 @@ class MemoryStore:
     # ── KEY operations ─────────────────────────────────────────
 
     def delete(self, *keys) -> int:
+        """Delete one or more keys across all keyspaces.
+
+        Removes the key from every keyspace (string, list, hash, sorted-set, set)
+        where it may exist, mirroring Redis behaviour where a key belongs to exactly
+        one data structure.
+
+        Args:
+            *keys: Key names to delete.
+
+        Returns:
+            Total number of key-in-keyspace entries removed.
+        """
         count = 0
         for key in keys:
             with self._str_lock:
@@ -524,6 +910,14 @@ class MemoryStore:
         return count
 
     def exists(self, key: str) -> bool:
+        """Return ``True`` if ``key`` exists and has not expired in any keyspace.
+
+        Args:
+            key: Key to check.
+
+        Returns:
+            ``True`` if the key is present and live, ``False`` otherwise.
+        """
         with self._str_lock:
             entry = self._strings.get(key)
             if entry and not self._is_expired(entry[1]):
@@ -547,6 +941,15 @@ class MemoryStore:
         return False
 
     def expire(self, key: str, seconds: int) -> bool:
+        """Set a TTL on ``key`` in the first keyspace where it is found.
+
+        Args:
+            key: Key to update.
+            seconds: New TTL in seconds.
+
+        Returns:
+            ``True`` if the key was found and updated, ``False`` if it does not exist.
+        """
         new_expiry = self._expiry_from_seconds(seconds)
         for store, lock in [
             (self._strings, self._str_lock),
@@ -637,11 +1040,29 @@ class MemoryStore:
     # ── PIPELINE ───────────────────────────────────────────────
 
     def pipeline(self, transaction: bool = True) -> 'PipelineProxy':
+        """Return a ``PipelineProxy`` that queues commands for batched execution.
+
+        Args:
+            transaction: Accepted for API compatibility; ignored (all operations are
+                applied sequentially and immediately on ``execute()``).
+
+        Returns:
+            A new :class:`PipelineProxy` bound to this store.
+        """
         return PipelineProxy(self)
 
     # ── Type method (compatibility) ────────────────────────────
 
     def type(self, key: str) -> str:
+        """Return the data-structure type of ``key`` as a Redis-compatible string.
+
+        Args:
+            key: Key to inspect.
+
+        Returns:
+            One of ``"string"``, ``"list"``, ``"hash"``, ``"zset"``, ``"set"``,
+            or ``"none"`` if the key does not exist in any keyspace.
+        """
         with self._str_lock:
             if key in self._strings:
                 return "string"
@@ -664,12 +1085,24 @@ class PubSubProxy:
     """PubSub interface (Redis-compatible API) using queue.Queue per subscriber."""
 
     def __init__(self, store: MemoryStore):
+        """Initialise the proxy with a private message queue and an empty channel subscription set.
+
+        Args:
+            store: The :class:`MemoryStore` instance that owns the channel registry.
+        """
         import queue as queue_module
         self._store = store
         self._queue = queue_module.Queue(maxsize=1000)
         self._subscribed_channels: set = set()
 
     def subscribe(self, *channels):
+        """Subscribe to one or more ``channels`` so that published messages are delivered to this proxy.
+
+        Idempotent — subscribing to an already-subscribed channel is a no-op.
+
+        Args:
+            *channels: Channel names to subscribe to.
+        """
         with self._store._pubsub_lock:
             for ch in channels:
                 if ch not in self._subscribed_channels:
@@ -677,6 +1110,13 @@ class PubSubProxy:
                     self._subscribed_channels.add(ch)
 
     def unsubscribe(self, *channels):
+        """Unsubscribe from one or more ``channels``, stopping future message delivery.
+
+        Silently ignores channels that are not currently subscribed.
+
+        Args:
+            *channels: Channel names to unsubscribe from.
+        """
         with self._store._pubsub_lock:
             for ch in channels:
                 if ch in self._subscribed_channels:
@@ -705,6 +1145,7 @@ class PubSubProxy:
                 yield msg
 
     def close(self):
+        """Unsubscribe from all channels and release this proxy's queue from the store."""
         self.unsubscribe(*list(self._subscribed_channels))
 
 
@@ -712,19 +1153,48 @@ class PipelineProxy:
     """Pipeline proxy (Redis-compatible API) — collects operations, executes sequentially on .execute()."""
 
     def __init__(self, store: MemoryStore):
+        """Initialise the proxy with an empty command queue.
+
+        Args:
+            store: The :class:`MemoryStore` instance that will execute queued commands.
+        """
         self._store = store
         self._commands: list = []
 
     def __getattr__(self, name):
+        """Intercept attribute access to capture any public store method call for later execution.
+
+        Private names (starting with ``_``) raise ``AttributeError`` immediately.
+
+        Args:
+            name: Name of the store method being called.
+
+        Returns:
+            A callable that records the method call and returns ``self`` for chaining.
+
+        Raises:
+            AttributeError: If ``name`` starts with ``_``.
+        """
         if name.startswith('_'):
             raise AttributeError(name)
 
         def _capture(*args, **kwargs):
+            """Record the method call and return the pipeline for chaining."""
             self._commands.append((name, args, kwargs))
             return self  # Allow chaining
         return _capture
 
     def execute(self) -> list:
+        """Execute all queued commands sequentially and return their results.
+
+        Each command is dispatched to the underlying :class:`MemoryStore`. Exceptions
+        raised by individual commands are caught and included in the result list rather
+        than aborting the pipeline, matching redis-py behaviour.
+
+        Returns:
+            A list of return values (or ``Exception`` instances) in the same order as
+            the queued commands. The internal command queue is cleared after execution.
+        """
         results = []
         for method_name, args, kwargs in self._commands:
             method = getattr(self._store, method_name, None)
@@ -739,7 +1209,9 @@ class PipelineProxy:
         return results
 
     def __enter__(self):
+        """Support use as a context manager; returns ``self`` for command chaining."""
         return self
 
     def __exit__(self, *args):
+        """Exit context manager; commands are not automatically executed on exit."""
         pass
