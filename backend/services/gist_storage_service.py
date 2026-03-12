@@ -149,6 +149,19 @@ class GistStorageService:
             json.dumps(last_message_data)
         )
 
+        if stored_count > 0:
+            try:
+                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                emit_reasoning_signal(ReasoningSignal(
+                    signal_type='gist_stored',
+                    source='gist_storage',
+                    topic=topic,
+                    content=f"{stored_count} gist(s) stored for topic '{topic}'",
+                    activation_energy=0.3,
+                ))
+            except Exception:
+                pass
+
         return stored_count
 
     def _get_all_gists_with_ids(self, topic: str) -> List[Tuple[str, Dict]]:

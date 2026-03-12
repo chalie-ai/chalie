@@ -190,6 +190,17 @@ class PersistentTaskService:
             """, (new_status, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id}: {current} -> {new_status}")
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='task_state_changed',
+                source='persistent_task_service',
+                topic=task.get('scope', 'general') if isinstance(task, dict) else 'general',
+                content=f"Task {task_id} transitioned: {current} → {new_status}",
+                activation_energy=0.5,
+            ))
+        except Exception:
+            pass
         return True, f"Task transitioned to {new_status}"
 
     def accept_task(self, task_id: int, scope: Optional[str] = None) -> Tuple[bool, str]:
@@ -310,6 +321,17 @@ class PersistentTaskService:
             """, (result, json.dumps(artifact) if artifact else None, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id} completed")
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='task_state_changed',
+                source='persistent_task_service',
+                topic='general',
+                content=f"Task {task_id} completed",
+                activation_energy=0.6,
+            ))
+        except Exception:
+            pass
         return True
 
     def set_next_run(self, task_id: int, delay_seconds: int):
