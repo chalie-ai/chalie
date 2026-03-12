@@ -42,6 +42,7 @@ class WorkerManager:
     """Master supervisor for managing worker threads."""
 
     def __init__(self):
+        """Initialise the WorkerManager with empty shared state and thread registry."""
         self.shared_state: Dict = {}
         self._state_lock = threading.Lock()
         self.threads: Dict[str, threading.Thread] = {}
@@ -51,10 +52,36 @@ class WorkerManager:
         self._tool_scanner_registry = None
 
     def register_service(self, worker_id: str, worker_func):
+        """Register a worker service definition for future spawning.
+
+        The service is appended to the internal ``service_definitions`` list.
+        It will be started when :meth:`spawn_all_services` is called, or
+        immediately via :meth:`spawn_service`.
+
+        Args:
+            worker_id: Unique string identifier for the worker, also used as
+                the daemon thread name (e.g., ``'decay-engine-service'``).
+            worker_func: Callable with signature
+                ``(shared_state: dict) -> None`` that implements the worker's
+                blocking run loop.
+        """
         self.service_definitions.append((worker_id, worker_func))
         logging.info(f"[Manager] Registered service definition: {worker_id}")
 
     def spawn_service(self, worker_id: str, worker_func):
+        """Spawn a worker as a daemon thread, skipping if one is already alive.
+
+        If a thread with the given ``worker_id`` already exists and is alive,
+        this method returns immediately without creating a duplicate.  The
+        thread passes ``shared_state`` to ``worker_func`` and logs any
+        unhandled exception before terminating.
+
+        Args:
+            worker_id: Unique identifier and daemon thread name for the worker.
+            worker_func: Callable with signature
+                ``(shared_state: dict) -> None`` that implements the worker's
+                blocking run loop.
+        """
         if worker_id in self.threads and self.threads[worker_id].is_alive():
             return
 
@@ -70,6 +97,12 @@ class WorkerManager:
         logging.info(f"[Manager] Spawned service: {worker_id} (thread)")
 
     def spawn_all_services(self):
+        """Spawn all registered service definitions as daemon threads.
+
+        Iterates ``service_definitions`` in registration order and calls
+        :meth:`spawn_service` for each entry.  Individual spawn failures are
+        logged as errors but do not abort spawning of subsequent services.
+        """
         logging.info("[Manager] Spawning all services...")
         for worker_id, worker_func in self.service_definitions:
             try:
@@ -102,12 +135,31 @@ class WorkerManager:
             pass  # never let health publication crash the health check
 
     def shutdown_all(self):
+        """Initiate a graceful shutdown by clearing the running flag.
+
+        Sets ``self.running = False`` so the :meth:`run` loop exits cleanly.
+        Worker threads are daemon threads and are terminated automatically
+        when the main thread finishes.
+        """
         logging.info("\n[Manager] Initiating graceful shutdown...")
         self.running = False
         # Daemon threads will be killed when main thread exits
         logging.info("[Manager] All services stopped")
 
     def run(self):
+        """Run the main supervisor loop, spawning services and monitoring thread health.
+
+        Installs ``SIGINT`` and ``SIGTERM`` handlers that call
+        :meth:`shutdown_all`.  Spawns all registered services via
+        :meth:`spawn_all_services`, optionally starts the hot-reload tool
+        scanner, then enters a 5-second polling loop.  Every iteration calls
+        :meth:`check_health` to restart dead threads.  A periodic summary is
+        logged every 5 minutes (60 × 5 s intervals).
+
+        Blocks until :meth:`shutdown_all` is called or a
+        ``KeyboardInterrupt`` is received, after which it ensures
+        :meth:`shutdown_all` is invoked in the ``finally`` block.
+        """
         signal.signal(signal.SIGINT, lambda sig, frame: self.shutdown_all())
         signal.signal(signal.SIGTERM, lambda sig, frame: self.shutdown_all())
 
@@ -176,12 +228,33 @@ class ToolScannerThread:
     DEFAULT_INTERVAL = 30
 
     def __init__(self, manager: WorkerManager, tools_dir):
+        """Initialise the tool scanner for the given tools directory.
+
+        Args:
+            manager: The :class:`WorkerManager` instance used to register and
+                spawn cron workers discovered during directory scans.
+            tools_dir: Filesystem path to the ``backend/tools/`` directory
+                that is monitored for new tool sub-directories.  The scan
+                interval can be overridden via the
+                ``TOOL_SCANNER_INTERVAL_SECONDS`` environment variable
+                (default: ``30`` seconds).
+        """
         self._manager = manager
         self._tools_dir = tools_dir
         self._interval = int(os.environ.get("TOOL_SCANNER_INTERVAL_SECONDS", self.DEFAULT_INTERVAL))
         self._registry = None
 
     def start(self, registry):
+        """Start the background scan loop and wire up the tool-registered callback.
+
+        Stores a reference to ``registry``, installs
+        :meth:`_on_tool_registered` as the post-build callback, then starts
+        the ``_scan_loop`` as a daemon thread named ``'tool-scanner'``.
+
+        Args:
+            registry: ``ToolRegistryService`` instance used to inspect known
+                tools, query build statuses, and create cron worker callables.
+        """
         self._registry = registry
         registry.set_on_tool_registered(self._on_tool_registered)
         t = threading.Thread(target=self._scan_loop, name="tool-scanner", daemon=True)
@@ -217,6 +290,13 @@ class ToolScannerThread:
         logging.info(f"[ToolScanner] Spawned cron worker: {worker_id}")
 
     def _scan_loop(self):
+        """Run periodic scans at the configured interval, logging errors without crashing.
+
+        Sleeps for one full interval before the first scan to allow other
+        services to finish initialising.  Errors inside :meth:`_scan_once`
+        are caught and logged so the scanner thread never terminates
+        unexpectedly.
+        """
         time.sleep(self._interval)
         while True:
             try:
@@ -226,6 +306,19 @@ class ToolScannerThread:
             time.sleep(self._interval)
 
     def _scan_once(self):
+        """Scan ``tools_dir`` once for new tool directories and trigger async builds.
+
+        A directory is skipped if any of the following conditions apply:
+
+        * It is already present in the registry (``known``).
+        * It is currently being built (``building``) or has an active install
+          lock (``locked``).
+        * It is missing a ``manifest.json`` or ``Dockerfile``.
+        * It is administratively disabled via ``ToolConfigService``.
+
+        Eligible new directories are handed off to
+        ``registry.register_tool_async`` for background image builds.
+        """
         import json as _json
         from pathlib import Path
         if not self._tools_dir.exists():
