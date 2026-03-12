@@ -101,6 +101,7 @@ class ReasoningSignal:
 | `thread_expired` | Conversation thread expired | thread_expiry_service | 0.3 |
 | `curiosity_finding` | Curiosity thread produced a finding | curiosity_pursuit_service | 0.5 |
 | `user_message` | User sent a chat message | websocket | 1.0 |
+| `goal_inferred` | Recurring topic pattern detected as potential goal | goal_inference_service | 0.6 |
 
 New signal types require:
 1. Addition to this table
