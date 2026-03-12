@@ -159,7 +159,7 @@ WebSocket → signal(user_message) → ReasoningLoop → route to response pipel
 
 ---
 
-### Milestone 4: Goal Inference
+### Milestone 4: Goal Inference (COMPLETE)
 
 **Goal:** The reasoning loop detects goals forming across signals — not just explicit requests, but patterns across conversations, schedule items, trait changes, and ambient context.
 
@@ -171,16 +171,18 @@ WebSocket → signal(user_message) → ReasoningLoop → route to response pipel
 - User asks about "mortgage rates" twice, then searches for "houses" → infer goal: "explore home buying"
 - Ambient context shows user at gym 3x/week → infer pattern, not goal (important distinction)
 
-**Implementation sketch:**
-- **Goal Detector**: lightweight service that maintains sliding windows of signal topics
-- **Signal:** `goal_inferred` (new type) — emitted when pattern crosses threshold
-- **Consumer:** ReasoningLoop routes to PlanAction or PersistentTaskService
-- **Gate:** Goal proposals shown to user before autonomous pursuit (respect the delegation boundary)
-
-**This is the most LLM-dependent milestone.** Pattern detection across sparse signals over weeks requires either:
-- A very good classifier (preferred — deterministic, fast)
-- An LLM synthesis step (fallback — expensive, slow)
-- Or both: classifier detects candidate patterns, LLM validates and names the goal
+**Delivered:**
+- `GoalInferenceService` — deterministic SQL candidate detection + LLM validation pipeline
+- Candidate detection: queries `interaction_log` for topics with ≥3 conversations, ≥5 messages in 14 days
+- Filters: existing goals (PersistentTaskService duplicate check), routine topics, recently proposed goals
+- LLM validation: names the goal, assigns confidence, explains reasoning
+- Creates PROPOSED persistent task with evidence checkpoint, surfaces via proactive notification
+- `goal_inferred` signal emitted to reasoning loop for further reasoning about the new goal
+- Signal topic tracking: all non-user-message signals accumulate topics in `goal_inference:signal_topics` sorted set (14-day window)
+- Idle-time trigger: goal inference runs during idle handler every 6h (configurable cooldown)
+- Dispatch table: `goal_inferred` → full reasoning path (`_handle_reasoning_signal`)
+- Config: `goal_inference` section in `cognitive-drift.json`
+- Nightly scenario: 978
 
 ---
 

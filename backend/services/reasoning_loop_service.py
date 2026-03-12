@@ -134,6 +134,7 @@ class ReasoningLoopService:
         'ambient_context': '_handle_reasoning_signal',
         'episode_created': '_handle_reasoning_signal',
         'curiosity_finding': '_handle_reasoning_signal',
+        'goal_inferred': '_handle_reasoning_signal',
         # Lightweight handlers: update state, no full reasoning cycle
         'gist_stored': '_handle_gist_stored',
         'trait_changed': '_handle_trait_changed',
@@ -344,6 +345,17 @@ class ReasoningLoopService:
             # Unknown signal type — fall back to full reasoning path
             logger.info(f"{LOG_PREFIX} Unknown signal type '{signal.signal_type}', using reasoning path")
             self._handle_reasoning_signal(signal)
+
+        # Track signal topic for goal inference pattern detection
+        if signal.topic and signal.signal_type != 'user_message':
+            try:
+                self.store.zadd('goal_inference:signal_topics', {signal.topic: time.time()})
+                # Prune topics older than lookback window (14 days)
+                self.store.zremrangebyscore(
+                    'goal_inference:signal_topics', '-inf', time.time() - 86400 * 14
+                )
+            except Exception:
+                pass
 
     def _handle_reasoning_signal(self, signal: ReasoningSignal) -> None:
         """Full reasoning path: gates → seed → spreading activation → synthesis → action."""
@@ -624,6 +636,11 @@ class ReasoningLoopService:
             logger.debug(f"{LOG_PREFIX} Workers not idle, skipping idle drift")
             return
 
+        # Goal inference: check for latent goals (cooldown-gated)
+        if self._should_run_goal_inference():
+            self._run_goal_inference()
+            # Don't return — still run normal idle discovery after goal check
+
         # Pick strategy: 60% salient, 40% insight
         seed = None
         if random.random() < 0.6:
@@ -649,6 +666,44 @@ class ReasoningLoopService:
             activation_energy=0.5,
         )
         self._reason_from_seed(seed, idle_signal)
+
+    def _should_run_goal_inference(self) -> bool:
+        """Check if goal inference cooldown has expired."""
+        try:
+            last_run = self.store.get('goal_inference:last_run')
+            if last_run:
+                elapsed = time.time() - float(last_run)
+                cooldown = self.config.get('goal_inference', {}).get('cooldown_hours', 6) * 3600
+                if elapsed < cooldown:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _run_goal_inference(self) -> None:
+        """Run the goal inference pipeline during idle time."""
+        try:
+            from services.goal_inference_service import GoalInferenceService
+            service = GoalInferenceService(self.db_service)
+            proposed = service.detect_and_propose()
+
+            if proposed:
+                logger.info(
+                    f"{LOG_PREFIX} Goal inference proposed {len(proposed)} goal(s): "
+                    f"{[g['goal'][:50] for g in proposed]}"
+                )
+            else:
+                logger.debug(f"{LOG_PREFIX} Goal inference: no goals detected this cycle")
+
+            # Reset cooldown regardless of result
+            self.store.set('goal_inference:last_run', str(time.time()))
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Goal inference failed: {e}")
+            # Set cooldown even on failure to prevent retry storms
+            try:
+                self.store.set('goal_inference:last_run', str(time.time()))
+            except Exception:
+                pass
 
     def _reason_from_seed(self, seed: Dict, signal: ReasoningSignal) -> None:
         """Core reasoning pipeline: spreading activation → synthesis → action."""
