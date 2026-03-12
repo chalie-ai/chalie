@@ -19,6 +19,22 @@ from services.config_service import ConfigService
 
 @dataclass
 class ThreadResolution:
+    """Outcome of a thread-resolution request for a channel.
+
+    Attributes:
+        thread_id: The resolved thread identifier in the format
+            ``{platform}:{channel_id}:{sequence}``.
+        is_new: ``True`` when a brand-new thread was created for this channel.
+        is_resumed: ``True`` when an existing thread was continued after a gap
+            that exceeded the soft-expiry threshold but not the hard-expiry.
+        resume_gap_minutes: How many minutes elapsed since the last activity,
+            populated only when *is_resumed* is ``True``.
+        previous_thread_id: The thread ID that was hard-expired to make room
+            for the new thread, if applicable.
+        recent_visible_context: Last 1–2 exchanges from the expired thread,
+            provided for visual continuity in the UI after a hard expiry.
+    """
+
     thread_id: str
     is_new: bool
     is_resumed: bool
@@ -31,6 +47,16 @@ class ThreadService:
     """Manages thread resolution and lifecycle."""
 
     def __init__(self, soft_expiry_minutes: int = 30, hard_expiry_minutes: int = 240):
+        """Initialise the service with expiry thresholds and a MemoryStore connection.
+
+        Args:
+            soft_expiry_minutes: Minutes of inactivity after which a thread is
+                considered *resumed* (gap acknowledged) rather than seamlessly
+                continued.  Defaults to 30 minutes.
+            hard_expiry_minutes: Minutes of inactivity after which a thread is
+                fully expired and a new thread is created.  Must be greater than
+                *soft_expiry_minutes*.  Defaults to 240 minutes (4 hours).
+        """
         self.store = MemoryClientService.create_connection()
         self.soft_expiry_seconds = soft_expiry_minutes * 60
         self.hard_expiry_seconds = hard_expiry_minutes * 60
