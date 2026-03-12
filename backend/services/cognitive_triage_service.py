@@ -25,9 +25,13 @@ LOG_PREFIX = "[TRIAGE]"
 
 # Cognitive primitives — always selected for ACT regardless of prompt compliance
 _PRIMITIVES = ['recall', 'memorize', 'introspect']
-_VALID_SKILLS = {'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list', 'focus', 'autobiography', 'persistent_task', 'document', 'read'}
-_CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES)  # innate skills that don't need external tools
-MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills; never truncates primitives
+_VALID_SKILLS = {
+    'recall', 'memorize', 'introspect', 'associate', 'schedule', 'list',
+    'focus', 'autobiography', 'persistent_task', 'document', 'read', 'reflect',
+    'needs_external_tool',
+}
+_CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES) - {'needs_external_tool'}
+MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills from LLM; ONNX predictions bypass this cap
 
 _FACTUAL_QUESTION = re.compile(
     r'\b(what|where|when|who|how\s+much|how\s+many|is\s+it|are\s+they|did\s+they|does\s+it)\b.*\?',
@@ -122,7 +126,7 @@ class CognitiveTriageService:
     """3-step branching triage: empty guard → LLM → self-eval → dispatch."""
 
     def triage(self, text: str, context: TriageContext) -> TriageResult:
-        """Main entry point. Empty guard → LLM triage → self-eval."""
+        """Main entry point. Empty guard → LLM triage → ONNX skill override → self-eval."""
         start = time.time()
 
         # 1. Empty-input guard (~0ms)
@@ -139,6 +143,10 @@ class CognitiveTriageService:
 
         # 2. LLM cognitive triage (~100-300ms)
         result = self._cognitive_triage(text, context)
+
+        # 2b. ONNX skill selector (~5ms) — override LLM skill selection when available
+        llm_skills = list(result.skills)
+        result = self._apply_onnx_skills(result, text, llm_skills)
 
         # 3. Self-eval sanity check (~0ms, deterministic)
         original_mode = result.mode
@@ -334,6 +342,86 @@ class CognitiveTriageService:
             'IGNORE': 'ignore',
             'CANCEL': 'ignore',
         }.get(mode, 'respond')
+
+    def _apply_onnx_skills(self, result: TriageResult, text: str, llm_skills: list) -> TriageResult:
+        """Replace LLM skill selection with ONNX predictions when available.
+
+        The ONNX skill-selector is a multi-label classifier trained on 13 skills.
+        It runs in ~5ms vs ~100-300ms for the LLM triage. When available, its
+        predictions replace the LLM's skill[] selection for ACT mode routing.
+
+        The LLM triage still determines mode/branch/tools/confidence — the ONNX
+        model only handles skill selection.
+
+        Shadow logging: both LLM and ONNX skill predictions are logged for
+        comparison to monitor alignment.
+        """
+        if result.branch != 'act':
+            return result
+
+        try:
+            from services.onnx_inference_service import get_onnx_inference_service
+            svc = get_onnx_inference_service()
+
+            if not svc.is_available("skill-selector"):
+                return result
+
+            # Build input in the same format as training data
+            input_text = f"{text}\nSkills:"
+            onnx_skills = svc.predict_multi_label("skill-selector", input_text)
+
+            if not onnx_skills:
+                return result
+
+            # Extract skill names (predict_multi_label returns [(label, confidence), ...])
+            onnx_skill_names = [s for s, _ in onnx_skills]
+
+            # Shadow log: compare LLM vs ONNX skill predictions
+            self._log_skill_shadow(text, llm_skills, onnx_skill_names, onnx_skills)
+
+            # Build final skill list: ensure cognitive primitives, then ONNX contextual skills
+            # ONNX predictions are NOT capped at MAX_CONTEXTUAL_SKILLS — the model was
+            # trained to predict the full set independently
+            primitives = [p for p in _PRIMITIVES if p not in onnx_skill_names]
+            result.skills = primitives + onnx_skill_names
+
+            # If ONNX predicts needs_external_tool, ensure we don't strip tools
+            if 'needs_external_tool' in onnx_skill_names:
+                result.skills = [s for s in result.skills if s != 'needs_external_tool']
+                # Boost tool confidence so self-eval doesn't downgrade
+                result.confidence_tool_need = max(result.confidence_tool_need, 0.6)
+
+            logger.debug(
+                f"{LOG_PREFIX} ONNX skills: {onnx_skill_names} "
+                f"(replaced LLM: {llm_skills})"
+            )
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} ONNX skill selector unavailable: {e}")
+
+        return result
+
+    @staticmethod
+    def _log_skill_shadow(text: str, llm_skills: list, onnx_skills: list, onnx_raw: list):
+        """Log LLM vs ONNX skill predictions for shadow comparison."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+
+            db = get_shared_db_service()
+            InteractionLogService(db).log_event(
+                event_type='skill_selector_shadow',
+                payload={
+                    'message_preview': text[:100],
+                    'llm_skills': llm_skills,
+                    'onnx_skills': onnx_skills,
+                    'onnx_confidences': {s: round(c, 3) for s, c in onnx_raw},
+                    'match': set(llm_skills) == set(onnx_skills),
+                },
+                source='cognitive_triage',
+            )
+        except Exception:
+            pass
 
     def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext) -> TriageResult:
         """Deterministic sanity check rules. ~0ms."""
