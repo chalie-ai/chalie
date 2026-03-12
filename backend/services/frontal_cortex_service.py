@@ -852,6 +852,8 @@ class FrontalCortexService:
 
             from services.identity_state_service import IdentityStateService
             from services.memory_client import MemoryClientService
+            from services.database_service import get_shared_db_service
+            from services.user_trait_service import UserTraitService
 
             # Read current exchange count from thread hash
             r = MemoryClientService.create_connection()
@@ -861,12 +863,28 @@ class FrontalCortexService:
             identity_state = identity_svc.get_all()
             onboarding_state = identity_state.get('_onboarding', {})
 
+            # Build set of trait keys already known in permanent storage
+            # (user_traits survives MemoryStore TTL expiry)
+            try:
+                db = get_shared_db_service()
+                trait_svc = UserTraitService(db)
+                known_trait_keys = {
+                    t['trait_key'] for t in trait_svc.get_all_traits()
+                    if t.get('confidence', 0) >= 0.5
+                }
+            except Exception:
+                known_trait_keys = set()
+
             for entry in _ONBOARDING_SCHEDULE:
                 trait = entry['trait']
 
-                # Already have this trait — skip
+                # Already have this trait in MemoryStore — skip
                 trait_data = identity_state.get(trait)
                 if trait_data and trait_data.get('value'):
+                    continue
+
+                # Already have this trait in permanent storage — skip
+                if trait in known_trait_keys:
                     continue
 
                 # Too early in the conversation
