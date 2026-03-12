@@ -251,7 +251,14 @@ class FocusSessionService:
         return _BOUNDARY_MODIFIER.get(focus.get('source', 'inferred'), 0.5)
 
     def _generate_embedding(self, text: str) -> Optional[list]:
-        """Generate embedding as list for JSON serialization."""
+        """Generate a text embedding as a plain list suitable for JSON serialization.
+
+        Args:
+            text: Text string to embed (typically the focus description + topic).
+
+        Returns:
+            List of floats, or ``None`` if embedding generation fails.
+        """
         try:
             from services.embedding_service import get_embedding_service
             emb_service = get_embedding_service()

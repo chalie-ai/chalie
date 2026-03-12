@@ -30,6 +30,18 @@ class EngagementTracker:
     """Tracks and scores user engagement with proactive messages."""
 
     def __init__(self, config: dict = None):
+        """Initialize EngagementTracker with configurable similarity thresholds.
+
+        Args:
+            config: Optional configuration overrides. Supported keys:
+                ``engaged_similarity`` (float, default 0.35) — cosine similarity
+                    threshold above which a response is classified as *engaged*.
+                ``dismissed_similarity`` (float, default 0.2) — cosine similarity
+                    below which a response is classified as *dismissed*.
+                ``min_engaged_words`` (int, default 3) — minimum word count
+                    required for full *engaged* classification (in addition to
+                    exceeding ``engaged_similarity``).
+        """
         config = config or {}
         self.store = MemoryClientService.create_connection()
 
@@ -42,6 +54,14 @@ class EngagementTracker:
 
     @property
     def embedding_service(self):
+        """Lazily initialized EmbeddingService instance.
+
+        The service is created on first access to avoid loading the embedding
+        model at startup when engagement tracking may not be needed.
+
+        Returns:
+            EmbeddingService: The shared embedding service instance.
+        """
         if self._embedding_service is None:
             self._embedding_service = EmbeddingService()
         return self._embedding_service

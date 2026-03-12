@@ -1,3 +1,19 @@
+"""
+Memory Chunker Worker — Asynchronous memory extraction and consolidation pipeline.
+
+This module implements the ``memory_chunker_worker`` queue worker, which runs
+after every conversation exchange to extract structured memory chunks from the
+prompt/response pair.  A single LLM call produces gists, facts, user traits,
+communication-style observations, and emotion signals that are then persisted
+to the appropriate storage backends.
+
+Additional helper functions handle:
+- Identity vector reinforcement via dual-channel (emotion + reward) signals.
+- Micro-preference detection from user messages using regex (no LLM call).
+- Challenge-reaction tracking to update ``challenge_tolerance`` incrementally.
+- Communication-style dimension tracking with EMA merge across exchanges.
+"""
+
 import json
 import re
 import time

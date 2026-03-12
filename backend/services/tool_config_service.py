@@ -14,6 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 class ToolConfigService:
+    """SQLite-backed per-tool configuration store.
+
+    Provides get/set/delete operations for arbitrary tool config keys
+    (API credentials, endpoint URLs, feature flags, etc.) as well as
+    reserved system keys such as ``_enabled``, ``_webhook_key``, and
+    OAuth token fields.
+
+    Reserved keys are write-protected through the public ``set_tool_config``
+    interface; dedicated helper methods (``_set_enabled_flag``,
+    ``_set_source_metadata``, etc.) must be used to update them.
+    """
+
     RESERVED_KEYS = {
         "_enabled", "_webhook_key",
         "_oauth_access_token", "_oauth_refresh_token",
@@ -22,6 +34,13 @@ class ToolConfigService:
     }
 
     def __init__(self, database_service):
+        """Initialise the service with a shared database connection.
+
+        Args:
+            database_service: A ``DatabaseService`` instance whose
+                ``connection()`` context manager provides a SQLite
+                connection to the ``tool_configs`` table.
+        """
         self.db = database_service
 
     def get_tool_config(self, tool_name: str) -> dict:

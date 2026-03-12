@@ -6,6 +6,17 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+"""
+Frontal Cortex Service — LLM response generation and context assembly.
+
+Assembles the full system prompt from 60+ context injection placeholders
+(memory, identity, user traits, calendar, tool results, etc.) and invokes
+the configured LLM provider to generate a structured JSON response.
+
+Also hosts :class:`ChatHistoryProcessor`, a lightweight helper that
+truncates and serialises chat history for prompt injection.
+"""
+
 import re
 import time
 import json
@@ -121,10 +132,29 @@ class ChatHistoryProcessor:
     """Processes chat history for context injection into prompts."""
 
     def __init__(self, max_exchanges: int = None, max_tokens: int = None):
+        """Initialize the chat history processor with optional window limits.
+
+        Args:
+            max_exchanges: Maximum number of most-recent exchanges to include.
+                ``None`` means no exchange-count limit.
+            max_tokens: Maximum token budget for the serialised history.
+                ``None`` means no token limit (not yet enforced).
+        """
         self.max_exchanges = max_exchanges
         self.max_tokens = max_tokens
 
     def process(self, chat_history: list) -> str:
+        """Serialise chat history into a plain-text prompt snippet.
+
+        Args:
+            chat_history: List of exchange dicts, each with a ``'prompt'``
+                sub-dict containing ``'message'`` and an optional ``'response'``
+                value (dict or string).
+
+        Returns:
+            A newline-joined string of ``"User: …"`` / ``"Assistant: …"`` lines,
+            or ``"No previous conversation"`` when the list is empty.
+        """
         if not chat_history:
             return "No previous conversation"
 
@@ -146,6 +176,15 @@ class ChatHistoryProcessor:
         return "\n".join(lines) if lines else "No previous conversation"
 
     def _apply_limits(self, chat_history: list) -> list:
+        """Trim the history list to ``max_exchanges`` most-recent entries.
+
+        Args:
+            chat_history: Full chat history list.
+
+        Returns:
+            A (possibly truncated) list containing at most ``max_exchanges``
+            entries from the tail of ``chat_history``.
+        """
         if self.max_exchanges and len(chat_history) > self.max_exchanges:
             chat_history = chat_history[-self.max_exchanges:]
         return chat_history
@@ -200,7 +239,13 @@ class FrontalCortexService:
     """Service for generating contextual responses using LLM."""
 
     def __init__(self, config: dict):
-        """Initialize with configuration for LLM."""
+        """Initialize the frontal cortex service with LLM and world state components.
+
+        Args:
+            config: Provider configuration dict passed to
+                :func:`~services.llm_service.create_llm_service`.  Must include
+                at least a ``platform`` key.
+        """
         from services.llm_service import create_llm_service
         from services.world_state_service import WorldStateService
 
@@ -697,7 +742,13 @@ class FrontalCortexService:
         return result
 
     def _get_identity_modulation(self) -> str:
-        """Get identity modulation text from voice mapper."""
+        """Retrieve identity modulation text from the voice mapper for prompt injection.
+
+        Returns:
+            Formatted modulation string from
+            :meth:`~services.voice_mapper_service.VoiceMapperService.generate_modulation`,
+            or a safe fallback string on error.
+        """
         try:
             from services.identity_service import IdentityService
             from services.voice_mapper_service import VoiceMapperService
@@ -1173,7 +1224,16 @@ class FrontalCortexService:
             return ""
 
     def _get_performance_hint(self, tool_name: str) -> str:
-        """Compact one-line performance hint for ACT prompt injection."""
+        """Build a compact performance hint string for a tool in the ACT prompt.
+
+        Args:
+            tool_name: Registered tool name to look up statistics for.
+
+        Returns:
+            Single-line performance annotation string (e.g.
+            ``'[perf: reliable • 92% success • 430ms • 15 uses]'``), or
+            empty string when fewer than 3 uses have been recorded.
+        """
         try:
             from services.tool_performance_service import ToolPerformanceService
             stats = ToolPerformanceService().get_tool_stats(tool_name)
@@ -1187,7 +1247,16 @@ class FrontalCortexService:
             return ''
 
     def _get_strategy_hints(self, topic: str) -> str:
-        """Compact strategy hints from procedural memory for ACT prompt."""
+        """Build compact strategy hints from procedural memory for the ACT prompt.
+
+        Args:
+            topic: Current conversation topic (currently unused but reserved for
+                future topic-scoped strategy filtering).
+
+        Returns:
+            Formatted ``## Strategy Hints`` section string listing up to 8
+            action-reliability signals, or empty string when no data is available.
+        """
         try:
             from services.procedural_memory_service import ProceduralMemoryService
             from services.database_service import get_shared_db_service

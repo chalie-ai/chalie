@@ -11,7 +11,11 @@ _key_cache = None
 
 
 def get_key_file_path() -> Path:
-    """Get path to .key file (Docker volume /app/data for persistence)."""
+    """Return the path to the persistent ``.key`` file inside the data volume.
+
+    Returns:
+        :class:`~pathlib.Path` pointing to ``<backend_root>/data/.key``.
+    """
     return Path(__file__).resolve().parent.parent / "data" / ".key"
 
 

@@ -14,6 +14,12 @@ class SettingsService:
     """Manages application settings stored in database."""
 
     def __init__(self, database_service):
+        """Initialise the service with a shared database connection.
+
+        Args:
+            database_service: Active database service instance used for all
+                settings reads and writes.
+        """
         self.db = database_service
         self._enc_key = None
 

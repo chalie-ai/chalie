@@ -36,7 +36,14 @@ DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', '/app/data/documents')
 
 
 def _pack_embedding(embedding):
-    """Pack a list of floats into a binary blob for sqlite-vec."""
+    """Pack a list of floats into a binary blob for sqlite-vec storage.
+
+    Args:
+        embedding: List of float values representing the embedding vector.
+
+    Returns:
+        Bytes object in little-endian 32-bit float format.
+    """
     return struct.pack(f'{len(embedding)}f', *embedding)
 
 
@@ -44,6 +51,12 @@ class DocumentService:
     """Manages document storage, chunk retrieval, and hybrid search."""
 
     def __init__(self, db_service):
+        """Initialize the document service with a database connection.
+
+        Args:
+            db_service: :class:`~services.database_service.DatabaseService`
+                instance used for all document storage and retrieval operations.
+        """
         self.db = db_service
 
     # ─────────────────────────────────────────────
@@ -60,7 +73,25 @@ class DocumentService:
         source_type: str = 'upload',
         watched_folder_id: str = None,
     ) -> str:
-        """Create a new document record. Returns doc_id (8-char hex)."""
+        """Create a new document record in the database.
+
+        Args:
+            original_name: Human-readable filename displayed in the UI.
+            mime_type: MIME type string (e.g. ``'application/pdf'``).
+            file_size: File size in bytes.
+            file_path: Path relative to ``DOCUMENTS_ROOT`` (or absolute for
+                watched-folder documents).
+            file_hash: SHA-256 hex digest of the file for deduplication.
+            source_type: Origin label (``'upload'``, ``'watched_folder'``,
+                ``'conversation'``, or ``'moment'``).
+            watched_folder_id: Optional ID of the originating watched folder.
+
+        Returns:
+            Eight-character hex document ID.
+
+        Raises:
+            Exception: Propagates any database error to the caller.
+        """
         doc_id = secrets.token_hex(4)
 
         try:
@@ -83,7 +114,14 @@ class DocumentService:
             raise
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single document by ID."""
+        """Retrieve a single document record by its ID.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+
+        Returns:
+            Document dict, or ``None`` if not found or on database error.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -109,7 +147,15 @@ class DocumentService:
             return None
 
     def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, Any]]:
-        """Get all documents, optionally including soft-deleted ones."""
+        """Retrieve all document records, newest first.
+
+        Args:
+            include_deleted: When ``True``, soft-deleted documents are included in
+                the results.  Defaults to ``False``.
+
+        Returns:
+            List of document dicts ordered by ``created_at`` descending.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -148,7 +194,16 @@ class DocumentService:
             return []
 
     def search_documents_metadata(self, query: str) -> List[Dict[str, Any]]:
-        """Text search on original_name, tags, category, and project."""
+        """Search non-deleted documents by name, tags, category, and project.
+
+        Args:
+            query: Search string matched case-insensitively against
+                ``original_name``, ``doc_category``, and ``doc_project``;
+                also matched exactly against tag values.
+
+        Returns:
+            List of matching document dicts ordered by ``created_at`` descending.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -185,9 +240,19 @@ class DocumentService:
         source_type: str = 'conversation',
     ) -> str:
         """
-        Create a document from raw text (no file upload).
-        Writes text to disk as markdown, computes hash, creates DB record.
-        Returns doc_id.
+        Create a document from raw text without a file upload.
+
+        Writes the text to disk as a Markdown file, computes a SHA-256
+        hash, sizes the content, and creates a database record via
+        :meth:`create_document`.
+
+        Args:
+            original_name: Filename to use (should end in ``.md``).
+            text_content: Raw text content to write and store.
+            source_type: Origin label (default ``'conversation'``).
+
+        Returns:
+            Eight-character hex document ID.
         """
         doc_id = secrets.token_hex(4)
 
@@ -224,7 +289,18 @@ class DocumentService:
         error_message: Optional[str] = None,
         chunk_count: int = 0,
     ) -> None:
-        """Update document processing status."""
+        """Update the processing status of a document.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+            status: New status string (``'processing'``, ``'awaiting_confirmation'``,
+                ``'ready'``, or ``'failed'``).
+            error_message: Optional error detail stored when status is ``'failed'``.
+            chunk_count: Number of chunks produced (0 for non-terminal states).
+
+        Raises:
+            Exception: Propagates any database error to the caller.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -303,7 +379,12 @@ class DocumentService:
             cursor.close()
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
-        """Mark a document as replacing an older version."""
+        """Mark a document as replacing (superseding) an older version.
+
+        Args:
+            doc_id: ID of the newer document.
+            supersedes_id: ID of the older document being replaced.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -409,7 +490,16 @@ class DocumentService:
     # ─────────────────────────────────────────────
 
     def soft_delete(self, doc_id: str) -> bool:
-        """Soft-delete a document (30-day purge window)."""
+        """Soft-delete a document by setting its deletion timestamp.
+
+        Sets ``deleted_at`` to now and schedules ``purge_after`` 30 days from now.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+
+        Returns:
+            ``True`` if the document was found and deleted, ``False`` otherwise.
+        """
         try:
             purge_after = datetime.now(timezone.utc) + timedelta(days=PURGE_WINDOW_DAYS)
             with self.db.connection() as conn:
@@ -431,7 +521,17 @@ class DocumentService:
             return False
 
     def restore(self, doc_id: str) -> bool:
-        """Restore a soft-deleted document."""
+        """Restore a previously soft-deleted document.
+
+        Clears ``deleted_at`` and ``purge_after`` so the document re-appears in
+        normal queries.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+
+        Returns:
+            ``True`` if the document was found and restored, ``False`` otherwise.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -452,7 +552,18 @@ class DocumentService:
             return False
 
     def hard_delete(self, doc_id: str) -> bool:
-        """Permanently delete a document and its file from disk."""
+        """Permanently delete a document record, its chunks, and its file from disk.
+
+        Removes entries from the ``documents_vec``, ``document_chunks_vec``, and
+        ``document_chunks_fts`` virtual tables before deleting the parent row so
+        that FK-unaware virtual tables are cleaned up correctly.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+
+        Returns:
+            ``True`` if the document was found and deleted, ``False`` otherwise.
+        """
         try:
             doc = self.get_document(doc_id)
             if not doc:
@@ -499,7 +610,11 @@ class DocumentService:
             return False
 
     def purge_expired(self) -> int:
-        """Hard-delete all documents past their purge window."""
+        """Hard-delete all documents that have passed their scheduled purge date.
+
+        Returns:
+            Number of documents permanently deleted.
+        """
         try:
             # Find expired docs first (need file paths for disk cleanup)
             with self.db.connection() as conn:
@@ -529,7 +644,20 @@ class DocumentService:
     # ─────────────────────────────────────────────
 
     def store_chunks(self, doc_id: str, chunks: List[Dict]) -> None:
-        """Bulk insert chunks into document_chunks and their embeddings into document_chunks_vec."""
+        """Bulk-insert chunks and their embeddings into the database.
+
+        Inserts each chunk into ``document_chunks`` and, when an embedding is
+        present, into the ``document_chunks_vec`` sqlite-vec virtual table.
+
+        Args:
+            doc_id: Parent document identifier.
+            chunks: List of chunk dicts with keys ``chunk_index``, ``content``,
+                ``page_number``, ``section_title``, ``token_count``, and optional
+                ``embedding``.
+
+        Raises:
+            Exception: Propagates any database error to the caller.
+        """
         if not chunks:
             return
 
@@ -570,7 +698,16 @@ class DocumentService:
             raise
 
     def get_chunks_for_document(self, doc_id: str) -> List[Dict[str, Any]]:
-        """Get all chunks for a document, ordered by chunk_index."""
+        """Retrieve all text chunks for a document ordered by chunk index.
+
+        Args:
+            doc_id: Parent document identifier.
+
+        Returns:
+            List of chunk dicts with keys ``id``, ``document_id``,
+            ``chunk_index``, ``content``, ``page_number``,
+            ``section_title``, and ``token_count``.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -847,7 +984,12 @@ class DocumentService:
             return None
 
     def update_tags(self, doc_id: str, tags: list) -> None:
-        """Update the tags JSON array for a document."""
+        """Update the tags JSON array for a document.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+            tags: New list of tag strings to store.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -864,7 +1006,17 @@ class DocumentService:
         category: str = None, project: str = None,
         doc_date: str = None, lock: bool = False,
     ) -> None:
-        """Update document classification metadata. Set lock=True for user edits."""
+        """Update document classification metadata, optionally locking it.
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+            category: New ``doc_category`` value, or ``None`` to leave unchanged.
+            project: New ``doc_project`` value, or ``None`` to leave unchanged.
+            doc_date: New ``doc_date`` value (``YYYY-MM-DD``), or ``None`` to
+                leave unchanged.
+            lock: When ``True``, sets ``meta_locked = 1`` so automatic
+                classification cannot overwrite user edits.
+        """
         try:
             set_parts = ["updated_at = datetime('now')"]
             params = []
@@ -924,7 +1076,15 @@ class DocumentService:
             return []
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
-        """Update the file_path for a document (e.g., rename detection)."""
+        """Update the stored ``file_path`` for a document.
+
+        Used during folder-watcher scans when a rename is detected (same hash,
+        new path).
+
+        Args:
+            doc_id: Eight-character hex document identifier.
+            new_path: New absolute or relative file path string.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -941,7 +1101,16 @@ class DocumentService:
     # ─────────────────────────────────────────────
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
-        """Convert a database row tuple to a document dict."""
+        """Convert a documents table row tuple to a document dict.
+
+        Args:
+            row: sqlite3 row object with exactly 27 positional columns matching
+                the SELECT column order used throughout this service.
+
+        Returns:
+            Document dict with keys matching the ``documents`` table schema plus
+            boolean ``meta_locked``.
+        """
         return {
             'id': row[0],
             'original_name': row[1],

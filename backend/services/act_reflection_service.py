@@ -38,6 +38,14 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
 
     Applies novelty gate layers 1 (ephemeral tool type) and 2 (output size).
     Layer 3 (content hash dedup) runs in the assimilation service.
+
+    Args:
+        act_history: List of action result dicts from the ACT loop.  Only
+            entries with ``status == 'success'`` and non-ephemeral action types
+            are considered.
+        topic: Conversation topic identifier for the reflection payload.
+        user_prompt: Original user message that triggered the ACT loop,
+            included in the reflection payload for context.
     """
     try:
         tool_outputs = []
