@@ -18,20 +18,34 @@ def _make_service_instance():
     return object.__new__(FrontalCortexService)
 
 
-def _mock_identity_and_store(identity_blob: dict, exchange_count: int, thread_id: str = "t1"):
+def _mock_identity_and_store(
+    identity_blob: dict,
+    exchange_count: int,
+    thread_id: str = "t1",
+    user_traits: list = None,
+):
     """
-    Context manager that patches IdentityStateService and MemoryClientService
-    for onboarding nudge tests.
+    Context manager that patches IdentityStateService, MemoryClientService,
+    and UserTraitService for onboarding nudge tests.
 
-    Both are imported locally inside _get_onboarding_nudge, so we patch them
+    All are imported locally inside _get_onboarding_nudge, so we patch them
     at their source modules.
+
+    Args:
+        user_traits: list of trait dicts from UserTraitService.get_all_traits().
+                     Defaults to [] (no traits in permanent storage).
     """
     import contextlib
+
+    if user_traits is None:
+        user_traits = []
 
     @contextlib.contextmanager
     def _ctx():
         with patch('services.identity_state_service.IdentityStateService') as mock_id_cls, \
-             patch('services.memory_client.MemoryClientService') as mock_store_cls:
+             patch('services.memory_client.MemoryClientService') as mock_store_cls, \
+             patch('services.database_service.get_shared_db_service') as mock_db, \
+             patch('services.user_trait_service.UserTraitService') as mock_trait_cls:
 
             mock_id = MagicMock()
             mock_id.get_all.return_value = identity_blob
@@ -41,6 +55,10 @@ def _mock_identity_and_store(identity_blob: dict, exchange_count: int, thread_id
             mock_store = MagicMock()
             mock_store.hget.return_value = str(exchange_count)
             mock_store_cls.create_connection.return_value = mock_store
+
+            mock_trait = MagicMock()
+            mock_trait.get_all_traits.return_value = user_traits
+            mock_trait_cls.return_value = mock_trait
 
             yield mock_id, mock_store
 
@@ -144,6 +162,21 @@ class TestOnboardingNudge:
         }
 
         with _mock_identity_and_store(identity, exchange_count=80):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert result == ""
+
+    def test_no_nudge_when_trait_in_permanent_storage(self):
+        """No name nudge when IdentityStateService expired but user_traits has the name."""
+        svc = _make_service_instance()
+        # IdentityStateService has no name (TTL expired), but user_traits does
+        user_traits = [
+            {'trait_key': 'name', 'trait_value': 'Dylan', 'confidence': 0.95, 'category': 'core'},
+        ]
+
+        # exchange_count=4: name (min_turn=3) eligible but in user_traits → skipped
+        # age_range (min_turn=5) not yet eligible → no nudge at all
+        with _mock_identity_and_store({}, exchange_count=4, user_traits=user_traits):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
