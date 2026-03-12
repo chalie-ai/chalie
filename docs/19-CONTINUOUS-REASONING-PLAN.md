@@ -42,7 +42,7 @@ Before building anything new, recognize what's already operational:
 
 ---
 
-### Milestone 1: Complete Signal Coverage
+### Milestone 1: Complete Signal Coverage (COMPLETE)
 
 **Goal:** Every service that produces an interesting event emits a signal. This is Phase 1 of the Signal Contract — emit signals, keep existing timers. Safe to ship incrementally.
 
@@ -65,7 +65,7 @@ Before building anything new, recognize what's already operational:
 
 ---
 
-### Milestone 2: Rename and Expand the Reasoning Loop
+### Milestone 2: Rename and Expand the Reasoning Loop (COMPLETE)
 
 **Goal:** CognitiveDriftEngine → ReasoningLoopService. Same architecture (blpop, signal processing, action routing), but expanded to handle the new signal types from Milestone 1 and with clearer separation between idle-discovery and signal-responsive behavior.
 
