@@ -212,6 +212,19 @@ class ExperienceAssimilationService:
             try:
                 self._store_episode(obs, topic, user_prompt, tool_outputs)
                 stored += 1
+
+                try:
+                    from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                    emit_reasoning_signal(ReasoningSignal(
+                        signal_type='novel_observation',
+                        source='experience_assimilation',
+                        topic=topic,
+                        content=obs_text[:200],
+                        activation_energy=0.6,
+                    ))
+                except Exception:
+                    pass
+
             except Exception as e:
                 logger.error(f"{LOG_PREFIX} Failed to store episode: {e}")
 

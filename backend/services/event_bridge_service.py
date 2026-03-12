@@ -346,9 +346,10 @@ class EventBridgeService:
         try:
             from services.autonomous_actions.base import ThoughtContext
 
+            composed_message = self._compose_message(events)
             thought = ThoughtContext(
                 thought_type='event',
-                thought_content=self._compose_message(events),
+                thought_content=composed_message,
                 activation_energy=primary.confidence,
                 seed_concept=primary.event_type,
                 seed_topic=primary.to_state or primary.event_type,
@@ -372,6 +373,18 @@ class EventBridgeService:
             from services.autonomous_actions.action_decision_router import ActionDecisionRouter
             router = ActionDecisionRouter()
             router.evaluate_and_execute(thought)
+
+            try:
+                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                emit_reasoning_signal(ReasoningSignal(
+                    signal_type='ambient_context',
+                    source='event_bridge',
+                    topic=primary.to_state or primary.event_type,
+                    content=composed_message,
+                    activation_energy=primary.confidence,
+                ))
+            except Exception:
+                pass
 
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Event routing failed: {e}")

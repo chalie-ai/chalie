@@ -7,28 +7,33 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Cognitive Drift Engine — spontaneous thought generation during idle periods.
+Cognitive Drift Engine — signal-driven spontaneous reasoning.
 
-Models the Default Mode Network: when the brain is idle, residual activation
-from recent experience, emotional salience, and semantic associations produce
-fleeting internal thoughts (reflections, questions, hypotheses).
+Replaces the timer-based Default Mode Network with an event-driven loop.
+Reasoning is triggered by signals from other cognitive services:
+  - memory_pressure: Decay engine finds fading concepts
+  - new_knowledge: Semantic consolidation creates new concepts
+  - novel_observation: Experience assimilation stores novel findings
+  - ambient_context: Event bridge detects context transitions
 
-These are stored as drift gists and naturally surface in frontal cortex context.
+When no signals arrive (idle timeout), the engine falls back to
+salient and insight seed strategies from existing memory.
 
-After each thought, an ActionDecisionRouter evaluates what to do with it:
-  - COMMUNICATE: Share with the user proactively (quality + timing + engagement gated)
-  - REFLECT: Internal enrichment — store association-linked gist, boost concepts
-  - NOTHING: Let the gist live in MemoryStore as before (reactive surfacing only)
-  - PLAN: Create plan-backed persistent tasks from recurring topics
-  - Future: USE_SKILL, LEARN
+After each thought, an ActionDecisionRouter evaluates what to do:
+  - COMMUNICATE: Share with the user proactively
+  - REFLECT: Internal enrichment
+  - PLAN: Create plan-backed persistent tasks
+  - NOTHING: Let the gist live in MemoryStore
 """
 
+import dataclasses
 import json
 import math
 import time
 import random
 import uuid
 import logging
+from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 
 from services.memory_client import MemoryClientService
@@ -50,13 +55,67 @@ COOLDOWN_KEY = "cognitive_drift_concept_cooldowns"
 FATIGUE_KEY = "cognitive_drift_activations"
 STATE_KEY = "cognitive_drift_state"
 
+# Signal queue constants
+SIGNAL_QUEUE_KEY = "reasoning:signals"
+MAX_QUEUE_DEPTH = 50
+
+
+@dataclasses.dataclass
+class ReasoningSignal:
+    """A signal that triggers reasoning in the cognitive drift engine."""
+    signal_type: str       # memory_pressure, new_knowledge, novel_observation, ambient_context
+    source: str            # decay_engine, semantic_consolidation, experience_assimilation, event_bridge
+    concept_id: int | None = None
+    concept_name: str | None = None
+    topic: str | None = None
+    content: str | None = None
+    activation_energy: float = 0.5
+    timestamp: float = dataclasses.field(default_factory=time.time)
+
+    def to_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self))
+
+    @classmethod
+    def from_json(cls, raw: str) -> 'ReasoningSignal':
+        data = json.loads(raw if isinstance(raw, str) else raw.decode())
+        return cls(**data)
+
+
+def emit_reasoning_signal(signal: ReasoningSignal) -> bool:
+    """Emit a reasoning signal to the signal queue. Called by other services."""
+    try:
+        store = MemoryClientService.create_connection()
+        config = ConfigService.resolve_agent_config("cognitive-drift")
+        signal_config = config.get('signal_queue', {})
+        queue_key = signal_config.get('key', 'reasoning:signals')
+        max_depth = signal_config.get('max_queue_depth', 50)
+
+        # Cap queue depth
+        if store.llen(queue_key) >= max_depth:
+            logger.debug(f"[REASONING SIGNAL] Queue full ({max_depth}), dropping signal: {signal.signal_type}")
+            return False
+
+        store.rpush(queue_key, json.dumps(dataclasses.asdict(signal)))
+        logger.debug(f"[REASONING SIGNAL] Emitted {signal.signal_type} from {signal.source}")
+        return True
+    except Exception as e:
+        logger.debug(f"[REASONING SIGNAL] Failed to emit: {e}")
+        return False
+
 
 class CognitiveDriftEngine:
     """
-    Background service that generates spontaneous thoughts during idle periods.
+    Background service that generates spontaneous thoughts driven by
+    incoming reasoning signals or, when idle, by autonomous discovery.
 
-    Selects seed concepts via weighted random strategy, runs spreading activation,
-    synthesizes a brief thought via LLM, and stores it as a drift gist.
+    Signals are pushed by other services (decay engine, semantic consolidation,
+    experience assimilation, event bridge) via emit_reasoning_signal(). The
+    engine blocks on blpop() and processes each signal through the full
+    spreading-activation → synthesis → action pipeline.
+
+    When no signal arrives within idle_timeout seconds, the engine enters
+    discovery mode: it picks a seed via salient or insight strategy and
+    reasons from it directly.
     """
 
     def __init__(self, check_interval: int = 300):
@@ -96,10 +155,6 @@ class CognitiveDriftEngine:
         self.soul_axioms = ConfigService.get_agent_prompt("soul")
 
         # Config values
-        self.seed_weights = self.config.get('seed_weights', {
-            'decaying': 0.35, 'recent': 0.25, 'salient': 0.15,
-            'insight': 0.15, 'temporal': 0.05, 'random': 0.05,
-        })
         self.max_activation_depth = self.config.get('max_activation_depth', 2)
         self.max_activated_concepts = self.config.get('max_activated_concepts', 5)
         self.episode_lookback_hours = self.config.get('episode_lookback_hours', 168)
@@ -110,17 +165,19 @@ class CognitiveDriftEngine:
         self.jitter_range = self.config.get('jitter_range', [0.7, 1.3])
         self.fatigue_budget = self.config.get('fatigue_budget', 2.5)
         self.fatigue_window_minutes = self.config.get('fatigue_window_minutes', 30)
-        self.long_gap_probability = self.config.get('long_gap_probability', 0.1)
         self.min_activation_energy = self.config.get('min_activation_energy', 0.4)
         self.decaying_reinforce_bump = self.config.get('decaying_reinforce_bump', 0.1)
+
+        # Signal loop config
+        self.idle_timeout = self.config.get('signal_queue', {}).get('idle_timeout_seconds', 600)
+        self.min_signal_interval = self.config.get('signal_queue', {}).get('min_signal_interval_seconds', 30)
 
         # Initialize autonomous action router
         self.action_router = self._init_action_router()
 
         logger.info(
             f"{LOG_PREFIX} Engine initialized "
-            f"(check_interval={check_interval}s, "
-            f"seed_weights={self.seed_weights})"
+            f"(check_interval={check_interval}s, signal-driven)"
         )
 
     def _init_action_router(self):
@@ -202,46 +259,258 @@ class CognitiveDriftEngine:
 
         return router
 
-    def run(self, shared_state: Optional[dict] = None) -> None:
-        """Main service loop."""
-        logger.info(f"{LOG_PREFIX} Service started")
+    # -- Signal loop -----------------------------------------------------------
+
+    def run_signal_loop(self, shared_state: Optional[dict] = None) -> None:
+        """Main signal-driven reasoning loop. Replaces the old timer-based run()."""
+        logger.info(f"{LOG_PREFIX} Signal loop started (idle_timeout={self.idle_timeout}s)")
 
         while True:
             try:
                 # Check for deferred thoughts from quiet hours
                 self._process_deferred()
 
-                interval = self._next_interval()
-                time.sleep(interval)
+                # Block until a signal arrives or idle_timeout elapses
+                result = self.store.blpop(SIGNAL_QUEUE_KEY, timeout=self.idle_timeout)
 
-                if not self._are_workers_idle():
-                    logger.debug(f"{LOG_PREFIX} Workers not idle, skipping")
-                    continue
-
-                if not self._has_recent_episodes():
-                    logger.debug(f"{LOG_PREFIX} No recent episodes, skipping drift")
-                    continue
-
-                # Self-regulation: skip when memory is nearly empty
-                try:
-                    from services.self_model_service import SelfModelService
-                    richness = SelfModelService().get_memory_richness()
-                    if richness < 0.1:
-                        logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.1, skipping drift")
-                        continue
-                except Exception as e:
-                    logger.warning(f"{LOG_PREFIX} Richness check failed, skipping drift cycle: {e}")
-                    continue
-
-                self._run_drift_cycle()
+                if result is None:
+                    # Timeout — no signal arrived; enter discovery mode
+                    logger.debug(f"{LOG_PREFIX} Idle timeout, entering discovery mode")
+                    self._handle_idle_signal()
+                else:
+                    # result is (key, value) tuple
+                    _, raw = result
+                    try:
+                        signal = ReasoningSignal.from_json(raw)
+                        logger.info(
+                            f"{LOG_PREFIX} Processing {signal.signal_type} signal "
+                            f"from {signal.source}"
+                        )
+                        self._process_signal(signal)
+                    except Exception as e:
+                        logger.warning(f"{LOG_PREFIX} Failed to parse signal: {e}")
 
             except KeyboardInterrupt:
-                logger.info(f"{LOG_PREFIX} Service shutting down...")
+                logger.info(f"{LOG_PREFIX} Signal loop shutting down...")
                 break
             except Exception as e:
-                logger.error(f"{LOG_PREFIX} Error: {e}", exc_info=True)
+                logger.error(f"{LOG_PREFIX} Error in signal loop: {e}", exc_info=True)
                 logger.info(f"{LOG_PREFIX} Waiting 1 minute before retry...")
                 time.sleep(60)
+
+    def _process_signal(self, signal: ReasoningSignal) -> None:
+        """Process one incoming reasoning signal through the full pipeline."""
+        # Gate 1: Fatigue
+        if self._is_fatigued():
+            return
+
+        # Gate 2: Deep focus
+        if self._is_user_deep_focus():
+            logger.info(f"{LOG_PREFIX} User in deep focus, skipping signal")
+            return
+
+        # Gate 3: Recent episodes required
+        if not self._has_recent_episodes():
+            logger.debug(f"{LOG_PREFIX} No recent episodes, skipping signal")
+            return
+
+        # Gate 4: Memory richness
+        try:
+            from services.self_model_service import SelfModelService
+            richness = SelfModelService().get_memory_richness()
+            if richness < 0.1:
+                logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.1, skipping signal")
+                return
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Richness check failed, skipping signal: {e}")
+            return
+
+        # Gate 5: Workers idle
+        if not self._are_workers_idle():
+            logger.debug(f"{LOG_PREFIX} Workers not idle, skipping signal")
+            return
+
+        # Debounce: prevent signal storms
+        if not self._debounce_check(signal):
+            return
+
+        # Occasionally generate a self-reflective thought instead
+        if self._try_self_model_reflection():
+            return
+
+        # Convert signal to concept seed
+        seed = self._signal_to_seed(signal)
+        if not seed:
+            logger.debug(
+                f"{LOG_PREFIX} No viable seed for {signal.signal_type} signal "
+                f"(concept_id={signal.concept_id})"
+            )
+            return
+
+        self._reason_from_seed(seed, signal)
+
+    def _signal_to_seed(self, signal: ReasoningSignal) -> Optional[Dict]:
+        """Convert a reasoning signal to a concept seed dict."""
+        # Direct concept reference — fastest path
+        if signal.concept_id is not None:
+            concept_id_str = str(signal.concept_id)
+            if not self._is_on_cooldown(concept_id_str):
+                return {
+                    'concept_id': concept_id_str,
+                    'concept_name': signal.concept_name or f'concept:{signal.concept_id}',
+                    'definition': signal.content or '',
+                    'seed_type': signal.signal_type,
+                    'topic': signal.topic or 'general',
+                }
+
+        # Content-based lookup via semantic retrieval
+        if signal.content:
+            try:
+                concepts = self.semantic_retrieval.retrieve_concepts(signal.content, limit=3)
+                for concept in concepts:
+                    cid = str(concept.get('id', ''))
+                    if cid and not self._is_on_cooldown(cid):
+                        return {
+                            'concept_id': cid,
+                            'concept_name': concept.get('concept_name', ''),
+                            'definition': concept.get('definition', ''),
+                            'seed_type': signal.signal_type,
+                            'topic': signal.topic or concept.get('domain', 'general'),
+                        }
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Semantic lookup for signal failed: {e}")
+
+        return None
+
+    def _handle_idle_signal(self) -> None:
+        """Timeout handler — discovery mode when no signals arrive."""
+        # Gate checks (same as _process_signal)
+        if self._is_fatigued():
+            return
+        if self._is_user_deep_focus():
+            logger.info(f"{LOG_PREFIX} User in deep focus, skipping idle drift")
+            return
+        if not self._has_recent_episodes():
+            logger.debug(f"{LOG_PREFIX} No recent episodes, skipping idle drift")
+            return
+        try:
+            from services.self_model_service import SelfModelService
+            richness = SelfModelService().get_memory_richness()
+            if richness < 0.1:
+                logger.debug(f"{LOG_PREFIX} Richness {richness:.2f} < 0.1, skipping idle drift")
+                return
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Richness check failed, skipping idle drift: {e}")
+            return
+        if not self._are_workers_idle():
+            logger.debug(f"{LOG_PREFIX} Workers not idle, skipping idle drift")
+            return
+
+        # Pick strategy: 60% salient, 40% insight
+        seed = None
+        if random.random() < 0.6:
+            seed = self._seed_salient()
+        else:
+            seed = self._seed_insight()
+
+        if not seed:
+            logger.debug(f"{LOG_PREFIX} Idle discovery: no seed found")
+            return
+
+        if self._is_on_cooldown(seed['concept_id']):
+            logger.debug(f"{LOG_PREFIX} Idle discovery: seed '{seed['concept_name']}' on cooldown")
+            return
+
+        idle_signal = ReasoningSignal(
+            signal_type='idle_discovery',
+            source='cognitive_drift_engine',
+            concept_id=int(seed['concept_id']) if seed['concept_id'].isdigit() else None,
+            concept_name=seed.get('concept_name'),
+            topic=seed.get('topic'),
+            content=seed.get('definition'),
+            activation_energy=0.5,
+        )
+        self._reason_from_seed(seed, idle_signal)
+
+    def _reason_from_seed(self, seed: Dict, signal: ReasoningSignal) -> None:
+        """Core reasoning pipeline: spreading activation → synthesis → action."""
+        # Step 3: Spreading activation from seed
+        activated = self.semantic_retrieval.spreading_activation(
+            [seed['concept_id']], max_depth=self.max_activation_depth
+        )
+
+        # Step 4: Check activation energy threshold
+        if not self._has_sufficient_activation(activated):
+            logger.info(
+                f"{LOG_PREFIX} Insufficient activation energy from "
+                f"'{seed['concept_name']}', no thought emerged"
+            )
+            self._maybe_reinforce_seed(seed, drift_succeeded=False)
+            return
+
+        max_activation = max(
+            c.get('activation_score', 0) for c in activated
+        ) if activated else 0
+
+        # Step 5: Filter activated concepts through cooldown
+        activated = [
+            c for c in activated
+            if not self._is_on_cooldown(c['id'])
+        ][:self.max_activated_concepts]
+
+        # Step 6: Retrieve grounding episode
+        grounding_episode = None
+        concept_names = [c['concept_name'] for c in activated[:3]]
+        if concept_names:
+            query_text = " ".join(concept_names)
+            episodes = self.episodic_retrieval.retrieve_episodes(
+                query_text=query_text, limit=1
+            )
+            if episodes:
+                grounding_episode = episodes[0]
+
+        # Step 7: Synthesize thought
+        thought = self._synthesize_thought(seed, activated, grounding_episode)
+        drift_succeeded = thought is not None
+
+        if drift_succeeded:
+            # Step 8: Store as gist (always — preserves current behavior)
+            self._store_drift(seed['topic'], thought['type'], thought['content'])
+
+            # Step 9: Mark seed + activated concepts as used
+            self._mark_used(seed['concept_id'])
+            for c in activated:
+                self._mark_used(c['id'])
+
+            # Step 10: Record drift activation for fatigue tracking
+            drift_id = str(uuid.uuid4())
+            self._record_drift_activation(drift_id, max_activation)
+
+            # Step 11: Update state
+            self._update_state(seed)
+
+            # Step 12: Route through action router
+            self._route_thought(thought, seed, max_activation, activated, grounding_episode)
+        else:
+            logger.info(f"{LOG_PREFIX} Thought synthesis failed for '{seed['concept_name']}'")
+
+        # Maybe reinforce decaying seed
+        self._maybe_reinforce_seed(seed, drift_succeeded)
+
+    def _debounce_check(self, signal: ReasoningSignal) -> bool:
+        """Prevent signal storms by enforcing a minimum interval between processed signals."""
+        last = self.store.get("reasoning:last_processed")
+        if last:
+            elapsed = time.time() - float(last)
+            if elapsed < self.min_signal_interval:
+                logger.debug(
+                    f"{LOG_PREFIX} Signal debounced ({elapsed:.1f}s < {self.min_signal_interval}s interval)"
+                )
+                return False
+        self.store.set("reasoning:last_processed", str(time.time()), ex=self.min_signal_interval * 2)
+        return True
+
+    # -- Deferred processing ---------------------------------------------------
 
     def _process_deferred(self):
         """Check and process deferred thoughts from quiet hours."""
@@ -298,15 +567,6 @@ class CognitiveDriftEngine:
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Failed to check recent episodes: {e}")
             return False
-
-    # -- Timing ----------------------------------------------------------------
-
-    def _next_interval(self) -> float:
-        """Stochastic jitter with occasional long gaps."""
-        base = self.check_interval
-        if random.random() < self.long_gap_probability:
-            return base * random.uniform(1.8, 2.5)
-        return base * random.uniform(self.jitter_range[0], self.jitter_range[1])
 
     # -- Fatigue ---------------------------------------------------------------
 
@@ -369,131 +629,7 @@ class CognitiveDriftEngine:
         max_activation = max(c.get('activation_score', 0) for c in activated_concepts)
         return max_activation >= self.min_activation_energy
 
-    # -- Seed selection --------------------------------------------------------
-
-    def _select_seed(self) -> Optional[Dict[str, Any]]:
-        """
-        Weighted random seed selection with cooldown retry.
-
-        Strategies: decaying (35%), recent (25%), salient (15%), insight (15%), random (10%).
-        Retries up to 3 times on cooldown hit.
-        """
-        strategies = list(self.seed_weights.keys())
-        weights = list(self.seed_weights.values())
-
-        for attempt in range(3):
-            strategy = random.choices(strategies, weights=weights, k=1)[0]
-            seed = self._select_seed_by_strategy(strategy)
-
-            if seed and not self._is_on_cooldown(seed['concept_id']):
-                logger.info(
-                    f"{LOG_PREFIX} Selected seed: '{seed['concept_name']}' "
-                    f"(strategy={strategy}, attempt={attempt + 1})"
-                )
-                return seed
-
-            if seed:
-                logger.debug(
-                    f"{LOG_PREFIX} Seed '{seed['concept_name']}' on cooldown, retrying"
-                )
-
-        logger.info(f"{LOG_PREFIX} No viable seed found after 3 attempts")
-        return None
-
-    def _select_seed_by_strategy(self, strategy: str) -> Optional[Dict[str, Any]]:
-        """Execute a specific seed selection strategy."""
-        try:
-            if strategy == 'decaying':
-                return self._seed_decaying()
-            elif strategy == 'recent':
-                return self._seed_recent()
-            elif strategy == 'salient':
-                return self._seed_salient()
-            elif strategy == 'insight':
-                return self._seed_insight()
-            elif strategy == 'temporal':
-                return self._seed_temporal()
-            elif strategy == 'random':
-                return self._seed_random()
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Seed strategy '{strategy}' failed: {e}")
-        return None
-
-    def _seed_decaying(self) -> Optional[Dict[str, Any]]:
-        """Select a concept whose strength is fading but not dead."""
-        with self.db_service.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, concept_name, definition, strength, domain
-                FROM semantic_concepts
-                WHERE deleted_at IS NULL
-                  AND strength > 0.2 AND strength < 2.0
-                ORDER BY strength ASC, last_reinforced_at ASC
-                LIMIT 5
-            """)
-            rows = cursor.fetchall()
-            cursor.close()
-
-        if not rows:
-            return None
-
-        row = random.choice(rows)
-        return {
-            'concept_id': str(row[0]),
-            'concept_name': row[1],
-            'definition': row[2],
-            'seed_type': 'decaying',
-            'topic': row[4] or 'general',
-        }
-
-    def _seed_recent(self) -> Optional[Dict[str, Any]]:
-        """Select a concept from a recent episode, weighted toward more recent ones."""
-        with self.db_service.connection() as conn:
-            cursor = conn.cursor()
-
-            # Fetch top-20 recent episodes within lookback window
-            cursor.execute("""
-                SELECT id,
-                       (CAST(strftime('%s', 'now') AS REAL) - CAST(strftime('%s', created_at) AS REAL)) / 3600.0 AS age_hours
-                FROM episodes
-                WHERE deleted_at IS NULL
-                  AND created_at > datetime('now', ? || ' hours')
-                ORDER BY created_at DESC
-                LIMIT 20
-            """, (str(-self.episode_lookback_hours),))
-            episodes = cursor.fetchall()
-            if not episodes:
-                cursor.close()
-                return None
-
-            # Gradient sample: weight = exp(-decay * age_hours), most recent heaviest
-            weights = [math.exp(-self.episode_recency_decay * float(row[1])) for row in episodes]
-            episode_row = random.choices(episodes, weights=weights, k=1)[0]
-            episode_id = str(episode_row[0])
-
-            # Find concepts linked to the sampled episode
-            cursor.execute("""
-                SELECT id, concept_name, definition, strength, domain
-                FROM semantic_concepts
-                WHERE deleted_at IS NULL
-                  AND EXISTS (SELECT 1 FROM json_each(source_episodes) WHERE value = ?)
-                ORDER BY strength DESC
-                LIMIT 5
-            """, (episode_id,))
-            rows = cursor.fetchall()
-            cursor.close()
-
-        if not rows:
-            return None
-
-        row = random.choice(rows)
-        return {
-            'concept_id': str(row[0]),
-            'concept_name': row[1],
-            'definition': row[2],
-            'seed_type': 'recent',
-            'topic': row[4] or 'general',
-        }
+    # -- Seed selection (kept for idle discovery) ------------------------------
 
     def _seed_salient(self) -> Optional[Dict[str, Any]]:
         """Select a concept from a high-salience episode, weighted by salience x recency."""
@@ -541,97 +677,6 @@ class CognitiveDriftEngine:
             'seed_type': 'salient',
             'topic': episode_topic or concept.get('domain', 'general'),
         }
-
-    def _seed_random(self) -> Optional[Dict[str, Any]]:
-        """Pure random pick from active concepts."""
-        with self.db_service.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, concept_name, definition, domain
-                FROM semantic_concepts
-                WHERE deleted_at IS NULL AND confidence >= 0.4
-                ORDER BY RANDOM()
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
-            cursor.close()
-
-        if not row:
-            return None
-
-        return {
-            'concept_id': str(row[0]),
-            'concept_name': row[1],
-            'definition': row[2],
-            'seed_type': 'random',
-            'topic': row[3] or 'general',
-        }
-
-    def _seed_temporal(self) -> Optional[Dict[str, Any]]:
-        """Select seed from topics with strong temporal associations.
-
-        If the current time matches a topic-time pattern (e.g., user often
-        discusses 'cooking' in the evening), select that topic's concept.
-        """
-        try:
-            from services.temporal_pattern_service import TemporalPatternService
-            from services.user_trait_service import UserTraitService
-            from datetime import datetime
-
-            now = datetime.utcnow()
-            hour = now.hour
-
-            # Get topic-time traits
-            trait_service = UserTraitService(self.db_service)
-            traits = trait_service.get_traits_by_category('behavioral_pattern')
-
-            # Find topic-time associations matching current hour label
-            hour_label = TemporalPatternService._hour_to_label(hour)
-            matching_topics = []
-            for t in traits:
-                key = t.get('trait_key', '')
-                value = t.get('trait_value', '')
-                if key.startswith('topic_time_') and hour_label in value.lower():
-                    # Extract topic name from the value
-                    # Format: "Often discusses {topic} in the {label}"
-                    topic = value.replace('Often discusses ', '').split(' in the ')[0]
-                    matching_topics.append((topic, t.get('confidence', 0.5)))
-
-            if not matching_topics:
-                return None
-
-            # Pick highest confidence match
-            matching_topics.sort(key=lambda x: x[1], reverse=True)
-            topic_name = matching_topics[0][0]
-
-            # Find concept matching this topic
-            with self.db_service.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, concept_name, definition, domain
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL
-                      AND (concept_name LIKE ? OR domain LIKE ?)
-                    ORDER BY strength DESC
-                    LIMIT 1
-                """, (f'%{topic_name}%', f'%{topic_name}%'))
-                row = cursor.fetchone()
-                cursor.close()
-
-            if not row:
-                return None
-
-            return {
-                'concept_id': str(row[0]),
-                'concept_name': row[1],
-                'definition': row[2],
-                'seed_type': 'temporal',
-                'topic': row[3] or topic_name,
-            }
-
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Temporal seed selection failed: {e}")
-            return None
 
     def _seed_insight(self) -> Optional[Dict[str, Any]]:
         """
@@ -931,91 +976,6 @@ class CognitiveDriftEngine:
             logger.debug(f"{LOG_PREFIX} Self-model reflection failed: {e}")
             return False
 
-    # -- Main drift cycle ------------------------------------------------------
-
-    def _run_drift_cycle(self):
-        """Execute one complete drift cycle."""
-        # 1. Check fatigue
-        if self._is_fatigued():
-            return
-
-        # 1b. Attention gate — don't interrupt deep work with spontaneous thoughts
-        if self._is_user_deep_focus():
-            logger.info(f"{LOG_PREFIX} User in deep focus, skipping drift")
-            return
-
-        # 1c. Self-model reflection — occasionally seed from internal state
-        if self._try_self_model_reflection():
-            return  # Self-reflection consumed this drift cycle
-
-        # 2. Select seed
-        seed = self._select_seed()
-        if not seed:
-            return
-
-        # 3. Spreading activation from seed
-        activated = self.semantic_retrieval.spreading_activation(
-            [seed['concept_id']], max_depth=self.max_activation_depth
-        )
-
-        # 4. Check activation energy threshold
-        if not self._has_sufficient_activation(activated):
-            logger.info(
-                f"{LOG_PREFIX} Insufficient activation energy from "
-                f"'{seed['concept_name']}', no thought emerged"
-            )
-            self._maybe_reinforce_seed(seed, drift_succeeded=False)
-            return
-
-        max_activation = max(
-            c.get('activation_score', 0) for c in activated
-        ) if activated else 0
-
-        # 5. Filter activated concepts through cooldown
-        activated = [
-            c for c in activated
-            if not self._is_on_cooldown(c['id'])
-        ][:self.max_activated_concepts]
-
-        # 6. Retrieve grounding episode
-        grounding_episode = None
-        concept_names = [c['concept_name'] for c in activated[:3]]
-        if concept_names:
-            query_text = " ".join(concept_names)
-            episodes = self.episodic_retrieval.retrieve_episodes(
-                query_text=query_text, limit=1
-            )
-            if episodes:
-                grounding_episode = episodes[0]
-
-        # 7. Synthesize thought
-        thought = self._synthesize_thought(seed, activated, grounding_episode)
-        drift_succeeded = thought is not None
-
-        if drift_succeeded:
-            # 8. Store as gist (always — preserves current behavior)
-            self._store_drift(seed['topic'], thought['type'], thought['content'])
-
-            # 9. Mark seed + activated concepts as used
-            self._mark_used(seed['concept_id'])
-            for c in activated:
-                self._mark_used(c['id'])
-
-            # 10. Record drift activation for fatigue tracking
-            drift_id = str(uuid.uuid4())
-            self._record_drift_activation(drift_id, max_activation)
-
-            # 11. Update state
-            self._update_state(seed)
-
-            # 12. Action decision: what to do with this thought?
-            self._route_thought(thought, seed, max_activation, activated, grounding_episode)
-        else:
-            logger.info(f"{LOG_PREFIX} Thought synthesis failed for '{seed['concept_name']}'")
-
-        # Maybe reinforce decaying seed
-        self._maybe_reinforce_seed(seed, drift_succeeded)
-
     # -- Action routing --------------------------------------------------------
 
     def _route_thought(self, thought: Dict, seed: Dict, max_activation: float,
@@ -1141,4 +1101,4 @@ def cognitive_drift_worker(shared_state=None):
         check_interval = 300
 
     engine = CognitiveDriftEngine(check_interval=check_interval)
-    engine.run(shared_state)
+    engine.run_signal_loop(shared_state)

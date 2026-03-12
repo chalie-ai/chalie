@@ -37,7 +37,10 @@ def _key(suffix: str) -> str:
 class AmbientToolAction(AutonomousAction):
 
     def __init__(self, config: dict = None):
-        super().__init__(name='AMBIENT_TOOL', enabled=True, priority=6)
+        # Disabled: ambient tool invocation from drift produced low-quality content
+        # (world events, places) on weak similarity matching. Re-enable when
+        # signal-driven reasoning provides better context.
+        super().__init__(name='AMBIENT_TOOL', enabled=False, priority=6)
         config = config or {}
         self.store = MemoryClientService.create_connection()
 

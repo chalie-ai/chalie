@@ -225,6 +225,21 @@ class SemanticConsolidationService:
                                 f"[CONSOLIDATION] Contradiction detected on concept "
                                 f"'{existing_concept['concept_name']}': {conflict.get('reasoning', '')[:80]}"
                             )
+
+                            try:
+                                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                                emit_reasoning_signal(ReasoningSignal(
+                                    signal_type='memory_pressure',
+                                    source='semantic_consolidation',
+                                    concept_id=int(existing_concept['id']) if existing_concept.get('id') else None,
+                                    concept_name=existing_concept['concept_name'],
+                                    topic=concept.get('domain') or 'general',
+                                    content=f"Contradiction detected: {conflict.get('reasoning', '')[:150]}",
+                                    activation_energy=0.7,
+                                ))
+                            except Exception:
+                                pass
+
                 except Exception as ue:
                     logging.debug(f"[CONSOLIDATION] Contradiction check skipped: {ue}")
 
@@ -247,6 +262,21 @@ class SemanticConsolidationService:
 
                 concept_id = self.storage.store_concept(concept_data)
                 logging.info(f"Created new concept: {concept['name']}")
+
+                try:
+                    from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                    emit_reasoning_signal(ReasoningSignal(
+                        signal_type='new_knowledge',
+                        source='semantic_consolidation',
+                        concept_id=int(concept_id) if concept_id else None,
+                        concept_name=concept_data['concept_name'],
+                        topic=concept_data.get('domain') or 'general',
+                        content=concept_data['definition'],
+                        activation_energy=0.6,
+                    ))
+                except Exception:
+                    pass
+
                 return concept_id
 
         except Exception as e:

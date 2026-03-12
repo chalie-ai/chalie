@@ -257,6 +257,32 @@ class DecayEngineService:
                     """, (self.semantic_decay_rate,))
 
                     updated = cursor.rowcount
+
+                    # Emit memory_pressure signals for concepts approaching forgetting threshold
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        cursor.execute("""
+                            SELECT id, concept_name, definition, strength, domain
+                            FROM semantic_concepts
+                            WHERE deleted_at IS NULL
+                              AND strength > 0.2 AND strength < 0.5
+                              AND last_accessed_at < datetime('now', '-24 hours')
+                            ORDER BY strength ASC
+                            LIMIT 3
+                        """)
+                        for row in cursor.fetchall():
+                            emit_reasoning_signal(ReasoningSignal(
+                                signal_type='memory_pressure',
+                                source='decay_engine',
+                                concept_id=row[0],
+                                concept_name=row[1],
+                                topic=row[4] or 'general',
+                                content=f"Fading concept '{row[1]}' (strength={row[3]:.2f}): {(row[2] or '')[:100]}",
+                                activation_energy=0.5,
+                            ))
+                    except Exception as e:
+                        logger.debug(f"[DECAY ENGINE] Reasoning signal emission failed: {e}")
+
                     cursor.close()
 
                     if updated > 0:
