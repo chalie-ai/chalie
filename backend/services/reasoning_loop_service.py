@@ -156,6 +156,8 @@ class ReasoningLoopService:
                 attempts. The actual interval is randomised with jitter
                 (default ±30 %) and occasional long gaps. Defaults to 300.
         """
+        # WorldStateService — lazy, initialised on first use
+        self._world_state_service = None
         self.store = MemoryClientService.create_connection()
         self.config = ConfigService.resolve_agent_config("cognitive-drift")
         self.check_interval = check_interval
@@ -295,6 +297,19 @@ class ReasoningLoopService:
             ))
 
         return router
+
+    def _get_world_state_service(self):
+        """Lazy-initialize WorldStateService for continuous world model updates."""
+        if self._world_state_service is None:
+            try:
+                from services.world_state_service import WorldStateService
+                self._world_state_service = WorldStateService(db=self.db_service)
+                logger.debug(
+                    f"{LOG_PREFIX} WorldStateService initialized for continuous updates"
+                )
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} WorldStateService init failed: {e}")
+        return self._world_state_service
 
     # -- Signal loop -----------------------------------------------------------
 
@@ -447,6 +462,21 @@ class ReasoningLoopService:
             }), ex=3600)
             logger.debug(f"{LOG_PREFIX} Task state event: {content[:80]}")
 
+            # Update world model cache with new task state
+            ws = self._get_world_state_service()
+            if ws:
+                try:
+                    ws.notify_task_changed(
+                        task_id=signal.metadata.get('task_id') if signal.metadata else None,
+                        goal=signal.content or '',
+                        status=signal.metadata.get('status') if signal.metadata else None,
+                        progress_json=signal.metadata.get('progress') if signal.metadata else None,
+                        updated_at=signal.timestamp,
+                        deadline=signal.metadata.get('deadline') if signal.metadata else None,
+                    )
+                except Exception:
+                    pass
+
             # Task completions (energy >= 0.6) may warrant reasoning about next steps
             if signal.activation_energy >= 0.6:
                 self._handle_reasoning_signal(signal)
@@ -456,6 +486,19 @@ class ReasoningLoopService:
     def _handle_schedule_fired(self, signal: ReasoningSignal) -> None:
         """Evaluate whether a fired schedule item needs reasoning attention."""
         try:
+            # Update world model cache before reasoning — item status is now 'fired'
+            ws = self._get_world_state_service()
+            if ws:
+                try:
+                    ws.notify_schedule_changed(
+                        item_id=signal.metadata.get('item_id') if signal.metadata else None,
+                        message=signal.content or '',
+                        status='fired',
+                        due_at=signal.metadata.get('due_at') if signal.metadata else None,
+                    )
+                except Exception:
+                    pass
+
             # Schedule fires always go through reasoning — they may need user surfacing
             self._handle_reasoning_signal(signal)
         except Exception as e:
@@ -577,6 +620,14 @@ class ReasoningLoopService:
         except Exception:
             pass
 
+        # World model summary — scheduled items, tasks, lists, ambient, topics
+        try:
+            ws = self._get_world_state_service()
+            if ws:
+                context['world_model'] = ws.get_world_model_summary()
+        except Exception:
+            pass
+
         return context
 
     def _signal_to_seed(self, signal: ReasoningSignal) -> Optional[Dict]:
@@ -635,6 +686,14 @@ class ReasoningLoopService:
         if not self._are_workers_idle():
             logger.debug(f"{LOG_PREFIX} Workers not idle, skipping idle drift")
             return
+
+        # Refresh world model cache from DB during idle periods
+        ws = self._get_world_state_service()
+        if ws:
+            try:
+                ws.refresh_model()
+            except Exception:
+                pass
 
         # Goal inference: check for latent goals (cooldown-gated)
         if self._should_run_goal_inference():
