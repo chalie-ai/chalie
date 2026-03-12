@@ -64,6 +64,23 @@ def register_websocket(sock):
 
     @sock.route('/ws')
     def ws_handler(ws):
+        """
+        Handle an individual WebSocket connection lifecycle.
+
+        Authenticates the upgrade request via session cookie, then:
+        - Subscribes to the ``output:events`` pub/sub channel for
+          drift/card/task push events.
+        - Drains any buffered notifications queued in ``notifications:recent``.
+        - Triggers the first-contact welcome flow when applicable.
+        - Spawns a daemon thread (``_drift_sender``) that forwards pub/sub
+          events to the client with monotonic sequence numbers.
+        - Enters the main receive loop, dispatching incoming messages to
+          :func:`_handle_chat`, :func:`_handle_action`, or
+          :func:`_handle_resume` based on the ``type`` field.
+
+        Args:
+            ws: The flask-sock WebSocket connection object for this connection.
+        """
         from flask import request as flask_request
         from services.auth_session_service import validate_session
 
@@ -296,6 +313,16 @@ def _handle_chat(ws, store, msg):
     bg_done = threading.Event()
 
     def run_digest():
+        """
+        Background thread target that runs digest_worker for the current chat request.
+
+        Invokes :func:`workers.digest_worker.digest_worker` with the user's text
+        and request metadata. On success the worker publishes its output to the
+        per-request SSE channel (``sse:<request_id>``). On failure the exception
+        message is stored in ``bg_error`` and published to the same channel so
+        the WebSocket receive loop can surface the error rather than waiting
+        until timeout. Sets ``bg_done`` when finished regardless of outcome.
+        """
         try:
             from workers.digest_worker import digest_worker
             digest_worker(text, metadata={
