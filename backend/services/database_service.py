@@ -136,6 +136,7 @@ class SessionProxy:
             import re
             ordered_params = []
             def _replace(match):
+                """Capture a named placeholder, append its value, return ``?``."""
                 key = match.group(1)
                 ordered_params.append(params[key])
                 return '?'
@@ -455,15 +456,6 @@ class DatabaseService:
         except Exception:
             conn.rollback()
             raise
-
-    def close(self):
-        """Close the calling thread's SQLite connection and clear thread-local state.
-
-        After this call the thread will obtain a fresh connection on the next
-        database operation.  Safe to call even when no connection has been
-        opened yet on the current thread (no-op in that case).
-        """
-        self.close_pool()
 
     def close_pool(self):
         """Close the calling thread's SQLite connection and clear thread-local state.
