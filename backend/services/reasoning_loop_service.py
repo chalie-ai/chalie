@@ -31,6 +31,7 @@ import json
 import math
 import time
 import random
+import threading
 import uuid
 import logging
 from dataclasses import dataclass, field, asdict
@@ -57,6 +58,7 @@ STATE_KEY = "reasoning_loop:state"
 
 # Signal queue constants
 SIGNAL_QUEUE_KEY = "reasoning:signals"
+PRIORITY_QUEUE_KEY = "reasoning:priority"
 MAX_QUEUE_DEPTH = 50
 
 
@@ -71,6 +73,7 @@ class ReasoningSignal:
     content: str | None = None
     activation_energy: float = 0.5
     timestamp: float = dataclasses.field(default_factory=time.time)
+    metadata: dict | None = None  # Extra data (e.g., user message routing info)
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))
@@ -78,7 +81,9 @@ class ReasoningSignal:
     @classmethod
     def from_json(cls, raw: str) -> 'ReasoningSignal':
         data = json.loads(raw if isinstance(raw, str) else raw.decode())
-        return cls(**data)
+        known_fields = {f.name for f in dataclasses.fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered)
 
 
 def emit_reasoning_signal(signal: ReasoningSignal) -> bool:
@@ -120,6 +125,8 @@ class ReasoningLoopService:
 
     # Signal dispatch table — maps signal types to handlers
     SIGNAL_DISPATCH = {
+        # User messages — highest priority, fast dispatch
+        'user_message': '_handle_user_message',
         # Full reasoning path: signal → seed → spreading activation → synthesis → action
         'memory_pressure': '_handle_reasoning_signal',
         'new_knowledge': '_handle_reasoning_signal',
@@ -300,7 +307,7 @@ class ReasoningLoopService:
                 self._process_deferred()
 
                 # Block until a signal arrives or idle_timeout elapses
-                result = self.store.blpop(SIGNAL_QUEUE_KEY, timeout=self.idle_timeout)
+                result = self.store.blpop([PRIORITY_QUEUE_KEY, SIGNAL_QUEUE_KEY], timeout=self.idle_timeout)
 
                 if result is None:
                     # Timeout — no signal arrived; enter discovery mode
@@ -367,6 +374,9 @@ class ReasoningLoopService:
             return
         # Debounce: prevent signal storms
         if not self._debounce_check(signal):
+            return
+        # Yield: priority signal preempts background reasoning
+        if self._check_priority_preempt():
             return
         # Occasionally generate a self-reflective thought instead
         if self._try_self_model_reflection():
@@ -452,6 +462,110 @@ class ReasoningLoopService:
             logger.debug(f"{LOG_PREFIX} Noted thread expiry: {content[:80]}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to note thread expiry: {e}")
+
+    def _handle_user_message(self, signal: ReasoningSignal) -> None:
+        """Handle user message — enrich with loop context and dispatch to digest pipeline.
+
+        This is the M3 paradigm shift: user messages flow through the reasoning loop
+        before reaching the response pipeline. The loop enriches the message with its
+        current state (active topics, recent identity shifts, task events) so the
+        response can be contextually aware of what Chalie has been thinking about.
+
+        The actual response generation still happens in digest_worker (spawned as a
+        daemon thread) — the reasoning loop doesn't block on LLM calls for user messages.
+        """
+        metadata = signal.metadata or {}
+
+        try:
+            # Enrich with reasoning loop context
+            loop_context = self._get_loop_context()
+            metadata['reasoning_context'] = loop_context
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Context enrichment failed (non-fatal): {e}")
+
+        # Track user message topic in active topics
+        if signal.topic:
+            try:
+                self.store.zadd('reasoning_loop:active_topics', {signal.topic: time.time()})
+            except Exception:
+                pass
+
+        # Dispatch to digest worker — same thread-spawn pattern the WebSocket used to do
+        text = signal.content or ''
+        request_id = metadata.get('uuid', 'unknown')
+
+        # Closure references for error handling
+        sse_channel = f"sse:{request_id}"
+
+        def run_digest():
+            try:
+                from workers.digest_worker import digest_worker
+                digest_worker(text, metadata=metadata)
+            except Exception as e:
+                logger.error(f"{LOG_PREFIX} digest_worker error for {request_id}: {e}", exc_info=True)
+                try:
+                    self.store.publish(sse_channel, json.dumps({"error": str(e)}))
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=run_digest, daemon=True)
+        thread.start()
+
+        logger.info(
+            f"{LOG_PREFIX} Dispatched user message to digest pipeline "
+            f"(request={request_id[:8]}..., context_keys={list((metadata.get('reasoning_context') or {}).keys())})"
+        )
+
+    def _get_loop_context(self) -> dict:
+        """Collect reasoning loop state for context enrichment of user messages."""
+        context = {}
+
+        # Active conversation topics (last hour)
+        try:
+            topics = self.store.zrangebyscore(
+                'reasoning_loop:active_topics', time.time() - 3600, '+inf'
+            )
+            context['active_topics'] = list(topics[:10]) if topics else []
+        except Exception:
+            pass
+
+        # Recent identity shifts
+        try:
+            shifts = self.store.lrange('reasoning_loop:identity_shifts', 0, 4)
+            context['recent_identity_shifts'] = [
+                json.loads(s) for s in shifts
+            ] if shifts else []
+        except Exception:
+            pass
+
+        # Last task event
+        try:
+            task_event = self.store.get('reasoning_loop:last_task_event')
+            context['last_task_event'] = json.loads(task_event) if task_event else None
+        except Exception:
+            pass
+
+        # Recent expired threads
+        try:
+            expiries = self.store.lrange('reasoning_loop:expired_threads', 0, 2)
+            context['recent_thread_expiries'] = [
+                json.loads(e) for e in expiries
+            ] if expiries else []
+        except Exception:
+            pass
+
+        # Last reasoning state (what was Chalie just thinking about?)
+        try:
+            state = self.store.hgetall('reasoning_loop:state')
+            if state:
+                context['last_reasoning'] = {
+                    'seed_concept': state.get('last_seed_concept', ''),
+                    'seed_type': state.get('last_seed_type', ''),
+                }
+        except Exception:
+            pass
+
+        return context
 
     def _signal_to_seed(self, signal: ReasoningSignal) -> Optional[Dict]:
         """Convert a reasoning signal to a concept seed dict."""
@@ -573,6 +687,10 @@ class ReasoningLoopService:
             if episodes:
                 grounding_episode = episodes[0]
 
+        # Yield: priority signal preempts before expensive LLM call
+        if self._check_priority_preempt():
+            return
+
         # Step 7: Synthesize thought
         thought = self._synthesize_thought(seed, activated, grounding_episode)
         drift_succeeded = thought is not None
@@ -671,6 +789,23 @@ class ReasoningLoopService:
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Failed to check recent episodes: {e}")
             return False
+
+    def _check_priority_preempt(self) -> bool:
+        """Check if a priority signal (user message) is waiting.
+
+        Called as a yield point before expensive operations in background
+        signal processing. If a priority signal is pending, returns True
+        to signal the caller to abort current processing so the loop can
+        pick up the user message on the next iteration.
+        """
+        try:
+            pending = self.store.llen(PRIORITY_QUEUE_KEY)
+            if pending > 0:
+                logger.info(f"{LOG_PREFIX} Priority signal waiting — preempting background reasoning")
+                return True
+        except Exception:
+            pass
+        return False
 
     # -- Fatigue ---------------------------------------------------------------
 

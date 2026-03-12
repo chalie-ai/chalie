@@ -104,7 +104,7 @@ idle (timeout)     → _handle_idle_signal()                         # Salient/i
 
 ---
 
-### Milestone 3: User Messages as Signals
+### Milestone 3: User Messages as Signals (COMPLETE)
 
 **Goal:** User messages enter the same signal loop as everything else. This is the paradigm shift from "message-response" to "continuous reasoning with occasional responses."
 
