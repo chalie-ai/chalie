@@ -234,6 +234,18 @@ def episodic_memory_worker(job_data: dict) -> str:
 
         logging.info(f"Generated and stored episode {episode_id} for topic '{topic}'")
 
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='episode_created',
+                source='episodic_memory_worker',
+                topic=topic,
+                content=episode_data.get('gist', '')[:200],
+                activation_energy=0.5,
+            ))
+        except Exception:
+            pass
+
         # Feed the semantic consolidation tracker so concepts get created
         try:
             from services.semantic_consolidation_tracker import SemanticConsolidationTracker

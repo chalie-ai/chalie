@@ -127,6 +127,18 @@ class CuriosityPursuitService:
             # Store learning note
             thread_service.add_learning_note(thread_id, learning_summary, source='pursuit')
 
+            try:
+                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                emit_reasoning_signal(ReasoningSignal(
+                    signal_type='curiosity_finding',
+                    source='curiosity_pursuit',
+                    topic=thread.get('seed_topic', 'general'),
+                    content=learning_summary[:200] if learning_summary else '',
+                    activation_energy=0.5,
+                ))
+            except Exception:
+                pass
+
             # Check surfacing conditions
             self._check_surfacing(thread, thread_service)
 

@@ -193,6 +193,19 @@ class UserTraitService:
                             f"(count: {new_count})"
                         )
 
+                        # Point A — Reinforcement signal
+                        try:
+                            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                            emit_reasoning_signal(ReasoningSignal(
+                                signal_type='trait_changed',
+                                source='user_trait_service',
+                                topic=category or 'general',
+                                content=f"Reinforced '{trait_key}' = '{trait_value}' (confidence={new_confidence:.2f})",
+                                activation_energy=0.3,
+                            ))
+                        except Exception:
+                            pass
+
                         # Phase 4 — evidence-based resolution: reinforcement resolves uncertainties
                         # on this trait if the other side is significantly weaker
                         cursor.execute("SELECT id FROM user_traits WHERE trait_key = ?", (trait_key,))
@@ -237,6 +250,19 @@ class UserTraitService:
                             f"'{old_value}' → '{trait_value}' "
                             f"(confidence {old_confidence:.2f} → {confidence:.2f})"
                         )
+
+                        # Point B — Overwrite signal
+                        try:
+                            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                            emit_reasoning_signal(ReasoningSignal(
+                                signal_type='trait_changed',
+                                source='user_trait_service',
+                                topic=category or 'general',
+                                content=f"Changed '{trait_key}': '{old_value}' → '{trait_value}' (confidence={confidence:.2f})",
+                                activation_energy=0.6,
+                            ))
+                        except Exception:
+                            pass
 
                         # Create uncertainty for the conflict (confidence dominance path)
                         if old_trait_id:
@@ -326,6 +352,19 @@ class UserTraitService:
                         f"'{trait_value}' (confidence: {confidence:.2f}, "
                         f"category: {category}, source: {source})"
                     )
+
+                    # Point C — New trait signal
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='trait_changed',
+                            source='user_trait_service',
+                            topic=category or 'general',
+                            content=f"New trait '{trait_key}' = '{trait_value}' (confidence={confidence:.2f})",
+                            activation_energy=0.5,
+                        ))
+                    except Exception:
+                        pass
 
                 cursor.close()
                 return True
@@ -647,6 +686,19 @@ class UserTraitService:
 
                     logger.info(f"[USER_TRAITS] Corrected trait '{trait_key}' → '{new_value}' (explicit_correction)")
 
+                    # Point D — Existing trait corrected signal
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='trait_changed',
+                            source='user_trait_service',
+                            topic=update_category or 'general',
+                            content=f"User corrected '{trait_key}' → '{new_value}'",
+                            activation_energy=0.7,
+                        ))
+                    except Exception:
+                        pass
+
                     # Phase 3 — Resolution feedback loop: resolve linked uncertainties
                     # and Phase 4 — lower uncertainty tolerance (user correcting us)
                     try:
@@ -683,6 +735,19 @@ class UserTraitService:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
                     logger.info(f"[USER_TRAITS] Inserted corrected trait '{trait_key}' = '{new_value}'")
+
+                    # Point E — New trait from correction signal
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='trait_changed',
+                            source='user_trait_service',
+                            topic=category if category else 'general',
+                            content=f"User set new trait '{trait_key}' = '{new_value}'",
+                            activation_energy=0.7,
+                        ))
+                    except Exception:
+                        pass
             return True
         except Exception as e:
             logger.error(f"[TRAITS] Correction failed for {trait_key}: {e}")

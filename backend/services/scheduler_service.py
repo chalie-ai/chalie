@@ -143,6 +143,17 @@ def _poll_and_fire():
                         continue
 
                     _fire_item(item)
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='schedule_fired',
+                            source='scheduler_service',
+                            topic=item.get('topic', 'schedule'),
+                            content=f"Fired {item.get('item_type', 'reminder')}: {(item.get('message', '') or '')[:100]}",
+                            activation_energy=0.5,
+                        ))
+                    except Exception:
+                        pass
                     cursor.execute(
                         "UPDATE scheduled_items SET status='fired', last_fired_at=? WHERE id=?",
                         (now_iso, item["id"])
