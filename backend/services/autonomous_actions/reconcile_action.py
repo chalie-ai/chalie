@@ -44,6 +44,20 @@ class ReconcileAction(AutonomousAction):
     """
 
     def __init__(self, config: dict = None, services: dict = None):
+        """Initialize ReconcileAction with optional config overrides and injected services.
+
+        Args:
+            config: Optional configuration overrides. Supported keys:
+                ``cooldown_minutes`` (int, default 30) — minimum minutes between runs.
+                ``n_traits`` (int, default 5) — traits to sample per reconcile pass.
+                ``n_concepts`` (int, default 5) — concepts to sample per reconcile pass.
+                ``min_activation_energy`` (float, default 0.25) — minimum drift energy
+                    required to trigger reconciliation.
+                ``enabled`` (bool, default True) — set to False to disable the action.
+            services: Optional injected service dependencies. Supported keys:
+                ``db_service`` — a pre-built DatabaseService instance; if absent,
+                    the shared DB service is resolved lazily at execute time.
+        """
         super().__init__(name='RECONCILE', enabled=True, priority=4)
 
         config = config or {}
@@ -61,6 +75,26 @@ class ReconcileAction(AutonomousAction):
             self.enabled = False
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
+        """Determine eligibility and score for a reconcile sweep.
+
+        Two gates must pass:
+
+        1. **Activation energy gate** — drift must exceed ``min_activation_energy``
+           (lower bar than other actions; reconcile is background maintenance).
+        2. **Cooldown gate** — at least ``cooldown_minutes`` must have elapsed
+           since the previous reconcile run.
+
+        Score is intentionally low and predictable:
+        ``0.3 + (activation_energy * 0.1)``
+
+        Args:
+            thought: The current drift thought context.
+
+        Returns:
+            tuple: ``(score: float, eligible: bool)``. Returns ``(0.0, False)``
+                when any gate fails; otherwise returns the maintenance score
+                with ``eligible=True``.
+        """
         # Gate 1: activation energy floor (lower than other actions — reconcile
         # works even on low-energy drifts since it's background maintenance)
         if thought.activation_energy < self.min_activation_energy:
@@ -87,6 +121,36 @@ class ReconcileAction(AutonomousAction):
         return (score, True)
 
     def execute(self, thought: ThoughtContext) -> ActionResult:
+        """Run the cross-store contradiction sweep.
+
+        Workflow:
+        1. Resolve DB service (injected or shared fallback).
+        2. Import ContradictionClassifierService and UncertaintyService.
+        3. Sample ``n_traits`` traits + ``n_concepts`` concepts from the database.
+        4. Run pairwise vector comparison to find high-similarity candidate pairs.
+        5. For each untracked pair:
+
+           - ``temporal_change`` with a temporal signal → auto-supersede via
+             :meth:`_auto_supersede`.
+           - All other contradictions → create an uncertainty record (capped at
+             ``_MAX_UNCERTAINTY_CREATES`` per pass).
+        6. Record the cooldown timestamp.
+
+        Args:
+            thought: The current drift thought context (not directly used in the
+                sweep logic, but part of the base class contract).
+
+        Returns:
+            ActionResult: ``action_name='RECONCILE'``. ``success=True`` on normal
+                completion — including when no memories were found. ``success=False``
+                when a required service is unavailable or cannot be imported.
+                ``details`` keys: ``memories_sampled``, ``candidate_pairs``,
+                ``uncertainties_created``, ``auto_resolved``.
+
+        Raises:
+            No exceptions are raised; all errors are caught and returned as a
+            failed ``ActionResult``.
+        """
         db = self._db_service
         if db is None:
             # Try to get shared DB service
