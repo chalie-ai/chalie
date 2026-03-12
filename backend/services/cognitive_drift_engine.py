@@ -119,6 +119,18 @@ class CognitiveDriftEngine:
     """
 
     def __init__(self, check_interval: int = 300):
+        """Initialize the cognitive drift engine and all dependent services.
+
+        Loads the agent config, resolves queue names from connection config,
+        instantiates semantic/episodic retrieval and gist storage services,
+        creates the background LLM proxy, and registers all autonomous action
+        handlers with the decision router.
+
+        Args:
+            check_interval: Base sleep interval in seconds between drift cycle
+                attempts. The actual interval is randomised with jitter
+                (default ±30 %) and occasional long gaps. Defaults to 300.
+        """
         self.store = MemoryClientService.create_connection()
         self.config = ConfigService.resolve_agent_config("cognitive-drift")
         self.check_interval = check_interval
@@ -785,11 +797,27 @@ class CognitiveDriftEngine:
 
     def _synthesize_thought(self, seed: Dict, activated: List[Dict],
                             episode: Optional[Dict]) -> Optional[Dict]:
-        """
-        Call LLM to produce a brief internal thought.
+        """Call the background LLM to produce a brief internal thought.
+
+        Builds the prompt by substituting the seed concept, activated concept
+        list, grounding episode, and temporal rhythm summary into the agent's
+        prompt template. Strips ``<think>…</think>`` tags from the raw response
+        before JSON-parsing to handle model thinking-leakage. Retries up to
+        3 times on parse failures.
+
+        Args:
+            seed: Seed concept dict containing at minimum ``concept_name`` and
+                ``definition`` keys.
+            activated: List of spreading-activation result dicts, each with
+                ``concept_name``, ``definition``, ``id``, and
+                ``activation_score``.
+            episode: Optional grounding episode dict with ``topic``, ``gist``,
+                and ``outcome`` keys. ``None`` if no relevant episode was found.
 
         Returns:
-            Dict with 'type' and 'content', or None on failure.
+            A dict with ``type`` (one of ``"reflection"``, ``"question"``,
+            ``"hypothesis"``) and ``content`` keys on success, or ``None``
+            if the LLM fails or returns an invalid response after all retries.
         """
         # Build prompt from template
         seed_text = f"{seed['concept_name']}: {seed['definition']}"

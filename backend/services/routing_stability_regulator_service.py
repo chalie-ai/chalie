@@ -100,6 +100,12 @@ class RoutingStabilityRegulator:
     }
 
     def __init__(self, db=None):
+        """Initialise the regulator, wiring up the database and config directory.
+
+        Args:
+            db: Optional database service instance. When omitted a lightweight
+                shared instance is created automatically.
+        """
         self.db = db or get_lightweight_db_service()
         self.decision_service = RoutingDecisionService(self.db)
         os.makedirs(GENERATED_CONFIG_DIR, exist_ok=True)

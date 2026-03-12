@@ -20,16 +20,42 @@ class SchemaService:
     """Manages SQLite database schema initialization and versioning."""
 
     def __init__(self, database_service: DatabaseService, embedding_dimensions: int = 768):
+        """Initialize the schema service.
+
+        Args:
+            database_service: A ``DatabaseService`` instance whose ``db_path``
+                attribute points to the SQLite file to manage.
+            embedding_dimensions: Number of float dimensions used in
+                ``vec0`` virtual tables for vector search. Defaults to 768.
+        """
         self.db_service = database_service
         self.embedding_dimensions = embedding_dimensions
         self._schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
 
     def database_exists(self, db_name: str = None) -> bool:
-        """Check if the SQLite database file exists."""
+        """Check whether the SQLite database file exists on disk.
+
+        Args:
+            db_name: Unused; kept for interface compatibility with the
+                PostgreSQL-era ``SchemaService``. Defaults to ``None``.
+
+        Returns:
+            ``True`` if the database file referenced by
+            ``database_service.db_path`` is present, ``False`` otherwise.
+        """
         return os.path.exists(self.db_service.db_path)
 
     def create_database(self, db_name: str = None):
-        """Create the database by running the consolidated schema."""
+        """Create the database by running the consolidated schema.
+
+        Delegates entirely to ``initialize_schema()``. SQLite creates the file
+        automatically on first connection, so no explicit file creation is
+        needed.
+
+        Args:
+            db_name: Unused; kept for interface compatibility with the
+                PostgreSQL-era ``SchemaService``. Defaults to ``None``.
+        """
         self.initialize_schema()
         logger.info(f"Database created at {self.db_service.db_path}")
 
@@ -82,7 +108,12 @@ class SchemaService:
                 logger.warning(f"Could not create vec table {table_name}: {e}")
 
     def schema_version(self) -> int:
-        """Get current schema version (0 if not initialized)."""
+        """Get the current schema version from the ``schema_version`` table.
+
+        Returns:
+            The maximum version integer stored in ``schema_version``, or
+            ``0`` if the table does not yet exist or contains no rows.
+        """
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()

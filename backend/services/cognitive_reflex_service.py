@@ -126,7 +126,8 @@ class CognitiveReflexService:
     """
 
     def __init__(self, db=None, store=None):
-        """
+        """Initialize the cognitive reflex service with database and memory-store connections.
+
         Args:
             db: DatabaseService instance (uses shared if None)
             store: MemoryStore connection (uses shared if None)
@@ -284,7 +285,14 @@ class CognitiveReflexService:
             self._create_cluster(text, embedding, was_useful)
 
     def record_activation(self, cluster_id: int):
-        """Record that the fast path was activated for a cluster."""
+        """Record that the fast path was activated for a cluster.
+
+        Increments the ``times_activated`` counter and stamps ``last_activated``
+        on the cluster row so staleness checks remain accurate.
+
+        Args:
+            cluster_id: Primary-key ID of the cognitive_reflexes cluster.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -299,7 +307,15 @@ class CognitiveReflexService:
             logger.warning(f"[REFLEX] Failed to record activation: {e}")
 
     def set_pending_validation(self, thread_id: str, cluster_id: int):
-        """Store pending validation state — next user message checked for correction."""
+        """Store pending validation state so the next user message is checked for correction.
+
+        Writes a short-lived key to the memory store keyed by ``thread_id``.
+        The key expires after ``PENDING_VALIDATION_TTL`` seconds.
+
+        Args:
+            thread_id: Conversation thread identifier used as part of the Redis key.
+            cluster_id: ID of the reflex cluster whose activation is pending validation.
+        """
         try:
             self.store.setex(
                 f"reflex:pending:{thread_id}",
@@ -310,11 +326,16 @@ class CognitiveReflexService:
             logger.debug(f"[REFLEX] Failed to set pending validation: {e}")
 
     def check_pending_validation(self, thread_id: str, next_message: str):
-        """
-        Check if the previous reflex response needs correction.
+        """Check if the previous reflex response needs correction.
 
         Called at the start of each digest cycle — if a pending validation
         exists for this thread, examine the new message for correction signals.
+        Consumes the pending-validation key (one-shot) and updates the cluster's
+        ``times_succeeded`` or ``times_failed`` counter accordingly.
+
+        Args:
+            thread_id: Conversation thread identifier used to look up the pending key.
+            next_message: The user's follow-up message, scanned for correction patterns.
         """
         try:
             key = f"reflex:pending:{thread_id}"
@@ -398,11 +419,19 @@ class CognitiveReflexService:
         self, text: str, metadata: dict, thread_id: str,
         reflex_response: str, cluster_id: int,
     ):
-        """
-        Probabilistically queue full-pipeline run for quality comparison.
+        """Probabilistically queue a full-pipeline run for quality comparison.
 
-        ~10% of reflex activations get a shadow run through the full pipeline.
-        The shadow comparison detects silent correctness failures.
+        Approximately 10 % of reflex activations (controlled by
+        ``SHADOW_VALIDATION_RATE``) trigger a shadow run through the full
+        pipeline.  The shadow comparison detects silent correctness failures
+        without impacting the user-visible response latency.
+
+        Args:
+            text: Original user query text.
+            metadata: Request metadata dict (currently unused but kept for future use).
+            thread_id: Conversation thread identifier used as part of the shadow key.
+            reflex_response: The response already returned to the user via fast path.
+            cluster_id: ID of the reflex cluster that produced the response.
         """
         if random.random() > SHADOW_VALIDATION_RATE:
             return
@@ -424,10 +453,17 @@ class CognitiveReflexService:
             logger.debug(f"[REFLEX] Shadow validation queue failed: {e}")
 
     def process_shadow_result(self, thread_id: str, full_pipeline_response: str):
-        """
-        Compare shadow pipeline response with the reflex response.
+        """Compare shadow pipeline response with the reflex response.
 
-        Called after a shadow full-pipeline run completes.
+        Called after a shadow full-pipeline run completes.  Reads the stored
+        reflex response from the memory store, computes embedding-based cosine
+        distance between the two responses, and increments either
+        ``times_succeeded`` (responses agree, distance < 0.3) or
+        ``times_failed`` (responses diverge) on the cluster row.
+
+        Args:
+            thread_id: Conversation thread identifier used to look up shadow data.
+            full_pipeline_response: Response produced by the full pipeline run.
         """
         try:
             key = f"reflex:shadow:{thread_id}"
@@ -479,7 +515,18 @@ class CognitiveReflexService:
             logger.debug(f"[REFLEX] Shadow result processing failed: {e}")
 
     def get_stats(self) -> dict:
-        """Get aggregate reflex statistics for observability."""
+        """Get aggregate reflex statistics for observability.
+
+        Queries the ``cognitive_reflexes`` table for totals, rates, and the
+        ten most-recently-seen clusters.
+
+        Returns:
+            Dict with keys: ``total_clusters``, ``active_clusters``,
+            ``total_observations``, ``total_activations``, ``total_succeeded``,
+            ``total_failed``, ``total_unnecessary``, ``activation_rate``,
+            ``success_rate``, ``new_clusters_24h``, ``recent_clusters``.
+            On database error returns ``{'error': <message>}``.
+        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()

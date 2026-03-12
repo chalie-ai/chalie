@@ -93,6 +93,20 @@ def _contains_url(text: str) -> bool:
 
 @dataclass
 class TriageContext:
+    """Input context supplied to the triage LLM for routing decisions.
+
+    Attributes:
+        context_warmth: Float 0-1 measuring how active the current conversation is.
+        memory_confidence: Float 0-1 confidence that internal memory is sufficient.
+        working_memory_turns: Number of turns currently held in working memory.
+        gist_count: Number of gist summaries available for this topic.
+        fact_count: Number of stored facts available for this topic.
+        previous_mode: The routing mode used in the prior turn (e.g. 'RESPOND').
+        previous_tools: Tool names selected in the prior ACT turn.
+        tool_summaries: Grouped human-readable summary of available tools.
+        working_memory_summary: Text summary of recent working memory exchanges.
+    """
+
     context_warmth: float
     memory_confidence: float
     working_memory_turns: int
@@ -106,6 +120,25 @@ class TriageContext:
 
 @dataclass
 class TriageResult:
+    """Output of the cognitive triage pipeline.
+
+    Attributes:
+        branch: High-level dispatch branch: 'ignore' | 'respond' | 'clarify' | 'act'.
+        mode: Routing mode: 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'.
+        tools: Tool names selected for ACT mode (empty for other modes).
+        skills: Innate skill names selected for ACT mode.
+        confidence_internal: Float 0-1 confidence that internal memory is sufficient.
+        confidence_tool_need: Float 0-1 confidence that external tools are required.
+        freshness_risk: Float 0-1 risk that the answer requires recent or real-time data.
+        decision_entropy: Absolute difference between confidence_internal and confidence_tool_need.
+        reasoning: Human-readable explanation of the routing decision.
+        triage_time_ms: Wall-clock milliseconds taken for the full triage pipeline.
+        fast_filtered: True if the result came from the regex fast path (no LLM called).
+        self_eval_override: True if a self-eval rule overrode the LLM decision.
+        self_eval_reason: Short label for which self-eval rule fired.
+        effort_estimate: Effort tier: 'trivial' | 'light' | 'moderate' | 'deep'.
+    """
+
     branch: str                   # 'ignore' | 'respond' | 'clarify' | 'act'
     mode: str                     # 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'
     tools: List[str]              # tool names, only meaningful for ACT
@@ -159,8 +192,20 @@ class CognitiveTriageService:
         result.triage_time_ms = (time.time() - start) * 1000
         return result
 
+
+
     def _cognitive_triage(self, text: str, context: TriageContext) -> TriageResult:
-        """LLM call with cognitive-triage.md prompt. Falls back to heuristics on timeout."""
+        """Call the LLM with the cognitive-triage prompt and parse the response.
+
+        Falls back to heuristics if the LLM times out or returns invalid JSON.
+
+        Args:
+            text: The raw user message text.
+            context: TriageContext carrying memory signals and tool summaries.
+
+        Returns:
+            TriageResult parsed from the LLM response, or a heuristic fallback.
+        """
         import json
 
         try:
@@ -244,7 +289,17 @@ class CognitiveTriageService:
             return self._heuristic_fallback(text, context)
 
     def _heuristic_fallback(self, text: str, context: TriageContext) -> TriageResult:
-        """Deterministic fallback when LLM times out or fails."""
+        """Build a deterministic TriageResult when the LLM times out or fails.
+
+        Uses keyword detection for innate skill patterns and command/real-time signals.
+
+        Args:
+            text: The raw user message text.
+            context: TriageContext carrying tool summaries and conversation state.
+
+        Returns:
+            TriageResult with fast_filtered=True derived from keyword heuristics.
+        """
         lower = text.lower()
 
         # Innate skill detection — these never need external tools
@@ -334,7 +389,14 @@ class CognitiveTriageService:
         return None
 
     def _mode_to_branch(self, mode: str) -> str:
-        """Map LLM mode string to branch name."""
+        """Map an LLM mode string to the corresponding dispatch branch name.
+
+        Args:
+            mode: Uppercase mode string from the LLM response (e.g. 'ACT').
+
+        Returns:
+            Lowercase branch name string (e.g. 'act'), defaulting to 'respond'.
+        """
         return {
             'ACT': 'act',
             'RESPOND': 'respond',
@@ -424,7 +486,19 @@ class CognitiveTriageService:
             pass
 
     def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext) -> TriageResult:
-        """Deterministic sanity check rules. ~0ms."""
+        """Apply deterministic guard-rail rules to catch obvious LLM routing errors.
+
+        Runs in ~0ms. Mutates and returns the result with override flags set when
+        a rule fires.
+
+        Args:
+            result: TriageResult from the LLM (or heuristic fallback).
+            text: The raw user message text.
+            ctx: TriageContext for tool availability and conversation state.
+
+        Returns:
+            Potentially-modified TriageResult with self_eval_override/reason set.
+        """
 
         # Rule 1: ACT without tools → keep if contextual skill, defer to ACT loop if tools exist, else downgrade
         if result.branch == 'act' and not result.tools:
@@ -579,7 +653,11 @@ class CognitiveTriageService:
 
     @staticmethod
     def _get_active_tasks_summary() -> str:
-        """Get a brief summary of active persistent tasks for triage context."""
+        """Retrieve a formatted summary of active persistent tasks for triage context.
+
+        Returns:
+            Newline-separated list of active task lines, or 'None' if empty or on error.
+        """
         try:
             from services.database_service import get_shared_db_service
             from services.persistent_task_service import PersistentTaskService
@@ -607,6 +685,11 @@ class CognitiveTriageService:
             return 'None'
 
     def _load_prompt(self) -> str:
+        """Load the cognitive-triage.md prompt template from disk.
+
+        Returns:
+            Full contents of the prompt file as a string.
+        """
         import os
         prompts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts')
         path = os.path.join(prompts_dir, 'cognitive-triage.md')
@@ -614,6 +697,11 @@ class CognitiveTriageService:
             return f.read()
 
     def _get_llm(self):
+        """Instantiate and return the LLM service configured for cognitive triage.
+
+        Returns:
+            LLM service instance backed by the 'cognitive-triage' agent config.
+        """
         from services.llm_service import create_llm_service
         from services.config_service import ConfigService
         agent_cfg = ConfigService.resolve_agent_config('cognitive-triage')

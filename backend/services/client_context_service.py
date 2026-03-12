@@ -88,10 +88,24 @@ class ClientContextService:
     """Manages client context (timezone, location, device, behavioral signals) in MemoryStore."""
 
     def __init__(self):
+        """Initialize the service and open a MemoryStore connection."""
         self._store = MemoryClientService.create_connection()
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
-        """Resolve location name from lat/lon coordinates."""
+        """Resolve a human-readable city/country name from coordinates.
+
+        Calls the Nominatim reverse-geocoding API (OpenStreetMap). Prefers
+        city → town → municipality → county → state_district as the locality
+        label, combined with the country name.
+
+        Args:
+            lat: Latitude in decimal degrees.
+            lon: Longitude in decimal degrees.
+
+        Returns:
+            A string such as ``"Valletta, Malta"`` on success, or ``None`` if
+            the API call fails or returns an unusable address.
+        """
         try:
             url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=en"
             headers = {"User-Agent": "Chalie/1.0"}
@@ -183,7 +197,16 @@ class ClientContextService:
         return json.loads(raw) if raw else {}
 
     def is_stale(self, max_age_seconds: int = 600) -> bool:
-        """Check if client context is stale (no update for max_age_seconds)."""
+        """Check whether the stored client context is older than the allowed age.
+
+        Args:
+            max_age_seconds: Maximum acceptable age in seconds. Defaults to
+                600 (10 minutes).
+
+        Returns:
+            ``True`` if the stored context is missing or its ``saved_at``
+            timestamp is older than ``max_age_seconds``, ``False`` otherwise.
+        """
         ctx = self.get()
         saved_at = ctx.get("saved_at", 0)
         is_stale = (time.time() - saved_at) > max_age_seconds
@@ -346,7 +369,14 @@ class ClientContextService:
                 logging.debug(f"[CLIENT CONTEXT] Re-entry flag failed: {e}")
 
     def _emit_session_event(self, event_type: str, payload: dict = None):
-        """Emit a session event to the event bridge."""
+        """Emit a session lifecycle event to the event bridge.
+
+        Args:
+            event_type: The event type string, e.g. ``"session_start"`` or
+                ``"session_resume"``.
+            payload: Optional dict of additional event data, such as
+                ``{"absent_seconds": 1800}``. Defaults to an empty dict.
+        """
         try:
             from services.event_bridge_service import EventBridgeService, BridgeEvent
             bridge = EventBridgeService()

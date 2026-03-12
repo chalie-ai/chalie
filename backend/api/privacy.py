@@ -116,6 +116,19 @@ def export_data():
     FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
 
     def generate():
+        """Stream all user data as a single JSON object to the HTTP response.
+
+        Yields successive chunks of JSON text covering every SQLite table listed
+        in ``user_data_tables`` and every MemoryStore key prefix listed in
+        ``store_patterns``.  Rows are fetched in batches of ``FETCH_BATCH`` to
+        keep memory usage bounded, and tables that exceed ``MAX_EXPORT_ROWS``
+        rows are truncated with a ``"truncated": true`` marker in the output.
+
+        Yields:
+            str: Raw JSON text fragments that, when concatenated, form a valid
+            JSON object with ``"exported_at"``, ``"tables"``, and
+            ``"memory_store"`` top-level keys.
+        """
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 

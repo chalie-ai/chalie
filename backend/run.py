@@ -194,6 +194,20 @@ def _install_default_tools():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    """Parse CLI arguments, bootstrap the application, and start all services.
+
+    Performs the following startup sequence in order:
+    1. Parses ``--host`` / ``--port`` arguments and stores them in
+       ``runtime_config``.
+    2. Ensures the encryption key file exists.
+    3. Pre-loads the sentence-transformer embedding model in a daemon thread
+       so the UI is not blocked during a first-run model download.
+    4. Initialises the SQLite database schema and runs pending migrations.
+    5. Generates or retrieves the REST API key.
+    6. Registers all background worker services with the ``WorkerManager``.
+    7. Registers any cron-triggered tools from the tool registry.
+    8. Starts the Flask HTTP server and blocks until the process exits.
+    """
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")

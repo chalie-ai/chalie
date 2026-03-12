@@ -61,9 +61,18 @@ class ContextRelevanceService:
     }
 
     def __init__(self, config_path: Optional[str] = None):
-        """
-        Initialize the service with config from JSON file.
-        If config_path not provided, loads from default location.
+        """Initialize the service with config from a JSON file.
+
+        If config_path is not provided, loads from the default location at
+        backend/configs/agents/context-relevance.json.
+
+        Args:
+            config_path: Optional path to the JSON config file. Uses the default
+                location when None.
+
+        Raises:
+            ConfigError: If the config file exists but cannot be parsed as JSON.
+            ConfigError: If circular dependencies are detected in the config.
         """
         if config_path is None:
             # Default: backend/configs/agents/context-relevance.json
@@ -74,7 +83,14 @@ class ContextRelevanceService:
         self._validate_config()
 
     def _load_config(self) -> Dict:
-        """Load and parse JSON config file."""
+        """Load and parse the JSON config file from self.config_path.
+
+        Returns:
+            Parsed config dict, or a minimal safe-default dict when the file is absent.
+
+        Raises:
+            ConfigError: If the file exists but cannot be decoded as JSON.
+        """
         if not self.config_path.exists():
             # Return minimal safe default
             logger.warning(f"Config file not found at {self.config_path}, using minimal defaults")
@@ -98,7 +114,11 @@ class ContextRelevanceService:
             raise ConfigError(f"Failed to load config from {self.config_path}: {e}")
 
     def _validate_config(self):
-        """Validate config integrity (e.g., detect circular dependencies)."""
+        """Validate config integrity by checking for circular dependencies.
+
+        Raises:
+            ConfigError: If circular dependencies are found in the dependency graph.
+        """
         deps = self.config.get('dependencies', {})
         self._detect_circular_dependencies(deps)
 
@@ -111,6 +131,14 @@ class ContextRelevanceService:
         rec_stack = set()
 
         def has_cycle(node: str) -> bool:
+            """Recursively detect a cycle reachable from node using DFS.
+
+            Args:
+                node: Dependency graph node name to visit.
+
+            Returns:
+                True if a back-edge (cycle) is found, False otherwise.
+            """
             visited.add(node)
             rec_stack.add(node)
 

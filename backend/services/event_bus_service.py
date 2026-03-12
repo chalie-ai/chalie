@@ -27,7 +27,14 @@ class EventBusService:
         self._handlers: Dict[str, List[Callable]] = {}
 
     def _get_event_queue_key(self, event_type: str) -> str:
-        """Generate MemoryStore key for an event queue."""
+        """Generate the MemoryStore key for an event type's queue.
+
+        Args:
+            event_type: Event type string (e.g. ``ENCODE_EVENT``).
+
+        Returns:
+            MemoryStore key string in the format ``event_bus:<event_type>``.
+        """
         return f"event_bus:{event_type}"
 
     def emit(self, event_type: str, payload: Dict[str, Any]) -> bool:
