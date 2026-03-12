@@ -30,8 +30,21 @@ def _get_store():
 
 
 class MemoryClientService:
+    """Thin facade over the shared ``MemoryStore`` singleton.
+
+    Acts as the single entry-point for obtaining the in-process memory store
+    and for resolving topic names from the application configuration.
+    ``create_connection`` always returns the same ``MemoryStore`` instance,
+    making it a drop-in replacement for callers that previously used a
+    Redis connection pool.
+    """
 
     def __init__(self):
+        """Initialise the service and load connection configuration.
+
+        Reads the ``connections`` block from ``ConfigService`` so that
+        topic name look-ups in ``get_topic`` reflect the current config.
+        """
         self._config = ConfigService.connections()
         self._client = None
 
