@@ -82,7 +82,26 @@ def _ensure_docker_running(max_wait: int = 30) -> bool:
 
 
 class ToolContainerService:
+    """Manages Docker image builds and sandboxed container execution for tools.
+
+    Provides lifecycle management for tool Docker images (build, existence checks,
+    source-hash staleness detection) and two execution modes:
+
+    - ``run``: Single-shot execution — payload in, JSON result out.
+    - ``run_interactive``: Bidirectional stdin/stdout dialog for multi-turn
+      tool↔Chalie exchanges following the JSON-line protocol.
+
+    All containers are run with a hardened security profile (``--cap-drop=ALL``,
+    ``--read-only``, ``--no-new-privileges``, ``--pids-limit``).
+    """
+
     def __init__(self):
+        """Initialise the service and verify Docker daemon availability.
+
+        Raises:
+            docker.errors.DockerException: If Docker is unavailable after the
+                startup wait defined by ``_ensure_docker_running``.
+        """
         import docker
         _ensure_docker_running()
         self.client = docker.from_env()
