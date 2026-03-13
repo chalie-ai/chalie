@@ -654,9 +654,13 @@ class TestSystemAPI:
         if not store_ok:
             mock_store.ping.side_effect = Exception('store down')
 
+        # Patch the embedding model sentinel so the embeddings component reports 'ok'
+        mock_st_model = MagicMock()  # any non-None value means model is loaded
+
         patches = {
             'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
             'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
+            'services.embedding_service._st_model': mock_st_model,
         }
         if not worker_ok:
             patches['services.prompt_queue.PromptQueue'] = MagicMock(side_effect=ImportError('no queue'))
