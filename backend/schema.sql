@@ -153,24 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_relationships_target ON semantic_relationships(ta
 CREATE INDEX IF NOT EXISTS idx_relationships_type ON semantic_relationships(relationship_type);
 CREATE INDEX IF NOT EXISTS idx_relationships_strength ON semantic_relationships(strength DESC);
 
--- ────────────────────────────────────────────────────────────────
--- SEMANTIC SCHEMAS — mental frameworks
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS semantic_schemas (
-    id TEXT PRIMARY KEY,
-    schema_name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    core_concepts TEXT NOT NULL,              -- JSONB
-    relationships TEXT DEFAULT '[]',         -- JSONB
-    activation_count INTEGER DEFAULT 0,
-    last_activated_at TEXT,
-    learned_from_episodes TEXT DEFAULT '[]', -- JSONB
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_schemas_name ON semantic_schemas(schema_name);
-CREATE INDEX IF NOT EXISTS idx_schemas_activation ON semantic_schemas(activation_count DESC);
+-- semantic_schemas table removed — never used by any service.
 
 -- ────────────────────────────────────────────────────────────────
 -- INTERACTION LOG — append-only audit trail
@@ -606,8 +589,6 @@ CREATE TABLE IF NOT EXISTS tool_performance_metrics (
     latency_ms REAL,
     cost_estimate REAL DEFAULT 0,
     user_correction INTEGER DEFAULT 0,        -- BOOLEAN
-    follow_up_confusion INTEGER DEFAULT 0,    -- BOOLEAN
-    result_used_in_response INTEGER DEFAULT 1,-- BOOLEAN
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -700,21 +681,7 @@ CREATE TABLE IF NOT EXISTS persistent_tasks (
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_status ON persistent_tasks(account_id, status);
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_next_run ON persistent_tasks(status, next_run_after);
 
--- ────────────────────────────────────────────────────────────────
--- COGNITIVE REFLEXES — learned fast-path clusters
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS cognitive_reflexes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sample_queries TEXT DEFAULT '[]',         -- JSON array (was TEXT[])
-    times_seen INTEGER DEFAULT 1,
-    times_unnecessary INTEGER DEFAULT 0,
-    times_activated INTEGER DEFAULT 0,
-    times_succeeded INTEGER DEFAULT 0,
-    times_failed INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    last_seen TEXT DEFAULT (datetime('now')),
-    last_activated TEXT
-);
+-- cognitive_reflexes table removed — service is disabled (disconnected from pipeline).
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
