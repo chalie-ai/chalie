@@ -57,7 +57,6 @@ class ReflectAction(AutonomousAction):
         self.store = MemoryClientService.create_connection()
 
         # Injected services (from drift engine — no new connections)
-        self._gist_storage = services.get('gist_storage')
         self._embedding_service = services.get('embedding_service')
         self._db_service = services.get('db_service')
 
@@ -281,20 +280,7 @@ class ReflectAction(AutonomousAction):
             f"(connects to: {connects_to})"
         )
 
-        # 2. Store as reflection gist
-        if self._gist_storage:
-            self._gist_storage.store_gists(
-                topic=thought.seed_topic,
-                gists=[{
-                    'content': enriched_content,
-                    'type': 'reflection',
-                    'confidence': self.reflection_gist_confidence,
-                }],
-                prompt='[cognitive-drift-reflect]',
-                response=thought.thought_content,
-            )
-
-        # 3. Record embedding for novelty tracking
+        # 2. Record embedding for novelty tracking
         if thought.thought_embedding:
             recent_key = _key(thought.seed_topic, 'recent_embeddings')
             entry = json.dumps({
@@ -317,25 +303,6 @@ class ReflectAction(AutonomousAction):
 
         # 5. Boost associated concepts (access_count + last_accessed_at)
         boosted_ids = self._boost_concepts(activated_concepts[:self.concept_boost_limit])
-
-        # 6. Strategy analysis (opportunistic)
-        strategy_insight = self._analyze_act_strategies(thought.seed_topic)
-        if strategy_insight and self._gist_storage:
-            insight_text = (
-                f"[strategy insight] Tool combo [{strategy_insight['best_strategy']}] "
-                f"(avg value {strategy_insight['best_avg_value']:.2f}, "
-                f"~{strategy_insight['best_avg_seconds']:.0f}s, {strategy_insight['best_complexity']}) "
-                f"outperformed [{strategy_insight['worst_strategy']}] "
-                f"(avg value {strategy_insight['worst_avg_value']:.2f}, "
-                f"~{strategy_insight['worst_avg_seconds']:.0f}s) "
-                f"over {strategy_insight['loops_analyzed']} recent loops"
-            )
-            self._gist_storage.store_gists(
-                topic=thought.seed_topic,
-                gists=[{'content': insight_text, 'type': 'strategy', 'confidence': self.reflection_gist_confidence}],
-                prompt='[strategy-reflect]',
-                response=insight_text,
-            )
 
         logger.info(
             f"{LOG_PREFIX} Stored reflection: seed='{thought.seed_concept}', "

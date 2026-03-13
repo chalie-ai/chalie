@@ -22,7 +22,6 @@ from typing import Optional, Dict, Any, List, Tuple
 from services.memory_client import MemoryClientService
 from services.embedding_service import EmbeddingService
 from services.working_memory_service import WorkingMemoryService
-from services.gist_storage_service import GistStorageService
 
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
@@ -32,6 +31,15 @@ LOG_PREFIX = "[COMMUNICATE]"
 
 # MemoryStore key namespace — single-user system
 _NS = "proactive"
+
+
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Return Jaccard similarity (word-set intersection/union) between two strings."""
+    set_a = set(a.lower().split())
+    set_b = set(b.lower().split())
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
 
 
 def _key(suffix: str) -> str:
@@ -269,9 +277,7 @@ class CommunicateAction(AutonomousAction):
         max_sim = 0.0
         for turn in turns:
             content = turn.get('content', '')
-            sim = GistStorageService._calculate_jaccard_similarity(
-                thought.thought_content, content
-            )
+            sim = _jaccard_similarity(thought.thought_content, content)
             if sim > max_sim:
                 max_sim = sim
 

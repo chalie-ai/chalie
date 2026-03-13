@@ -116,17 +116,9 @@ class TestConversationAPI:
 
     def test_summary_returns_time_range_keys(self, client):
         """GET /conversation/summary returns today/this_week/older_highlights keys."""
-        with patch('services.thread_service.get_thread_service') as mock_get_ts, \
-             patch('services.gist_storage_service.GistStorageService') as mock_gist_cls, \
-             patch('services.database_service.get_shared_db_service') as mock_db_fn, \
+        with patch('services.database_service.get_shared_db_service') as mock_db_fn, \
              patch('services.episodic_retrieval_service.EpisodicRetrievalService') as mock_er_cls, \
-             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}), \
-             patch('services.memory_client.MemoryClientService.create_connection') as mock_store:
-            # No active thread
-            mock_ts = MagicMock()
-            mock_ts.get_active_thread_id.return_value = None
-            mock_get_ts.return_value = mock_ts
-
+             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
             # Episodic retrieval returns empty
             mock_er = MagicMock()
             mock_er.retrieve_episodes.return_value = []

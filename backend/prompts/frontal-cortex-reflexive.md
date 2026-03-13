@@ -5,8 +5,6 @@ context is needed — the answer is self-evident from the question alone.
 
 {{identity_context}}
 
-{{communication_style}}
-
 ## User Prompt
 {{original_prompt}}
 

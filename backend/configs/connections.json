@@ -2,7 +2,6 @@
   "memory": {
     "topics": {
       "prompt_queue": "prompt-queue",
-      "memory_chunker": "memory-chunker-queue",
       "episodic_memory": "episodic-memory-queue",
       "output_queue": "output-queue"
     },

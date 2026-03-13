@@ -7,7 +7,7 @@ You do not reason, speculate, or explore alternatives.
 Your sole function is memory consolidation: extracting stable, meaningful structure from a session snippet.
 
 ## Your Task
-Analyze the provided memory chunks from a single conversation session and synthesize one episodic 
+Analyze the provided conversation from a single session and synthesize one episodic
 memory object that captures the essence of what occurred.
 
 The episode should reflect:
@@ -23,7 +23,7 @@ The episode should reflect:
 You must synthesize across the entire session.
 Do not describe individual turns or messages.
 
-## Memory Chunks from Session
+## Conversation from Session
 {{session_context}}
 
 ## Field Definitions & Constraints
@@ -126,7 +126,7 @@ Collapse the session into a single coherent episode.
 Prefer stable interpretation over literal phrasing.
 
 3. Respect Absence
-If something is not present in the memory chunks, leave it empty.
+If something is not present in the conversation, leave it empty.
 
 4. No Inference Beyond Evidence
 Do not hallucinate emotions, outcomes, or constraints.

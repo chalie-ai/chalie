@@ -86,8 +86,9 @@ class TestDeleteAll:
         src = inspect.getsource(delete_all)
 
         # Critical namespaces that must appear
+        # Note: gist:* and fact:* removed in Stream 1 (memory chunker killed)
         for pattern in [
-            'working_memory:*', 'gist:*', 'fact:*',
+            'working_memory:*',
             'auth_session:*', 'proactive:*',
             'identity_state:*', 'cognitive_drift_state',
             'tool_state:*', 'metrics:timing:*',
@@ -172,12 +173,13 @@ class TestExportData:
             )
 
     def test_export_store_patterns_are_meaningful(self):
-        """export_data() should export working_memory, facts, gists, identity."""
+        """export_data() should export working_memory and identity state."""
         import inspect
         from api.privacy import export_data
         src = inspect.getsource(export_data)
 
-        for pattern in ['working_memory:*', 'gist:*', 'fact:*', 'identity_state:*']:
+        # gist:* and fact:* removed in Stream 1 (memory chunker killed)
+        for pattern in ['working_memory:*', 'identity_state:*']:
             assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in export_data"
 
     def test_content_disposition_header_set(self):

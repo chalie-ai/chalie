@@ -21,8 +21,6 @@ You do NOT:
 
 {{user_traits}}
 
-{{communication_style}}
-
 {{adaptive_directives}}
 
 {{spark_guidance}}

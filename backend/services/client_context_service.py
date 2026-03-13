@@ -436,8 +436,6 @@ class ClientContextService:
                 trait_value=culture,
                 confidence=0.3,  # Possible tier
                 category="core",
-                source="inferred",
-                is_literal=True,
             )
 
             # Also seed language preference
@@ -447,8 +445,6 @@ class ClientContextService:
                     trait_value=language,
                     confidence=0.5,
                     category="core",
-                    source="inferred",
-                    is_literal=True,
                 )
 
             self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days

@@ -9,7 +9,8 @@
 """
 Adaptive Layer Service — Rule-based communication style directives for LLM prompt injection.
 
-Pure-Python, no LLM call, sub-1ms.  Reads stored communication style,
+Pure-Python, no LLM call, sub-1ms.  Measures the current message with
+StyleMetricsService, blends with a per-thread EMA baseline (MemoryStore),
 micro-preferences, and challenge tolerance, then outputs natural-language
 directives ready to be appended to any frontal-cortex prompt.
 
@@ -41,25 +42,15 @@ DIRECTIVE_RULES: Dict[str, tuple] = {
         "Frame suggestions gently — open doors rather than point.",
         "Lead with a clear position, then expand if needed.",
     ),
-    'emotional_valence': (
+    'formality': (
         4, 7,
-        "Stay structured and evidence-focused. Logic over feeling.",
-        "Acknowledge the emotional context before moving into solutions.",
+        "Keep it casual and conversational. Avoid stiff phrasing.",
+        "Maintain a composed, measured tone throughout.",
     ),
-    'certainty_level': (
+    'certainty': (
         4, 7,
         "Validate before expanding. Build confidence through clarity.",
         "Speak as equals. No hedging — conviction lands well here.",
-    ),
-    'challenge_appetite': (
-        4, 7,
-        "Build on their perspective. Challenge only when invited.",
-        "Introduce counterpoints and edge cases. Push the thinking.",
-    ),
-    'depth_preference': (
-        4, 7,
-        "Surface practical, actionable next steps.",
-        "Explore layers — perspectives, connections, reflective prompts.",
     ),
     'pacing': (
         4, 7,
@@ -91,34 +82,28 @@ LOAD_DIRECTIVES: Dict[str, str] = {
 # Fork triggers — dimensions that benefit from a choice framing when ambiguous
 # ─────────────────────────────────────────────────────────────────────────────
 FORK_TRIGGERS: Dict[str, str] = {
-    'depth_preference': "I can give you the quick take — or we can dig deeper.",
-    'challenge_appetite': "I can build on this with you — or poke some holes if you'd rather stress-test it.",
-    'abstraction_level': "I can map out practical steps — or zoom out to the bigger picture.",
+    'verbosity': "I can give you the quick take — or go deeper if you'd like more.",
+    'directness': "I can give you a straight answer — or frame it more gently if you prefer.",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Growth reflection templates — one dimension -> list of variant phrasings
 # ─────────────────────────────────────────────────────────────────────────────
 GROWTH_REFLECTIONS: Dict[str, List[str]] = {
-    'certainty_level': [
+    'certainty': [
         "You're approaching decisions more decisively lately.",
         "There's a sharper clarity in how you're framing things.",
         "Your positions are landing with more conviction.",
-    ],
-    'depth_preference': [
-        "Your thinking is going deeper — exploring more layers.",
-        "You're pulling threads further than before.",
-        "There's more depth in how you're engaging with ideas.",
-    ],
-    'challenge_appetite': [
-        "You're leaning into challenge more than before.",
-        "You seem more comfortable with friction in ideas.",
-        "There's a shift — you're seeking the harder questions.",
     ],
     'verbosity': [
         "You're expressing more fully — taking space to think out loud.",
         "You're giving your thoughts more room to develop.",
         "There's more texture in how you're communicating.",
+    ],
+    'directness': [
+        "You're getting more direct — leading with the point.",
+        "There's less hedging in how you're presenting ideas.",
+        "You're owning your positions more clearly.",
     ],
 }
 
@@ -132,7 +117,7 @@ PREF_LABELS: Dict[str, str] = {
     'enjoys_challenge':      "User enjoys being challenged and hearing counterpoints.",
 }
 
-# Minimum observed interactions before directives are emitted (cold-start gate)
+# Minimum observed messages before EMA baseline is trusted
 _MIN_OBSERVATION_COUNT = 2
 
 # Midpoint of the 1–10 scale — used for salience calculations
@@ -144,39 +129,50 @@ _MAX_DIRECTIVES = 4
 # Max micro-preference lines appended after directives
 _MAX_MICRO_PREFS = 2
 
-# MemoryStore cooldown TTLs (seconds)
+# MemoryStore TTLs (seconds)
 _FORK_COOLDOWN_TTL = 300
 _FORK_PENDING_TTL = 600
 _GROWTH_COOLDOWN_TTL = 86400
+_BASELINE_TTL = 86400 * 30  # 30 days
+
+# EMA blend weight for the measured message vs stored baseline
+# 0.3 new + 0.7 baseline — smooths single-message noise
+_EMA_WEIGHT = 0.3
 
 
 class AdaptiveLayerService:
     """
     Generates natural-language style directives for LLM prompt injection.
 
-    Reads persisted communication style, micro-preferences, and challenge
-    tolerance from user_traits, applies slot-selection logic to avoid
-    over-biasing, and returns a ready-to-inject directive block.
+    Measures the current message with StyleMetricsService, blends with a
+    per-thread EMA baseline stored in MemoryStore, applies slot-selection
+    logic to avoid over-biasing, and returns a ready-to-inject directive block.
 
-    No LLM call is made.  Designed to run in < 1ms on warm paths (DB results
-    will be the dominant cost on first call).
+    No LLM call is made.  Designed to run in < 1ms on warm paths.
     """
+
+    def __init__(self, db_service=None):
+        """Accept optional db_service for API compatibility (not used internally)."""
+        pass
 
     def generate_directives(
         self,
         thread_id: Optional[str] = None,
         current_signals: Optional[Dict] = None,
         working_memory_turns: Optional[List[Dict]] = None,
+        current_message: Optional[str] = None,
     ) -> str:
         """
         Build the full adaptive directive block for injection into an LLM prompt.
 
         Args:
-            thread_id:            Active conversation thread ID (used for fork).
+            thread_id:            Active conversation thread ID (used for EMA baseline
+                                  and fork cooldown tracking).
             current_signals:      Dict with optional keys:
                                     'prompt_token_count' (int),
                                     'explicit_feedback' (str|None).
             working_memory_turns: List of turn dicts [{'role': ..., 'content': ...}].
+            current_message:      Raw current user message text for style measurement.
 
         Returns:
             str: Formatted directive block, or empty string if cold-start gate fails.
@@ -185,31 +181,34 @@ class AdaptiveLayerService:
             current_signals = current_signals or {}
             working_memory_turns = working_memory_turns or []
 
-            # -- 1. Fetch style ------------------------------------------------
-            style = self._get_communication_style()
+            # -- 1. Measure current message style ---------------------------------
+            from services.style_metrics_service import StyleMetricsService
+            measured = StyleMetricsService().measure(current_message or "")
 
-            # -- 2. Cold-start gate --------------------------------------------
-            if not style:
+            # -- 2. Blend with EMA baseline (smooths noise) -----------------------
+            style = self._blend_with_baseline(measured, thread_id)
+
+            # -- 3. Cold-start gate -----------------------------------------------
+            obs_count = self._get_observation_count(thread_id)
+            if obs_count < _MIN_OBSERVATION_COUNT:
+                self._increment_observation_count(thread_id)
                 return ""
-            observation_count = style.get('_observation_count', 0)
-            if observation_count < _MIN_OBSERVATION_COUNT:
-                return ""
+            self._increment_observation_count(thread_id)
 
-            # -- 3. Fetch supporting data --------------------------------------
-            micro_prefs    = self._get_micro_preferences()
-            challenge_tol  = self._get_challenge_tolerance()
+            # -- 4. Fetch supporting data -----------------------------------------
+            micro_prefs   = self._get_micro_preferences()
+            challenge_tol = self._get_challenge_tolerance()
 
-            # -- 4. Cognitive load ---------------------------------------------
+            # -- 5. Cognitive load ------------------------------------------------
             load_tier = self._estimate_cognitive_load(working_memory_turns, micro_prefs)
             load_directive = LOAD_DIRECTIVES.get(load_tier, "")
 
-            # -- 5. Energy mirror ----------------------------------------------
+            # -- 6. Energy mirror -------------------------------------------------
             mirror_directive = self._get_energy_mirror_directive(style, current_signals)
 
-            # -- 6. Build core directive slots ----------------------------------
+            # -- 7. Build core directive slots ------------------------------------
             directives: List[str] = []
 
-            # Load directive takes the first slot when load is HIGH/OVERLOAD
             if load_directive:
                 directives.append(load_directive)
 
@@ -218,13 +217,10 @@ class AdaptiveLayerService:
             if pacing_directive:
                 directives.append(pacing_directive)
 
-            # Cognitive slot dimensions: verbosity, directness, depth_preference,
-            # challenge_appetite — ranked by salience (abs distance from midpoint)
-            cognitive_dims = ['verbosity', 'directness', 'depth_preference', 'challenge_appetite']
+            # Cognitive slot dimensions: verbosity, directness, formality, certainty
+            cognitive_dims = ['verbosity', 'directness', 'formality', 'certainty']
 
-            # challenge_appetite is superseded by challenge_style_tiers when
-            # an explicit tolerance value exists — exclude it from the scored
-            # cognitive slot so we don't double-count.
+            # challenge_tolerance supersedes the certainty slot when explicitly stored
             challenge_handled = False
             if challenge_tol is not None:
                 tier = self._challenge_tier(challenge_tol)
@@ -232,7 +228,6 @@ class AdaptiveLayerService:
                 if challenge_directive:
                     directives.append(challenge_directive)
                     challenge_handled = True
-                cognitive_dims = [d for d in cognitive_dims if d != 'challenge_appetite']
 
             # Rank remaining cognitive dims by salience
             scored: List[tuple] = []
@@ -247,7 +242,6 @@ class AdaptiveLayerService:
 
             scored.sort(key=lambda x: x[0], reverse=True)
 
-            # Fill remaining slots up to cap (2 from cognitive dims)
             cognitive_added = 0
             for salience, dim, text in scored:
                 if len(directives) >= _MAX_DIRECTIVES:
@@ -257,23 +251,17 @@ class AdaptiveLayerService:
                 directives.append(text)
                 cognitive_added += 1
 
-            # Emotional slot — include only if salience > 1.5 on either dimension
-            if len(directives) < _MAX_DIRECTIVES:
-                emotional_directive = self._resolve_emotional_slot(style)
-                if emotional_directive:
-                    directives.append(emotional_directive)
-
             # Energy mirror appended after core slots (if room and not already at cap)
             if mirror_directive and len(directives) < _MAX_DIRECTIVES:
                 directives.append(mirror_directive)
 
-            # -- 7. Fork directive (at most one) --------------------------------
+            # -- 8. Fork directive (at most one) ----------------------------------
             fork_directive = self._get_fork_directive(style, thread_id)
 
-            # -- 8. Growth reflection -------------------------------------------
+            # -- 9. Growth reflection --------------------------------------------
             growth_reflection = self._get_growth_reflection()
 
-            # -- 9. Assemble output ---------------------------------------------
+            # -- 10. Assemble output ---------------------------------------------
             if not directives and not micro_prefs and not fork_directive and not growth_reflection:
                 return ""
 
@@ -285,7 +273,6 @@ class AdaptiveLayerService:
             if fork_directive:
                 lines.append(f"- {fork_directive}")
 
-            # Micro-preferences (up to 2)
             pref_lines = micro_prefs[:_MAX_MICRO_PREFS]
             for pref in pref_lines:
                 lines.append(f"- {pref}")
@@ -308,25 +295,74 @@ class AdaptiveLayerService:
             return ""
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Data retrieval helpers
+    # EMA baseline helpers (MemoryStore)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _get_communication_style(self) -> dict:
-        """
-        Retrieve stored communication style dict from UserTraitService.
+    def _blend_with_baseline(self, measured: dict, thread_id: Optional[str]) -> dict:
+        """Blend measured style with stored EMA baseline.
+
+        If no baseline exists, measured values are used as-is.
+
+        Args:
+            measured: Dict of 5 dimension scores from StyleMetricsService.
+            thread_id: Thread identifier for per-thread baseline key.
 
         Returns:
-            dict with dimension scores (1-10 scale) and '_observation_count', or {}.
+            Blended style dict (same 5 keys).
         """
         try:
-            from services.user_trait_service import UserTraitService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            trait_svc = UserTraitService(db)
-            return trait_svc.get_communication_style()
+            if not thread_id:
+                return measured
+
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            key = f"style_baseline:{thread_id}"
+            raw = store.get(key)
+            if not raw:
+                store.set(key, json.dumps(measured), ex=_BASELINE_TTL)
+                return measured
+
+            baseline = json.loads(raw)
+            blended = {}
+            for dim in ('verbosity', 'directness', 'formality', 'certainty', 'pacing'):
+                m = float(measured.get(dim, 5))
+                b = float(baseline.get(dim, 5))
+                blended[dim] = round(_EMA_WEIGHT * m + (1 - _EMA_WEIGHT) * b, 2)
+
+            store.set(key, json.dumps(blended), ex=_BASELINE_TTL)
+            return blended
         except Exception as e:
-            logger.warning(f"[adaptive_layer] _get_communication_style failed: {e}")
-            return {}
+            logger.debug(f"[adaptive_layer] baseline blend failed: {e}")
+            return measured
+
+    def _get_observation_count(self, thread_id: Optional[str]) -> int:
+        """Read per-thread observation counter from MemoryStore."""
+        try:
+            if not thread_id:
+                return _MIN_OBSERVATION_COUNT  # no gating when thread unknown
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            val = store.get(f"style_obs_count:{thread_id}")
+            return int(val) if val else 0
+        except Exception:
+            return _MIN_OBSERVATION_COUNT
+
+    def _increment_observation_count(self, thread_id: Optional[str]) -> None:
+        """Increment per-thread observation counter."""
+        try:
+            if not thread_id:
+                return
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            key = f"style_obs_count:{thread_id}"
+            store.incr(key)
+            store.expire(key, _BASELINE_TTL)
+        except Exception:
+            pass
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Data retrieval helpers
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _get_micro_preferences(self) -> List[str]:
         """
@@ -426,7 +462,6 @@ class AdaptiveLayerService:
         try:
             micro_prefs = micro_prefs or []
 
-            # Extract user turns only
             user_turns: List[str] = [
                 t.get('content', '')
                 for t in working_memory_turns
@@ -435,14 +470,12 @@ class AdaptiveLayerService:
 
             score = 0
 
-            # -- Length trend: last 3 user turns decreasing --------------------
             recent = user_turns[-3:] if len(user_turns) >= 3 else user_turns
             if len(recent) >= 3:
                 lengths = [len(t.split()) for t in recent]
                 if lengths[0] > lengths[1] > lengths[2]:
                     score += 2
 
-            # -- Question-mark density (confusion signal) ----------------------
             for turn in recent:
                 words = turn.split()
                 if not words:
@@ -451,13 +484,11 @@ class AdaptiveLayerService:
                 ratio = qmarks / (len(words) / 20) if len(words) > 0 else 0
                 if ratio > 1:
                     score += 2
-                    break  # count once even if multiple turns trigger it
+                    break
 
-            # -- prefers_concise micro-preference ------------------------------
             if any('concise' in p.lower() for p in micro_prefs):
                 score += 1
 
-            # -- Short turn density in last 3 ----------------------------------
             last_three = user_turns[-3:] if len(user_turns) >= 3 else user_turns
             short_count = sum(1 for t in last_three if len(t.split()) < 10)
             if short_count >= 2:
@@ -514,7 +545,6 @@ class AdaptiveLayerService:
             if token_count is None:
                 return ""
 
-            # Approximate word count from token count (rough: ~0.75 tokens/word)
             approx_words = int(token_count * 0.75)
 
             if float(verbosity) >= 7 and approx_words < 10:
@@ -562,7 +592,6 @@ class AdaptiveLayerService:
             if store.exists(cooldown_key):
                 return ""
 
-            # Find eligible dims: in fork triggers AND in ambiguous zone (4-7)
             candidates: List[tuple] = []
             for dim, fork_text in FORK_TRIGGERS.items():
                 val = style.get(dim)
@@ -570,18 +599,15 @@ class AdaptiveLayerService:
                     continue
                 val_f = float(val)
                 if 4 <= val_f <= 7:
-                    # Closeness to midpoint = ambiguity (lower distance = more ambiguous)
                     distance_from_mid = abs(val_f - _MIDPOINT)
                     candidates.append((distance_from_mid, dim, fork_text))
 
             if not candidates:
                 return ""
 
-            # Pick the most ambiguous (closest to midpoint)
             candidates.sort(key=lambda x: x[0])
             _, chosen_dim, fork_text = candidates[0]
 
-            # Set pending key so downstream can observe which fork was offered
             pending_key = f"adaptive_fork_pending:{thread_id}"
             store.set(pending_key, chosen_dim, ex=_FORK_PENDING_TTL)
 
@@ -631,14 +657,12 @@ class AdaptiveLayerService:
             if not rows:
                 return ""
 
-            # Parse and filter for sufficient consecutive cycles
             eligible: List[tuple] = []
             for trait_key, trait_value in rows:
                 try:
                     data = json.loads(trait_value)
                     cycles = int(data.get('consecutive_cycles', 0))
                     if cycles >= 6:
-                        # Extract dimension name after 'growth_signal:'
                         dim = trait_key.split(':', 1)[1] if ':' in trait_key else trait_key
                         eligible.append((cycles, dim))
                 except Exception:
@@ -647,7 +671,6 @@ class AdaptiveLayerService:
             if not eligible:
                 return ""
 
-            # Pick the strongest (highest consecutive_cycles)
             eligible.sort(key=lambda x: x[0], reverse=True)
             _, strongest_dim = eligible[0]
 
@@ -657,7 +680,6 @@ class AdaptiveLayerService:
 
             reflection = random.choice(variants)
 
-            # Set 24-hour cooldown
             store.set(cooldown_key, '1', ex=_GROWTH_COOLDOWN_TTL)
 
             return reflection
@@ -690,29 +712,6 @@ class AdaptiveLayerService:
         if val_f >= high_thresh:
             return high_text
         return ""
-
-    def _resolve_emotional_slot(self, style: dict) -> str:
-        """
-        Return an emotional/certainty directive only when salience > 1.5
-        on either emotional_valence or certainty_level.
-
-        Picks the dimension with the higher salience.
-        """
-        candidates: List[tuple] = []
-        for dim in ('emotional_valence', 'certainty_level'):
-            val = style.get(dim)
-            if val is None:
-                continue
-            val_f = float(val)
-            salience = abs(val_f - _MIDPOINT)
-            if salience > 1.5:
-                text = self._resolve_directive(dim, style)
-                if text:
-                    candidates.append((salience, text))
-        if not candidates:
-            return ""
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
 
     @staticmethod
     def _challenge_tier(tolerance: float) -> str:

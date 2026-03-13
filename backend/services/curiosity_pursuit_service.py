@@ -71,7 +71,7 @@ class CuriosityPursuitService:
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            for queue_name in ['prompt-queue', 'memory-chunker-queue']:
+            for queue_name in ['prompt-queue']:
                 if store.llen(queue_name) > 0:
                     return False
             return True

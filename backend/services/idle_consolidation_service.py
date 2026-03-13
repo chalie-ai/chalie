@@ -47,7 +47,6 @@ class IdleConsolidationService:
         topics = config.get("memory", {}).get("topics", {})
 
         self.prompt_queue = topics.get("prompt_queue", "prompt-queue")
-        self.memory_queue = topics.get("memory_chunker", "memory-chunker-queue")
         self.episodic_queue = topics.get("episodic_memory", "episodic-memory-queue")
         self.semantic_queue = config.get("memory", {}).get("queues", {}).get(
             "semantic_consolidation_queue", {}
@@ -110,8 +109,7 @@ class IdleConsolidationService:
         """
         queues = [
             self.prompt_queue,
-            self.memory_queue,
-            self.episodic_queue
+            self.episodic_queue,
         ]
 
         for queue_name in queues:

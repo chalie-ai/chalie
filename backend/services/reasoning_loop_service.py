@@ -39,7 +39,6 @@ from typing import Optional, List, Dict, Any
 
 from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
-from services.gist_storage_service import GistStorageService
 from services.semantic_storage_service import SemanticStorageService
 from services.semantic_retrieval_service import SemanticRetrievalService
 from services.episodic_retrieval_service import EpisodicRetrievalService
@@ -136,7 +135,6 @@ class ReasoningLoopService:
         'curiosity_finding': '_handle_reasoning_signal',
         'goal_inferred': '_handle_reasoning_signal',
         # Lightweight handlers: update state, no full reasoning cycle
-        'gist_stored': '_handle_gist_stored',
         'trait_changed': '_handle_trait_changed',
         'task_state_changed': '_handle_task_state_changed',
         'schedule_fired': '_handle_schedule_fired',
@@ -147,7 +145,7 @@ class ReasoningLoopService:
         """Initialize the reasoning loop service and all dependent services.
 
         Loads the agent config, resolves queue names from connection config,
-        instantiates semantic/episodic retrieval and gist storage services,
+        instantiates semantic/episodic retrieval services,
         creates the background LLM proxy, and registers all autonomous action
         handlers with the decision router.
 
@@ -166,7 +164,6 @@ class ReasoningLoopService:
         conn_config = ConfigService.connections()
         topics = conn_config.get("memory", {}).get("topics", {})
         self.prompt_queue = topics.get("prompt_queue", "prompt-queue")
-        self.memory_queue = topics.get("memory_chunker", "memory-chunker-queue")
         self.episodic_queue = topics.get("episodic_memory", "episodic-memory-queue")
         self.semantic_queue = conn_config.get("memory", {}).get("queues", {}).get(
             "semantic_consolidation_queue", {}
@@ -183,9 +180,6 @@ class ReasoningLoopService:
         episodic_config = ConfigService.resolve_agent_config("episodic-memory")
         self.episodic_retrieval = EpisodicRetrievalService(self.db_service, episodic_config)
 
-        # Gist storage
-        self.gist_storage = GistStorageService()
-
         # LLM for thought synthesis — refreshable so provider changes take effect without restart
         self.ollama = create_background_llm_proxy("cognitive-drift")
 
@@ -199,7 +193,6 @@ class ReasoningLoopService:
         self.episode_lookback_hours = self.config.get('episode_lookback_hours', 168)
         self.episode_recency_decay = self.config.get('episode_recency_decay', 0.02)
         self.salience_lookback_days = self.config.get('salience_lookback_days', 7)
-        self.gist_confidence = self.config.get('gist_confidence', 8)
         self.cooldown_minutes = self.config.get('concept_cooldown_minutes', 60)
         self.jitter_range = self.config.get('jitter_range', [0.7, 1.3])
         self.fatigue_budget = self.config.get('fatigue_budget', 2.5)
@@ -280,7 +273,6 @@ class ReasoningLoopService:
             reflect = ReflectAction(
                 config=reflect_config,
                 services={
-                    'gist_storage': self.gist_storage,
                     'embedding_service': self.embedding_service,
                     'db_service': self.db_service,
                 },
@@ -417,19 +409,6 @@ class ReasoningLoopService:
             )
             return
         self._reason_from_seed(seed, signal)
-
-    def _handle_gist_stored(self, signal: ReasoningSignal) -> None:
-        """Track active conversation topics — no reasoning needed."""
-        try:
-            topic = signal.topic or 'general'
-            # Update active topics set with TTL
-            self.store.zadd('reasoning_loop:active_topics', {topic: time.time()})
-            # Prune topics older than 1 hour
-            cutoff = time.time() - 3600
-            self.store.zremrangebyscore('reasoning_loop:active_topics', '-inf', cutoff)
-            logger.debug(f"{LOG_PREFIX} Tracked active topic '{topic}' from gist")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to track gist topic: {e}")
 
     def _handle_trait_changed(self, signal: ReasoningSignal) -> None:
         """Flag identity shifts for autobiography — no reasoning needed."""
@@ -810,7 +789,7 @@ class ReasoningLoopService:
         drift_succeeded = thought is not None
 
         if drift_succeeded:
-            # Step 8: Store as gist (always — preserves current behavior)
+            # Step 8: Log thought to working memory for context continuity
             self._store_drift(seed['topic'], thought['type'], thought['content'])
 
             # Step 9: Mark seed + activated concepts as used
@@ -875,7 +854,6 @@ class ReasoningLoopService:
         """Check if all worker queues are empty."""
         queues = [
             self.prompt_queue,
-            self.memory_queue,
             self.episodic_queue,
             self.semantic_queue,
         ]
@@ -1261,21 +1239,17 @@ class ReasoningLoopService:
         logger.warning(f"{LOG_PREFIX} Failed to parse LLM response after {max_retries} attempts: {last_error}")
         return None
 
-    # -- Gist storage ----------------------------------------------------------
+    # -- Drift logging ----------------------------------------------------------
 
     def _store_drift(self, topic: str, drift_type: str, thought: str):
-        """Store drift thought as a gist."""
-        self.gist_storage.store_gists(
-            topic=topic,
-            gists=[{
-                'content': f"[{drift_type}] {thought}",
-                'type': 'drift',
-                'confidence': self.gist_confidence,
-            }],
-            prompt='[cognitive-drift]',
-            response=thought,
-        )
-        logger.info(f"{LOG_PREFIX} Stored drift gist: [{drift_type}] {thought[:80]}...")
+        """Log drift thought to working memory for context continuity."""
+        try:
+            from services.working_memory_service import WorkingMemoryService
+            wm = WorkingMemoryService()
+            wm.append_turn(topic, 'system', f"[drift/{drift_type}] {thought}")
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to log drift to working memory: {e}")
+        logger.info(f"{LOG_PREFIX} Drift thought: [{drift_type}] {thought[:80]}...")
 
     # -- State tracking --------------------------------------------------------
 

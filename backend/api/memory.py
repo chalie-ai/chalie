@@ -15,32 +15,30 @@ memory_bp = Blueprint('memory', __name__)
 @memory_bp.route('/memory/context', methods=['GET'])
 @require_session
 def memory_context():
-    """Return persistent life context — traits, facts, episodes, concepts."""
+    """Return persistent life context — traits, episodes, concepts."""
     try:
         from services.database_service import get_shared_db_service
         from services.user_trait_service import UserTraitService
-        from services.fact_store_service import FactStoreService
         from services.episodic_retrieval_service import EpisodicRetrievalService
         from services.semantic_retrieval_service import SemanticRetrievalService
-        from services.thread_service import get_thread_service
         from services.config_service import ConfigService
 
         db = get_shared_db_service()
-        result = {"traits": [], "facts": [], "significant_episodes": [], "concepts": []}
+        result = {"traits": [], "significant_episodes": [], "concepts": []}
 
         # User traits — structured list from DB + text summary for prompt injection
         try:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT trait_key, trait_value, confidence, category, source "
+                    "SELECT trait_key, trait_value, confidence, category "
                     "FROM user_traits "
                     "WHERE confidence >= 0.3 ORDER BY confidence DESC LIMIT 20"
                 )
                 rows = cursor.fetchall()
                 result["traits"] = [
                     {"key": r[0], "value": r[1], "confidence": round(float(r[2] or 0), 3),
-                     "category": r[3], "source": r[4]}
+                     "category": r[3]}
                     for r in rows
                 ]
             trait_service = UserTraitService(db)
@@ -49,25 +47,6 @@ def memory_context():
                 result["traits_summary"] = traits_text
         except Exception as e:
             logger.warning(f"[Memory] Trait retrieval failed: {e}")
-
-        # Facts for active topic
-        try:
-            ts = get_thread_service()
-            thread_id = ts.get_active_thread_id("default")
-            if thread_id:
-                from services.memory_client import MemoryClientService
-                store = MemoryClientService.create_connection()
-                topic_data = store.hgetall(f"thread:{thread_id}")
-                topic = topic_data.get("current_topic", "") if topic_data else ""
-                if topic:
-                    fact_service = FactStoreService()
-                    facts = fact_service.get_all_facts(topic)
-                    result["facts"] = [
-                        {"key": f.get("key", ""), "value": f.get("value", ""), "confidence": f.get("confidence", 0)}
-                        for f in facts
-                    ]
-        except Exception as e:
-            logger.warning(f"[Memory] Fact retrieval failed: {e}")
 
         # High-salience episodes
         try:
@@ -102,19 +81,17 @@ def memory_context():
 @memory_bp.route('/memory/forget', methods=['POST'])
 @require_session
 def memory_forget():
-    """Forget specific content by scope (topic, fact, all)."""
+    """Forget specific content by scope (topic, all)."""
     if not request.is_json:
         return jsonify({"error": "Content-Type must be application/json"}), 400
 
     data = request.get_json()
     scope = data.get("scope", "")
 
-    if scope not in ("topic", "fact", "all"):
-        return jsonify({"error": "scope must be 'topic', 'fact', or 'all'"}), 400
+    if scope not in ("topic", "all"):
+        return jsonify({"error": "scope must be 'topic' or 'all'"}), 400
 
     try:
-        from services.gist_storage_service import GistStorageService
-        from services.fact_store_service import FactStoreService
         from services.working_memory_service import WorkingMemoryService
 
         if scope == "topic":
@@ -122,26 +99,9 @@ def memory_forget():
             if not topic:
                 return jsonify({"error": "Missing 'topic' field"}), 400
 
-            GistStorageService().clear_gists(topic)
-            FactStoreService().clear_facts(topic)
             WorkingMemoryService().clear(topic)
 
             return jsonify({"deleted": True, "scope": "topic", "topic": topic}), 200
-
-        elif scope == "fact":
-            topic = data.get("topic", "").strip()
-            fact_key = data.get("fact_key", "").strip()
-            if not topic or not fact_key:
-                return jsonify({"error": "Missing 'topic' or 'fact_key' field"}), 400
-
-            fs = FactStoreService()
-            # Delete specific fact key + remove from index
-            store_key = fs._get_fact_key(topic, fact_key)
-            index_key = fs._get_fact_index_key(topic)
-            fs.store.delete(store_key)
-            fs.store.zrem(index_key, fact_key)
-
-            return jsonify({"deleted": True, "scope": "fact", "topic": topic, "fact_key": fact_key}), 200
 
         elif scope == "all":
             confirm = request.headers.get("X-Confirm-Delete", "")
@@ -151,7 +111,7 @@ def memory_forget():
             # Clear all MemoryStore memory stores
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            for pattern in ["working_memory:*", "gist:*", "gist_index:*", "fact:*", "fact_index:*", "world_state:*"]:
+            for pattern in ["working_memory:*", "world_state:*"]:
                 keys = store.keys(pattern)
                 if keys:
                     store.delete(*keys)

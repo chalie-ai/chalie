@@ -98,11 +98,11 @@ class TestAgentConfigAndPrompt:
     def test_get_agent_prompt_loads_correct_file(self):
         """get_agent_prompt delegates to load_text with the correct path."""
         with patch.object(ConfigService, 'load_text', return_value="System prompt here") as mock_load:
-            result = ConfigService.get_agent_prompt("memory-chunker")
+            result = ConfigService.get_agent_prompt("trait-extraction")
 
         mock_load.assert_called_once()
         call_path = mock_load.call_args[0][0]
-        assert call_path.endswith("prompts/memory-chunker.md")
+        assert call_path.endswith("prompts/trait-extraction.md")
         assert result == "System prompt here"
 
 
@@ -211,13 +211,13 @@ class TestGetAllAgents:
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
         (agents_dir / "frontal-cortex.json").write_text("{}")
-        (agents_dir / "memory-chunker.json").write_text("{}")
         (agents_dir / "mode-router.json").write_text("{}")
+        (agents_dir / "trait-extraction.json").write_text("{}")
 
         with patch.object(ConfigService, 'AGENTS_CONFIGS', agents_dir):
             result = ConfigService.get_all_agents()
 
-        assert sorted(result) == ["frontal-cortex", "memory-chunker", "mode-router"]
+        assert sorted(result) == ["frontal-cortex", "mode-router", "trait-extraction"]
 
     def test_returns_empty_list_for_empty_directory(self, tmp_path):
         """Empty directory yields empty list."""

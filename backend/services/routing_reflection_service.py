@@ -48,7 +48,6 @@ class RoutingReflectionService:
         conn_config = ConfigService.connections()
         topics = conn_config.get("memory", {}).get("topics", {})
         self.prompt_queue = topics.get("prompt_queue", "prompt-queue")
-        self.memory_queue = topics.get("memory_chunker", "memory-chunker-queue")
         self.episodic_queue = topics.get("episodic_memory", "episodic-memory-queue")
         self.semantic_queue = conn_config.get("memory", {}).get("queues", {}).get(
             "semantic_consolidation_queue", {}
@@ -108,7 +107,7 @@ class RoutingReflectionService:
 
     def _are_workers_idle(self) -> bool:
         """Check if all worker queues are empty."""
-        for queue_name in [self.prompt_queue, self.memory_queue,
+        for queue_name in [self.prompt_queue,
                            self.episodic_queue, self.semantic_queue]:
             if self.store.llen(queue_name) > 0:
                 return False

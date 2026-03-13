@@ -168,8 +168,6 @@ class TestModeRouter:
             topic="test-topic",
             context_warmth=0.5,
             working_memory=wm,
-            gist_storage=gs,
-            fact_store=fs,
             world_state_service=ws,
             classification_result={'confidence': 0.8, 'is_new_topic': False},
             session_service=ss,
@@ -208,7 +206,7 @@ class TestComputeNlpSignals:
 
         full_signals = collect_routing_signals(
             text=text, topic="test", context_warmth=0.5,
-            working_memory=wm, gist_storage=gs, fact_store=fs,
+            working_memory=wm,
             world_state_service=ws, classification_result={'confidence': 0.5, 'is_new_topic': False},
             session_service=ss, intent=intent,
         )

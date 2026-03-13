@@ -28,21 +28,18 @@ import logging
 from services import ConfigService, FrontalCortexService, OrchestratorService, PromptQueue, SessionService
 from services.llm_service import create_llm_service
 from services.recent_topic_service import RecentTopicService
-from services.gist_storage_service import GistStorageService
 from services.world_state_service import WorldStateService
 from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
-from services.event_bus_service import EventBusService, ENCODE_EVENT
+from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
 from services.topic_classifier_service import TopicClassifierService
-from services.fact_store_service import FactStoreService
 from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
 from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
 from services.context_relevance_service import ContextRelevanceService
 from services.context_assembly_service import ContextAssemblyService
-from .memory_chunker_worker import memory_chunker_worker
 
 # Global session service instance (shared across worker invocations)
 _session_service = None
@@ -159,20 +156,83 @@ def get_mode_router():
     return _mode_router
 
 
-def enqueue_memory_chunker(topic: str, exchange_id: str, prompt_message: str, response_message: str, metadata: dict = None, thread_id: str = None):
-    """Enqueue a memory chunking job for the completed exchange."""
-    memory_queue = PromptQueue(queue_name="memory-chunker-queue", worker_func=memory_chunker_worker)
+def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_id: str = None):
+    """Enqueue lightweight trait extraction for a user message."""
+    try:
+        import threading
 
-    job_payload = {
-        'topic': topic,
-        'exchange_id': exchange_id,
-        'prompt_message': prompt_message,
-        'response_message': response_message,
-        'metadata': metadata or {},
-        'thread_id': thread_id or '',
-    }
+        def _extract_traits():
+            try:
+                import json
+                from services.user_trait_service import UserTraitService
+                from services.database_service import get_shared_db_service
+                from services.llm_service import LLMService
 
-    memory_queue.enqueue(job_payload)
+                llm = LLMService()
+                prompt_text = _load_trait_prompt(prompt_message)
+                if not prompt_text:
+                    return
+
+                result = llm.generate(
+                    prompt_text,
+                    job='trait-extraction',
+                    temperature=0.3,
+                    timeout=30,
+                )
+                if not result:
+                    return
+
+                parsed = json.loads(result)
+                traits = parsed.get('traits', [])
+
+                CONFIDENCE_MAP = {'high': 0.85, 'medium': 0.55, 'low': 0.35}
+                CORE_KEYS = {
+                    'name', 'age', 'gender', 'occupation', 'nationality', 'language',
+                    'education', 'culture_region', 'language_preference',
+                    'relationship_status', 'ethnicity', 'birthday',
+                }
+
+                db = get_shared_db_service()
+                trait_service = UserTraitService(db)
+
+                for trait in traits:
+                    key = trait.get('key', '').lower().strip()
+                    value = trait.get('value', '').strip()
+                    conf_label = trait.get('confidence', 'low')
+
+                    if not key or not value:
+                        continue
+
+                    confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
+                    category = 'core' if key in CORE_KEYS else 'preference'
+
+                    trait_service.store_trait(
+                        trait_key=key,
+                        trait_value=value,
+                        confidence=confidence,
+                        category=category,
+                    )
+
+            except Exception as e:
+                logging.debug(f"[TRAIT_EXTRACT] Failed: {e}")
+
+        def _load_trait_prompt(message: str) -> str:
+            try:
+                import os
+                prompt_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), 'prompts', 'trait-extraction.md'
+                )
+                with open(prompt_path, 'r') as f:
+                    template = f.read()
+                return template.replace('{{message}}', message)
+            except Exception:
+                return None
+
+        t = threading.Thread(target=_extract_traits, daemon=True)
+        t.start()
+
+    except Exception as e:
+        logging.debug(f"[TRAIT_EXTRACT] Enqueue failed: {e}")
 
 
 def load_configs():
@@ -197,9 +257,6 @@ def load_configs():
                 'ACT': act_prompt,
             }
         },
-        'memory_chunker': {
-            'config': ConfigService.resolve_agent_config("memory-chunker")
-        }
     }
 
 
@@ -219,18 +276,13 @@ def get_existing_topics_from_db() -> list:
         return []
 
 
-def calculate_context_warmth(working_memory_len: int, gists: list, world_state_nonempty: bool) -> float:
+def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool, gists: list = None) -> float:
     """
     Calculate context warmth signal (0.0-1.0) for scaling uncertainty cost.
-
-    Gists with type='cold_start' are excluded so cold-start booster gists
-    don't inflate the warmth signal.
     """
     wm_score = min(working_memory_len / 4, 1.0)
-    real_gist_count = sum(1 for g in gists if g.get('type') != 'cold_start')
-    gist_score = min(real_gist_count / 5, 1.0)
     world_score = 1.0 if world_state_nonempty else 0.0
-    warmth = (wm_score + gist_score + world_score) / 3
+    warmth = (wm_score + world_score) / 2
     return warmth
 
 
@@ -652,7 +704,7 @@ def _generate_with_act_orchestrator(
 
 
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
-                       mode_router, signals, fact_store, metadata=None, context_warmth=1.0,
+                       mode_router, signals, metadata=None, context_warmth=1.0,
                        pre_routing_result=None, relevant_tools=None, selected_tools=None,
                        selected_skills=None, thread_id=None, returning_from_silence=False,
                        message_embedding=None):
@@ -937,14 +989,10 @@ def store_tool_dialog_memory(tool_name: str, turns: list):
         response_msg = turns[-1].get('response', '')
 
     try:
-        enqueue_memory_chunker(
-            topic=topic,
-            exchange_id=f'tool_dialog_{tool_name}_{int(time.time())}',
+        enqueue_trait_extraction(
             prompt_message=prompt_msg[:1000],
-            response_message=response_msg[:1000],
             metadata={
                 'source': f'tool_dialog:{tool_name}',
-                'memory_durability': 'tool_internal',
                 'tool_name': tool_name,
             },
         )
@@ -958,7 +1006,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
 
     Goes directly to response generation (no mode routing or user input logging).
     Tool has already formatted the prompt with its data.
-    Enqueues to memory-chunker with memory_durability: 'cron_tool' for 3x decay.
+    Enqueues trait extraction with memory_durability: 'cron_tool' for 3x decay.
     """
     try:
         from services.config_service import ConfigService
@@ -1063,22 +1111,17 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         except Exception as e:
             logging.error(f"[CRON TOOL] {tool_name}: Orchestrator failed: {e}")
 
-        # Enqueue to memory chunker with special durability marker for 3x decay
         try:
-            enqueue_memory_chunker(
-                topic=f'cron_tool:{tool_name}',
-                exchange_id=f'cron_{tool_name}_{int(time.time())}',
+            enqueue_trait_extraction(
                 prompt_message=text,
-                response_message=response_data['response'],
                 metadata={
                     'source': f'cron_tool:{tool_name}',
-                    'memory_durability': 'cron_tool',
                     'priority': priority,
                 },
                 thread_id=thread_id,
             )
         except Exception as e:
-            logging.warning(f"[CRON TOOL] {tool_name}: Memory chunker enqueue failed: {e}")
+            logging.warning(f"[CRON TOOL] {tool_name}: Trait extraction enqueue failed: {e}")
 
         # Log the cron tool execution
         try:
@@ -1149,9 +1192,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     working_memory = WorkingMemoryService(
         max_turns=cortex_config.get('max_working_memory_turns', 10)
     )
-    gist_storage = GistStorageService(attention_span_minutes=30, min_confidence=5, max_gists=8)
     world_state_service = WorldStateService()
-    fact_store = FactStoreService()
 
     # Build classification stub (topic is pre-determined)
     classification = {
@@ -1166,13 +1207,11 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     context_warmth = 0.0
     try:
         wm_turns = working_memory.get_recent_turns(thread_id or topic)
-        gists = gist_storage.get_latest_gists(topic)
         world_state = world_state_service.get_world_state(
             topic, thread_id=thread_id, message_embedding=None
         )
         context_warmth = calculate_context_warmth(
             working_memory_len=len(wm_turns),
-            gists=gists,
             world_state_nonempty=bool(world_state)
         )
     except Exception:
@@ -1193,8 +1232,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             topic=topic,
             context_warmth=context_warmth,
             working_memory=working_memory,
-            gist_storage=gist_storage,
-            fact_store=fact_store,
             world_state_service=world_state_service,
             classification_result=classification_result,
             session_service=session_service,
@@ -1408,14 +1445,6 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
             ))
 
             if similarity < 0.45:
-                # Genuinely different topic — store as gist silently
-                gist_storage = GistStorageService(attention_span_minutes=30, min_confidence=5, max_gists=8)
-                gist_storage.store_gists(
-                    topic=topic,
-                    gists=[{'content': f"[Background research] {act_history_context[:300]}", 'type': 'tool_result', 'confidence': 7}],
-                    prompt=original_prompt,
-                    response='(suppressed follow-up)'
-                )
                 _log_cycle_event('followup_suppressed', {'reason': 'stale', 'similarity': similarity}, topic)
                 logging.info(f"[TOOL RESULT] Suppressed stale follow-up (topic drift, similarity={similarity:.2f})")
                 return f"Topic '{topic}' | SUPPRESSED: topic changed to '{current_topic}'"
@@ -1426,13 +1455,6 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
     # If user is mid-conversation, defer
     defer_result = _should_deliver_followup(tool_cycle_id)
     if defer_result == 'suppress':
-        gist_storage = GistStorageService(attention_span_minutes=30, min_confidence=5, max_gists=8)
-        gist_storage.store_gists(
-            topic=topic,
-            gists=[{'content': f"[Background research] {act_history_context[:300]}", 'type': 'tool_result', 'confidence': 7}],
-            prompt=original_prompt,
-            response='(deferred → suppressed)'
-        )
         _log_cycle_event('followup_suppressed', {'reason': 'deferred_max'}, topic)
         return f"Topic '{topic}' | SUPPRESSED: max deferrals reached"
 
@@ -1527,24 +1549,6 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         except Exception as e:
             logging.error(f"[TOOL RESULT] Orchestrator failed: {e}")
 
-        # Emit encode event for memory chunker
-        try:
-            event_bus = EventBusService()
-            event_bus.emit_and_handle(ENCODE_EVENT, {
-                'topic': topic,
-                'exchange_id': f"tool_followup_{tool_cycle_id[:8] if tool_cycle_id else 'unknown'}",
-                'prompt_message': original_prompt,
-                'response_message': response_data['response'],
-                'metadata': {
-                    **metadata,
-                    'cycle_id': tool_cycle_id,
-                    'root_cycle_id': root_cycle_id,
-                    'is_followup': True,
-                },
-                'thread_id': thread_id,
-            })
-        except Exception as e:
-            logging.debug(f"[TOOL RESULT] Encode event failed: {e}")
 
         _log_cycle_event('followup_delivered', {
             'root_cycle_id': root_cycle_id,
@@ -2262,9 +2266,6 @@ def _run_iip_hook(text: str, database_service) -> None:
             trait_value=matched_name,
             confidence=0.95,
             category='core',
-            source='explicit',
-            is_literal=True,
-            speaker_confidence=1.0,
         )
         logging.info(f"[IIP] Promoted name='{matched_name}' → MemoryStore + SQLite")
 
@@ -2416,9 +2417,7 @@ def _detect_fork_response(text: str, thread_id: str):
                     trait_key=pref_key,
                     trait_value='true',
                     confidence=0.75,
-                    category='micro_preference',
-                    source='explicit',
-                    is_literal=True,
+                    category='preference',
                 )
                 logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")
                 # Clear the pending key
@@ -2481,7 +2480,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     configs = load_configs()
     cortex_config = configs['cortex']['config']
     cortex_prompt_map = configs['cortex']['prompt_map']
-    memory_chunker_config = configs['memory_chunker']['config']
 
     # Step 2: Resolve thread
     thread_service = get_thread_service()
@@ -2498,13 +2496,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 2a: Initialize services
     thread_conv_service = ThreadConversationService()
     recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
-    gist_storage = GistStorageService(
-        attention_span_minutes=30,
-        min_confidence=memory_chunker_config.get('min_gist_confidence', 7),
-        max_gists=8
-    )
     world_state_service = WorldStateService()
-    fact_store = FactStoreService()
 
     # Initialize working memory (keyed by thread_id)
     max_working_memory_turns = cortex_config.get('max_working_memory_turns', 10)
@@ -2519,21 +2511,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as e:
         logging.warning(f"[DIGEST] Interaction log not available: {e}")
 
-    # Initialize event bus with encode_event handler
+    # Initialize event bus
     event_bus = EventBusService()
-
-    def _handle_encode_event(event_type, payload):
-        """Translate encode_event into memory-chunker-queue enqueue."""
-        enqueue_memory_chunker(
-            payload['topic'],
-            payload['exchange_id'],
-            payload['prompt_message'],
-            payload['response_message'],
-            metadata=payload.get('metadata'),
-            thread_id=payload.get('thread_id'),
-        )
-
-    event_bus.subscribe(ENCODE_EVENT, _handle_encode_event)
 
     # Initialize metrics
     metrics = MetricsService()
@@ -2628,7 +2607,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             )
             if behavior_reward != 0.0:
                 logging.debug(f"[DIGEST] Previous exchange reward: {behavior_reward:.2f}")
-                # Cache reward in MemoryStore for identity reinforcement (read by memory chunker)
+                # Cache reward in MemoryStore for identity reinforcement
                 try:
                     from services.memory_client import MemoryClientService
                     reward_store = MemoryClientService.create_connection()
@@ -2659,28 +2638,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # PHASE B: RETRIEVAL (context assembly)
     # ═══════════════════════════════════════════════════════════
 
-    # Step 4: Inject cold-start gists if topic has none
-    if context_topic:
-        gist_storage.store_cold_start_gists(context_topic)
-
-    # Step 4a: Get context for frontal cortex
-    gists = []
-    if context_topic:
-        gists = gist_storage.get_latest_gists(context_topic)
-        if gists:
-            gist_lines = ["Recent conversation context:"]
-            for gist in gists:
-                gist_lines.append(f"- [{gist['type']}] {gist['content']} (confidence: {gist['confidence']})")
-            gist_context = "\n".join(gist_lines)
-        else:
-            last_msg = gist_storage.get_last_message(context_topic)
-            if last_msg:
-                gist_context = f"Last exchange:\nUser: {last_msg['prompt']}\nAssistant: {last_msg['response']}"
-            else:
-                gist_context = "No previous conversation context available"
-    else:
-        gist_context = "No previous conversation context available"
-
     world_state = (
         world_state_service.get_world_state(
             context_topic, thread_id=thread_id, message_embedding=None
@@ -2693,7 +2650,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     wm_turns = working_memory.get_recent_turns(thread_id)
     context_warmth = calculate_context_warmth(
         working_memory_len=len(wm_turns),
-        gists=gists,
+        gists=[],
         world_state_nonempty=bool(world_state)
     )
     logging.info(f"[DIGEST] Context warmth for '{context_topic}': {context_warmth:.2f}")
@@ -2754,21 +2711,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             source=source,
             metadata={'classification_time': classification_time}
         )
-
-    # Step 7b: Encode user message immediately (per-message encoding — Phase A)
-    # Always encode the user message, even for fast-path acks (user said something meaningful)
-    event_bus.emit_and_handle(ENCODE_EVENT, {
-        'topic': topic,
-        'exchange_id': exchange_id,
-        'prompt_message': text,
-        'response_message': '',
-        'metadata': metadata,
-        'thread_id': thread_id,
-    })
-
-    # Step 7c: If topic changed from context_topic, inject cold-start gists for new topic
-    if context_topic and topic != context_topic:
-        gist_storage.store_cold_start_gists(topic)
 
     # Step 7d: Focus auto-inference and distraction check
     try:
@@ -2869,22 +2811,19 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Tool relevance scoring removed — handled by CognitiveTriageService
 
     # Step 9c: Compute memory_confidence before intent classifier
-    # Use same FOK formula as mode_router_service.py collect_routing_signals()
+    # Use FOK + context warmth + working memory depth as density proxy
     from services.memory_client import MemoryClientService
     store = MemoryClientService.create_connection(decode_responses=True)
     raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 
-    gist_count = sum(1 for g in gists if g.get('type') != 'cold_start') if gists else 0
-    facts = fact_store.get_all_facts(topic) if topic else []
-    fact_count = len(facts)
-    density_score = min(1.0, (gist_count + fact_count) / 6.0)
+    wm_depth_score = min(1.0, len(wm_turns) / 6.0)
 
     memory_confidence = (
         0.4 * fok_score
         + 0.4 * context_warmth
-        + 0.2 * density_score
+        + 0.2 * wm_depth_score
     )
     if classification_result.get('is_new_topic', False):
         memory_confidence *= 0.7
@@ -2960,8 +2899,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             context_warmth=context_warmth,
             memory_confidence=memory_confidence,
             working_memory_turns=working_memory_turns,
-            gist_count=gist_count,
-            fact_count=fact_count,
+            gist_count=0,
+            fact_count=0,
             previous_mode=_previous_mode or 'RESPOND',
             previous_tools=_previous_tools,
             tool_summaries=profile_service.get_triage_summaries(),
@@ -3046,9 +2985,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     _act_signals = {
                         'context_warmth': context_warmth,
                         'working_memory_turns': working_memory_turns,
-                        'gist_count': gist_count,
-                        'fact_count': fact_count,
-                        'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                        'gist_count': 0,
+                        'fact_count': 0,
+                        'fact_keys': [],
                         'world_state_present': bool(world_state and world_state.strip()),
                         'topic_confidence': classification_result.get('confidence', 0.5),
                         'is_new_topic': classification_result.get('is_new_topic', False),
@@ -3059,7 +2998,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     _act_signals['_prompt_text'] = text
                     response_data, routing_result = route_and_generate(
                         topic, text, classification, thread_conv_service,
-                        cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
+                        cortex_config, cortex_prompt_map, mode_router, _act_signals,
                         metadata=metadata, context_warmth=context_warmth,
                         pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                         selected_tools=triage_result.tools if triage_result.tools else None,
@@ -3092,9 +3031,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _dt_signals = {
                 'context_warmth': context_warmth,
                 'working_memory_turns': working_memory_turns,
-                'gist_count': gist_count,
-                'fact_count': fact_count,
-                'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                'gist_count': 0,
+                'fact_count': 0,
+                'fact_keys': [],
                 'world_state_present': bool(world_state and world_state.strip()),
                 'topic_confidence': classification_result.get('confidence', 0.5),
                 'is_new_topic': classification_result.get('is_new_topic', False),
@@ -3121,9 +3060,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     _act_signals = {
                         'context_warmth': context_warmth,
                         'working_memory_turns': working_memory_turns,
-                        'gist_count': gist_count,
-                        'fact_count': fact_count,
-                        'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                        'gist_count': 0,
+                        'fact_count': 0,
+                        'fact_keys': [],
                         'world_state_present': bool(world_state and world_state.strip()),
                         'topic_confidence': classification_result.get('confidence', 0.5),
                         'is_new_topic': classification_result.get('is_new_topic', False),
@@ -3134,7 +3073,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     _act_signals['_prompt_text'] = text
                     response_data, routing_result = route_and_generate(
                         topic, text, classification, thread_conv_service,
-                        cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
+                        cortex_config, cortex_prompt_map, mode_router, _act_signals,
                         metadata=metadata, context_warmth=context_warmth,
                         pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                         selected_tools=triage_result.tools if triage_result.tools else None,
@@ -3159,9 +3098,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 _act_signals = {
                     'context_warmth': context_warmth,
                     'working_memory_turns': working_memory_turns,
-                    'gist_count': gist_count,
-                    'fact_count': fact_count,
-                    'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                    'gist_count': 0,
+                    'fact_count': 0,
+                    'fact_keys': [],
                     'world_state_present': bool(world_state and world_state.strip()),
                     'topic_confidence': classification_result.get('confidence', 0.5),
                     'is_new_topic': classification_result.get('is_new_topic', False),
@@ -3172,7 +3111,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 _act_signals['_prompt_text'] = text
                 response_data, routing_result = route_and_generate(
                     topic, text, classification, thread_conv_service,
-                    cortex_config, cortex_prompt_map, mode_router, _act_signals, fact_store,
+                    cortex_config, cortex_prompt_map, mode_router, _act_signals,
                     metadata=metadata, context_warmth=context_warmth,
                     pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                     selected_tools=triage_result.tools if triage_result.tools else None,
@@ -3197,9 +3136,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 # Context signals already available from Phase A/B
                 'context_warmth': context_warmth,
                 'working_memory_turns': working_memory_turns,
-                'gist_count': gist_count,
-                'fact_count': fact_count,
-                'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+                'gist_count': 0,
+                'fact_count': 0,
+                'fact_keys': [],
                 'world_state_present': bool(world_state and world_state.strip()),
                 'topic_confidence': classification_result.get('confidence', 0.5),
                 'is_new_topic': classification_result.get('is_new_topic', False),
@@ -3216,7 +3155,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 _forced_mode = 'RESPOND'
             response_data, routing_result = route_and_generate(
                 topic, text, classification, thread_conv_service,
-                cortex_config, cortex_prompt_map, mode_router, _forced_signals, fact_store,
+                cortex_config, cortex_prompt_map, mode_router, _forced_signals,
                 metadata=metadata, context_warmth=context_warmth,
                 pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal, 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
                 selected_tools=triage_result.tools if triage_result.tools else None,
@@ -3237,9 +3176,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _fallback_signals = {
             'context_warmth': context_warmth,
             'working_memory_turns': working_memory_turns,
-            'gist_count': gist_count,
-            'fact_count': fact_count,
-            'fact_keys': [f.get('key', '') for f in facts] if facts else [],
+            'gist_count': 0,
+            'fact_count': 0,
+            'fact_keys': [],
             'world_state_present': bool(world_state and world_state.strip()),
             'topic_confidence': classification_result.get('confidence', 0.5),
             'is_new_topic': classification_result.get('is_new_topic', False),
@@ -3250,7 +3189,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _fallback_signals['_prompt_text'] = text
         response_data, routing_result = route_and_generate(
             topic, text, classification, thread_conv_service,
-            cortex_config, cortex_prompt_map, mode_router, _fallback_signals, fact_store,
+            cortex_config, cortex_prompt_map, mode_router, _fallback_signals,
             metadata=metadata, context_warmth=context_warmth,
             thread_id=thread_id,
             returning_from_silence=returning_from_silence,
@@ -3308,18 +3247,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         NurtureAction.record_user_activity()
     except Exception as _nurture_e:
         logging.debug(f"[DIGEST] Nurture activity reset failed: {_nurture_e}")
-
-    # Step 11d: Encode assistant response (per-message encoding — Phase D)
-    # Skip for fast-path template acks — template has no semantic content worth encoding
-    if not is_fast_path_ack:
-        event_bus.emit_and_handle(ENCODE_EVENT, {
-            'topic': topic,
-            'exchange_id': exchange_id,
-            'prompt_message': '',
-            'response_message': response_data['response'],
-            'metadata': metadata,
-            'thread_id': thread_id,
-        })
 
     # Step 11e: Detect saveable content in response
     if not is_fast_path_ack:

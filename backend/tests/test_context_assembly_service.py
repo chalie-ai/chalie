@@ -21,8 +21,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value='wm'), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value='facts'), \
-             patch.object(svc, '_get_gists', return_value='gists'), \
              patch.object(svc, '_get_episodes', return_value='eps'), \
              patch.object(svc, '_get_procedural_hints', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
@@ -30,7 +28,7 @@ class TestContextAssemblyService:
             result = svc.assemble(prompt='hello', topic='test')
 
         expected_keys = {
-            'working_memory', 'moments', 'facts', 'gists',
+            'working_memory', 'moments',
             'episodes', 'procedural', 'concepts', 'previous_session', 'total_tokens_est',
             'self_awareness',
         }
@@ -43,8 +41,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value='some text'), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
@@ -62,8 +58,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value='User said hello'), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
@@ -78,8 +72,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value='') as mock_wm, \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
@@ -94,32 +86,12 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value='') as mock_wm, \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
             svc.assemble(prompt='hi', topic='my-topic')
 
         mock_wm.assert_called_once_with('my-topic')
-
-    # ── Facts ─────────────────────────────────────────────────────────
-
-    def test_facts_included_when_available(self):
-        """Facts text should pass through to the result."""
-        config = {'max_context_tokens': 100_000}
-        svc = ContextAssemblyService(config)
-
-        with patch.object(svc, '_get_working_memory', return_value=''), \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value='name: Alice'), \
-             patch.object(svc, '_get_gists', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
-            result = svc.assemble(prompt='hi', topic='t')
-
-        assert result['facts'] == 'name: Alice'
 
     # ── Episodes ──────────────────────────────────────────────────────
 
@@ -130,8 +102,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value=''), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value='Went to gym'), \
              patch.object(svc, '_get_concepts', return_value=''):
 
@@ -144,38 +114,15 @@ class TestContextAssemblyService:
     def test_working_memory_failure_returns_empty_string(self):
         """If WorkingMemoryService import fails, return ''."""
         config = {'max_context_tokens': 100_000}
-        svc = ContextAssemblyService(config)
-
-        with patch(
-            'services.context_assembly_service.ContextAssemblyService._get_working_memory',
-            side_effect=Exception('MemoryStore down'),
-        ):
-            # Call the real _get_working_memory which catches exceptions
-            result = svc._get_working_memory.__wrapped__(svc, 'topic') if hasattr(svc._get_working_memory, '__wrapped__') else ''
-
-        # The real method catches all exceptions and returns ""
-        # Test via assemble which calls _get_* methods that handle errors
         svc2 = ContextAssemblyService(config)
         with patch('services.working_memory_service.WorkingMemoryService', side_effect=Exception('boom')), \
              patch.object(svc2, '_get_moments', return_value=''), \
-             patch.object(svc2, '_get_facts', return_value=''), \
-             patch.object(svc2, '_get_gists', return_value=''), \
              patch.object(svc2, '_get_episodes', return_value=''), \
              patch.object(svc2, '_get_concepts', return_value=''):
 
             result = svc2.assemble(prompt='hi', topic='t')
 
         assert result['working_memory'] == ''
-
-    def test_facts_failure_returns_empty_string(self):
-        """If FactStoreService import fails, _get_facts returns ''."""
-        config = {}
-        svc = ContextAssemblyService(config)
-
-        with patch('services.fact_store_service.FactStoreService', side_effect=Exception('boom')):
-            result = svc._get_facts('topic')
-
-        assert result == ''
 
     def test_episodes_failure_returns_empty_string(self):
         """If EpisodicRetrievalService fails, _get_episodes returns ''."""
@@ -197,8 +144,6 @@ class TestContextAssemblyService:
         # 'concepts' has lowest default weight (0.6), should be trimmed first
         with patch.object(svc, '_get_working_memory', return_value='A' * 100), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value='B' * 100), \
-             patch.object(svc, '_get_gists', return_value='C' * 100), \
              patch.object(svc, '_get_episodes', return_value='D' * 100), \
              patch.object(svc, '_get_concepts', return_value='E' * 100):
 
@@ -207,8 +152,8 @@ class TestContextAssemblyService:
         # Budget is 10 tokens (~40 chars), so most sections should be trimmed
         # The highest-weight section (working_memory=1.0) should have the most content
         total_text = sum(len(v) for v in result.values() if isinstance(v, str))
-        # Verify budget mechanism ran (total should be much less than original 500 chars)
-        assert total_text < 500
+        # Verify budget mechanism ran (total should be much less than original 300 chars)
+        assert total_text < 300
 
     def test_previous_session_populated_from_recent_visible_context(self):
         """recent_visible_context should populate previous_session."""
@@ -222,8 +167,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value=''), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value=''):
 
@@ -253,7 +196,7 @@ class TestContextAssemblyService:
 
     def test_custom_weights_override_defaults(self):
         """Config-provided weights should override DEFAULT_WEIGHTS."""
-        custom = {'working_memory': 0.1, 'facts': 0.2}
+        custom = {'working_memory': 0.1, 'episodes': 0.2}
         svc = ContextAssemblyService({'context_weights': custom})
         assert svc.weights == custom
 
@@ -323,8 +266,6 @@ class TestContextAssemblyService:
 
         with patch.object(svc, '_get_working_memory', return_value=''), \
              patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_facts', return_value=''), \
-             patch.object(svc, '_get_gists', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_concepts', return_value='## Relevant Concepts\n- **AI**: Artificial intelligence'):
 
@@ -491,8 +432,6 @@ class TestProceduralInAssemble:
 
         with patch.object(svc, '_get_working_memory', return_value=""), \
              patch.object(svc, '_get_moments', return_value=""), \
-             patch.object(svc, '_get_facts', return_value=""), \
-             patch.object(svc, '_get_gists', return_value=""), \
              patch.object(svc, '_get_episodes', return_value=""), \
              patch.object(svc, '_get_procedural_hints', return_value=""), \
              patch.object(svc, '_get_concepts', return_value=""):
@@ -507,8 +446,6 @@ class TestProceduralInAssemble:
 
         with patch.object(svc, '_get_working_memory', return_value=""), \
              patch.object(svc, '_get_moments', return_value=""), \
-             patch.object(svc, '_get_facts', return_value=""), \
-             patch.object(svc, '_get_gists', return_value=""), \
              patch.object(svc, '_get_episodes', return_value=""), \
              patch.object(svc, '_get_procedural_hints', return_value=hints), \
              patch.object(svc, '_get_concepts', return_value=""):

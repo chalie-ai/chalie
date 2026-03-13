@@ -313,10 +313,8 @@ CREATE TABLE IF NOT EXISTS user_traits (
     id TEXT PRIMARY KEY,
     trait_key TEXT NOT NULL,
     trait_value TEXT NOT NULL,
-    category TEXT DEFAULT 'general',
+    category TEXT DEFAULT 'preference',
     confidence REAL DEFAULT 0.5,
-    source TEXT DEFAULT 'inferred',
-    is_literal INTEGER DEFAULT 1,            -- BOOLEAN
     reinforcement_count INTEGER DEFAULT 1,
     last_reinforced_at TEXT DEFAULT (datetime('now')),
     last_conflict_at TEXT,
