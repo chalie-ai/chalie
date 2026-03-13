@@ -8,27 +8,31 @@
 PRAGMA foreign_keys = OFF;
 
 -- ── user_traits ─────────────────────────────────────────────────────────────
+-- Note: source and is_literal columns were removed (migration 006 / schema.sql update).
+-- This migration must match schema.sql's current column set so it works on both
+-- fresh installs (where schema.sql already created the table) and upgrades
+-- (where the old table had source/is_literal — migration 006 strips them).
 CREATE TABLE IF NOT EXISTS user_traits_new (
     id TEXT PRIMARY KEY,
     trait_key TEXT NOT NULL,
     trait_value TEXT NOT NULL,
-    category TEXT DEFAULT 'general',
+    category TEXT DEFAULT 'preference',
     confidence REAL DEFAULT 0.5,
-    source TEXT DEFAULT 'inferred',
-    is_literal INTEGER DEFAULT 1,
     reinforcement_count INTEGER DEFAULT 1,
     last_reinforced_at TEXT DEFAULT (datetime('now')),
     last_conflict_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
+    reliability TEXT DEFAULT 'reliable',
     UNIQUE(trait_key)
 );
 
 INSERT INTO user_traits_new
-    (id, trait_key, trait_value, category, confidence, source, is_literal,
-     reinforcement_count, last_reinforced_at, last_conflict_at, created_at, updated_at)
-SELECT id, trait_key, trait_value, category, confidence, source, is_literal,
-       reinforcement_count, last_reinforced_at, last_conflict_at, created_at, updated_at
+    (id, trait_key, trait_value, category, confidence,
+     reinforcement_count, last_reinforced_at, last_conflict_at, created_at, updated_at, reliability)
+SELECT id, trait_key, trait_value, category, confidence,
+       reinforcement_count, last_reinforced_at, last_conflict_at, created_at, updated_at,
+       COALESCE(reliability, 'reliable')
 FROM user_traits;
 
 DROP TABLE IF EXISTS user_traits;

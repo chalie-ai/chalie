@@ -338,7 +338,6 @@ def delete_all():
                 "routing_decisions",
                 "procedural_memory",
                 "topics",
-                "semantic_schemas",
                 "triage_calibration_events",
                 "tool_performance_metrics",
                 "user_tool_preferences",
