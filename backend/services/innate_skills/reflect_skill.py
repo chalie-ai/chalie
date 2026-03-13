@@ -29,7 +29,6 @@ def handle_reflect(topic: str, params: dict) -> str:
             query (str, optional): What to reflect on. Defaults to recent experience.
             scope (str, optional): "recent" (last few interactions, default),
                                    "session" (current thread), "broad" (wider search)
-            store (bool, optional): Whether to store the reflection as a gist. Default True.
         }
 
     Returns:
@@ -37,7 +36,6 @@ def handle_reflect(topic: str, params: dict) -> str:
     """
     query = params.get('query', '').strip() or topic
     scope = params.get('scope', 'recent')
-    store = params.get('store', True)
 
     # Determine retrieval limits based on scope
     iteration_limit = {'recent': 10, 'session': 20, 'broad': 30}.get(scope, 10)
@@ -62,10 +60,6 @@ def handle_reflect(topic: str, params: dict) -> str:
     )
 
     synthesis = _synthesize(context_block)
-
-    # ── 6. Optionally store as a gist ─────────────────────────────────
-    if store and synthesis:
-        _store_reflection_gist(topic, synthesis)
 
     return synthesis
 
@@ -398,20 +392,3 @@ def _synthesize(context_block: str) -> str:
     return f"[REFLECT] Raw reflection context (LLM synthesis unavailable):\n{context_block}"
 
 
-def _store_reflection_gist(topic: str, synthesis_text: str) -> None:
-    """Store the reflection as a gist via GistStorageService."""
-    try:
-        from services.gist_storage_service import GistStorageService
-        gs = GistStorageService()
-        gs.store_gists(
-            topic=topic,
-            gists=[{
-                'content': f"[reflection] {synthesis_text}",
-                'type': 'reflection',
-                'confidence': 7,
-            }],
-            prompt='[reflect-skill]',
-            response=synthesis_text,
-        )
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Failed to store reflection gist: {e}")

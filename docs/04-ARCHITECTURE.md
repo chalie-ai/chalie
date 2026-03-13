@@ -61,14 +61,14 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from 6 memory layers (working memory, moments, facts, gists, episodes, procedural, concepts) with weighted budget allocation; procedural hints surface learned action reliability (≥8 attempts, top 3, confidence labels)
+- **`context_assembly_service.py`** — Unified retrieval from memory layers (working memory, moments, episodes, procedural, concepts, user traits) with weighted budget allocation; procedural hints surface learned action reliability (≥8 attempts, top 3, confidence labels)
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
-- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, relationship, physical, preference, communication_style, micro_preference, behavioral_pattern)
+- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, preference, behavioral); traits extracted via dedicated lightweight async LLM call, not chunker
 - **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as `behavioral_pattern` user traits with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — SQLite CRUD for episodic memories
 - **`semantic_storage_service.py`** — SQLite CRUD for semantic concepts
-- **`gist_storage_service.py`** — MemoryStore-backed short-term memory with deduplication
+- **`style_metrics_service.py`** — Deterministic communication style measurement (~1ms, zero LLM); 5 dimensions: verbosity, directness, formality, certainty, pacing; pure regex/heuristic, feeds adaptive layer
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
 - **`moment_service.py`** — Pinned message bookmarks with LLM-enriched context, sqlite-vec semantic search, and salience boosting; stores user-pinned Chalie responses as permanent, searchable moments via `moments` table
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs; boosts related episode salience on seal
@@ -147,7 +147,7 @@ frontend/
 
 14 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
-- **`memorize_skill.py`** — Store gists and facts (<50ms)
+- **`memorize_skill.py`** — Explicit memory encoding (<50ms)
 - **`introspect_skill.py`** — Raw state snapshot: context warmth, FOK signal, stats, decision explanations, recent autonomous actions (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
 - **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
@@ -158,15 +158,14 @@ frontend/
 - **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
-- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
+- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed)
 - **`emit_card_skill.py`** — Render deferred tool cards into conversation stream (internal trigger)
 
 ## Worker Processes (`backend/workers/`)
 
 ### Queue Workers (Daemon Threads)
-- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue memory job
-- **Memory Chunker Worker** — Enriches exchanges with memory chunks via LLM
-- **Episodic Memory Worker** — Builds episodes from sequences of exchanges
+- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue episodic memory job
+- **Episodic Memory Worker** — Reads raw conversation turns; builds episodes when turn count >=5 or idle timeout triggers
 - **Semantic Consolidation Worker** — Extracts concepts + relationships from episodes
 
 ### Services/Daemons (Daemon Threads)
@@ -206,9 +205,7 @@ frontend/
     ├─ Mode Routing (deterministic ~5ms mathematical router)
     ├─ Mode-Specific LLM Generation
     │  └─ If ACT: action loop → re-route → terminal response
-    └─ Enqueue Memory Chunking Job
-      → [Memory Chunker Queue] → [Memory Chunker Worker]
-        → [Conversation JSON] (enriched)
+    └─ Enqueue Episodic Memory Job
       → [Episodic Memory Queue] → [Episodic Memory Worker]
         → SQLite Episodes Table
         → [Semantic Consolidation Queue] → [Semantic Consolidation Worker]
@@ -232,7 +229,7 @@ frontend/
     ├─ Signal sources: decay_engine, semantic_consolidation, experience_assimilation, event_bridge
     ├─ Idle timeout (10min) → salient/insight discovery fallback
     ├─ Signal → seed → spreading activation (depth 2, decay 0.7/level)
-    └─ LLM synthesis → stores as drift gist → action routing
+    └─ LLM synthesis → stores as drift thought → action routing
 ```
 
 ## Key Architectural Decisions
@@ -256,13 +253,11 @@ frontend/
 - Focused scope prevents elaboration and improves consistency
 
 ### Memory Hierarchy
-- **Working Memory** (MemoryStore, 4 turns, 24h TTL) — Current conversation
-- **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries
-- **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
-- **Episodes** (SQLite + sqlite-vec) — Narrative units with decay
+- **Working Memory** (MemoryStore, 12 turns, 24h TTL) — Current conversation
+- **Episodes** (SQLite + sqlite-vec) — Narrative units with decay; consolidated from raw turns (>=5 turns or idle timeout trigger)
 - **Concepts** (SQLite + sqlite-vec) — Knowledge nodes and relationships
 - **Procedural Memory** (SQLite) — Learned action reliability; surfaced in context assembly as reliability hints (≥8 attempts, top 3 skills)
-- **User Traits** (SQLite) — Personal facts with category-specific decay (includes behavioral patterns from temporal mining)
+- **User Traits** (SQLite) — Personal facts with category-specific decay (categories: core, preference, behavioral); extracted via dedicated lightweight async LLM call
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
 Each layer optimized for its timescale; all integrated via context assembly. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
@@ -429,7 +424,7 @@ No external services required. SQLite and MemoryStore are embedded — everythin
 - **Router Confidence**: Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal**: Metric logged by monitors, consumed by the single regulator
 - **Context Warmth**: Signal (0.0-1.0) measuring how much context is available for current topic
-- **Drift Gist**: Spontaneous thought from signal-driven reasoning (formerly DMN)
+- **Drift Thought**: Spontaneous thought from signal-driven reasoning (formerly DMN)
 - **Episode**: Narrative memory unit with intent, context, action, emotion, outcome, salience
 - **Concept**: Knowledge node with strength decay and spreading activation
 - **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment

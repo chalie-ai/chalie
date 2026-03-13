@@ -21,18 +21,19 @@ by AdaptiveLayerService as growth reflections in the response prompt.
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Optional
+
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
 # Dimensions tracked for growth detection
 TRACKED_DIMENSIONS = [
-    'certainty_level',
-    'depth_preference',
-    'challenge_appetite',
     'verbosity',
+    'directness',
     'formality',
+    'certainty',
+    'pacing',
 ]
 
 # A delta must persist for at least this many consecutive cycles to qualify as a signal
@@ -97,21 +98,13 @@ class GrowthPatternService:
         result = {'signals_detected': 0, 'baseline_updated': False, 'errors': []}
 
         try:
-            from services.user_trait_service import UserTraitService
             from services.database_service import get_shared_db_service
 
             db_service = get_shared_db_service()
-            trait_service = UserTraitService(db_service)
 
-            current_style = trait_service.get_communication_style()
+            current_style = self._get_current_style()
             if not current_style:
-                logger.debug("[GROWTH PATTERN] No communication style found, skipping cycle")
-                return result
-
-            # Require enough observations before comparing against baseline
-            obs_count = current_style.get('_observation_count', 0)
-            if obs_count < 5:
-                logger.debug(f"[GROWTH PATTERN] Only {obs_count} observations, waiting for more data")
+                logger.debug("[GROWTH PATTERN] No style snapshot available, skipping cycle")
                 return result
 
             # Self-regulation: skip when memory is too thin for meaningful growth detection
@@ -163,6 +156,39 @@ class GrowthPatternService:
 
         return result
 
+    def _get_current_style(self) -> Optional[dict]:
+        """Read the most recent style snapshot from MemoryStore EMA baselines.
+
+        Scans for ``style_baseline:*`` keys written by AdaptiveLayerService and
+        returns the most recently touched one as the "current" style.
+
+        Returns:
+            Dict mapping dimension names to float values, or ``None`` if no
+            snapshot is available.
+        """
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+
+            # Scan for any style_baseline keys (one per active thread)
+            keys = store.keys("style_baseline:*") or []
+            if not keys:
+                return None
+
+            # Use the first key found — all threads share the same user
+            for key in keys:
+                raw = store.get(key)
+                if raw:
+                    data = json.loads(raw)
+                    # Validate it has at least one tracked dimension
+                    if any(dim in data for dim in TRACKED_DIMENSIONS):
+                        return data
+
+            return None
+        except Exception as e:
+            logger.warning(f"[GROWTH PATTERN] Failed to read current style snapshot: {e}")
+            return None
+
     def _get_baseline(self, db_service) -> Optional[dict]:
         """Read the stored communication style baseline from the user_traits table.
 
@@ -213,8 +239,6 @@ class GrowthPatternService:
                 trait_value=json.dumps(baseline),
                 confidence=0.8,
                 category='core',
-                source='inferred',
-                is_literal=True,
             )
         except Exception as e:
             logger.warning(f"[GROWTH PATTERN] Failed to store baseline: {e}")
@@ -277,7 +301,7 @@ class GrowthPatternService:
             except Exception:
                 pass
 
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = utc_now().isoformat()
 
             if existing_signal:
                 # If direction matches, increment consecutive cycles
@@ -316,8 +340,6 @@ class GrowthPatternService:
                 trait_value=json.dumps(signal_data),
                 confidence=0.7,
                 category='core',
-                source='inferred',
-                is_literal=True,
             )
             return True
 
@@ -395,8 +417,6 @@ class GrowthPatternService:
                 trait_value=json.dumps(updated_baseline),
                 confidence=0.8,
                 category='core',
-                source='inferred',
-                is_literal=True,
             )
             return True
         except Exception as e:

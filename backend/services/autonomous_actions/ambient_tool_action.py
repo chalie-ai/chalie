@@ -272,8 +272,8 @@ class AmbientToolAction(AutonomousAction):
         # 3. Update rate limit
         self.store.set(_key(f'last_invoke:{tool_name}'), str(time.time()))
 
-        # 4. Store finding as gist for future drift/recall
-        gist_stored = self._store_finding_gist(thought, tool_name, query, result_text)
+        # 4. Store finding in working memory for context continuity
+        self._store_finding_in_wm(thought, tool_name, query, result_text)
 
         logger.info(f"{LOG_PREFIX} Invoked {tool_name} for '{query}' (relevance={self._pending_relevance:.2f})")
 
@@ -284,7 +284,6 @@ class AmbientToolAction(AutonomousAction):
                 'tool': tool_name,
                 'query': query,
                 'relevance': self._pending_relevance,
-                'gist_stored': gist_stored,
             },
         )
 
@@ -332,26 +331,15 @@ class AmbientToolAction(AutonomousAction):
         done.wait(timeout=self.llm_timeout)
         return result_holder[0]
 
-    def _store_finding_gist(self, thought: ThoughtContext, tool_name: str, query: str, result_text: str) -> bool:
-        """Store ambient tool finding as a gist for future use."""
+    def _store_finding_in_wm(self, thought: ThoughtContext, tool_name: str, query: str, result_text: str) -> None:
+        """Store ambient tool finding in working memory for context continuity."""
         try:
-            from services.gist_storage_service import GistStorageService
-            gist_service = GistStorageService(attention_span_minutes=120)
+            from services.working_memory_service import WorkingMemoryService
             topic = thought.seed_topic or 'ambient_discovery'
-            stored = gist_service.store_gists(
-                topic=topic,
-                gists=[{
-                    'content': f"[Ambient {tool_name}] Query: {query}\n{result_text[:1000]}",
-                    'type': 'ambient_discovery',
-                    'confidence': 8,
-                }],
-                prompt=query,
-                response=result_text[:500],
-            )
-            return stored > 0
+            wm = WorkingMemoryService()
+            wm.append_turn(topic, 'system', f"[ambient/{tool_name}] {query}: {result_text[:500]}")
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Gist storage failed: {e}")
-            return False
+            logger.debug(f"{LOG_PREFIX} WM storage failed: {e}")
 
     @staticmethod
     def _cosine_similarity(a: list, b: list) -> float:

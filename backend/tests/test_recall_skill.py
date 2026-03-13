@@ -14,44 +14,42 @@ from unittest.mock import MagicMock, patch
 
 
 class TestFormatTraitHit:
-    """Unit tests for _format_trait_hit helper."""
+    """Unit tests for _format_trait_hit helper.
 
-    def test_high_confidence_explicit_source(self):
+    source column removed in migration 006 (Stream 1 — memory chunker killed).
+    _format_trait_hit now takes 4 args: key, value, category, confidence.
+    """
+
+    def test_high_confidence_label(self):
         from services.innate_skills.recall_skill import _format_trait_hit
-        hit = _format_trait_hit("name", "Dylan", "core", 0.95, "explicit")
+        hit = _format_trait_hit("name", "Dylan", "core", 0.95)
         assert hit["layer"] == "user_traits"
         assert hit["content"] == "name: Dylan"
         assert hit["confidence"] == 0.95
         assert hit["freshness"] == "well established"
-        assert hit["meta"]["source"] == "explicit"
         assert hit["meta"]["confidence_label"] == "well established"
         assert hit["meta"]["category"] == "core"
 
-    def test_medium_confidence_inferred(self):
+    def test_medium_confidence_label(self):
         from services.innate_skills.recall_skill import _format_trait_hit
-        hit = _format_trait_hit("food_preference", "ramen", "preference", 0.55, "inferred")
+        hit = _format_trait_hit("food_preference", "ramen", "preference", 0.55)
         assert hit["freshness"] == "likely"
-        assert hit["meta"]["source"] == "inferred"
         assert hit["meta"]["confidence_label"] == "likely"
 
-    def test_low_confidence_uncertain(self):
+    def test_low_confidence_label(self):
         from services.innate_skills.recall_skill import _format_trait_hit
-        hit = _format_trait_hit("hobby", "hiking", "general", 0.25, "inferred")
+        hit = _format_trait_hit("hobby", "hiking", "general", 0.25)
         assert hit["freshness"] == "uncertain"
         assert hit["meta"]["confidence_label"] == "uncertain"
 
-    def test_default_source_is_inferred(self):
-        from services.innate_skills.recall_skill import _format_trait_hit
-        hit = _format_trait_hit("key", "val", "general", 0.5)
-        assert hit["meta"]["source"] == "inferred"
-
 
 def _make_traits():
+    # source column removed in migration 006 (Stream 1 — memory chunker killed)
     return [
-        {"trait_key": "name", "trait_value": "Dylan", "category": "core", "confidence": 0.95, "source": "explicit"},
-        {"trait_key": "food_preference", "trait_value": "ramen", "category": "preference", "confidence": 0.6, "source": "inferred"},
-        {"trait_key": "hobby", "trait_value": "coding", "category": "general", "confidence": 0.35, "source": "inferred"},
-        {"trait_key": "low_conf_thing", "trait_value": "yoga", "category": "general", "confidence": 0.15, "source": "inferred"},
+        {"trait_key": "name", "trait_value": "Dylan", "category": "core", "confidence": 0.95},
+        {"trait_key": "food_preference", "trait_value": "ramen", "category": "preference", "confidence": 0.6},
+        {"trait_key": "hobby", "trait_value": "coding", "category": "general", "confidence": 0.35},
+        {"trait_key": "low_conf_thing", "trait_value": "yoga", "category": "general", "confidence": 0.15},
     ]
 
 
@@ -116,7 +114,7 @@ class TestSearchUserTraits:
         from services.innate_skills.recall_skill import _search_user_traits, BROAD_TRAIT_DISPLAY_CAP
         many_traits = [
             {"trait_key": f"key_{i}", "trait_value": f"val_{i}",
-             "category": "general", "confidence": 0.5, "source": "inferred"}
+             "category": "general", "confidence": 0.5}
             for i in range(BROAD_TRAIT_DISPLAY_CAP + 5)
         ]
         mock_svc = MagicMock()
@@ -142,7 +140,7 @@ class TestSearchUserTraits:
 
         assert len(hits) == 1
         assert "meta" in hits[0]
-        assert "source" in hits[0]["meta"]
+        # source removed from meta in migration 006 (Stream 1 — memory chunker killed)
         assert "confidence_label" in hits[0]["meta"]
         assert "category" in hits[0]["meta"]
 

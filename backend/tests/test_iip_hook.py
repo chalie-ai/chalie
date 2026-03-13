@@ -41,7 +41,7 @@ def _run_hook(text: str):
 class TestIIPHook:
 
     def test_call_me_dylan(self):
-        """'call me Dylan' → name='Dylan', source='explicit', category='core'."""
+        """'call me Dylan' → name='Dylan', category='core', confidence=0.95."""
         mock_id, mock_trait = _run_hook("call me Dylan")
         mock_id.set_field.assert_called_once_with(
             'name', 'Dylan', confidence=0.95, provisional=False
@@ -49,7 +49,7 @@ class TestIIPHook:
         mock_trait.store_trait.assert_called_once()
         kwargs = mock_trait.store_trait.call_args[1]
         assert kwargs['trait_value'] == 'Dylan'
-        assert kwargs['source'] == 'explicit'
+        # source column removed in migration 006
         assert kwargs['category'] == 'core'
         assert kwargs['confidence'] == 0.95
 

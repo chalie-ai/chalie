@@ -340,7 +340,8 @@ class TestSchedulerDedup:
         cursor.fetchone.return_value = None
 
         with patch('services.database_service.get_shared_db_service', return_value=db), \
-             patch('services.scheduler_card_service.SchedulerCardService'):
+             patch('services.scheduler_card_service.SchedulerCardService'), \
+             patch('services.scheduler_service.embed_scheduled_item'):
             result = _create("test-topic", {
                 "message": "drink water",
                 "due_at": "2099-01-01T12:00:00Z",
@@ -349,6 +350,7 @@ class TestSchedulerDedup:
 
         assert result == "__CARD_ONLY__"
         # Should have executed 2 queries: SELECT (dedup) + INSERT
+        # (embed_scheduled_item patched out to avoid extra vec table execute)
         assert cursor.execute.call_count == 2
 
 

@@ -370,7 +370,7 @@ if __name__ == "__main__":
 
     # Deferred imports
     from services import PromptQueue, DatabaseService, SchemaService
-    from workers import digest_worker, memory_chunker_worker, episodic_memory_worker, semantic_consolidation_worker, rest_api_worker, tool_worker
+    from workers import digest_worker, episodic_memory_worker, semantic_consolidation_worker, rest_api_worker, tool_worker
     from services.config_service import ConfigService
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker

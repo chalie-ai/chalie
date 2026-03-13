@@ -59,7 +59,7 @@ const JOBS = [
     { id: 'frontal-cortex-acknowledge', name: 'Acknowledge Mode',          desc: 'Brief acknowledgments for greetings and simple inputs.',                                  badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.1K', frequency: 'Per message (ACK mode)', strengths: ['Structured Output'] },
     { id: 'frontal-cortex-reflexive',   name: 'Reflexive Mode',            desc: 'Fast reflexive responses for simple, self-contained queries via cognitive reflex path.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per reflex activation',  strengths: ['Fast Inference', 'Structured Output'] },
     { id: 'frontal-cortex-scheduled-tool', name: 'Scheduled Tool Mode',    desc: 'Generates responses after scheduled tool/reminder execution.',                             badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.5K', frequency: 'Per scheduled event',   strengths: ['Structured Output', 'Context Following'] },
-    { id: 'memory-chunker',             name: 'Memory Chunker',            desc: 'Extracts gists, facts, and traits from exchanges. Runs async.',                           badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~4.1K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
+    { id: 'trait-extraction', name: 'Trait Extraction', desc: 'Extracts user traits from messages via lightweight LLM call. Async, non-blocking.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~0.5K', frequency: 'Per message (async)', strengths: ['Structured Output', 'Extraction'] },
     { id: 'moment-enrichment',          name: 'Moment Enrichment',         desc: 'Generates titles and summaries for pinned moments. Runs in a 5-minute background poll.',   badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~300',  frequency: 'Per pinned moment',     strengths: ['Summarisation', 'Extraction'] },
     { id: 'document-synthesis',          name: 'Document Synthesis',        desc: 'Generates summaries for uploaded documents during processing.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per document upload',   strengths: ['Summarisation', 'Extraction'] },
     { id: 'document-classification',     name: 'Document Classification',   desc: 'Classifies documents into categories, projects, and dates for automatic organisation.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1K',   frequency: 'Per document upload',   strengths: ['Classification', 'Structured Output', 'JSON'] },
@@ -2342,7 +2342,6 @@ async function loadMemoryObs() {
         html += '<div class="obs-section-title">Short-Term Memory</div>';
         html += '<div class="obs-stats">';
         html += obsStatCard('Working Memory', data.working_memory || 0, 'Active conversation turns');
-        html += obsStatCard('Gists', data.gists || 0, 'Compressed summaries');
         html += obsStatCard('Facts', data.facts || 0, 'Atomic assertions');
         html += '</div>';
 

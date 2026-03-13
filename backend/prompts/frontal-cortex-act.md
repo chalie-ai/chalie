@@ -49,8 +49,6 @@ You do NOT:
 
 {{self_awareness}}
 
-{{communication_style}}
-
 ────────────────────────────────
 
 # Available Skills

@@ -81,8 +81,8 @@ The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, s
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
-| `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, gists, facts, episodes, concepts, user_traits) |
-| `memorize` | memory | <50ms | Store gists (short-term) and/or facts (medium-term) |
+| `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, episodes, concepts, user_traits) |
+| `memorize` | memory | <50ms | Explicit memory encoding |
 | `introspect` | perception | <100ms | Self-examination: context_warmth, FOK signal, recall_failure_rate, skill stats, world state, decision explanations (routing audit), recent autonomous actions |
 | `associate` | cognition | <500ms | Spreading activation from seed concepts through semantic graph |
 | `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
@@ -120,8 +120,9 @@ User Input → Topic Classifier (embedding-based)
 ### Step 2: Context Assembly (same as before)
 ```
 Classification Result → Load Context:
-  - Gists, facts, working memory, world state
+  - Working memory (12 turns), world state
   - Episodes + concepts (vector similarity)
+  - User traits (semantic retrieval)
   - Calculate context_warmth (0.0-1.0)
 ```
 
@@ -151,9 +152,7 @@ The router collects signals from existing services (all MemoryStore reads, ~5ms 
 
 **Context Signals (from MemoryStore):**
 - `context_warmth` (float 0-1)
-- `working_memory_turns` (int 0-4)
-- `gist_count` (int, excluding cold_start type)
-- `fact_count` (int 0-50), `fact_keys` (list)
+- `working_memory_turns` (int 0-12)
 - `world_state_present` (bool)
 - `topic_confidence`, `is_new_topic` (from classifier)
 - `session_exchange_count` (int)
@@ -171,9 +170,9 @@ Each mode gets a weighted composite score:
 
 | Mode | Base | Primary Boosters | Primary Penalties |
 |------|------|-----------------|-------------------|
-| RESPOND | 0.50 | context_warmth, fact_density, gist_density, question+context | cold start |
-| CLARIFY | 0.30 | cold context, question+no_facts, new_topic+question | warm context (>0.6) |
-| ACT | 0.20 | question+moderate_context, interrogative+gap_in_facts, implicit_reference | very cold, very warm+facts |
+| RESPOND | 0.50 | context_warmth, memory_density, question+context | cold start |
+| CLARIFY | 0.30 | cold context, question+no_context, new_topic+question | warm context (>0.6) |
+| ACT | 0.20 | question+moderate_context, interrogative+context_gap, implicit_reference | very cold, very warm+context |
 | ACKNOWLEDGE | 0.10 | greeting_pattern (+0.60), positive_feedback (+0.40) | has_question (-0.30) |
 | IGNORE | -0.50 | empty_input only (+1.0) | everything else |
 
@@ -375,7 +374,7 @@ Retrieve grounding episode
       │
 LLM synthesis → reflection | question | hypothesis
       │
-Store as drift gist (surfaces in frontal cortex context)
+Store as drift thought (surfaces in frontal cortex context)
 ```
 
 ### Seed Selection Strategies
@@ -416,20 +415,16 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
 
-### Style Detection (9 dimensions)
+### Style Detection (5 dimensions)
 
-The `memory_chunker_worker` extracts 9 communication style dimensions per exchange and merges them into a user trait using Exponential Moving Average (EMA). Cold-start uses a faster 0.5/0.5 EMA for the first 5 observations; stable state uses 0.3/0.7.
+`StyleMetricsService` measures 5 communication style dimensions per message using pure regex/heuristics (~1ms, zero LLM). Results feed the adaptive layer directly.
 
 | Dimension | Meaning |
 |-----------|---------|
 | verbosity | Preference for short vs. long responses (1-10) |
 | directness | Indirect suggestion vs. clear assertion (1-10) |
 | formality | Casual vs. formal register (1-10) |
-| abstraction_level | Concrete action vs. abstract reasoning (1-10) |
-| emotional_valence | Logical vs. emotional framing (1-10) |
-| certainty_level | Hedging/questioning vs. declarative/confident (1-10) |
-| challenge_appetite | Seeks validation vs. seeks counterpoints (1-10) |
-| depth_preference | Surface/practical vs. deep/exploratory (1-10) |
+| certainty | Hedging/questioning vs. declarative/confident (1-10) |
 | pacing | Rapid short messages vs. slow deliberate ones (1-10) |
 
 ### Directive Generation (rule-based, sub-1ms)

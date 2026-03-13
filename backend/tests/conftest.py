@@ -40,15 +40,6 @@ def mock_store():
 def mock_config():
     """Test config — no file I/O."""
     agent_configs = {
-        'memory-chunker': {
-            'model': 'test-model',
-            'attention_span_minutes': 30,
-            'min_gist_confidence': 7,
-            'max_gists': 8,
-            'gist_similarity_threshold': 0.7,
-            'max_gists_per_type': 2,
-            'timeout': 120,
-        },
         'mode-router': {
             'base_scores': {
                 'RESPOND': 0.40,
@@ -90,8 +81,7 @@ def mock_config():
         },
     }
     agent_prompts = {
-        'memory-chunker': 'Test chunker prompt {{world_state}}',
-        'fact-extraction': 'Test fact extraction prompt {{user_message}} {{system_response}}',
+        'trait-extraction': 'Test trait extraction prompt {{message}}',
     }
     connections = {
         'memory': {},

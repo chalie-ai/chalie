@@ -25,8 +25,6 @@ class ContextAssemblyService:
     DEFAULT_WEIGHTS = {
         'working_memory': 1.0,
         'moments': 0.95,
-        'facts': 0.9,
-        'gists': 0.8,
         'episodes': 0.7,
         'procedural': 0.65,
         'concepts': 0.6
@@ -84,8 +82,6 @@ class ContextAssemblyService:
         wm_identifier = thread_id if thread_id else topic
         sections['working_memory'] = self._get_working_memory(wm_identifier)
         sections['moments'] = self._get_moments(prompt)
-        sections['facts'] = self._get_facts(topic)
-        sections['gists'] = self._get_gists(topic)
         sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding)
         sections['procedural'] = self._get_procedural_hints(topic)
         sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding)
@@ -183,67 +179,6 @@ class ContextAssemblyService:
         except Exception as e:
             logging.debug(f"[CONTEXT] Moments unavailable: {e}")
             return ""
-
-    def _get_facts(self, topic: str) -> str:
-        """Retrieve formatted facts for the given topic from FactStoreService.
-
-        Args:
-            topic: Conversation topic used to scope fact retrieval.
-
-        Returns:
-            Formatted facts string, or empty string on error or when no facts exist.
-        """
-        try:
-            from services.fact_store_service import FactStoreService
-            fs = FactStoreService()
-            return fs.get_facts_formatted(topic)
-        except Exception as e:
-            logging.debug(f"[CONTEXT] Fact store unavailable: {e}")
-            return ""
-
-    def _get_gists(self, topic: str) -> str:
-        """Retrieve conversation gist summaries for the given topic.
-
-        Falls back to the last exchange when no gists meet the confidence threshold.
-
-        Args:
-            topic: Conversation topic used to scope gist retrieval.
-
-        Returns:
-            Formatted gist context string, or a fallback last-exchange string.
-        """
-        try:
-            from services.gist_storage_service import GistStorageService
-            min_confidence = self.config.get('min_gist_confidence', 7)
-            max_gists = self.config.get('max_gists', 8)
-            gs = GistStorageService(min_confidence=min_confidence, max_gists=max_gists)
-
-            gists = gs.get_latest_gists(topic)
-            if gists:
-                # Filter out cold_start gists — internal metadata, not conversation context
-                real_gists = [g for g in gists if g.get('type') != 'cold_start']
-                if real_gists:
-                    lines = ["## Recent Conversation Gists"]
-                    for gist in real_gists:
-                        lines.append(
-                            f"- [{gist['type']}] {gist['content']} "
-                            f"(confidence: {gist['confidence']})"
-                        )
-                    return "\n".join(lines)
-
-            # Fallback to last message
-            last_message = gs.get_last_message(topic)
-            if last_message:
-                return (
-                    f"## Last Exchange\n"
-                    f"User: {last_message['prompt']}\n"
-                    f"Assistant: {last_message['response']}"
-                )
-
-            return "No previous conversation context available"
-        except Exception as e:
-            logging.debug(f"[CONTEXT] Gist store unavailable: {e}")
-            return "No previous conversation context available"
 
     def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
         """Retrieve relevant episodic memories via semantic search.
@@ -438,7 +373,7 @@ class ContextAssemblyService:
         Returns:
             Budget-constrained sections
         """
-        memory_types = ['working_memory', 'moments', 'facts', 'gists', 'episodes', 'procedural', 'concepts', 'previous_session']
+        memory_types = ['working_memory', 'moments', 'episodes', 'procedural', 'concepts', 'previous_session']
 
         # Sort by weight ascending (trim lowest weight first)
         sorted_types = sorted(memory_types, key=lambda t: self.weights.get(t, 0.5))

@@ -37,7 +37,8 @@ class TestCorrectTrait:
             if 'UPDATE user_traits' in c[0][0]
         ]
         assert len(update_sqls) >= 1
-        assert 'explicit_correction' in update_sqls[0]
+        # source column removed in migration 006; confidence=0.95 marks explicit corrections
+        assert 'trait_value' in update_sqls[0]
 
     def test_correct_new_trait_inserts_row(self):
         """correct_trait() inserts when trait does not exist."""
@@ -52,7 +53,8 @@ class TestCorrectTrait:
             if 'INSERT INTO user_traits' in c[0][0]
         ]
         assert len(insert_sqls) >= 1
-        assert 'explicit_correction' in insert_sqls[0]
+        # source column removed in migration 006; confidence=0.95 marks explicit corrections
+        assert 'trait_value' in insert_sqls[0]
 
     def test_correct_trait_sets_confidence_095(self):
         """correct_trait() always sets confidence to 0.95."""

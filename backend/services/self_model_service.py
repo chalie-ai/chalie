@@ -194,24 +194,20 @@ class SelfModelService:
         """Memory warmth, recall reliability, topic depth signals."""
         topic = self._get_active_topic()
 
-        gist_count = self._get_gist_count(topic)
-        fact_count = self._get_fact_count(topic)
         wm_depth = self._get_working_memory_depth(topic)
 
-        # Context warmth: weighted combo of memory density
-        gist_score = min(1.0, gist_count / 5.0)
-        fact_score = min(1.0, fact_count / 10.0)
+        # Context warmth: driven by working memory depth and FOK
         wm_score = min(1.0, wm_depth / 4.0)
+        fok_signal = self._get_fok_signal(topic)
+        fok_score = min(1.0, fok_signal / 5.0)
         context_warmth = round(
-            (gist_score * 0.4) + (fact_score * 0.3) + (wm_score * 0.3), 3
+            (wm_score * 0.6) + (fok_score * 0.4), 3
         )
 
         return {
             "context_warmth": context_warmth,
-            "gist_count": gist_count,
-            "fact_count": fact_count,
             "working_memory_depth": wm_depth,
-            "partial_match_signal": self._get_fok_signal(topic),
+            "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
             "topic_age": self._get_topic_age(),
             "recent_modes": self._get_recent_modes(),
@@ -226,20 +222,6 @@ class SelfModelService:
             return topic if topic else "general"
         except Exception:
             return "general"
-
-    def _get_gist_count(self, topic: str) -> int:
-        try:
-            from services.gist_storage_service import GistStorageService
-            return len(GistStorageService().get_latest_gists(topic))
-        except Exception:
-            return 0
-
-    def _get_fact_count(self, topic: str) -> int:
-        try:
-            from services.fact_store_service import FactStoreService
-            return len(FactStoreService().get_all_facts(topic))
-        except Exception:
-            return 0
 
     def _get_working_memory_depth(self, topic: str) -> int:
         try:

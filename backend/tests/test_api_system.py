@@ -169,7 +169,7 @@ class TestSystemAPI:
         assert data['memory']['gist_keys'] == 2
         assert data['memory']['fact_keys'] == 2
         # Queue depths
-        for q in ['prompt-queue', 'output-queue', 'memory-chunker-queue']:
+        for q in ['prompt-queue', 'output-queue']:
             assert data['queues'][q] == 5
 
     def test_system_status_degraded_when_store_fails(self, client):
@@ -237,8 +237,6 @@ class TestSystemAPI:
         mock_store = MagicMock()
         mock_store.keys.side_effect = lambda pattern: {
             'working_memory:*': ['wm1'],
-            'gist_index:*': ['g1', 'g2'],
-            'fact_index:*': ['f1', 'f2', 'f3'],
         }.get(pattern, [])
         mock_store.llen.return_value = 0
 
@@ -261,8 +259,6 @@ class TestSystemAPI:
         assert data['epistemic'] == fake_snapshot['epistemic']
         assert data['noteworthy'] == fake_snapshot['noteworthy']
         assert data['working_memory'] == 1
-        assert data['gists'] == 2
-        assert data['facts'] == 3
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────

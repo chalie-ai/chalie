@@ -34,7 +34,7 @@ class TestPrivacyAPI:
     # ------------------------------------------------------------------
 
     def test_data_summary_returns_counts(self, client):
-        """GET /privacy/data-summary returns table counts and fact count."""
+        """GET /privacy/data-summary returns table counts."""
         mock_conn = MagicMock()
 
         # cursor.fetchone() returns a tuple — (count,) for COUNT(*) queries
@@ -50,7 +50,6 @@ class TestPrivacyAPI:
         mock_db.connection.return_value = mock_conn_ctx
 
         mock_store = MagicMock()
-        mock_store.scan_iter.return_value = iter(["fact_index:topic1", "fact_index:topic2"])
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
@@ -66,8 +65,6 @@ class TestPrivacyAPI:
             assert "autobiography" in data
             assert "persistent_tasks" in data
             assert "place_fingerprints" in data
-            # MemoryStore fact count
-            assert data["facts"] == 2
 
     # ------------------------------------------------------------------
     # DELETE /privacy/delete-all

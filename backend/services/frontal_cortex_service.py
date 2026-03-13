@@ -709,12 +709,7 @@ class FrontalCortexService:
             user_traits = ''
         result = result.replace('{{user_traits}}', user_traits)
 
-        # Communication style (detected behavioral pattern)
-        if _include('communication_style'):
-            communication_style = self._get_communication_style()
-        else:
-            communication_style = ''
-        result = result.replace('{{communication_style}}', communication_style)
+        result = result.replace('{{communication_style}}', '')
 
         # Adaptive response directives (style-driven behavioral hints)
         if _include('adaptive_directives'):
@@ -991,63 +986,6 @@ class FrontalCortexService:
             logging.debug(f"Focus context not available: {e}")
             return ""
 
-    def _get_communication_style(self) -> str:
-        """
-        Get user's detected communication style dimensions for prompt injection.
-
-        Translates numeric dimension scores into human-readable labels.
-
-        Returns:
-            str: Formatted communication style section or empty string
-        """
-        try:
-            from services.user_trait_service import UserTraitService
-            from services.database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            trait_service = UserTraitService(db_service)
-            style = trait_service.get_communication_style()
-            if not style:
-                return ""
-
-            def _verbosity_label(v):
-                if v <= 3: return "terse"
-                if v <= 6: return "balanced"
-                return "detailed"
-
-            def _directness_label(v):
-                if v <= 3: return "indirect"
-                if v <= 6: return "moderate"
-                return "direct"
-
-            def _formality_label(v):
-                if v <= 3: return "casual"
-                if v <= 6: return "neutral"
-                return "formal"
-
-            def _abstraction_label(v):
-                if v <= 3: return "concrete"
-                if v <= 6: return "mixed"
-                return "abstract"
-
-            labels = []
-            if 'verbosity' in style:
-                labels.append(f"verbosity: {_verbosity_label(style['verbosity'])}")
-            if 'directness' in style:
-                labels.append(f"directness: {_directness_label(style['directness'])}")
-            if 'formality' in style:
-                labels.append(f"formality: {_formality_label(style['formality'])}")
-            if 'abstraction_level' in style:
-                labels.append(f"abstraction: {_abstraction_label(style['abstraction_level'])}")
-
-            if not labels:
-                return ""
-
-            return "## User Communication Style\n" + ", ".join(labels)
-        except Exception as e:
-            logging.debug(f"Communication style not available: {e}")
-            return ""
-
     def _get_adaptive_directives(self, original_prompt: str = "", thread_id: str = None) -> str:
         """
         Get adaptive response directives based on detected user interaction style.
@@ -1092,6 +1030,7 @@ class FrontalCortexService:
                 thread_id=thread_id,
                 working_memory_turns=working_memory_turns,
                 current_signals=current_signals,
+                current_message=original_prompt,
             )
         except Exception as e:
             logging.debug(f"Adaptive directives not available: {e}")

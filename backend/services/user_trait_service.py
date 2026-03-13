@@ -26,14 +26,9 @@ CONFIDENCE_LABELS = {
 # Category-specific decay configuration
 # base_decay: per decay cycle (30min), floor: minimum confidence before deletion eligibility
 CATEGORY_DECAY = {
-    'core':               {'base_decay': 0.01, 'floor': 0.3},
-    'relationship':       {'base_decay': 0.01, 'floor': 0.25},
-    'physical':           {'base_decay': 0.015, 'floor': 0.2},
-    'preference':         {'base_decay': 0.02, 'floor': 0.1},
-    'general':            {'base_decay': 0.02, 'floor': 0.1},
-    'communication_style': {'base_decay': 0.005, 'floor': 0.2},  # very slow — behavioral patterns are stable
-    'micro_preference': {'base_decay': 0.015, 'floor': 0.15},   # faster — preferences are more volatile than patterns
-    'behavioral_pattern': {'base_decay': 0.005, 'floor': 0.2},  # slow — activity time patterns are stable
+    'core':       {'base_decay': 0.01, 'floor': 0.25},
+    'preference': {'base_decay': 0.02, 'floor': 0.10},
+    'behavioral': {'base_decay': 0.005, 'floor': 0.20},
 }
 
 MAX_TRAITS_IN_PROMPT = 8
@@ -115,10 +110,7 @@ class UserTraitService:
         trait_key: str,
         trait_value: str,
         confidence: float,
-        category: str = 'general',
-        source: str = 'inferred',
-        is_literal: bool = True,
-        speaker_confidence: float = 1.0,
+        category: str = 'preference',
     ) -> bool:
         """
         Store or update a user trait with conflict resolution.
@@ -132,27 +124,11 @@ class UserTraitService:
             trait_key: Trait identifier (e.g., 'name', 'favourite_food')
             trait_value: Trait value (e.g., 'Dylan', 'ramen')
             confidence: Confidence score (0.0-1.0)
-            category: One of: core, preference, physical, relationship, general
-            source: 'explicit' or 'inferred'
-            is_literal: False for humor/figurative statements
-            speaker_confidence: How confident we are this is the known user (0.0-1.0)
+            category: One of: core, preference, behavioral
 
         Returns:
             bool: True if stored/updated, False if rejected
         """
-        # Reject traits from untrusted sources
-        if speaker_confidence < 0.3:
-            logger.debug(f"[USER_TRAITS] Rejecting trait '{trait_key}' from untrusted speaker")
-            return False
-
-        # Apply speaker confidence penalty
-        if speaker_confidence < 0.5:
-            confidence *= 0.5
-
-        # Apply inferred source penalty
-        if source == 'inferred':
-            confidence *= 0.7
-
         # Clamp confidence
         confidence = max(0.0, min(1.0, confidence))
 
@@ -231,14 +207,13 @@ class UserTraitService:
                         cursor.execute("""
                             UPDATE user_traits
                             SET trait_value = ?, confidence = ?,
-                                category = ?, source = ?, is_literal = ?,
+                                category = ?,
                                 reinforcement_count = 1,
                                 last_reinforced_at = datetime('now'),
                                 last_conflict_at = datetime('now'),
                                 updated_at = datetime('now')
                             WHERE trait_key = ?
-                        """, (trait_value, confidence, category, source,
-                              1 if is_literal else 0, trait_key))
+                        """, (trait_value, confidence, category, trait_key))
 
                         # Update embedding in companion vec table
                         trait_rowid = self._get_rowid(conn, trait_key)
@@ -336,11 +311,9 @@ class UserTraitService:
                     embedding_blob = self._generate_embedding_blob(trait_key, trait_value)
                     cursor.execute("""
                         INSERT INTO user_traits
-                            (id, trait_key, trait_value, category, confidence,
-                             source, is_literal)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (trait_id, trait_key, trait_value, category, confidence,
-                          source, 1 if is_literal else 0))
+                            (id, trait_key, trait_value, category, confidence)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (trait_id, trait_key, trait_value, category, confidence))
 
                     # Store embedding in companion vec table
                     trait_rowid = self._get_rowid(conn, trait_key)
@@ -350,7 +323,7 @@ class UserTraitService:
                     logger.info(
                         f"[USER_TRAITS] Stored new trait '{trait_key}': "
                         f"'{trait_value}' (confidence: {confidence:.2f}, "
-                        f"category: {category}, source: {source})"
+                        f"category: {category})"
                     )
 
                     # Point C — New trait signal
@@ -376,7 +349,6 @@ class UserTraitService:
     def get_traits_for_prompt(
         self,
         prompt: str = "",
-        speaker_confidence: float = 1.0,
         injection_threshold: float = INJECTION_THRESHOLD,
     ) -> str:
         """
@@ -398,7 +370,6 @@ class UserTraitService:
 
         Args:
             prompt: Current user message for contextual retrieval
-            speaker_confidence: Confidence this is the known user
             injection_threshold: Minimum confidence for inclusion
 
         Returns:
@@ -414,7 +385,6 @@ class UserTraitService:
                     FROM user_traits
                     WHERE category = 'core'
                       AND confidence > ?
-                      AND is_literal = 1
                     ORDER BY confidence DESC
                 """, (injection_threshold,))
                 core_traits = cursor.fetchall()
@@ -457,7 +427,6 @@ class UserTraitService:
                         FROM user_traits
                         WHERE category != 'core'
                           AND confidence >= ?
-                          AND is_literal = 1
                         ORDER BY confidence DESC, reinforcement_count DESC
                         LIMIT ?
                     """, (WILDCARD_CONFIDENCE, WILDCARD_SLOTS + len(semantic_keys) + len(core_keys)))
@@ -479,7 +448,6 @@ class UserTraitService:
                         FROM user_traits
                         WHERE category != 'core'
                           AND confidence > ?
-                          AND is_literal = 1
                         ORDER BY confidence DESC
                         LIMIT ?
                     """, (injection_threshold, remaining_slots))
@@ -491,13 +459,11 @@ class UserTraitService:
                 if not all_traits:
                     return ""
 
-                # Scale confidence by speaker_confidence for unknown speakers
                 lines = ["## Known About User"]
                 for trait_key, trait_value, confidence, category in all_traits:
-                    effective_confidence = confidence * speaker_confidence
-                    if effective_confidence <= injection_threshold:
+                    if confidence <= injection_threshold:
                         continue
-                    label = self._confidence_label(effective_confidence)
+                    label = self._confidence_label(confidence)
                     display_key = trait_key.replace('_', ' ').title()
                     lines.append(f"- {display_key}: {trait_value} {label}")
 
@@ -577,7 +543,7 @@ class UserTraitService:
 
                 # Load all traits
                 cursor.execute("""
-                    SELECT id, trait_key, confidence, category, source,
+                    SELECT id, trait_key, confidence, category,
                            reinforcement_count, updated_at,
                            COALESCE(reliability, 'reliable') AS reliability
                     FROM user_traits
@@ -585,19 +551,15 @@ class UserTraitService:
                 rows = cursor.fetchall()
 
                 for row in rows:
-                    trait_id, trait_key, confidence, category, source, reinf_count, updated_at, reliability = row
+                    trait_id, trait_key, confidence, category, reinf_count, updated_at, reliability = row
 
-                    decay_cfg = CATEGORY_DECAY.get(category, CATEGORY_DECAY['general'])
+                    decay_cfg = CATEGORY_DECAY.get(category, CATEGORY_DECAY['preference'])
                     base_decay = decay_cfg['base_decay']
                     floor = decay_cfg['floor']
 
                     # Reinforcement resistance
                     resistance = 1.0 / math.log2(max(reinf_count, 1) + 1)
                     effective_decay = base_decay * resistance
-
-                    # Inferred traits decay 1.5x faster
-                    if source == 'inferred':
-                        effective_decay *= 1.5
 
                     # Reliability multiplier: contradicted/uncertain traits decay faster
                     from services.decay_engine_service import RELIABILITY_DECAY_MULTIPLIER
@@ -672,8 +634,8 @@ class UserTraitService:
                     update_category = category or existing[1]
                     cursor.execute(
                         "UPDATE user_traits SET trait_value = ?, confidence = ?, "
-                        "source = 'explicit_correction', reinforcement_count = 1, "
-                        "category = ?, is_literal = 1, "
+                        "reinforcement_count = 1, "
+                        "category = ?, "
                         "last_conflict_at = datetime('now'), updated_at = datetime('now') "
                         "WHERE trait_key = ?",
                         (new_value, 0.95, update_category, trait_key)
@@ -724,9 +686,9 @@ class UserTraitService:
                     trait_id = str(uuid.uuid4())
                     cursor.execute(
                         "INSERT INTO user_traits (id, trait_key, trait_value, confidence, "
-                        "category, source, is_literal, reinforcement_count) "
-                        "VALUES (?, ?, ?, ?, ?, 'explicit_correction', 1, 1)",
-                        (trait_id, trait_key, new_value, 0.95, category or 'general')
+                        "category, reinforcement_count) "
+                        "VALUES (?, ?, ?, ?, ?, 1)",
+                        (trait_id, trait_key, new_value, 0.95, category or 'preference')
                     )
 
                     # Store embedding in companion vec table
@@ -806,15 +768,6 @@ class UserTraitService:
         except Exception as e:
             logger.debug(f"[USER_TRAITS] get_traits_by_category failed: {e}")
             return []
-
-    def get_speaker_confidence(self, metadata: dict) -> float:
-        """
-        Single-user app — all authenticated requests are the primary user.
-
-        Returns:
-            float: Always 1.0
-        """
-        return 1.0
 
     def _confidence_label(self, confidence: float) -> str:
         """Convert numeric confidence to natural language label."""

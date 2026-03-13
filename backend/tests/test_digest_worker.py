@@ -21,52 +21,39 @@ pytestmark = pytest.mark.unit
 
 class TestCalculateContextWarmth:
     """
-    warmth = (wm_score + gist_score + world_score) / 3
-    wm_score   = min(working_memory_len / 4, 1.0)
-    gist_score = min(real_gist_count / 5, 1.0)   # cold_start excluded
+    warmth = (wm_score + world_score) / 2
+    wm_score    = min(working_memory_len / 4, 1.0)
     world_score = 1.0 if world_state_nonempty else 0.0
+
+    Gist score removed in Stream 1 (memory chunker killed).
     """
 
     def test_all_zeros_returns_zero(self):
-        assert calculate_context_warmth(0, [], False) == 0.0
+        assert calculate_context_warmth(0, False) == 0.0
 
     def test_all_maxed_returns_one(self):
-        gists = [{'type': 'observation'}] * 6  # 6 real gists, caps at 1.0
-        result = calculate_context_warmth(8, gists, True)
+        result = calculate_context_warmth(8, True)
         assert result == pytest.approx(1.0)
 
-    def test_cold_start_gists_excluded_from_count(self):
-        gists = [
-            {'type': 'cold_start'},
-            {'type': 'cold_start'},
-            {'type': 'observation'},
-        ]
-        # real_gist_count = 1 → gist_score = 0.2
-        # wm_score = 0, world_score = 0
-        result = calculate_context_warmth(0, gists, False)
-        expected = (0.0 + 0.2 + 0.0) / 3
-        assert result == pytest.approx(expected)
-
     def test_wm_caps_at_one(self):
-        # 8 turns → min(8/4, 1.0) = 1.0
-        result = calculate_context_warmth(8, [], False)
-        expected = (1.0 + 0.0 + 0.0) / 3
+        # 8 turns → min(8/4, 1.0) = 1.0, world=False
+        result = calculate_context_warmth(8, False)
+        expected = (1.0 + 0.0) / 2
         assert result == pytest.approx(expected)
 
-    def test_world_state_true_contributes_one_third(self):
-        result = calculate_context_warmth(0, [], True)
-        expected = (0.0 + 0.0 + 1.0) / 3
+    def test_world_state_true_contributes_half(self):
+        result = calculate_context_warmth(0, True)
+        expected = (0.0 + 1.0) / 2
         assert result == pytest.approx(expected)
 
     def test_world_state_false_contributes_zero(self):
-        result = calculate_context_warmth(0, [], False)
+        result = calculate_context_warmth(0, False)
         assert result == 0.0
 
     def test_mixed_inputs(self):
-        gists = [{'type': 'observation'}, {'type': 'observation'}]
-        # wm=2 → 0.5, gist=2 → 0.4, world=True → 1.0
-        result = calculate_context_warmth(2, gists, True)
-        expected = (0.5 + 0.4 + 1.0) / 3
+        # wm=2 → 0.5, world=True → 1.0
+        result = calculate_context_warmth(2, True)
+        expected = (0.5 + 1.0) / 2
         assert result == pytest.approx(expected, abs=0.001)
 
 

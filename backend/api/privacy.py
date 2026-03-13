@@ -78,12 +78,6 @@ def data_summary():
             except Exception:
                 pass
 
-        # MemoryStore fact count
-        try:
-            result["facts"] = sum(1 for _ in store.scan_iter(match="fact_index:*", count=100))
-        except Exception:
-            result["facts"] = 0
-
         return jsonify(result), 200
 
     except Exception as e:
@@ -108,7 +102,7 @@ def export_data():
     ]
 
     store_patterns = [
-        "working_memory:*", "gist:*", "fact:*",
+        "working_memory:*",
         "identity_state:*", "spark_state:*", "focus_session:*",
     ]
 
@@ -229,8 +223,7 @@ def delete_all():
         store = MemoryClientService.create_connection()
         for pattern in [
             # Memory layer
-            "working_memory:*", "gist:*", "gist_index:*",
-            "fact:*", "fact_index:*", "world_state:*",
+            "working_memory:*", "world_state:*",
 
             # Threads
             "thread:*", "active_thread:*",

@@ -144,7 +144,7 @@ def system_status():
             result["database_error"] = str(e)
 
         # Queue depths
-        for queue_name in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
+        for queue_name in ["prompt-queue", "output-queue"]:
             try:
                 result["queues"][queue_name] = store.llen(queue_name)
             except Exception:
@@ -243,10 +243,8 @@ def observability_memory():
         try:
             store = MemoryClientService.create_connection()
             result['working_memory'] = len(store.keys("working_memory:*"))
-            result['gists'] = len(store.keys("gist_index:*"))
-            result['facts'] = len(store.keys("fact_index:*"))
 
-            for q in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
+            for q in ["prompt-queue", "output-queue"]:
                 depth = store.llen(q)
                 if depth:
                     result['queues'][q] = depth

@@ -394,7 +394,7 @@ class TemporalPatternService:
             from services.user_trait_service import UserTraitService
             trait_service = UserTraitService(self.db)
             all_traits = trait_service.get_all_traits()
-            traits = [t for t in all_traits if t.get('category') == 'behavioral_pattern']
+            traits = [t for t in all_traits if t.get('category') == 'behavioral']
 
             if not traits:
                 return ''
@@ -550,7 +550,7 @@ class TemporalPatternService:
                 cursor.execute(
                     """
                     SELECT COUNT(*) FROM user_traits
-                    WHERE category = 'behavioral_pattern'
+                    WHERE category = 'behavioral'
                     """
                 )
                 row = cursor.fetchone()
@@ -970,9 +970,7 @@ class TemporalPatternService:
                     trait_key=p['key'],
                     trait_value=p['value'],
                     confidence=p['confidence'],
-                    category='behavioral_pattern',
-                    source='inferred',
-                    is_literal=True,
+                    category='behavioral',
                 )
                 if result:
                     stored += 1

@@ -70,33 +70,11 @@ def conversation_summary():
     try:
         from datetime import datetime, timedelta, timezone
         from services.time_utils import parse_utc
-        from services.thread_service import get_thread_service
-        from services.gist_storage_service import GistStorageService
         from services.database_service import get_shared_db_service
         from services.episodic_retrieval_service import EpisodicRetrievalService
         from services.config_service import ConfigService
 
-        ts = get_thread_service()
-        thread_id = ts.get_active_thread_id("default")
-
         result = {"today": [], "this_week": [], "older_highlights": []}
-
-        # Today's gists from active topic
-        if thread_id:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            topic_data = store.hgetall(f"thread:{thread_id}")
-            current_topic = topic_data.get("current_topic", "") if topic_data else ""
-
-            if current_topic:
-                gist_service = GistStorageService()
-                gists = gist_service.get_latest_gists(current_topic)
-                for g in gists:
-                    result["today"].append({
-                        "content": g.get("content", ""),
-                        "type": g.get("type", ""),
-                        "timestamp": g.get("created_at", ""),
-                    })
 
         # Episodes for this week and older
         try:

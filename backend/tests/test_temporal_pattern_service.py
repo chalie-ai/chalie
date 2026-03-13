@@ -372,11 +372,11 @@ class TestRhythmSummary:
         with memdb.connection() as conn:
             conn.execute(
                 """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                   VALUES ('weekday_energy_rhythm', 'Typically high in the morning', 0.8, 'behavioral_pattern')"""
+                   VALUES ('weekday_energy_rhythm', 'Typically high in the morning', 0.8, 'behavioral')"""
             )
             conn.execute(
                 """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                   VALUES ('weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, 'behavioral_pattern')"""
+                   VALUES ('weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, 'behavioral')"""
             )
             conn.commit()
 
@@ -389,7 +389,7 @@ class TestRhythmSummary:
             for i in range(5):
                 conn.execute(
                     """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                       VALUES (?, ?, 0.8, 'behavioral_pattern')""",
+                       VALUES (?, ?, 0.8, 'behavioral')""",
                     (f'pattern_{i}', f'Pattern line {i}')
                 )
             conn.commit()
@@ -403,7 +403,7 @@ class TestRhythmSummary:
             for key in ['weekday_energy_rhythm', 'weekday_attention_rhythm']:
                 conn.execute(
                     """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                       VALUES (?, ?, 0.8, 'behavioral_pattern')""",
+                       VALUES (?, ?, 0.8, 'behavioral')""",
                     (key, 'A' * 150)
                 )
             conn.commit()
@@ -414,7 +414,7 @@ class TestRhythmSummary:
         with memdb.connection() as conn:
             conn.execute(
                 """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                   VALUES ('weekday_energy_rhythm', ?, 0.8, 'behavioral_pattern')""",
+                   VALUES ('weekday_energy_rhythm', ?, 0.8, 'behavioral')""",
                 ('High energy \x00\x01\x02 mornings',)
             )
             conn.commit()
@@ -746,7 +746,11 @@ class TestStorePatternsAsTraits:
         assert mock_trait_svc.store_trait.call_count == 2
 
     def test_passes_correct_arguments_to_store_trait(self):
-        """store_trait() should be called with category='behavioral_pattern' and source='inferred'."""
+        """store_trait() should be called with category='behavioral'.
+
+        behavioral → behavioral after Stream 1 3-tier CATEGORY_DECAY simplification.
+        source removed from store_trait in migration 006.
+        """
         from services.temporal_pattern_service import TemporalPatternService
         mock_db = MagicMock()
         service = TemporalPatternService(mock_db)
@@ -760,8 +764,7 @@ class TestStorePatternsAsTraits:
             service._store_patterns_as_traits(patterns)
 
         call_kwargs = mock_trait_svc.store_trait.call_args.kwargs
-        assert call_kwargs['category'] == 'behavioral_pattern'
-        assert call_kwargs['source'] == 'inferred'
+        assert call_kwargs['category'] == 'behavioral'
         assert call_kwargs['trait_key'] == 'active_hours'
 
     def test_empty_patterns_does_not_call_store(self):
@@ -792,18 +795,19 @@ class TestStorePatternsAsTraits:
 
 @pytest.mark.unit
 class TestBehavioralPatternDecay:
+    """behavioral renamed to behavioral in Stream 1 3-tier CATEGORY_DECAY simplification."""
 
-    def test_behavioral_pattern_in_category_decay(self):
-        """behavioral_pattern should be a registered decay category."""
+    def test_behavioral_in_category_decay(self):
+        """behavioral should be a registered decay category."""
         from services.user_trait_service import CATEGORY_DECAY
-        assert 'behavioral_pattern' in CATEGORY_DECAY
+        assert 'behavioral' in CATEGORY_DECAY
 
-    def test_behavioral_pattern_has_slow_decay(self):
+    def test_behavioral_has_slow_decay(self):
         """Activity time patterns are stable — base_decay should be low."""
         from services.user_trait_service import CATEGORY_DECAY
-        assert CATEGORY_DECAY['behavioral_pattern']['base_decay'] <= 0.01
+        assert CATEGORY_DECAY['behavioral']['base_decay'] <= 0.01
 
-    def test_behavioral_pattern_has_floor(self):
+    def test_behavioral_has_floor(self):
         """Behavioral patterns should have a floor to prevent total erasure."""
         from services.user_trait_service import CATEGORY_DECAY
-        assert CATEGORY_DECAY['behavioral_pattern']['floor'] > 0
+        assert CATEGORY_DECAY['behavioral']['floor'] > 0

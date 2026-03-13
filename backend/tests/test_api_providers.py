@@ -115,7 +115,7 @@ class TestProvidersAPI:
     def test_create_first_provider_auto_assigns_all_jobs(
         self, client, mock_service, mock_cache
     ):
-        """POST /providers for the first provider auto-assigns all 20 jobs."""
+        """POST /providers for the first provider auto-assigns all jobs."""
         mock_service.list_providers_summary.return_value = []  # no existing
         mock_service.create_provider.return_value = {
             "id": 1,
@@ -132,7 +132,7 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 19
+        assert mock_service.set_job_assignment.call_count == 18
 
         assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
         expected_jobs = sorted([
@@ -142,7 +142,7 @@ class TestProvidersAPI:
             'frontal-cortex-proactive',
             'frontal-cortex-scheduled-tool', 'mode-reflection',
             'semantic-memory', 'cognitive-triage', 'experience-assimilation',
-            'fact-store', 'memory-chunker',
+            'trait-extraction',
             'moment-enrichment', 'document-synthesis',
             'document-classification',
         ])
@@ -347,16 +347,16 @@ class TestProvidersAPI:
     def test_assign_job_success(self, client, mock_service, mock_cache):
         """PUT /providers/jobs/<name> assigns provider successfully."""
         mock_service.set_job_assignment.return_value = {
-            "job_name": "memory-chunker",
+            "job_name": "trait-extraction",
             "provider_id": 3,
         }
 
-        response = client.put('/providers/jobs/memory-chunker', json={
+        response = client.put('/providers/jobs/trait-extraction', json={
             "provider_id": 3,
         })
 
         assert response.status_code == 200
         data = response.get_json()
-        assert data["assignment"]["job_name"] == "memory-chunker"
+        assert data["assignment"]["job_name"] == "trait-extraction"
         assert data["assignment"]["provider_id"] == 3
-        mock_service.set_job_assignment.assert_called_once_with("memory-chunker", 3)
+        mock_service.set_job_assignment.assert_called_once_with("trait-extraction", 3)
