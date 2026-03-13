@@ -357,11 +357,18 @@ class OnnxInferenceService:
             if model.pruned:
                 # Pruned: output is (batch, num_classes) — already class-specific
                 label_logits = logits[0]
+                if len(label_logits) < len(model.labels):
+                    logger.warning(f"{LOG_PREFIX} {model_name}: pruned output has {len(label_logits)} classes but {len(model.labels)} labels")
+                    return None, 0.0
             else:
                 # Legacy: output is (batch, seq_len, vocab_size)
                 seq_len = int(attention_mask.sum()) - 1
                 last_logits = logits[0, seq_len, :]
-                label_logits = np.array([last_logits[tid] for tid in model.label_token_ids])
+                vocab_size = len(last_logits)
+                safe_ids = [tid for tid in model.label_token_ids if tid < vocab_size]
+                if len(safe_ids) < len(model.label_token_ids):
+                    logger.warning(f"{LOG_PREFIX} {model_name}: {len(model.label_token_ids) - len(safe_ids)} token IDs exceed vocab size {vocab_size}")
+                label_logits = np.array([last_logits[tid] for tid in safe_ids])
 
             # Softmax over label logits
             label_logits_shifted = label_logits - label_logits.max()
@@ -439,6 +446,9 @@ class OnnxInferenceService:
             thresholds = threshold_overrides or model.thresholds
             results = []
             for i, label in enumerate(model.labels):
+                if i >= len(probs):
+                    logger.warning(f"{LOG_PREFIX} {model_name}: label index {i} exceeds logits length {len(probs)}")
+                    break
                 t = thresholds.get(label, 0.5)
                 if probs[i] >= t:
                     results.append((label, float(probs[i])))

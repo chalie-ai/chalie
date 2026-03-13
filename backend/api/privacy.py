@@ -243,10 +243,11 @@ def delete_all():
             "reflection:*",
             "plan:*",
 
-            # Cognitive systems
+            # Cognitive systems (legacy + current keys)
             "cognitive_drift_state",
             "cognitive_drift_concept_cooldowns",
             "cognitive_drift_activations",
+            "cognitive_drift:*",
             "reasoning_loop:state",
             "reasoning_loop:cooldowns",
             "reasoning_loop:activations",

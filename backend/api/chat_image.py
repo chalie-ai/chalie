@@ -47,8 +47,8 @@ _TTL_HASH = 300     # 5 minutes
 
 
 def _get_store():
-    from services.memory_store import get_memory_store
-    return get_memory_store()
+    from services.memory_client import MemoryClientService
+    return MemoryClientService.create_connection()
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
