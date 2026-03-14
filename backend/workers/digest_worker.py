@@ -168,6 +168,22 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 from services.database_service import get_shared_db_service
                 from services.provider_cache_service import ProviderCacheService
 
+                # ONNX gate: skip LLM call if classifier says no trait present
+                try:
+                    from services.onnx_inference_service import get_onnx_inference_service
+                    onnx_svc = get_onnx_inference_service()
+                    if onnx_svc.is_available("trait-detector"):
+                        gate_input = f"{prompt_message}\nTrait:"
+                        label, confidence = onnx_svc.predict("trait-detector", gate_input)
+                        if label == "false" and confidence >= 0.85:
+                            logging.debug(
+                                f"[TRAIT_EXTRACT] ONNX gate: no trait detected "
+                                f"(confidence={confidence:.3f}), skipping LLM"
+                            )
+                            return
+                except Exception as e:
+                    logging.debug(f"[TRAIT_EXTRACT] ONNX gate unavailable: {e}")
+
                 provider_config = ProviderCacheService.resolve_for_job('trait-extraction')
                 if not provider_config:
                     return
@@ -2587,37 +2603,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as _save_e:
         logging.debug(f"[DIGEST] Save trigger check skipped: {_save_e}")
 
-    # Step 3c: Evaluate reward from previous exchange
-    try:
-        from services.reward_evaluator_service import RewardEvaluatorService
-        reward_eval = RewardEvaluatorService()
-        prev_turns = working_memory.get_recent_turns(thread_id, n=2)
-        previous_input = None
-        for turn in prev_turns:
-            if turn.get('role') == 'user' and turn.get('content') != text:
-                previous_input = turn.get('content')
-                break
-
-        if previous_input and context_topic:
-            behavior_reward = reward_eval.evaluate_user_behavior(
-                current_input=text,
-                previous_input=previous_input,
-                previous_topic=context_topic,
-                current_topic=context_topic
-            )
-            if behavior_reward != 0.0:
-                logging.debug(f"[DIGEST] Previous exchange reward: {behavior_reward:.2f}")
-                # Cache reward in MemoryStore for identity reinforcement
-                try:
-                    from services.memory_client import MemoryClientService
-                    reward_store = MemoryClientService.create_connection()
-                    reward_store.setex(f"identity_reward:{context_topic}", 1800, str(behavior_reward))
-                except Exception as re:
-                    logging.debug(f"[DIGEST] Failed to cache identity reward: {re}")
-
-    except Exception as e:
-        logging.debug(f"[DIGEST] Reward evaluation skipped: {e}")
-
     # Step 3d: Proactive engagement correlation
     if context_topic:
         _try_proactive_engagement_correlation(text, context_topic)
@@ -2856,21 +2841,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         triage_service = CognitiveTriageService()
         profile_service = ToolProfileService()
 
-        # Detect user signals from previous exchange (calibration)
-        calibration = None
-        try:
-            from services.triage_calibration_service import TriageCalibrationService
-            calibration = TriageCalibrationService()
-            _prev_exch_id = None
-            try:
-                _prev_exch_id = thread_conv_service.get_latest_exchange_id(topic) if topic else None
-            except Exception:
-                pass
-            if _prev_exch_id and _prev_exch_id != exchange_id:
-                calibration.detect_user_signals(_prev_exch_id, text, intent)
-        except Exception as _cal_err:
-            logging.debug(f"[DIGEST] Calibration signal detection failed: {_cal_err}")
-
         # Condensed working memory summary for triage context
         _wm_summary = ""
         try:
@@ -2916,15 +2886,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             f"time={triage_result.triage_time_ms:.1f}ms"
             + (" [SELF-EVAL OVERRIDE]" if triage_result.self_eval_override else "")
         )
-
-        # Log calibration event (partial — outcome filled later)
-        if calibration:
-            try:
-                calibration.log_triage_decision(
-                    exchange_id=exchange_id, topic=topic, result=triage_result
-                )
-            except Exception as _cal_err:
-                logging.debug(f"[DIGEST] Calibration log failed: {_cal_err}")
 
         # Performance-rank triage tools (tool order influences LLM selection)
         if triage_result.tools and len(triage_result.tools) > 1:
@@ -3230,23 +3191,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             thread_id=thread_id,
         )
 
-    # Step 11c: Spark exchange tracking — increment phase state machine
-    try:
-        from services.spark_state_service import SparkStateService
-        spark = SparkStateService()
-        if not spark.is_graduated():
-            spark.increment_exchange(text, response_gap_seconds=5.0, source=source)
-            if topic:
-                spark.record_topic(topic)
-    except Exception as _spark_e:
-        logging.debug(f"[DIGEST] Spark exchange tracking failed: {_spark_e}")
-
-    # Step 11c.1: Reset nurture backoff on user activity
-    try:
-        from services.autonomous_actions.nurture_action import NurtureAction
-        NurtureAction.record_user_activity()
-    except Exception as _nurture_e:
-        logging.debug(f"[DIGEST] Nurture activity reset failed: {_nurture_e}")
 
     # Step 11e: Detect saveable content in response
     if not is_fast_path_ack:

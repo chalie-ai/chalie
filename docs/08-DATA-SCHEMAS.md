@@ -284,12 +284,3 @@ CREATE TABLE master_account (
 );
 ```
 
-### Triage Calibration
-```sql
-CREATE TABLE triage_calibration (
-    id TEXT PRIMARY KEY,
-    metric_name TEXT NOT NULL,
-    score FLOAT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-```

@@ -54,7 +54,6 @@ frontend/
 - **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
 - **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
-- **`cognitive_reflex_service.py`** — Learned fast path via semantic abstraction; heuristic pre-screen (~1ms) + sqlite-vec cosine search (~5-20ms) bypasses full pipeline for self-contained queries; rolling-average centroids generalize from observed examples; self-correcting per cluster via user corrections and shadow validation
 
 #### Response Generation
 - **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
@@ -76,9 +75,7 @@ frontend/
 
 #### Autonomous Behavior
 - **`cognitive_drift_engine.py`** — Signal-driven reasoning engine; processes signals from decay engine, semantic consolidation, experience assimilation, and event bridge via `reasoning:signals` queue (blpop); falls back to salient/insight discovery on idle timeout (10min); attention-gated (skips when user in deep focus)
-- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, SuggestAction (skill-matched proactive suggestions), NurtureAction (gentle phase-appropriate presence), PlanAction (proactive plan proposals from recurring topics, 7-gate eligibility with signal persistence), ReflectAction, SeedThreadAction
-- **`spark_state_service.py`** — Tracks relationship phase progression (first_contact → surface → exploratory → connected → graduated)
-- **`spark_welcome_service.py`** — First-contact welcome message triggered on first WebSocket connection; runs once per lifecycle
+- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, PlanAction (proactive plan proposals from recurring topics, 7-gate eligibility with signal persistence), ReflectAction, SeedThreadAction, AmbientToolAction
 - **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
 - **`curiosity_pursuit_service.py`** — Background worker exploring active threads via ACT loop
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
@@ -349,7 +346,7 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 - **`memory`** — Memory layer counts and health indicators
 - **`tools`** — Tool performance stats
 - **`identity`** — Identity vector states
-- **`tasks`** — Active persistent tasks, curiosity threads, triage calibration
+- **`tasks`** — Active persistent tasks and curiosity threads
 - **`autobiography`** — Current autobiography narrative with delta (changed/unchanged sections)
 - **`traits`** (GET) — User traits grouped by category with confidence scores
 - **`traits/<key>`** (DELETE) — Remove a specific learned trait (user correction)

@@ -44,10 +44,10 @@ Every service belongs to exactly one of three layers. Failures are contained wit
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
 **Cognitive services:**
-DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, CognitiveTriage, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, RoutingStabilityRegulator, RoutingReflection, TopicStabilityRegulator, TriageCalibration, SelfModel
+DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, CognitiveTriage, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, RoutingStabilityRegulator, RoutingReflection, TopicStabilityRegulator, SelfModel
 
 **Embodiment services:**
-AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, SparkState, EpisodicMemoryObserver, ThreadExpiry
+AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, EpisodicMemoryObserver, ThreadExpiry
 
 **Capability services:**
 ToolRegistry, ToolWorker, ToolContainer, ToolConfig, ToolProfile, ToolPerformance, ToolUpdateChecker, ACTLoop, ACTDispatcher, DocumentService, DocumentProcessing, DocumentPurge, SchedulerService, ListService, PersistentTaskWorker, MomentEnrichment, ProfileEnrichment
@@ -249,7 +249,6 @@ def run_signal_loop(self):
 | RoutingStabilityRegulator | 24h timer | Low | Calibration, timer is appropriate |
 | RoutingReflectionService | 5min timer | — | Could react to low-confidence routing signals |
 | TopicStabilityRegulator | 24h timer | Low | Calibration, timer is appropriate |
-| TriageCalibrationService | 24h timer | Low | Calibration, timer is appropriate |
 | ProfileEnrichmentService | 6h timer | Low | Long cycle, timer is fine |
 | TemporalPatternService | 6h timer | Low | Long cycle, timer is fine |
 | ToolUpdateChecker | 6h timer | Low | Infrastructure, timer is fine |

@@ -545,40 +545,6 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
 CREATE INDEX IF NOT EXISTS idx_tcp_tool_name ON tool_capability_profiles(tool_name);
 
 -- ────────────────────────────────────────────────────────────────
--- TRIAGE CALIBRATION EVENTS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS triage_calibration_events (
-    id TEXT PRIMARY KEY,
-    exchange_id TEXT,
-    topic TEXT,
-    triage_branch TEXT NOT NULL,
-    triage_mode TEXT NOT NULL,
-    tool_selected TEXT,                       -- JSON array (was TEXT[])
-    confidence_internal REAL,
-    confidence_tool_need REAL,
-    reasoning TEXT,
-    freshness_risk REAL,
-    decision_entropy REAL,
-    self_eval_override INTEGER DEFAULT 0,     -- BOOLEAN
-    self_eval_reason TEXT,
-    outcome_mode TEXT,
-    outcome_tools_used TEXT,                  -- JSON array (was TEXT[])
-    outcome_tool_success INTEGER,             -- BOOLEAN
-    outcome_latency_ms REAL,
-    tool_abstention INTEGER DEFAULT 0,        -- BOOLEAN
-    signal_rephrase INTEGER DEFAULT 0,        -- BOOLEAN
-    signal_correction INTEGER DEFAULT 0,      -- BOOLEAN
-    signal_explicit_lookup INTEGER DEFAULT 0, -- BOOLEAN
-    signal_abandonment INTEGER DEFAULT 0,     -- BOOLEAN
-    correctness_label TEXT,
-    correctness_score REAL,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tce_created ON triage_calibration_events(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tce_topic ON triage_calibration_events(topic, created_at DESC);
-
--- ────────────────────────────────────────────────────────────────
 -- TOOL PERFORMANCE METRICS
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_performance_metrics (
@@ -681,7 +647,11 @@ CREATE TABLE IF NOT EXISTS persistent_tasks (
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_status ON persistent_tasks(account_id, status);
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_next_run ON persistent_tasks(status, next_run_after);
 
--- cognitive_reflexes table removed — service is disabled (disconnected from pipeline).
+-- cognitive_reflexes table removed — CognitiveReflexService removed.
+DROP TABLE IF EXISTS cognitive_reflexes;
+DROP TABLE IF EXISTS cognitive_reflexes_vec;
+-- triage_calibration_events table removed — TriageCalibrationService removed.
+DROP TABLE IF EXISTS triage_calibration_events;
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────

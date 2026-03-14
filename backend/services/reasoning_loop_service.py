@@ -219,7 +219,6 @@ class ReasoningLoopService:
         from services.autonomous_actions.communicate_action import CommunicateAction
         from services.autonomous_actions.reflect_action import ReflectAction
         from services.autonomous_actions.seed_thread_action import SeedThreadAction
-        from services.autonomous_actions.suggest_action import SuggestAction
 
         router = ActionDecisionRouter()
 
@@ -233,18 +232,7 @@ class ReasoningLoopService:
         if seed_config.get('enabled', True):
             router.register(SeedThreadAction(config=seed_config))
 
-        # Register SUGGEST (priority 8, below COMMUNICATE=10, above SEED_THREAD=6)
-        suggest_config = action_config.get('suggest', {})
-        if suggest_config.get('enabled', True):
-            router.register(SuggestAction(config=suggest_config))
-
-        # Register NURTURE (priority 7, between SUGGEST and SEED_THREAD)
-        from services.autonomous_actions.nurture_action import NurtureAction
-        nurture_config = action_config.get('nurture', {})
-        if nurture_config.get('enabled', True):
-            router.register(NurtureAction(config=nurture_config))
-
-        # Register PLAN (priority 7, same as NURTURE — ties broken by score)
+        # Register PLAN (priority 7)
         from services.autonomous_actions.plan_action import PlanAction
         plan_config = action_config.get('plan', {})
         if plan_config.get('enabled', True):

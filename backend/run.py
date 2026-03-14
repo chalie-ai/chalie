@@ -311,7 +311,6 @@ def main():
     # Import worker functions
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
-    from services.growth_pattern_service import growth_pattern_worker
     from services.topic_stability_regulator_service import topic_stability_regulator_worker
     from services.reasoning_loop_service import reasoning_loop_worker
     from services.routing_stability_regulator_service import routing_stability_regulator_worker
@@ -331,7 +330,6 @@ def main():
     # Register service workers
     manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
-    manager.register_service("growth-pattern-service", growth_pattern_worker)
     manager.register_service("topic-stability-regulator-service", topic_stability_regulator_worker)
     manager.register_service("reasoning-loop", reasoning_loop_worker)
     manager.register_service("routing-stability-regulator-service", routing_stability_regulator_worker)
@@ -361,8 +359,6 @@ def main():
     manager.register_service("background-llm-worker", background_llm_worker)
 
     # Optional services (fail gracefully)
-    _try_register(manager, "triage-calibration-service",
-                  "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
     _try_register(manager, "temporal-pattern-service",

@@ -20,8 +20,7 @@ _ACTIVITY_EVENT_TYPES = (
     'proactive_sent',
     'act_loop_telemetry', 'cron_tool_executed',
     'plan_proposed', 'curiosity_thread_seeded',
-    'spark_nurture_sent', 'spark_suggestion_sent',
-    'spark_phase_change', 'place_transition',
+    'place_transition',
 )
 
 
@@ -42,9 +41,6 @@ def _summarize_event(event_type: str, payload: dict) -> str:
         'cron_tool_executed': lambda: f"Ran {p.get('tool_name', 'tool')} in background",
         'plan_proposed': lambda: f"Proposed background task: {p.get('topic', 'unknown')}",
         'curiosity_thread_seeded': lambda: "Started exploring a new curiosity thread",
-        'spark_nurture_sent': lambda: "Sent a relationship check-in",
-        'spark_suggestion_sent': lambda: f"Suggested: {p.get('skill_name', 'something')}",
-        'spark_phase_change': lambda: "Relationship phase updated",
         'place_transition': lambda: "Noticed a location change",
     }
     fn = summaries.get(event_type, lambda: event_type.replace('_', ' ').title())

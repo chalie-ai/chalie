@@ -105,7 +105,7 @@ class TestDeleteAll:
             'episodes', 'semantic_concepts', 'semantic_relationships',
             'user_traits', 'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
-            'cognitive_reflexes', 'interaction_log', 'cortex_iterations',
+            'interaction_log', 'cortex_iterations',
             'routing_decisions', 'procedural_memory', 'curiosity_threads',
         ]
         for table in required_tables:
@@ -136,7 +136,7 @@ class TestDataSummary:
         required_tables = [
             'episodes', 'semantic_concepts', 'user_traits', 'threads',
             'autobiography', 'scheduled_items', 'persistent_tasks',
-            'lists', 'place_fingerprints', 'cognitive_reflexes',
+            'lists', 'place_fingerprints',
             'interaction_log', 'curiosity_threads',
         ]
         for table in required_tables:
@@ -156,7 +156,7 @@ class TestExportData:
             'episodes', 'semantic_concepts', 'semantic_relationships',
             'user_traits', 'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'list_items', 'place_fingerprints',
-            'cognitive_reflexes', 'curiosity_threads',
+            'curiosity_threads',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in export_data table list"

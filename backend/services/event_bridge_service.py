@@ -5,7 +5,6 @@ Event sources:
   - Ambient Inference → place_transition, attention_shift, energy_change
   - Scheduler Service → item_approaching, item_due
   - Client Context → session_start, session_resume, long_idle_end
-  - Spark State → phase_transition
 
 Pipeline:
   1. State stabilization (90s window for jitter-prone events)

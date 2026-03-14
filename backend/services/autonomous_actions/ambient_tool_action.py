@@ -10,7 +10,7 @@ Low priority because ambient lookups are speculative — they should not
 compete with direct user-facing actions.
 
 Gates:
-  1. Phase gate: Spark must be in connected or graduated
+  1. Phase gate: Always passes
   2. Tool gate: At least one ambient tool must exist
   3. Relevance gate: Thought embedding similarity to tool docs > threshold
   4. Rate limit: Max 1 invocation per cooldown per tool
@@ -119,13 +119,8 @@ class AmbientToolAction(AutonomousAction):
     # ── Gates ──────────────────────────────────────────────────
 
     def _phase_gate(self) -> bool:
-        """Same as SuggestAction — connected or graduated."""
-        try:
-            from services.spark_state_service import SparkStateService
-            phase = SparkStateService().get_phase()
-            return phase in ('connected', 'graduated')
-        except Exception:
-            return False
+        """Always allowed."""
+        return True
 
     def _tool_gate(self) -> Tuple[bool, List[dict]]:
         """At least one ambient tool must exist."""
