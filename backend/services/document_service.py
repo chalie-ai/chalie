@@ -805,7 +805,7 @@ class DocumentService:
 
                 # Stage 2b: Full-text search within candidate docs via FTS5
                 import re as _re
-                fts_query = _re.sub(r'[:\(\)\*\^"\\?,]', ' ', query_text)
+                fts_query = _re.sub(r'[:\(\)\*\^"\\?,\']', ' ', query_text)
                 fts_query = _re.sub(r'\s+', ' ', fts_query).strip() or '*'
                 cursor.execute(f"""
                     SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
