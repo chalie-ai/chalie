@@ -51,7 +51,6 @@ frontend/
 #### Routing & Decision Making
 - **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker
 - **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
-- **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
 - **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
 
@@ -127,8 +126,6 @@ frontend/
 #### Topic Classification
 - **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
 - **`adaptive_boundary_detector.py`** — 3-layer self-calibrating topic boundary detector (NEWMA + Transient Surprise + Leaky Accumulator); persists per-thread state in MemoryStore; degrades gracefully to static threshold when < 5 messages
-- **`topic_stability_regulator_service.py`** — 24h adaptive tuning of topic classification and boundary detector parameters
-
 #### Session & Conversation
 - **`thread_conversation_service.py`** — MemoryStore-backed conversation thread persistence
 - **`thread_service.py`** — Manages conversation threads with expiry
@@ -175,9 +172,7 @@ frontend/
   - *UncertaintyService* — CRUD + state machine for `uncertainties` table; rank-guard on `reliability` columns; `mark_surfaced()` with anti-nag downgrade; `resolve_by_reinforcement()` for evidence-based auto-resolution
   - *ContradictionClassifierService* — LLM pair classifier (600ms ingestion time-box); vector pre-screen via `user_traits_vec`/`concepts_vec`; discriminates temporal change vs true contradiction vs context-dependent
   - *ReconcileAction* — Autonomous drift action (priority 4, 30min cooldown); samples traits+concepts, runs pairwise classification, creates uncertainty records or auto-supersedes temporal changes
-- **Routing Stability Regulator** — Single authority for router weight mutation
 - **Routing Reflection** — Idle-time peer review of routing decisions
-- **Topic Stability Regulator** — Adaptive tuning of topic classification parameters
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
@@ -211,11 +206,8 @@ frontend/
 
 ### Background Processes
 ```
-[Routing Stability Regulator] ← reads routing_decisions (24h cycle)
-    → adjusts configs/generated/mode_router_config.json
-
 [Routing Reflection Service] ← reads reflection-queue (idle-time)
-    → writes routing_decisions.reflection → feeds pressure to regulator
+    → writes routing_decisions.reflection
 
 [Decay Engine] → runs every 1800s (30min)
     ├─ Episodic decay (salience-weighted)
@@ -237,12 +229,6 @@ frontend/
 - **Scores**: Each mode gets weighted composite score; highest wins
 - **Tie-breaker**: Small LLM (qwen3:4b) for ambiguous cases
 - **Self-leveling**: Router naturally shifts toward RESPOND as memory accumulates
-
-### Single Authority for Weight Mutation
-- **Routing Stability Regulator** is the only service that modifies router weights
-- Other services log "pressure signals" but don't mutate state
-- Updates bounded: max ±0.02/day, 48h cooldown per parameter
-- **Closed-loop control**: Verifies adjustments work before persisting
 
 ### Mode-Specific Prompts
 - Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT) has its own focused prompt template
@@ -278,8 +264,6 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - **Leaky Accumulator** provides hysteresis — single-message outliers don't create false topics
 - All thresholds derived from running conversation statistics; no manual tuning
 - State persisted in MemoryStore (`adaptive_boundary:{thread_id}`, 24h TTL); cold-start fallback (0.55 threshold) when < 5 messages
-- Base parameters (`accumulator_boundary_base`, `accumulator_leak_rate`, NEWMA windows) are the slow outer loop controlled by Topic Stability Regulator
-
 ### Topic Confidence Reinforcement
 - Topic confidence updated via bounded reinforcement formula
 - `new = current + (new_confidence - current) * 0.5`
@@ -316,8 +300,6 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 ### Primary Configuration
 - **`configs/connections.json`** — SQLite path and MemoryStore settings
 - **`configs/agents/*.json`** — LLM settings (model, temperature, timeout)
-- **`configs/generated/mode_router_config.json`** — Learned router weights (generated)
-
 ### Provider Configuration
 - Stored in SQLite `providers` table (not JSON files)
 - Runtime configurable via REST API (`/api/providers`)

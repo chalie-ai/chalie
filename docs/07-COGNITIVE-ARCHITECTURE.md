@@ -26,11 +26,7 @@ This separation eliminates:
 - Fatigue fallbacks on simple greetings
 - ~15s latency for trivial interactions (ACKNOWLEDGE now uses qwen3:4b, ~2s)
 
-### 2. Single Authority for Weight Mutation
-
-Multiple monitors observe routing quality but **none modify weights directly**. They log pressure signals. A single `RoutingStabilityRegulator` (24h cycle) is the only entity that mutates router weights, with bounded corrections (max ±0.02/day) and 48h cooldown per parameter.
-
-### 3. Self-Leveling via Context Warmth
+### 2. Self-Leveling via Context Warmth
 
 The router naturally shifts behavior as memory accumulates:
 - Cold context (new topic, no facts) → favors CLARIFY
@@ -265,17 +261,6 @@ After generation, detect router misclassification using user behavior signals fr
 | Positive reward after any mode | Routing was correct | correct_route |
 
 Feedback is stored in `routing_decisions.feedback` (JSONB).
-
-### Routing Stability Regulator (24h Cycle)
-
-Single authority for weight mutation. Follows `TopicStabilityRegulatorService` pattern:
-
-1. Reads pressure signals from `routing_decisions` table (last 24h)
-2. Computes: tie-breaker rate, mode entropy, misroute rate, ACT opportunity miss rate, reflection disagreement
-3. Selects worst pressure, maps to single parameter adjustment
-4. Max ±0.02 per day, 48h cooldown per parameter, hard bounds on all weights
-5. **Closed-loop control**: Evaluates whether previous adjustments improved metrics. Reverts if no improvement or degradation detected.
-6. Persists to `configs/generated/mode_router_config.json`
 
 ### Routing Reflection (Idle-Time Peer Review)
 

@@ -18,9 +18,7 @@
 | **Idle Consolidation** (`services/idle_consolidation_service.py`) | `run.py` | Triggers semantic consolidation during idle periods. | |
 | **Decay Engine** (`services/decay_engine_service.py`) | `run.py` | Periodic decay: episodic (0.05/hr), semantic (0.03/hr). Runs every 30min. | High-salience decays slower. |
 | **Growth Pattern Service** (`services/growth_pattern_service.py`) | `run.py` | Tracks longitudinal communication style shifts. Compares current style against a slowly-updated EMA baseline to detect persistent changes in certainty, depth, challenge appetite, verbosity, and formality. Stores `growth_signal:{dim}` traits (category=core) when a shift persists 3+ consecutive cycles (90min+). 30min cycle. | Growth signals surface via `AdaptiveLayerService` as optional growth reflections in the response prompt (24h cooldown). Uses `StyleMetricsService` for deterministic 5-dimension measurements (~1ms, zero LLM). |
-| **Topic Stability Regulator** (`services/topic_stability_regulator_service.py`) | `run.py` | Adaptive tuning of topic switching parameters. 24h cycle. | |
-| **Routing Stability Regulator** (`services/routing_stability_regulator_service.py`) | `run.py` | Single authority for mode router weight mutation. 24h cycle. Reads pressure signals, applies bounded corrections (max ±0.02/day), 48h cooldown per parameter. Closed-loop control (reverts ineffective adjustments). | Persists to `configs/generated/mode_router_config.json`. |
-| **Routing Reflection** (`services/routing_reflection_service.py`) | `run.py` | Idle-time peer review of routing decisions via strong LLM (qwen3:14b). Stratified sampling, dimensional ambiguity analysis, anti-authority safeguards. | Consultant, not authority. Feeds pressure signals to regulator. |
+| **Routing Reflection** (`services/routing_reflection_service.py`) | `run.py` | Idle-time peer review of routing decisions via strong LLM (qwen3:14b). Stratified sampling, dimensional ambiguity analysis, anti-authority safeguards. | Consultant, not authority. Feeds pressure signals. |
 | **Experience Assimilation** (`services/experience_assimilation_service.py`) | `run.py` | Converts tool results into episodic memory. 60s poll cycle. | |
 | **Thread Expiry Service** (`services/thread_expiry_service.py`) | `run.py` | Expires stale conversation threads. 5min poll cycle. | |
 | **Scheduler Service** (`services/scheduler_service.py`) | `run.py` | Fires due reminders and scheduled tasks. 60s poll cycle. | |
@@ -74,8 +72,6 @@ The `WorkerManager` in `run.py` runs a health check loop every 30 seconds:
 | Decay Engine | 30min | None | Fixed interval |
 | Scheduler Service | 60s poll | None | Checks `due_at <= NOW()` |
 | Thread Expiry | 5min poll | None | Expires threads with no activity |
-| Routing Stability Regulator | 24h cycle | None | Single authority for weight mutation |
-| Topic Stability Regulator | 24h cycle | None | Tunes topic classifier params |
 | Autobiography Synthesis | 6h cycle | None | Narrative synthesis |
 | Triage Calibration | 24h cycle | None | Scoring/learning signals |
 | Profile Enrichment | 6h cycle | None | Tool profile enrichment |
