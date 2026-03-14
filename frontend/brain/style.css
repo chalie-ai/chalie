@@ -329,6 +329,52 @@ body::before {
     font-size: 14px;
 }
 
+.auto-assign-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: rgba(255, 184, 0, 0.06);
+    border: 1px solid rgba(255, 184, 0, 0.18);
+}
+.auto-assign-bar__text {
+    flex: 1;
+    font-size: 13px;
+    color: #FFB800;
+}
+.auto-assign-bar__text i {
+    margin-right: 6px;
+}
+.auto-assign-bar__btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    background: #8A5CFF;
+    color: #fff;
+    cursor: pointer;
+    transition: box-shadow 220ms ease;
+    white-space: nowrap;
+}
+.auto-assign-bar__btn:hover {
+    box-shadow: 0 0 12px rgba(138, 92, 255, 0.4);
+}
+.auto-assign-bar__dismiss {
+    background: none;
+    border: none;
+    color: rgba(234, 230, 242, 0.4);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
+.auto-assign-bar__dismiss:hover {
+    color: rgba(234, 230, 242, 0.7);
+}
+
 .job-health-dot {
     display: inline-block;
     width: 8px;

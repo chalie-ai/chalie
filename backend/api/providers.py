@@ -311,6 +311,62 @@ def test_provider():
         return jsonify({"success": False, "error": "Test failed unexpectedly"}), 500
 
 
+@providers_bp.route('/jobs/auto-assign', methods=['POST'])
+@require_session
+def auto_assign_jobs():
+    """Optimally assign jobs to providers based on model tier vs job requirement.
+
+    For each job, picks the provider whose model tier best matches the
+    job's recommended tier — preferring exact match, then higher, then lower.
+    """
+    try:
+        from api.system import _JOB_RECOMMENDED_TIER, _detect_model_tier, _TIER_ORDER
+
+        service = get_provider_service()
+        providers_list = service.list_providers_summary()
+        if len(providers_list) < 2:
+            return jsonify({"error": "Need at least 2 providers for auto-assign"}), 400
+
+        # Score each provider per model tier
+        scored = []
+        for p in providers_list:
+            tier = _detect_model_tier(p.get('model', ''))
+            scored.append({'id': p['id'], 'name': p['name'], 'model': p.get('model', ''), 'tier': tier,
+                           'tier_rank': _TIER_ORDER.get(tier, 0)})
+
+        changed = []
+        for job_id, rec_tier in _JOB_RECOMMENDED_TIER.items():
+            rec_rank = _TIER_ORDER.get(rec_tier, 0)
+
+            # Sort providers: prefer exact tier match, then closest above, then closest below
+            def sort_key(p):
+                diff = p['tier_rank'] - rec_rank
+                # Exact match = 0, above = small positive, below = large positive
+                if diff == 0:
+                    return (0, 0)
+                if diff > 0:
+                    return (1, diff)       # over-provisioned (acceptable)
+                return (2, -diff)          # under-provisioned (least preferred)
+
+            best = min(scored, key=sort_key)
+            service.set_job_assignment(job_id, best['id'])
+            changed.append({'job_id': job_id, 'provider_id': best['id'],
+                            'provider_name': best['name'], 'model_tier': best['tier'],
+                            'recommended_tier': rec_tier})
+
+        # Invalidate provider cache
+        try:
+            from services.provider_cache_service import ProviderCacheService
+            ProviderCacheService.invalidate()
+        except Exception:
+            pass
+
+        return jsonify({"ok": True, "assignments": changed}), 200
+    except Exception as e:
+        logger.error(f"[REST API] auto-assign failed: {e}")
+        return jsonify({"error": "Auto-assign failed"}), 500
+
+
 @providers_bp.route('/jobs', methods=['GET'])
 @require_session
 def list_job_assignments():
