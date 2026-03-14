@@ -955,6 +955,17 @@ body {
   color: var(--text-primary);
 }
 
+.speech-form__speak-btn.speaking--loading {
+  color: var(--accent-cyan, #00F0FF);
+  animation: speak-pulse 1s ease-in-out infinite;
+  cursor: wait;
+}
+
+@keyframes speak-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* Remember (pin) button */
 .speech-form__remember-btn {
   background: none;

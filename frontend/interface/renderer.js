@@ -292,6 +292,17 @@ export class Renderer {
       speakBtn.setAttribute('aria-label', 'Read aloud');
       speakBtn.innerHTML = SPEAK_ICON;
       speakBtn.addEventListener('click', () => {
+        if (speakBtn.disabled) return;
+        speakBtn.disabled = true;
+        speakBtn.classList.add('speaking--loading');
+        const onDone = () => {
+          speakBtn.disabled = false;
+          speakBtn.classList.remove('speaking--loading');
+          document.removeEventListener('chalie:speak:done', onDone);
+          document.removeEventListener('chalie:speak:error', onDone);
+        };
+        document.addEventListener('chalie:speak:done', onDone);
+        document.addEventListener('chalie:speak:error', onDone);
         document.dispatchEvent(new CustomEvent('chalie:speak', { detail: { text } }));
       });
       metaRow.appendChild(speakBtn);
