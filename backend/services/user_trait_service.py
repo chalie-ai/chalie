@@ -10,11 +10,114 @@ Traits decay unless reinforced, and uncertain knowledge fades naturally.
 
 import logging
 import math
+import re
 import struct
 import uuid
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Trait validation (deterministic, zero LLM) ────────────────────
+# Catches garbage traits from weak models and noisy temporal patterns.
+
+_STOP_WORDS = frozenset({
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for',
+    'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'like',
+    'through', 'after', 'over', 'between', 'out', 'up', 'down', 'off',
+    'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either',
+    'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most',
+    'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than',
+    'too', 'very', 'just', 'because', 'if', 'when', 'while', 'this',
+    'that', 'these', 'those', 'it', 'its', 'i', 'me', 'my', 'we',
+    'our', 'you', 'your', 'he', 'she', 'they', 'them', 'their',
+    'what', 'which', 'who', 'whom', 'how', 'where', 'there', 'here',
+    'often', 'discusses', 'yes', 'no', 'ok', 'okay', 'true', 'false',
+})
+
+# Placeholder values that indicate no real trait was extracted
+_PLACEHOLDER_RE = re.compile(
+    r'^(?:unknown|n/?a|none|null|undefined|not specified|unspecified|empty|default)$',
+    re.IGNORECASE,
+)
+
+# Maximum segments in a topic_time key slug before it's likely a sentence fragment.
+# Real topics: "machine_learning" (2), "natural_language_processing" (3).
+# Garbage: "bloody_tired_trying_finalise" (4), "yeah_look_skill_itself" (4).
+_MAX_TOPIC_SLUG_SEGMENTS = 3
+
+
+def _extract_content_words(text: str) -> list:
+    """Extract meaningful content words from text (not stop words, len > 1)."""
+    words = re.findall(r'[a-zA-Z]{2,}', text.lower())
+    return [w for w in words if w not in _STOP_WORDS and len(w) > 1]
+
+
+def _information_density(text: str) -> float:
+    """Ratio of content words to total words. Higher = more meaningful."""
+    all_words = re.findall(r'[a-zA-Z]{2,}', text.lower())
+    if not all_words:
+        return 0.0
+    content = [w for w in all_words if w not in _STOP_WORDS and len(w) > 1]
+    return len(content) / len(all_words)
+
+
+def _validate_trait(key: str, value: str, category: str) -> Optional[str]:
+    """Validate a trait before storage. Returns rejection reason or None if valid.
+
+    Uses information density and structural heuristics rather than hardcoded
+    template matching. Catches garbage from weak LLMs and noisy temporal patterns.
+    """
+    # Key validation
+    if not key or len(key) < 2:
+        return 'key_too_short'
+
+    # Reject keys that are pure stop words
+    key_segments = [w for w in re.split(r'[_\-\s]+', key.lower()) if w]
+    content_key = [w for w in key_segments if w not in _STOP_WORDS and len(w) > 1]
+    if not content_key:
+        return 'key_is_stop_words'
+
+    # Value validation
+    if not value or len(value.strip()) < 3:
+        return 'value_too_short'
+    if len(value) > 500:
+        return 'value_too_long'
+
+    # Placeholder detection
+    if _PLACEHOLDER_RE.match(value.strip()):
+        return 'placeholder_value'
+
+    # Information density: value must carry enough meaning
+    # Low density = mostly stop/template words, little actual content
+    density = _information_density(value)
+    content_words_value = _extract_content_words(value)
+    if len(content_words_value) < 1:
+        return 'no_content_words'
+
+    # Combined content: key + value must have ≥ 2 unique content words
+    content_all = set(content_key + content_words_value)
+    if len(content_all) < 2:
+        return 'insufficient_content'
+
+    # Topic-time trait validation: the topic slug must be a real concept, not a
+    # slugified sentence fragment. Real topics have ≤ 3-4 slug segments
+    # ("machine_learning", "system_design"). Sentence fragments have more
+    # ("bloody_tired_trying_finalise", "yeah_look_skill_itself").
+    if key.startswith('topic_time_'):
+        topic_slug = key[len('topic_time_'):]
+        slug_segments = [s for s in topic_slug.split('_') if s]
+
+        if len(slug_segments) > _MAX_TOPIC_SLUG_SEGMENTS:
+            return 'topic_slug_too_long'
+
+        # Topic slug must have at least one content word (not a stop word)
+        topic_content = [s for s in slug_segments if s not in _STOP_WORDS and len(s) > 1]
+        if not topic_content:
+            return 'topic_slug_no_content'
+
+    return None
 
 # Confidence levels for natural language injection
 CONFIDENCE_LABELS = {
@@ -129,6 +232,15 @@ class UserTraitService:
         Returns:
             bool: True if stored/updated, False if rejected
         """
+        # Validate trait quality before any DB operations
+        rejection = _validate_trait(trait_key, trait_value, category)
+        if rejection:
+            logger.info(
+                f"[USER_TRAITS] Rejected '{trait_key}': {rejection} "
+                f"(value='{trait_value[:60]}', category={category})"
+            )
+            return False
+
         # Clamp confidence
         confidence = max(0.0, min(1.0, confidence))
 

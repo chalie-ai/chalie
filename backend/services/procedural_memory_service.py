@@ -175,17 +175,21 @@ class ProceduralMemoryService:
 
     def record_gate_rejection(self, action_name: str, reason: str = '') -> bool:
         """
-        Record a gate rejection as a soft failure in procedural memory.
+        Record a gate rejection as a neutral event in procedural memory.
 
-        Gate rejections are pre-execution blocks (the action was considered
-        but a deterministic gate prevented it). These count as lighter
-        failures than execution failures (reward=-0.3 vs -1.0) so the
-        action's weight decreases gradually as rejections accumulate.
+        Gate rejections are pre-execution blocks — the action was considered
+        but a deterministic gate correctly prevented it (wrong phase, rate
+        limit, insufficient context, etc.). This is the system working as
+        designed, NOT a failure. Neutral reward (0.0) keeps the action's
+        weight stable instead of degrading it into learned helplessness.
+
+        Execution failures (the action ran and failed) still use negative
+        rewards via record_action_outcome().
         """
         return self.record_action_outcome(
             action_name=action_name,
             success=False,
-            reward=-0.3,
+            reward=0.0,
             failure_class='gate_rejection',
         )
 

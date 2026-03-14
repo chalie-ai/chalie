@@ -1175,12 +1175,35 @@ class ReasoningLoopService:
         except Exception:
             pass
 
+        # Inject user traits so drift thoughts orbit the user's actual life
+        # instead of generic philosophizing
+        user_context = ''
+        try:
+            from services.database_service import get_shared_db_service
+            from services.user_trait_service import UserTraitService
+            db = get_shared_db_service()
+            traits = UserTraitService(db).get_all_traits()
+            # Pick top traits by confidence, skip style_baseline (not human-readable)
+            top_traits = [
+                t for t in sorted(traits, key=lambda t: t.get('confidence', 0), reverse=True)
+                if t.get('trait_key') != 'style_baseline'
+            ][:5]
+            if top_traits:
+                lines = [
+                    f"- {t.get('trait_key', '?')}: {t.get('trait_value', '?')}"
+                    for t in top_traits
+                ]
+                user_context = '\n'.join(lines)
+        except Exception:
+            pass
+
         user_message = self.prompt_template \
             .replace("{{seed_concept}}", seed_text) \
             .replace("{{activated_concepts}}", activated_text) \
             .replace("{{grounding_episode}}", episode_text) \
             .replace("{{temporal_rhythm}}", rhythm_text) \
-            .replace("{{constraint_context}}", constraint_context)
+            .replace("{{constraint_context}}", constraint_context) \
+            .replace("{{user_context}}", user_context)
 
         # Soul axioms appended as stability anchor
         system_prompt = self.soul_axioms
