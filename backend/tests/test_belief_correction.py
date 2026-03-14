@@ -117,31 +117,36 @@ class TestCorrectTrait:
 # ── UserTraitService.delete_trait ─────────────────────────────────────────────
 
 class TestDeleteTrait:
-    def _make_service(self, rowcount=1):
+    def _make_service(self, exists=True):
         from services.user_trait_service import UserTraitService
         db = MagicMock()
         conn = MagicMock()
         cursor = MagicMock()
-        cursor.rowcount = rowcount
+        if exists:
+            cursor.fetchone.return_value = ('trait-id-123', 'preference')
+        else:
+            cursor.fetchone.return_value = None
         db.connection.return_value.__enter__ = lambda *a: conn
         db.connection.return_value.__exit__ = MagicMock(return_value=False)
         conn.cursor.return_value = cursor
         return UserTraitService(db), cursor
 
     def test_delete_trait_returns_true_when_deleted(self):
-        svc, cursor = self._make_service(rowcount=1)
+        svc, cursor = self._make_service(exists=True)
         assert svc.delete_trait('favourite_food') is True
 
     def test_delete_trait_returns_false_when_not_found(self):
-        svc, cursor = self._make_service(rowcount=0)
+        svc, cursor = self._make_service(exists=False)
         assert svc.delete_trait('nonexistent') is False
 
     def test_delete_trait_executes_correct_sql(self):
-        svc, cursor = self._make_service(rowcount=1)
+        svc, cursor = self._make_service(exists=True)
         svc.delete_trait('favourite_food')
-        sql = cursor.execute.call_args[0][0]
-        assert 'DELETE FROM user_traits' in sql
-        assert 'trait_key' in sql
+        # Find the DELETE call among all execute calls (nudge may add more)
+        sqls = [call[0][0] for call in cursor.execute.call_args_list]
+        delete_sqls = [s for s in sqls if 'DELETE FROM user_traits' in s]
+        assert len(delete_sqls) == 1
+        assert 'trait_key' in delete_sqls[0]
 
     def test_delete_trait_returns_false_on_db_error(self):
         from services.user_trait_service import UserTraitService

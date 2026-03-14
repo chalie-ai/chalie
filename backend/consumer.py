@@ -22,7 +22,15 @@ import sys
 import threading
 from typing import Dict, List, Tuple
 
-APP_VERSION = "0.2.0"
+def _read_version():
+    """Read version from the VERSION file — single source of truth."""
+    try:
+        from pathlib import Path
+        return Path(__file__).parent.parent.joinpath("VERSION").read_text().strip()
+    except Exception:
+        return "0.0.0"
+
+APP_VERSION = _read_version()
 
 
 def _thread_excepthook(args):

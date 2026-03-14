@@ -170,7 +170,7 @@ class MomentService:
                     FROM documents
                     WHERE source_type = 'moment'
                       AND deleted_at IS NULL
-                      AND json_extract(extracted_metadata, '$.moment_status') != 'forgotten'
+                      AND COALESCE(json_extract(extracted_metadata, '$.moment_status'), 'enriching') != 'forgotten'
                     ORDER BY created_at DESC
                 """)
                 rows = cursor.fetchall()

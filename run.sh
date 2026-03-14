@@ -102,4 +102,18 @@ if [[ "$_VOICE" == "true" ]]; then
 fi
 
 # ─── Launch ──────────────────────────────────────────────────────────────────
-exec "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST"
+# Loop: Python exits with code 42 to request a restart (e.g. after in-place update).
+# Any other exit code passes through normally.
+while true; do
+  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST"
+  _EXIT=$?
+  if [ "$_EXIT" -ne 42 ]; then
+    exit $_EXIT
+  fi
+  echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
+  if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
+    echo "→ Syncing dependencies from requirements.txt …"
+    "$PIP" install --quiet -r "$REQ"
+    touch "$STAMP"
+  fi
+done

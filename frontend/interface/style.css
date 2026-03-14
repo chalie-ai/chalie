@@ -159,6 +159,194 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   4b. Update Banner & Dialog
+   -------------------------------------------------------------------------- */
+.update-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  color: var(--accent-tertiary);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+}
+
+.update-banner.hidden {
+  display: none;
+}
+
+.update-banner__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent-tertiary);
+}
+
+.update-banner__text {
+  color: var(--text-primary);
+}
+
+.update-banner__text strong {
+  color: var(--accent-tertiary);
+}
+
+.update-banner__action {
+  background: var(--accent-tertiary);
+  color: #06080e;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 2px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.update-banner__action:hover {
+  opacity: 0.85;
+}
+
+.update-banner__dismiss {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.update-banner__dismiss:hover {
+  color: var(--text-primary);
+}
+
+.update-dialog {
+  background: transparent;
+  border: none;
+  padding: 0;
+  max-width: 480px;
+  width: 90vw;
+}
+
+.update-dialog::backdrop {
+  background: rgba(6, 8, 14, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+.update-dialog__content {
+  position: relative;
+  background: rgba(16, 20, 32, 0.98);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  color: var(--text-primary);
+}
+
+.update-dialog__close {
+  position: absolute;
+  top: var(--space-md);
+  right: var(--space-md);
+}
+
+.update-dialog__title {
+  font-size: var(--font-size-lg);
+  font-weight: 500;
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--accent-tertiary);
+}
+
+.update-dialog__version {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-md) 0;
+}
+
+.update-dialog__version strong {
+  color: var(--accent-tertiary);
+}
+
+.update-dialog__notes {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: var(--space-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: var(--line-height);
+  margin-bottom: var(--space-md);
+  white-space: pre-wrap;
+}
+
+.update-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.update-dialog__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
+}
+
+.update-dialog__progress.hidden {
+  display: none;
+}
+
+.update-dialog__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 240, 255, 0.2);
+  border-top-color: var(--accent-tertiary);
+  border-radius: 50%;
+  animation: updateSpin 0.8s linear infinite;
+}
+
+@keyframes updateSpin {
+  to { transform: rotate(360deg); }
+}
+
+.update-dialog__status {
+  font-size: var(--font-size-sm);
+  color: var(--accent-tertiary);
+  margin: 0;
+}
+
+.update-dialog__instructions {
+  padding: var(--space-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: var(--line-height);
+}
+
+.update-dialog__instructions.hidden {
+  display: none;
+}
+
+.update-dialog__instructions code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+/* --------------------------------------------------------------------------
    5. Presence Bar
    -------------------------------------------------------------------------- */
 .presence-bar {

@@ -319,7 +319,7 @@ class NurtureAction(AutonomousAction):
 
                 try:
                     config = ConfigService.resolve_agent_config(
-                        "frontal-cortex-acknowledge"
+                        "autonomous-nurture"
                     )
                 except Exception:
                     config = ConfigService.resolve_agent_config("frontal-cortex")

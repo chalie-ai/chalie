@@ -39,7 +39,7 @@ class OutputService:
         Args:
             topic: Conversation topic identifier
             response: The response text to deliver
-            mode: Output mode (RESPOND, CLARIFY, ACKNOWLEDGE)
+            mode: Output mode (RESPOND, CLARIFY, ACT)
             confidence: Confidence score of the response
             generation_time: Time taken to generate the response
             original_metadata: Optional original metadata from the request (uuid, source, etc.)

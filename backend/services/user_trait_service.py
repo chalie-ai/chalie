@@ -720,14 +720,44 @@ class UserTraitService:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+                # Fetch id before deleting (needed for uncertainty resolution)
+                cursor.execute(
+                    "SELECT id, category FROM user_traits WHERE trait_key = ?",
+                    (trait_key,)
+                )
+                existing = cursor.fetchone()
+                if not existing:
+                    return False
+
+                trait_id, category = existing[0], existing[1]
+
                 cursor.execute(
                     "DELETE FROM user_traits WHERE trait_key = ?",
                     (trait_key,)
                 )
-                deleted = cursor.rowcount
-            if deleted > 0:
-                logger.info(f"[USER_TRAITS] Deleted trait '{trait_key}' (user negation)")
-            return deleted > 0
+
+            logger.info(f"[USER_TRAITS] Deleted trait '{trait_key}' (user negation)")
+
+            # Emit reasoning signal — deletion is a correction event
+            try:
+                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                emit_reasoning_signal(ReasoningSignal(
+                    signal_type='trait_changed',
+                    source='user_trait_service',
+                    topic=category or 'general',
+                    content=f"User deleted trait '{trait_key}'",
+                    activation_energy=0.7,
+                ))
+            except Exception:
+                pass
+
+            # Phase 4 — lower uncertainty tolerance (user deleting = wants accuracy)
+            try:
+                _nudge_uncertainty_tolerance(self.db, direction=-0.03)
+            except Exception as ue:
+                logger.debug(f"[USER_TRAITS] Post-delete tolerance nudge skipped: {ue}")
+
+            return True
         except Exception as e:
             logger.error(f"[TRAITS] Delete failed for {trait_key}: {e}")
             return False
