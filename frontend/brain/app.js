@@ -781,8 +781,11 @@ function renderToolCard(tool) {
         if (hasConfig || hasOAuth) {
             actionsHtml += `<button class="tool-card__btn" onclick="openToolSettings('${name}')" title="Settings">⚙ Settings</button>`;
         }
-        if (isDisabled) {
-            actionsHtml += `<button class="tool-card__btn --primary" onclick="enableTool('${name}')">Enable</button>`;
+        if (isDisabled || hasError) {
+            if (isDisabled) {
+                actionsHtml += `<button class="tool-card__btn --primary" onclick="enableTool('${name}')">Enable</button>`;
+            }
+            actionsHtml += `<button class="tool-card__btn --danger" onclick="if(confirm('Permanently uninstall ${escapeHtml(name)}? This cannot be undone.')) deleteTool('${escapeHtml(name)}')">Uninstall</button>`;
         } else {
             actionsHtml += `<button class="tool-card__btn --danger" onclick="disableTool('${name}')">Disable</button>`;
         }
@@ -956,6 +959,32 @@ async function enableTool(name) {
             startBuildPoll();
         } else {
             showToast(data.error || 'Failed to enable tool', 'error');
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Permanently uninstalls a tool by calling the DELETE /tools/:name endpoint.
+ *
+ * On success, shows a success toast and refreshes the embodiment tool grid.
+ * On failure (non-OK HTTP response or network error), shows an error toast
+ * with the server-provided message when available.
+ *
+ * @async
+ * @param {string} name - The tool directory name to uninstall.
+ * @returns {Promise<void>}
+ */
+async function deleteTool(name) {
+    try {
+        const res = await apiFetch(`/tools/${name}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Tool uninstalled', 'success');
+            await loadEmbodiment();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to delete tool', 'error');
         }
     } catch (e) {
         showToast('Error: ' + e.message, 'error');
