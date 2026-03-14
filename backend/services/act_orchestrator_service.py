@@ -911,7 +911,12 @@ class ACTOrchestrator:
         current_types: set,
         recent_entries: list,
     ) -> Optional[str]:
-        """Embedding-based semantic repetition check (same-type only)."""
+        """Embedding-based semantic repetition check (same-type only).
+
+        Requires 2+ consecutive similar iterations to trigger — a single
+        similar search is "exploring a topic from different angles", not
+        being stuck.
+        """
         try:
             from services.embedding_service import get_embedding_service
             import numpy as np
@@ -919,17 +924,25 @@ class ACTOrchestrator:
             emb_service = get_embedding_service()
             current_vec = emb_service.generate_embedding_np(current_fingerprint)
 
-            for prev_fingerprint, prev_types in recent_entries[-4:-1]:
+            consecutive_hits = 0
+            # Check most recent entries (newest first)
+            for prev_fingerprint, prev_types in reversed(recent_entries[:-1]):
                 if not current_types & prev_types:
-                    continue
+                    break  # Type mismatch breaks the consecutive streak
                 prev_vec = emb_service.generate_embedding_np(prev_fingerprint)
                 sim = float(np.dot(current_vec, prev_vec))
                 if sim > self.repetition_sim_threshold:
-                    logger.warning(
-                        f"{LOG_PREFIX} Smart repetition (same-type): "
-                        f"sim={sim:.3f} > {self.repetition_sim_threshold}"
-                    )
-                    return 'smart_repetition'
+                    consecutive_hits += 1
+                else:
+                    break  # Below threshold breaks the streak
+
+            if consecutive_hits >= 2:
+                logger.warning(
+                    f"{LOG_PREFIX} Smart repetition (same-type): "
+                    f"{consecutive_hits} consecutive similar iterations "
+                    f"(threshold={self.repetition_sim_threshold})"
+                )
+                return 'smart_repetition'
         except Exception:
             pass
         return None
