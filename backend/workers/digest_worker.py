@@ -881,17 +881,27 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
         except Exception as e:
             logging.error(f"[ORCHESTRATOR] Failed: {e}")
 
-    # Signal completion for IGNORE mode on sync WebSocket channels.
-    # RESPOND/CLARIFY handlers call OutputService.enqueue_text()
-    # which signals the WebSocket handler. IGNORE skips OutputService entirely,
-    # so the handler never receives a completion signal — send a close signal
-    # so it can emit "done" instead of "No response received".
+    # Signal completion for IGNORE/card-only mode on sync WebSocket channels.
+    # RESPOND/CLARIFY handlers call OutputService.enqueue_text() which signals
+    # the WebSocket handler directly. For card-only ACT results that resolve to
+    # IGNORE, we also call enqueue_text() with an empty response so the frontend
+    # receives a proper `message` event (carrying exchange_id, topic, mode, etc.)
+    # before the `done` event — instead of jumping straight to a bare close signal
+    # that would leave responseMeta unpopulated on the client.
     if response_data.get('mode') == 'IGNORE' and metadata and metadata.get('uuid'):
         try:
             from services.output_service import OutputService
-            OutputService().enqueue_close_signal(metadata['uuid'])
+            OutputService().enqueue_text(
+                topic=topic,
+                response='',
+                mode='ACT',
+                confidence=response_data.get('confidence', 1.0),
+                generation_time=response_data.get('generation_time', 0.0),
+                original_metadata=metadata,
+                reply_actions=response_data.get('reply_actions'),
+            )
         except Exception as e:
-            logging.warning(f"[IGNORE] Failed to publish close signal: {e}")
+            logging.warning(f"[IGNORE] Failed to publish empty-text message event: {e}")
 
     return response_data, routing_result
 
