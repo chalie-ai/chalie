@@ -714,6 +714,37 @@ def observability_provider_health():
         return jsonify({"error": "Failed to retrieve provider health"}), 500
 
 
+@system_bp.route('/system/observability/failures', methods=['GET'])
+@require_session
+def observability_failures():
+    """
+    Return failure-analysis blame distribution and lesson statistics.
+
+    Aggregates all failure lessons stored across ``procedural_memory`` rows and
+    returns:
+
+    - ``blame_distribution``: Counter of blame categories across all lessons.
+    - ``lesson_counts_by_action``: Per-action lesson counts.
+    - ``top_lessons_by_frequency``: Top 10 lessons by ``times_seen`` (descending).
+    - ``recent_lessons``: 10 most recently updated lessons.
+    - ``total_lessons``: Grand total lesson count.
+    - ``generated_at``: ISO-8601 timestamp of the response.
+    """
+    try:
+        from services.failure_analysis_service import FailureAnalysisService
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        fas = FailureAnalysisService(db)
+        stats = fas.get_stats()
+        return jsonify({
+            'generated_at': _now_iso(),
+            **stats,
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/failures error: {e}")
+        return jsonify({"error": "Failed to retrieve failure data"}), 500
+
+
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────

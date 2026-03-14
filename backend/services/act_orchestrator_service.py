@@ -222,6 +222,12 @@ class ACTOrchestrator:
                 if _health_hint:
                     act_history_str += f"\n\n[Tool Health]\n{_health_hint}"
 
+            # ── Inject cautionary lessons (after first iteration) ──────
+            if act_loop.act_history:
+                _lessons_hint = self._get_cautionary_lessons(act_loop.act_history)
+                if _lessons_hint:
+                    act_history_str += f"\n\n[Cautionary Lessons]\n{_lessons_hint}"
+
             # Generate action plan via LLM
             response_data = cortex_service.generate_response(
                 system_prompt_template=act_prompt,
@@ -701,9 +707,121 @@ class ACTOrchestrator:
                         f"{LOG_PREFIX} Critic MAX_RETRIES reached for {action_type}"
                     )
 
+            # ── Failure lesson recording ────────────────────────────────
+            if not verdict.get('verified', True) or current_result.get('critic_blocked'):
+                self._record_failure_lesson(
+                    action_type=action_type,
+                    failure_context={
+                        'original_request': original_text,
+                        'action_type': action_type,
+                        'action_intent': action_spec,
+                        'action_result': current_result,
+                        'critic_verdict': verdict,
+                        'error_signals': {
+                            'status': current_result.get('status', ''),
+                            'confidence': current_result.get('confidence', 0),
+                            'reliability_warning': current_result.get('reliability_warning', ''),
+                            'critic_issue': verdict.get('issue', ''),
+                        },
+                    },
+                    severity=verdict.get('severity', 'minor'),
+                )
+
             critic_corrected.append(current_result)
 
         return critic_corrected
+
+    def _get_cautionary_lessons(self, recent_history: list) -> str:
+        """
+        Retrieve generalised failure lessons relevant to recently executed action types.
+
+        Queries :class:`FailureAnalysisService` for each unique action type that
+        appears in ``recent_history``, collects qualifying lessons (``severity ==
+        'major'`` or ``times_seen >= 2``), and formats them as a compact hint
+        string suitable for injection into the LLM's ``act_history`` context.
+
+        Args:
+            recent_history: List of action result dicts from ``act_loop.act_history``.
+                Each dict is expected to contain an ``action_type`` key.
+
+        Returns:
+            A newline-separated string of up to 3 lesson hints, e.g.::
+
+                - [tool_choice] Prefer X over Y when Z. (seen 3x)
+                - [external] Retry after 503s. (seen 2x)
+
+            Returns an empty string when no qualifying lessons are found or when
+            any exception occurs (errors are silently swallowed to stay non-blocking).
+        """
+        try:
+            from services.failure_analysis_service import FailureAnalysisService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            fas = FailureAnalysisService(db)
+            action_types = {
+                r.get('action_type', '')
+                for r in recent_history
+                if r.get('action_type')
+            }
+            all_lessons = []
+            for at in action_types:
+                all_lessons.extend(fas.get_relevant_lessons(at))
+            if not all_lessons:
+                return ''
+            # Sort by times_seen descending and cap at 3.
+            all_lessons.sort(key=lambda l: l.get('times_seen', 1), reverse=True)
+            lines = [
+                f"- [{l['blame']}] {l['lesson']} (seen {l.get('times_seen', 1)}x)"
+                for l in all_lessons[:3]
+            ]
+            return '\n'.join(lines)
+        except Exception:
+            return ''
+
+    def _record_failure_lesson(
+        self, action_type: str, failure_context: dict, severity: str = 'minor'
+    ) -> None:
+        """
+        Analyse a critic-rejected action and store a generalised lesson.
+
+        For ``severity == 'major'``, the analysis runs synchronously so the lesson is
+        available before the next iteration. For all other severities the work is
+        offloaded to a daemon thread so it never blocks the ACT loop.
+
+        Errors inside the analysis/storage path are caught and logged as warnings —
+        they must never propagate back to the caller.
+
+        Args:
+            action_type: The action type string (used as the ``action_name`` key in
+                ``procedural_memory``).
+            failure_context: Dict with keys ``original_request``, ``action_type``,
+                ``action_intent``, ``action_result``, ``critic_verdict``, and
+                ``error_signals``.
+            severity: Critic-reported severity (``'minor'`` or ``'major'``).
+                Major failures are analysed synchronously; minor ones asynchronously.
+        """
+        def _do_record():
+            try:
+                from services.failure_analysis_service import FailureAnalysisService
+                from services.database_service import get_shared_db_service
+                db = get_shared_db_service()
+                fas = FailureAnalysisService(db)
+                analysis = fas.analyze(failure_context)
+                if analysis:
+                    fas.store_lesson(analysis, action_type)
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} Failure lesson recording failed: {exc}")
+
+        if severity == 'major':
+            _do_record()
+        else:
+            import threading
+            t = threading.Thread(
+                target=_do_record,
+                daemon=True,
+                name=f"failure-lesson-{action_type[:20]}",
+            )
+            t.start()
 
     def _maybe_inject_budget_warning(
         self, act_loop: ActLoopService, actions: list

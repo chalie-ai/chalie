@@ -493,6 +493,44 @@ def _execute_plan_aware_loop(task: dict, plan: dict,
                 failure_reason=str(e)[:200],
                 retryable=True,
             )
+            # ── Failure lesson recording (async, never blocks the worker) ──
+            try:
+                import threading
+                from services.failure_analysis_service import FailureAnalysisService
+                from services.database_service import get_shared_db_service
+                _fc = {
+                    'original_request': task.get('goal', ''),
+                    'action_type': 'plan_step',
+                    'action_intent': {
+                        'step_id': step['id'],
+                        'description': step.get('description', ''),
+                    },
+                    'action_result': {'status': 'error', 'result': str(e)[:500]},
+                    'error_signals': {
+                        'status': 'exception',
+                        'error_text': str(e)[:200],
+                    },
+                    'plan_context': f"Step {step['id']} of task {task['id']}",
+                }
+
+                def _record_plan_step_failure(fc=_fc):
+                    """Analyse and store a lesson for a failed plan step."""
+                    try:
+                        db = get_shared_db_service()
+                        fas = FailureAnalysisService(db)
+                        analysis = fas.analyze(fc)
+                        if analysis:
+                            fas.store_lesson(analysis, 'plan_step')
+                    except Exception:
+                        pass  # Never let failure analysis break the task worker
+
+                threading.Thread(
+                    target=_record_plan_step_failure,
+                    daemon=True,
+                    name=f"failure-lesson-plan_step-{step['id'][:20]}",
+                ).start()
+            except Exception:
+                pass  # Never let failure analysis infrastructure break the task worker
         steps_processed += 1
 
     coverage = PlanDecompositionService.get_plan_coverage(plan)
