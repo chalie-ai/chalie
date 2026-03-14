@@ -187,7 +187,7 @@ class CuriosityPursuitService:
                     continue
 
                 title = f"Capability gap: {gap['request_summary'][:80]}"
-                thread_id = thread_service.seed_thread(
+                thread_id = thread_service.create_thread(
                     title=title,
                     seed_topic=gap['request_summary'][:120],
                     rationale=(
@@ -195,7 +195,6 @@ class CuriosityPursuitService:
                         f"but I lack the capability. Exploring alternatives."
                     ),
                     thread_type='behavioral',
-                    source='capability_gap',
                 )
                 if thread_id:
                     # Link the gap to the curiosity thread
