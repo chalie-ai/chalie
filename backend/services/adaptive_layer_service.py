@@ -87,27 +87,6 @@ FORK_TRIGGERS: Dict[str, str] = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Growth reflection templates — one dimension -> list of variant phrasings
-# ─────────────────────────────────────────────────────────────────────────────
-GROWTH_REFLECTIONS: Dict[str, List[str]] = {
-    'certainty': [
-        "You're approaching decisions more decisively lately.",
-        "There's a sharper clarity in how you're framing things.",
-        "Your positions are landing with more conviction.",
-    ],
-    'verbosity': [
-        "You're expressing more fully — taking space to think out loud.",
-        "You're giving your thoughts more room to develop.",
-        "There's more texture in how you're communicating.",
-    ],
-    'directness': [
-        "You're getting more direct — leading with the point.",
-        "There's less hedging in how you're presenting ideas.",
-        "You're owning your positions more clearly.",
-    ],
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Micro-preference labels — maps trait_key to natural language
 # ─────────────────────────────────────────────────────────────────────────────
 PREF_LABELS: Dict[str, str] = {
@@ -132,7 +111,6 @@ _MAX_MICRO_PREFS = 2
 # MemoryStore TTLs (seconds)
 _FORK_COOLDOWN_TTL = 300
 _FORK_PENDING_TTL = 600
-_GROWTH_COOLDOWN_TTL = 86400
 _BASELINE_TTL = 86400 * 30  # 30 days
 
 # EMA blend weight for the measured message vs stored baseline
@@ -258,11 +236,8 @@ class AdaptiveLayerService:
             # -- 8. Fork directive (at most one) ----------------------------------
             fork_directive = self._get_fork_directive(style, thread_id)
 
-            # -- 9. Growth reflection --------------------------------------------
-            growth_reflection = self._get_growth_reflection()
-
-            # -- 10. Assemble output ---------------------------------------------
-            if not directives and not micro_prefs and not fork_directive and not growth_reflection:
+            # -- 9. Assemble output ----------------------------------------------
+            if not directives and not micro_prefs and not fork_directive:
                 return ""
 
             lines: List[str] = ["## Adaptive Response Style"]
@@ -276,12 +251,6 @@ class AdaptiveLayerService:
             pref_lines = micro_prefs[:_MAX_MICRO_PREFS]
             for pref in pref_lines:
                 lines.append(f"- {pref}")
-
-            if growth_reflection:
-                lines.append(
-                    f'- If natural, weave in this observation: "{growth_reflection}". '
-                    "One sentence, no fanfare."
-                )
 
             lines.append(
                 "When these directives conflict with your identity voice, "
@@ -615,77 +584,6 @@ class AdaptiveLayerService:
 
         except Exception as e:
             logger.warning(f"[adaptive_layer] _get_fork_directive failed: {e}")
-            return ""
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Growth reflection
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _get_growth_reflection(self) -> str:
-        """
-        Return a single-sentence growth observation if a pattern qualifies.
-
-        Queries user_traits for growth_signal:* rows (category='core'), parses
-        the JSON value, and checks for consecutive_cycles >= 6.
-
-        Respects a 24-hour MemoryStore cooldown.
-
-        Returns:
-            str: Randomly selected reflection sentence, or "".
-        """
-        try:
-            from services.memory_client import MemoryClientService
-            from services.database_service import get_shared_db_service
-
-            store = MemoryClientService.create_connection()
-            cooldown_key = "adaptive_growth_reflection_cooldown"
-            if store.exists(cooldown_key):
-                return ""
-
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT trait_key, trait_value
-                    FROM user_traits
-                    WHERE trait_key LIKE 'growth_signal:%'
-                      AND category = 'core'
-                """)
-                rows = cursor.fetchall()
-                cursor.close()
-
-            if not rows:
-                return ""
-
-            eligible: List[tuple] = []
-            for trait_key, trait_value in rows:
-                try:
-                    data = json.loads(trait_value)
-                    cycles = int(data.get('consecutive_cycles', 0))
-                    if cycles >= 6:
-                        dim = trait_key.split(':', 1)[1] if ':' in trait_key else trait_key
-                        eligible.append((cycles, dim))
-                except Exception:
-                    continue
-
-            if not eligible:
-                return ""
-
-            eligible.sort(key=lambda x: x[0], reverse=True)
-            _, strongest_dim = eligible[0]
-
-            variants = GROWTH_REFLECTIONS.get(strongest_dim)
-            if not variants:
-                return ""
-
-            reflection = random.choice(variants)
-
-            store.set(cooldown_key, '1', ex=_GROWTH_COOLDOWN_TTL)
-
-            return reflection
-
-        except Exception as e:
-            logger.warning(f"[adaptive_layer] _get_growth_reflection failed: {e}")
             return ""
 
     # ─────────────────────────────────────────────────────────────────────────

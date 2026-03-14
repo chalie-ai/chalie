@@ -40,11 +40,9 @@ DATA_TABLES = [
     'documents',
     'document_chunks',
     'persistent_tasks',
-    'cognitive_reflexes',
     'place_fingerprints',
     'moments',
     'tool_performance_metrics',
-    'triage_calibration',
 ]
 
 

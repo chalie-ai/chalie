@@ -56,7 +56,7 @@ def data_summary():
                 "episodes", "semantic_concepts", "user_traits", "threads",
                 "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
-                "cognitive_reflexes", "interaction_log", "cortex_iterations",
+                "interaction_log", "cortex_iterations",
                 "curiosity_threads", "documents", "document_chunks",
             ]:
                 try:
@@ -95,7 +95,7 @@ def export_data():
         "user_traits", "threads", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
-        "place_fingerprints", "cognitive_reflexes", "curiosity_threads",
+        "place_fingerprints", "curiosity_threads",
         "interaction_log", "cortex_iterations", "routing_decisions",
         "procedural_memory", "topics", "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
@@ -103,7 +103,7 @@ def export_data():
 
     store_patterns = [
         "working_memory:*",
-        "identity_state:*", "spark_state:*", "focus_session:*",
+        "identity_state:*", "focus_session:*",
     ]
 
     MAX_EXPORT_ROWS = 10000
@@ -231,15 +231,12 @@ def delete_all():
 
             # Identity & context
             "identity_state:*",
-            "spark_state:*",
             "focus_session:*",
             "client_context:*",
             "ambient:*",
 
             # Autonomous action state
             "proactive:*",
-            "spark_nurture:*",
-            "spark_suggest:*",
             "reflection:*",
             "plan:*",
 
@@ -324,7 +321,6 @@ def delete_all():
                 "identity_vectors",
                 "identity_events",
                 "place_fingerprints",
-                "cognitive_reflexes",
 
                 # Documents (includes moments, watched-folder docs)
                 "document_chunks",
@@ -338,7 +334,6 @@ def delete_all():
                 "routing_decisions",
                 "procedural_memory",
                 "topics",
-                "triage_calibration_events",
                 "tool_performance_metrics",
                 "user_tool_preferences",
                 "curiosity_threads",

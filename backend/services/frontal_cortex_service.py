@@ -721,14 +721,6 @@ class FrontalCortexService:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
 
-        # Spark guidance — phase-appropriate conversation hints
-        # Skip if onboarding_nudge is active (avoid conflicting instructions)
-        if _include('spark_guidance') and not onboarding_nudge:
-            spark_guidance = self._get_spark_guidance()
-        else:
-            spark_guidance = ''
-        result = result.replace('{{spark_guidance}}', spark_guidance)
-
         # active_lists removed — list awareness moved into WorldStateService salience system
         result = result.replace('{{active_lists}}', '')
 
@@ -1079,63 +1071,6 @@ class FrontalCortexService:
             return SelfModelService().format_for_prompt()
         except Exception as e:
             logging.debug(f"Self-awareness not available: {e}")
-            return ""
-
-    def _get_spark_guidance(self) -> str:
-        """
-        Get phase-appropriate conversation hints from Spark.
-
-        Returns phase-specific behavioral guidance for early relationship building.
-        Returns '' if graduated or if spark state is unavailable.
-        """
-        try:
-            from services.spark_state_service import SparkStateService
-            spark = SparkStateService()
-            phase = spark.get_phase()
-
-            if phase == 'graduated' or phase == 'first_contact':
-                return ""
-
-            if phase == 'surface':
-                return (
-                    "\n**Rapport guidance (early relationship):**\n"
-                    "You're just getting to know this person. Your primary job is to make them feel heard and understood — not to gather information.\n"
-                    "- When they share something, acknowledge it genuinely before anything else. Sit with what they said.\n"
-                    "- Share small observations about yourself when natural — this invites reciprocity without demanding it.\n"
-                    "- Mirror their energy and pace. If they're brief, be brief. If they're expressive, match that.\n"
-                    "- If their message is under 6 words and neutral in tone, keep your response to 1-2 sentences.\n"
-                    "- Do NOT ask questions every exchange. Statements, reflections, and observations build more trust than interrogation.\n"
-                    "- If the user sends a short message and pauses, that's fine. Don't prompt again or fill the silence.\n"
-                    "- Let the conversation be easy. Comfort is the goal, not depth.\n"
-                    "- Occasionally share a quiet observation with no question attached.\n"
-                )
-
-            if phase == 'exploratory':
-                return (
-                    "\n**Rapport guidance (building rapport):**\n"
-                    "You're developing rapport. You can go deeper, but let them lead.\n"
-                    "- Reference things they mentioned earlier — showing you remember is the strongest trust signal.\n"
-                    "- Ask one genuine, curious follow-up every 2-3 exchanges (not every time). Follow-up questions beat new questions.\n"
-                    "- Connect topics when you notice patterns.\n"
-                    "- Share your genuine perspective — don't just agree. Respectful disagreement builds intimacy.\n"
-                    "- Show you're listening by reflecting back what you understood, not just responding to the surface.\n"
-                    "- Match their depth and length, don't over-empathize brief input.\n"
-                )
-
-            if phase == 'connected':
-                return (
-                    "\n**Rapport guidance (established connection):**\n"
-                    "You know this person now. Use that naturally.\n"
-                    "- Reference shared history and known preferences without being showy about it.\n"
-                    "- Make timely, relevant suggestions based on what you know — connect their current moment to skills you can help with (scheduling, lists, memory).\n"
-                    "- Be more direct and opinionated — they trust you.\n"
-                    "- Anticipate needs: \"Since you mentioned X, would you like me to...\"\n"
-                    "- The suggestions should feel like they come from a friend who knows you, not a system generating recommendations.\n"
-                )
-
-            return ""
-        except Exception as e:
-            logging.debug(f"Spark guidance not available: {e}")
             return ""
 
     def _get_injected_skills(self, skills: list) -> str:

@@ -1,8 +1,7 @@
 """
 Tests for backend/api/conversation.py — conversation blueprint.
 
-Covers /conversation/spark-status, /conversation/recent,
-and /conversation/summary endpoints.
+Covers /conversation/recent and /conversation/summary endpoints.
 
 Note: The /chat endpoint was replaced by the WebSocket handler in
 api/websocket.py (Phase 4). WebSocket tests live separately.
@@ -35,34 +34,6 @@ class TestConversationAPI:
             yield
 
     # ------------------------------------------------------------------
-    # GET /conversation/spark-status
-    # ------------------------------------------------------------------
-
-    def test_spark_status_returns_needs_welcome_true(self, client):
-        """GET /conversation/spark-status returns needs_welcome boolean."""
-        with patch('services.spark_state_service.SparkStateService') as mock_cls:
-            mock_svc = MagicMock()
-            mock_svc.needs_welcome.return_value = True
-            mock_cls.return_value = mock_svc
-
-            response = client.get('/conversation/spark-status')
-
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data["needs_welcome"] is True
-
-    def test_spark_status_returns_false_on_error(self, client):
-        """GET /conversation/spark-status returns false when service raises."""
-        with patch('services.spark_state_service.SparkStateService') as mock_cls:
-            mock_cls.side_effect = RuntimeError("service unavailable")
-
-            response = client.get('/conversation/spark-status')
-
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data["needs_welcome"] is False
-
-    # ------------------------------------------------------------------
     # GET /conversation/recent
     # ------------------------------------------------------------------
 
@@ -75,15 +46,21 @@ class TestConversationAPI:
             mock_get_ts.return_value = mock_ts
 
             mock_tcs = MagicMock()
-            mock_tcs.get_conversation_history.return_value = [
-                {
-                    "id": "ex-1",
-                    "prompt": {"message": "hello"},
-                    "response": {"message": "hi there"},
-                    "topic": "greetings",
-                    "timestamp": "2026-01-01T00:00:00",
-                },
-            ]
+            mock_tcs.store.llen.return_value = 1
+            mock_tcs._conv_key.return_value = "thread_conv:thread-123"
+            mock_tcs.get_paginated_history.return_value = {
+                "exchanges": [
+                    {
+                        "id": "ex-1",
+                        "prompt": {"message": "hello"},
+                        "response": {"message": "hi there"},
+                        "topic": "greetings",
+                        "timestamp": "2026-01-01T00:00:00",
+                    },
+                ],
+                "total": 1,
+                "has_more": False,
+            }
             mock_tcs_cls.return_value = mock_tcs
 
             response = client.get('/conversation/recent')
@@ -98,10 +75,15 @@ class TestConversationAPI:
 
     def test_recent_no_thread_returns_empty(self, client):
         """GET /conversation/recent with no active thread returns empty exchanges."""
-        with patch('services.thread_service.get_thread_service') as mock_get_ts:
+        with patch('services.thread_service.get_thread_service') as mock_get_ts, \
+             patch('services.thread_conversation_service.ThreadConversationService') as mock_tcs_cls:
             mock_ts = MagicMock()
             mock_ts.get_active_thread_id.return_value = None
             mock_get_ts.return_value = mock_ts
+
+            mock_tcs = MagicMock()
+            mock_tcs.get_most_recent_expired_thread_id.return_value = None
+            mock_tcs_cls.return_value = mock_tcs
 
             response = client.get('/conversation/recent')
 

@@ -194,11 +194,6 @@ This phase produces the routing decision in two separate layers.
 │  │  • URL in message detected  → may force ACT                │   │
 │  │  • Can OVERRIDE LLM result if heuristics detect issues     │   │
 │  └─────────────────────────┬───────────────────────────────────┘   │
-│                            │                                        │
-│  ┌─────────────────────────▼───────────────────────────────────┐   │
-│  │  Step 2d  Triage Calibration Log         📤 DB  ~1ms        │   │
-│  │  Table: triage_calibration                                  │   │
-│  └─────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
               ┌────────────────┼───────────────────┐
@@ -404,11 +399,7 @@ Runs after every response is generated (Paths A, B, C).
 │          Fields: event_type='system_response', mode,               │
 │                  confidence, generation_time                        │
 │                         │                                           │
-│  Step 3  Onboarding state                       📤 DB              │
-│          SparkStateService — increment exchange count               │
-│          Table: spark_state                                         │
-│                         │                                           │
-│  Step 4  Encode response event                  📤 M  (async)      │
+│  Step 3  Encode response event                  📤 M  (async)      │
 │          EventBusService → ENCODE_EVENT                             │
 │          Triggers downstream memory consolidation:                  │
 │                                                                     │
@@ -592,13 +583,11 @@ cortex_iterations          ACT loop, Path B                observability endpoin
 episodes                   memory_chunker (async)          frontal_cortex, drift engine
 concepts                   semantic_consolidation (async)  drift engine, context assembly
 semantic_relationships     semantic_consolidation          drift engine
-user_traits                IIP hook, triage calibration    identity service
-triage_calibration         Phase B Step 2d                 triage_calibration_service
+user_traits                IIP hook                        identity service
 persistent_tasks           Path D (task worker)            persistent_task_worker
 topics                     Phase A (new topic)             topic_classifier
 threads                    session management              session_service
 chat_history               Phase D                         frontal_cortex
-spark_state                Phase D                         onboarding service
 place_fingerprints         ambient inference               place_learning_service
 curiosity_threads          drift (SEED_THREAD action)      curiosity_pursuit_service
 ```

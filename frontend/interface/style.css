@@ -2691,10 +2691,10 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Spark Overlay — First-contact "Waking up Chalie..." screen
+   Loading Overlay — "Waking up Chalie..." screen shown during backend readiness
    -------------------------------------------------------------------------- */
 
-.spark-overlay {
+.loading-overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -2705,23 +2705,23 @@ body {
   transition: opacity 220ms ease;
 }
 
-.spark-overlay.hidden {
+.loading-overlay.hidden {
   display: none;
 }
 
-.spark-overlay.spark-overlay--fading {
+.loading-overlay.loading-overlay--fading {
   opacity: 0;
   pointer-events: none;
 }
 
-.spark-overlay__content {
+.loading-overlay__content {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 20px;
 }
 
-.spark-overlay__dot {
+.loading-overlay__dot {
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -2730,15 +2730,15 @@ body {
   box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(138, 92, 255, 0.2);
 }
 
-.spark-overlay__text {
+.loading-overlay__text {
   color: var(--text-secondary);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: 0.02em;
-  animation: sparkTextFadeIn 400ms ease 400ms both;
+  animation: loadingTextFadeIn 400ms ease 400ms both;
 }
 
-.spark-overlay__skip {
+.loading-overlay__skip {
   background: none;
   border: none;
   color: var(--text-tertiary);
@@ -2747,26 +2747,26 @@ body {
   cursor: pointer;
   padding: 4px 8px;
   opacity: 0;
-  animation: sparkTextFadeIn 400ms ease 4s both;
+  animation: loadingTextFadeIn 400ms ease 4s both;
   transition: color 220ms ease;
 }
 
-.spark-overlay__skip:hover {
+.loading-overlay__skip:hover {
   color: var(--text-secondary);
 }
 
-.spark-overlay__skip:focus-visible {
+.loading-overlay__skip:focus-visible {
   outline: 1.5px solid rgba(138, 92, 255, 0.45);
   outline-offset: 2px;
 }
 
-@keyframes sparkTextFadeIn {
+@keyframes loadingTextFadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 /* --------------------------------------------------------------------------
-   Ambient Messages — Spark nurture/welcome: softer presence, not a prompt
+   Ambient Messages — softer presence, not a prompt
    -------------------------------------------------------------------------- */
 
 .speech-form--ambient {

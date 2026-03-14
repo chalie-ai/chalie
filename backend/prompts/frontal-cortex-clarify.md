@@ -19,8 +19,6 @@ You do NOT:
 
 {{adaptive_directives}}
 
-{{spark_guidance}}
-
 ## Client Context
 
 {{client_context}}

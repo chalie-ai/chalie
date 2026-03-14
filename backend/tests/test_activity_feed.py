@@ -31,12 +31,6 @@ class TestSummarizeEvent:
         result = _summarize_event('some_unknown_event', {})
         assert result == 'Some Unknown Event'
 
-    def test_summarize_handles_none_payload(self):
-        from services.interaction_log_service import _summarize_event
-        result = _summarize_event('spark_nurture_sent', None)
-        assert isinstance(result, str)
-        assert len(result) > 0
-
     def test_summarize_handles_empty_payload(self):
         from services.interaction_log_service import _summarize_event
         result = _summarize_event('plan_proposed', {})
@@ -57,7 +51,7 @@ class TestActivityEventTypes:
         from services.interaction_log_service import _ACTIVITY_EVENT_TYPES
         expected = {
             'proactive_sent', 'act_loop_telemetry', 'cron_tool_executed',
-            'plan_proposed', 'curiosity_thread_seeded', 'spark_nurture_sent',
+            'plan_proposed', 'curiosity_thread_seeded',
         }
         for t in expected:
             assert t in _ACTIVITY_EVENT_TYPES

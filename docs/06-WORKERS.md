@@ -25,7 +25,6 @@
 | **Thread Expiry Service** (`services/thread_expiry_service.py`) | `run.py` | Expires stale conversation threads. 5min poll cycle. | |
 | **Scheduler Service** (`services/scheduler_service.py`) | `run.py` | Fires due reminders and scheduled tasks. 60s poll cycle. | |
 | **Autobiography Synthesis Service** (`services/autobiography_synthesis_service.py`) | `run.py` | Synthesizes user narrative from interactions. 6h cycle. | |
-| **Triage Calibration Service** (`services/triage_calibration_service.py`) | `run.py` | Scores triage/routing correctness and provides learning signals. 24h cycle. | |
 | **Profile Enrichment Service** (`services/profile_enrichment_service.py`) | `run.py` | Enriches tool capability profiles from execution data. 6h cycle. | |
 | **Temporal Pattern Service** (`services/temporal_pattern_service.py`) | `run.py` | Mines behavioral patterns from interaction timestamps — hour-of-day peaks, day-of-week peaks, topic-time clusters. Stores as `behavioral_pattern` user traits. 24h cycle, 5min startup warmup. | Uses generalized time labels ("evenings" not "10-11pm") for privacy. |
 

@@ -90,7 +90,6 @@ class SchemaService:
             ("topics_vec", self.embedding_dimensions),
             ("user_traits_vec", self.embedding_dimensions),
             ("tool_capability_profiles_vec", self.embedding_dimensions),
-            ("cognitive_reflexes_vec", self.embedding_dimensions),
             ("documents_vec", self.embedding_dimensions),
             ("document_chunks_vec", self.embedding_dimensions),
             ("scheduled_items_vec", self.embedding_dimensions),

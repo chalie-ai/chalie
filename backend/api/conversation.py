@@ -1,5 +1,5 @@
 """
-Conversation blueprint — /conversation/recent, /conversation/summary, /conversation/spark-status.
+Conversation blueprint — /conversation/recent, /conversation/summary.
 
 The /chat endpoint has been replaced by the WebSocket handler in api/websocket.py.
 """
@@ -13,18 +13,6 @@ logger = logging.getLogger(__name__)
 
 conversation_bp = Blueprint('conversation', __name__)
 
-
-@conversation_bp.route('/conversation/spark-status', methods=['GET'])
-@require_session
-def spark_status():
-    """Return whether a welcome message is still needed for this user."""
-    try:
-        from services.spark_state_service import SparkStateService
-        svc = SparkStateService()
-        return jsonify({"needs_welcome": svc.needs_welcome()}), 200
-    except Exception as e:
-        logger.error(f"[REST API] spark-status error: {e}", exc_info=True)
-        return jsonify({"needs_welcome": False}), 200
 
 
 @conversation_bp.route('/conversation/recent', methods=['GET'])

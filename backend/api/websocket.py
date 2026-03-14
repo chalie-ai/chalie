@@ -118,12 +118,6 @@ def register_websocket(sock):
             except Exception:
                 pass
 
-        # Spark: send first-contact welcome if needed
-        try:
-            from services.spark_welcome_service import SparkWelcomeService
-            SparkWelcomeService().maybe_send_welcome()
-        except Exception:
-            pass
 
         # Background thread: push drift/output events to the WebSocket
         ws_open = threading.Event()

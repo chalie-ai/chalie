@@ -56,9 +56,7 @@ const JOBS = [
     { id: 'cognitive-triage',           name: 'Cognitive Triage',          desc: 'Routes user input to optimal cognitive branch (RESPOND/CLARIFY/ACT). Lightweight preferred.', badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.6K', frequency: 'Once per message',      strengths: ['Structured Output', 'Classification'] },
     { id: 'experience-assimilation',    name: 'Experience Assimilation',   desc: 'Evaluates tool outputs for novel knowledge worth storing.',                               badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.4K', frequency: 'Post-tool execution',   strengths: ['Structured Output', 'Classification'] },
     { id: 'fact-store',                 name: 'Fact Store',                desc: 'Extracts and stores atomic facts from exchanges. Runs async.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
-    { id: 'autonomous-nurture',          name: 'Nurture Outreach',            desc: 'Generates relationship-building messages during idle periods (spark nurture phase).',      badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.1K', frequency: 'Idle triggered',          strengths: ['Natural Language', 'Structured Output'] },
     { id: 'autonomous-ambient-tool',     name: 'Ambient Tool Query',          desc: 'Generates search queries for proactive tool use triggered by cognitive drift.',              badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Drift triggered',         strengths: ['Structured Output', 'Query Generation'] },
-    { id: 'autonomous-suggest',          name: 'Capability Suggestion',       desc: 'Generates feature suggestions based on user traits and available skills.',                   badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Drift triggered',         strengths: ['Natural Language', 'Structured Output'] },
     { id: 'frontal-cortex-reflexive',   name: 'Reflexive Mode',            desc: 'Fast reflexive responses for simple, self-contained queries via cognitive reflex path.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per reflex activation',  strengths: ['Fast Inference', 'Structured Output'] },
     { id: 'frontal-cortex-scheduled-tool', name: 'Scheduled Tool Mode',    desc: 'Generates responses after scheduled tool/reminder execution.',                             badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.5K', frequency: 'Per scheduled event',   strengths: ['Structured Output', 'Context Following'] },
     { id: 'trait-extraction', name: 'Trait Extraction', desc: 'Extracts user traits from messages via lightweight LLM call. Async, non-blocking.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~0.5K', frequency: 'Per message (async)', strengths: ['Structured Output', 'Extraction'] },
@@ -2483,22 +2481,8 @@ async function loadTasksObs() {
 
         const tasks = data.persistent_tasks || [];
         const threads = data.curiosity_threads || [];
-        const cal = data.calibration || {};
 
         let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'} and exploring ${threads.length} curiosity thread${threads.length === 1 ? '' : 's'}.</p>`;
-
-        // Triage calibration (framed as "Decision accuracy")
-        if (cal.correct_rate !== undefined || cal.act_success_rate !== undefined) {
-            html += '<div class="obs-section-title">Decision Accuracy</div>';
-            html += '<div class="obs-stats">';
-            if (cal.correct_rate !== undefined) {
-                html += obsStatCard('Correct Rate', obsPct(cal.correct_rate) + '%', 'Routing decisions');
-            }
-            if (cal.act_success_rate !== undefined) {
-                html += obsStatCard('Action Success', obsPct(cal.act_success_rate) + '%', 'Completed actions');
-            }
-            html += '</div>';
-        }
 
         // Persistent tasks
         if (tasks.length > 0) {

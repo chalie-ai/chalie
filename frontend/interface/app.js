@@ -127,7 +127,7 @@ class ChalieApp {
 
     // Show the "Waking up" overlay while we wait for the backend
     this._readyPollActive = true;
-    this._showSparkOverlay();
+    this._showLoadingOverlay();
 
     // Start the app
     await this._start();
@@ -176,7 +176,7 @@ class ChalieApp {
   async _start() {
     try {
       await this._pollUntilReady();
-      this._dismissSparkOverlay();
+      this._dismissLoadingOverlay();
       this.presence.setState('resting');
       const voiceReady = await this.voice.init();
       if (voiceReady.stt) document.getElementById('micBtn')?.classList.remove('hidden');
@@ -985,8 +985,8 @@ class ChalieApp {
     if (pill) pill.style.display = 'flex';
   }
 
-  _showSparkOverlay() {
-    const overlay = document.getElementById('sparkOverlay');
+  _showLoadingOverlay() {
+    const overlay = document.getElementById('loadingOverlay');
     const spine = document.getElementById('conversationSpine');
     const dock = document.querySelector('.input-dock');
     if (!overlay) return;
@@ -996,25 +996,25 @@ class ChalieApp {
     if (dock) dock.style.display = 'none';
 
     // Skip button
-    const skipBtn = overlay.querySelector('.spark-overlay__skip');
+    const skipBtn = overlay.querySelector('.loading-overlay__skip');
     if (skipBtn) {
       skipBtn.addEventListener('click', () => {
         this._readyPollActive = false;
-        this._dismissSparkOverlay();
+        this._dismissLoadingOverlay();
       }, { once: true });
     }
   }
 
-  _dismissSparkOverlay() {
-    const overlay = document.getElementById('sparkOverlay');
+  _dismissLoadingOverlay() {
+    const overlay = document.getElementById('loadingOverlay');
     const spine = document.getElementById('conversationSpine');
     const dock = document.querySelector('.input-dock');
 
     if (overlay && !overlay.classList.contains('hidden')) {
-      overlay.classList.add('spark-overlay--fading');
+      overlay.classList.add('loading-overlay--fading');
       setTimeout(() => {
         overlay.classList.add('hidden');
-        overlay.classList.remove('spark-overlay--fading');
+        overlay.classList.remove('loading-overlay--fading');
       }, 220);
     }
 
@@ -1099,10 +1099,6 @@ class ChalieApp {
     // Render in conversation spine as a Chalie message
     const formEl = this.renderer.appendChalieForm(content, meta);
 
-    // Spark presence messages get ambient treatment (softer, not conversational)
-    if (data.topic && data.topic.startsWith('spark_')) {
-      formEl.classList.add('speech-form--ambient');
-    }
 
     // Critic escalation — amber border to signal "needs your attention"
     if (data.type === 'escalation') {

@@ -73,7 +73,6 @@ class RoutingStabilityRegulator:
         'respond_overused': 0.10,      # RESPOND >85%
         'misroute_rate': 0.10,         # >10% misroute feedback
         'reflection_disagreement': 0.20,  # >20% reflection disagreement
-        'triage_miscalibration': 0.25,  # >25% incorrect triage decisions
     }
 
     # Hard bounds on weight parameters
@@ -236,17 +235,6 @@ class RoutingStabilityRegulator:
         else:
             normalized_entropy = 0
 
-        # Measure triage miscalibration pressure
-        triage_miscalibration = 0.0
-        try:
-            from services.triage_calibration_service import TriageCalibrationService
-            cal_stats = TriageCalibrationService().get_calibration_stats()
-            false_rate = cal_stats.get('false_positive_rate', 0) + cal_stats.get('false_negative_rate', 0)
-            if false_rate > self.PRESSURE_THRESHOLDS.get('triage_miscalibration', 0.25):
-                triage_miscalibration = false_rate
-        except Exception:
-            pass
-
         return {
             '_total_decisions': total,
             'tiebreaker_high': tb_rate,
@@ -254,7 +242,6 @@ class RoutingStabilityRegulator:
             'act_underused': 0,  # ACT routing now controlled by triage; kept for data compatibility
             'misroute_rate': misroute_rate,
             'reflection_disagreement': disagree_rate,
-            'triage_miscalibration': triage_miscalibration,
         }
 
     def _map_pressure_to_param(

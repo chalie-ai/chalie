@@ -416,12 +416,14 @@ class TestTriageFull:
 
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
-        # Empty tool_summaries so _pick_default_tool returns '' → downgrade fires
+        # Empty tool_summaries so _pick_default_tool returns '' → innate skill recovery fires
         ctx = self._make_context(tool_summaries='')
         result = svc.triage("do something external", ctx)
-        assert result.branch == 'respond'  # Downgraded by self-eval
+        # Innate primitives (recall, memorize, introspect) are always injected for ACT,
+        # so the recovery path keeps ACT mode with innate skills instead of downgrading
+        assert result.branch == 'act'
         assert result.self_eval_override is True
-        assert result.self_eval_reason == 'act_no_tools_available'
+        assert result.self_eval_reason == 'act_innate_skill'
 
     @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
     def test_triage_llm_timeout_fallback(self, mock_get_llm):

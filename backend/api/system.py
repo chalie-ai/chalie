@@ -352,13 +352,12 @@ def observability_identity():
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Active persistent tasks, curiosity threads, and triage calibration."""
+    """Active persistent tasks and curiosity threads."""
     try:
         result = {
             'generated_at': _now_iso(),
             'persistent_tasks': [],
             'curiosity_threads': [],
-            'calibration': {},
         }
 
         # Persistent tasks
@@ -386,14 +385,6 @@ def observability_tasks():
             result['curiosity_threads'] = threads
         except Exception as e:
             logger.warning(f"[OBS] curiosity threads error: {e}")
-
-        # Triage calibration stats
-        try:
-            from services.triage_calibration_service import TriageCalibrationService
-            svc = TriageCalibrationService()
-            result['calibration'] = svc.get_calibration_stats()
-        except Exception as e:
-            logger.warning(f"[OBS] triage calibration error: {e}")
 
         return jsonify(result), 200
     except Exception as e:

@@ -330,7 +330,7 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_tasks_returns_all_sections(self, client):
-        """GET /system/observability/tasks returns persistent_tasks, curiosity_threads, calibration."""
+        """GET /system/observability/tasks returns persistent_tasks and curiosity_threads."""
         mock_pt_svc = MagicMock()
         mock_pt_svc.get_active_tasks.return_value = [{'id': 1, 'goal': 'research X', 'state': 'active'}]
 
@@ -339,12 +339,8 @@ class TestSystemAPI:
             {'id': 2, 'question': 'Why is the sky blue?', 'last_explored_at': datetime(2026, 2, 26), 'created_at': '2026-02-25', 'last_surfaced_at': None},
         ]
 
-        mock_tc_svc = MagicMock()
-        mock_tc_svc.get_calibration_stats.return_value = {'accuracy': 0.88, 'total_scored': 200}
-
         with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc), \
-             patch('services.triage_calibration_service.TriageCalibrationService', return_value=mock_tc_svc):
+             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
@@ -356,14 +352,12 @@ class TestSystemAPI:
         assert data['curiosity_threads'][0]['last_explored_at'] == '2026-02-26 00:00:00'
         # Already a string, should be left as-is
         assert data['curiosity_threads'][0]['created_at'] == '2026-02-25'
-        assert data['calibration']['accuracy'] == 0.88
         assert 'generated_at' in data
 
     def test_observability_tasks_handles_sub_service_failures(self, client):
         """GET /system/observability/tasks gracefully handles individual sub-service failures."""
         with patch('services.persistent_task_service.PersistentTaskService', side_effect=RuntimeError('pt down')), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', side_effect=RuntimeError('ct down')), \
-             patch('services.triage_calibration_service.TriageCalibrationService', side_effect=RuntimeError('tc down')):
+             patch('services.curiosity_thread_service.CuriosityThreadService', side_effect=RuntimeError('ct down')):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
@@ -371,7 +365,6 @@ class TestSystemAPI:
         # All sections fallback to empty defaults
         assert data['persistent_tasks'] == []
         assert data['curiosity_threads'] == []
-        assert data['calibration'] == {}
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -438,10 +431,11 @@ class TestSystemAPI:
 
     def test_observability_traits_returns_categories(self, client):
         """GET /system/observability/traits returns traits grouped by category."""
+        # Schema: trait_key, trait_value, confidence, category, reinforcement_count, updated_at
         rows = [
-            ('favorite_drink', 'coffee', 0.92, 'preferences', 'inferred', 3, False, datetime(2026, 2, 25)),
-            ('name', 'Dylan', 0.99, 'identity', 'explicit', 5, True, datetime(2026, 2, 20)),
-            ('language', 'english', 0.85, 'preferences', 'inferred', 1, False, '2026-02-18'),
+            ('favorite_drink', 'coffee', 0.92, 'preferences', 3, datetime(2026, 2, 25)),
+            ('name', 'Dylan', 0.99, 'identity', 5, datetime(2026, 2, 20)),
+            ('language', 'english', 0.85, 'preferences', 1, '2026-02-18'),
         ]
 
         mock_db, mock_conn = _make_db_mock()
@@ -463,15 +457,12 @@ class TestSystemAPI:
         assert pref0['key'] == 'favorite_drink'
         assert pref0['value'] == 'coffee'
         assert pref0['confidence'] == 0.92
-        assert pref0['source'] == 'inferred'
         assert pref0['reinforcement_count'] == 3
-        assert pref0['is_literal'] is False
         # datetime object should be stringified
         assert pref0['updated_at'] == '2026-02-25 00:00:00'
 
         ident0 = categories['identity'][0]
         assert ident0['key'] == 'name'
-        assert ident0['is_literal'] is True
 
         # String updated_at should be left as-is
         pref1 = categories['preferences'][1]
@@ -499,11 +490,11 @@ class TestSystemAPI:
 
     def test_delete_trait_returns_404_when_not_found(self, client):
         """DELETE /system/observability/traits/<key> returns 404 when trait does not exist."""
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.rowcount = 0
+        mock_db = MagicMock()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
+             patch('services.user_trait_service.UserTraitService') as mock_svc_cls:
+            mock_svc_cls.return_value.delete_trait.return_value = False
             resp = client.delete('/system/observability/traits/nonexistent')
 
         assert resp.status_code == 404
@@ -554,8 +545,7 @@ class TestSystemAPI:
 
         with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=MagicMock(get_active_threads=MagicMock(return_value=[]))), \
-             patch('services.triage_calibration_service.TriageCalibrationService', return_value=MagicMock(get_calibration_stats=MagicMock(return_value={}))):
+             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=MagicMock(get_active_threads=MagicMock(return_value=[]))):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200

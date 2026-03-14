@@ -382,7 +382,6 @@ if __name__ == "__main__":
     from services.config_service import ConfigService
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
-    from services.growth_pattern_service import growth_pattern_worker
     from services.topic_stability_regulator_service import topic_stability_regulator_worker
     from services.cognitive_drift_engine import cognitive_drift_worker
     from services.routing_stability_regulator_service import routing_stability_regulator_worker
@@ -450,7 +449,6 @@ if __name__ == "__main__":
     # Register service workers (all run as daemon threads)
     manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
-    manager.register_service("growth-pattern-service", growth_pattern_worker)
     manager.register_service("topic-stability-regulator-service", topic_stability_regulator_worker)
     manager.register_service("cognitive-drift-engine", cognitive_drift_worker)
     manager.register_service("routing-stability-regulator-service", routing_stability_regulator_worker)
@@ -471,13 +469,6 @@ if __name__ == "__main__":
     # Background LLM worker
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
-
-    # Triage calibration service
-    try:
-        from services.triage_calibration_service import triage_calibration_worker
-        manager.register_service("triage-calibration-service", triage_calibration_worker)
-    except Exception as e:
-        logging.warning(f"[Consumer] Triage calibration service registration failed: {e}")
 
     # Profile enrichment service
     try:
