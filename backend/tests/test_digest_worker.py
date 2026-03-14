@@ -209,6 +209,193 @@ class TestInnateSkillOnly:
 
 MODULE = 'workers.digest_worker'
 
+import contextlib
+
+
+def _make_pipeline_patches(enqueue_side_effect=None):
+    """
+    Return a context manager that activates all mocks required to run
+    ``digest_worker()`` through its full main pipeline without real I/O.
+
+    The heavy dependencies (LLM, Redis, SQLite, classifiers, triage) are all
+    replaced with lightweight ``MagicMock`` objects so that the test can reach
+    Phase D — where ``enqueue_trait_extraction`` is called — without spawning
+    network connections or requiring on-disk models.
+
+    Args:
+        enqueue_side_effect: Optional side-effect to assign to the
+            ``enqueue_trait_extraction`` mock (e.g. an exception class to
+            simulate a failure).
+
+    Returns:
+        contextlib.ExitStack: An active context manager whose ``__exit__``
+            tears down all patches, plus a ``mock_enqueue`` attribute set
+            once the stack is entered (see usage in tests).
+    """
+
+    @contextlib.contextmanager
+    def _cm():
+        # ── Redis / MemoryClientService ──────────────────────────────────
+        mock_redis = MagicMock()
+        mock_redis.get.return_value = None
+        mock_redis.setex.return_value = True
+        mock_redis.delete.return_value = True
+
+        # ── Thread service ───────────────────────────────────────────────
+        mock_thread_res = MagicMock()
+        mock_thread_res.thread_id = 'thread-123'
+        mock_thread_svc = MagicMock()
+        mock_thread_svc.resolve_thread.return_value = mock_thread_res
+
+        # ── Working memory ───────────────────────────────────────────────
+        mock_wm = MagicMock()
+        mock_wm.get_recent_turns.return_value = []
+
+        # ── Topic classifier ─────────────────────────────────────────────
+        mock_topic_clf = MagicMock()
+        mock_topic_clf.classify.return_value = {
+            'topic': 'health',
+            'confidence': 0.8,
+            'classification_time': 0.01,
+            'message_embedding': None,
+            'just_reset_from_silence': False,
+            'is_new_topic': False,
+        }
+
+        # ── Intent classifier ────────────────────────────────────────────
+        mock_intent_clf = MagicMock()
+        mock_intent_clf.classify.return_value = {
+            'intent_type': 'conversational',
+            'complexity': 'low',
+            'confidence': 0.9,
+            'is_cancel': False,
+            'is_self_resolved': False,
+        }
+
+        # ── Metrics ──────────────────────────────────────────────────────
+        mock_metrics = MagicMock()
+        mock_metrics.start_trace.return_value = 'trace-123'
+
+        # ── Thread conversation service ──────────────────────────────────
+        mock_thread_conv = MagicMock()
+        mock_thread_conv.add_exchange.return_value = 'exchange-123'
+
+        # ── Session service ──────────────────────────────────────────────
+        mock_session = MagicMock()
+        mock_session.is_returning_from_silence.return_value = 0
+        mock_session.check_topic_switch.return_value = False
+        mock_session.topic_exchange_count = 0
+
+        # ── Cognitive triage result (RESPOND branch, no tool dispatch) ───
+        mock_triage_result = MagicMock()
+        mock_triage_result.branch = 'respond'
+        mock_triage_result.mode = 'RESPOND'
+        mock_triage_result.tools = []
+        mock_triage_result.skills = []
+        mock_triage_result.confidence_internal = 0.9
+        mock_triage_result.confidence_tool_need = 0.1
+        mock_triage_result.triage_time_ms = 5.0
+        mock_triage_result.effort_estimate = 'low'
+        mock_triage_result.self_eval_override = False
+        mock_triage_result.fast_filtered = False
+
+        mock_triage_svc = MagicMock()
+        mock_triage_svc.triage.return_value = mock_triage_result
+
+        mock_tool_profile = MagicMock()
+        mock_tool_profile.get_triage_summaries.return_value = {}
+
+        # ── Synthesised LLM response ─────────────────────────────────────
+        fake_response_data = {
+            'response': 'I am here to help!',
+            'mode': 'RESPOND',
+            'confidence': 0.9,
+            'generation_time': 0.1,
+        }
+        fake_routing_result = {
+            'mode': 'RESPOND',
+            'router_confidence': 0.9,
+            'routing_source': 'triage',
+            'routing_time_ms': 5.0,
+        }
+
+        # ── Minimal frontal-cortex config ────────────────────────────────
+        minimal_configs = {
+            'cortex': {
+                'config': {'max_working_memory_turns': 10},
+                'prompt_map': {
+                    'RESPOND': 'test prompt',
+                    'CLARIFY': 'test prompt',
+                    'ACT': 'test prompt',
+                },
+            }
+        }
+
+        # ── enqueue_trait_extraction (the subject under test) ────────────
+        mock_enqueue = MagicMock()
+        if enqueue_side_effect is not None:
+            mock_enqueue.side_effect = enqueue_side_effect
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch(f'{MODULE}.load_configs',
+                                      return_value=minimal_configs))
+            stack.enter_context(patch(f'{MODULE}.get_thread_service',
+                                      return_value=mock_thread_svc))
+            stack.enter_context(patch(
+                'services.memory_client.MemoryClientService.create_connection',
+                return_value=mock_redis,
+            ))
+            stack.enter_context(patch(f'{MODULE}.ThreadConversationService',
+                                      return_value=mock_thread_conv))
+            stack.enter_context(patch(f'{MODULE}.RecentTopicService',
+                                      return_value=MagicMock(
+                                          get_recent_topic=MagicMock(return_value=None)
+                                      )))
+            stack.enter_context(patch(f'{MODULE}.WorldStateService',
+                                      return_value=MagicMock(
+                                          get_world_state=MagicMock(return_value='')
+                                      )))
+            stack.enter_context(patch(f'{MODULE}.WorkingMemoryService',
+                                      return_value=mock_wm))
+            stack.enter_context(patch(f'{MODULE}.EventBusService',
+                                      return_value=MagicMock()))
+            stack.enter_context(patch(f'{MODULE}.MetricsService',
+                                      return_value=mock_metrics))
+            stack.enter_context(patch(f'{MODULE}.get_mode_router',
+                                      return_value=MagicMock()))
+            stack.enter_context(patch(f'{MODULE}.get_existing_topics_from_db',
+                                      return_value=[]))
+            stack.enter_context(patch(f'{MODULE}.get_topic_classifier',
+                                      return_value=mock_topic_clf))
+            stack.enter_context(patch(f'{MODULE}.get_session_service',
+                                      return_value=mock_session))
+            stack.enter_context(patch(f'{MODULE}.get_intent_classifier',
+                                      return_value=mock_intent_clf))
+            stack.enter_context(patch(f'{MODULE}.compute_nlp_signals',
+                                      return_value={}))
+            stack.enter_context(patch(f'{MODULE}._run_iip_hook'))
+            stack.enter_context(patch(f'{MODULE}._run_belief_correction_hook'))
+            stack.enter_context(patch(f'{MODULE}._detect_fork_response'))
+            stack.enter_context(patch(f'{MODULE}._store_adaptive_signals'))
+            stack.enter_context(patch(f'{MODULE}._check_active_tool_work',
+                                      return_value=None))
+            stack.enter_context(patch(
+                'services.cognitive_triage_service.CognitiveTriageService',
+                return_value=mock_triage_svc,
+            ))
+            stack.enter_context(patch(
+                'services.tool_profile_service.ToolProfileService',
+                return_value=mock_tool_profile,
+            ))
+            stack.enter_context(patch(f'{MODULE}.route_and_generate',
+                                      return_value=(fake_response_data,
+                                                    fake_routing_result)))
+            stack.enter_context(patch(f'{MODULE}.enqueue_trait_extraction',
+                                      mock_enqueue))
+            yield mock_enqueue
+
+    return _cm()
+
 
 class TestTraitExtractionEnqueue:
     """
@@ -243,15 +430,55 @@ class TestTraitExtractionEnqueue:
             mock_handler.assert_called_once()
             mock_enqueue.assert_not_called()
 
+    def test_regular_chat_enqueues_trait_extraction(self):
+        """
+        A regular chat message flowing through the full pipeline must call
+        ``enqueue_trait_extraction`` exactly once with the user message
+        (truncated to 1000 chars), a ``source`` key prefixed with 'chat:',
+        the resolved topic, and the correct ``thread_id``.
+
+        This test mocks all heavy infrastructure (LLM, Redis, SQLite,
+        classifiers, triage) so the assertion is a pure behavioural check
+        that the call site in Phase D is reached and wired correctly.
+        """
+        text = 'My name is Alice and I work as a nurse.'
+
+        with _make_pipeline_patches() as mock_enqueue:
+            from workers.digest_worker import digest_worker
+            result = digest_worker(text, {'source': 'web'})
+
+        # The function must still return a valid result string
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+        # enqueue_trait_extraction must be called exactly once …
+        mock_enqueue.assert_called_once()
+
+        # … with the expected keyword arguments
+        _, kwargs = mock_enqueue.call_args
+        assert kwargs['prompt_message'] == text[:1000]
+        assert kwargs['thread_id'] == 'thread-123'
+        assert kwargs['metadata']['source'] == 'chat:web'
+        # topic comes from the mocked classifier's return value
+        assert kwargs['metadata']['topic'] == 'health'
+
     def test_trait_extraction_failure_does_not_propagate(self):
-        """If enqueue_trait_extraction raises, digest_worker must still return a response."""
-        # We test this by importing the function and checking the try/except
-        # block wrapping the call. We verify the code structure is correct
-        # by grepping the source — a lighter test than mocking the whole pipeline.
-        import inspect
-        from workers.digest_worker import digest_worker
-        source_lines = inspect.getsource(digest_worker)
-        # The enqueue call must be wrapped in a try/except
-        assert 'enqueue_trait_extraction(' in source_lines
-        # Verify there's an except clause catching it
-        assert "Trait extraction enqueue failed" in source_lines
+        """
+        If ``enqueue_trait_extraction`` raises at runtime, ``digest_worker``
+        must swallow the exception (try/except wrapper) and still return a
+        valid response string — the user must never see a 500 because of a
+        background trait-extraction failure.
+        """
+        text = 'Tell me about machine learning.'
+
+        with _make_pipeline_patches(
+            enqueue_side_effect=RuntimeError('simulated extraction failure')
+        ) as mock_enqueue:
+            from workers.digest_worker import digest_worker
+            # Must not raise — the try/except in Phase D must absorb the error
+            result = digest_worker(text, {'source': 'web'})
+
+        # enqueue was called (and raised), yet a valid result was returned
+        mock_enqueue.assert_called_once()
+        assert isinstance(result, str)
+        assert len(result) > 0
