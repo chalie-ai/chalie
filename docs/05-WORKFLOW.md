@@ -52,20 +52,18 @@ The application processes user prompts through a pipeline of workers, queues, an
    - Stores the resulting episode in SQLite through `EpisodicStorageService`.
 6. **Experience Assimilation Service** – Converts tool results into episodic memory. Runs on 60s poll cycle.
 7. **Cognitive Drift Engine** (`services/cognitive_drift_engine.py`) – Default Mode Network service. During idle periods (all queues empty), generates spontaneous thoughts via spreading activation and LLM synthesis. Stores as drift gists that surface in frontal cortex context.
-8. **Routing Stability Regulator** (`services/routing_stability_regulator_service.py`) – Single authority for mode router weight mutation. Runs on 24h cycle, reads pressure signals, applies bounded corrections.
-9. **Routing Reflection Service** (`services/routing_reflection_service.py`) – Idle-time peer review of routing decisions via strong LLM. Feeds dimensional analysis into pressure signals consumed by the regulator.
-10. **Scheduler Service** – Fires due reminders and scheduled tasks. Runs on 60s poll cycle.
-11. **Thread Expiry Service** – Expires stale conversation threads. Runs on 5min poll cycle.
-12. **Autobiography Synthesis Service** – Synthesizes user narrative from interactions. Runs on 6h cycle.
-13. **Triage Calibration Service** – Scores triage/routing correctness. Runs on 24h cycle.
-14. **Profile Enrichment Service** – Enriches tool capability profiles. Runs on 6h cycle.
-15. **MemoryStore / SQLite** – MemoryStore holds queue topics and small runtime state. SQLite stores long-term episodic memories, semantic concepts, and routing decisions.
+8. **Routing Reflection Service** (`services/routing_reflection_service.py`) – Idle-time peer review of routing decisions via strong LLM. Feeds dimensional analysis into pressure signals.
+9. **Scheduler Service** – Fires due reminders and scheduled tasks. Runs on 60s poll cycle.
+10. **Thread Expiry Service** – Expires stale conversation threads. Runs on 5min poll cycle.
+11. **Autobiography Synthesis Service** – Synthesizes user narrative from interactions. Runs on 6h cycle.
+12. **Triage Calibration Service** – Scores triage/routing correctness. Runs on 24h cycle.
+13. **Profile Enrichment Service** – Enriches tool capability profiles. Runs on 6h cycle.
+14. **MemoryStore / SQLite** – MemoryStore holds queue topics and small runtime state. SQLite stores long-term episodic memories, semantic concepts, and routing decisions.
 
 ### Key Decisions
 - **Shared State** – `WorkerBase._update_shared_state` merges per-worker updates into a shared dictionary managed by the `WorkerManager`. This avoids global locks and keeps the worker pool lightweight.
 - **Deterministic Routing** – Mode selection is decoupled from LLM generation. A mathematical router scores modes using observable signals (~5ms), eliminating the previous approach where the LLM did both mode selection and response generation in a single ~15s call.
 - **Mode-Specific Prompts** – Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT, IGNORE) has its own focused prompt template (~30-80 lines each), replacing the old combined 240-line prompt.
-- **Single Authority** – Multiple monitors observe routing quality but only the `RoutingStabilityRegulator` (24h cycle) mutates weights, preventing tug-of-war between independent monitors.
 - **Confidence Calculation** – `ThreadConversationService._calculate_new_confidence` uses a bounded reinforcement formula `new = current + (new_confidence - current) * 0.5`.
 - **Thread Context** – Conversation threads are managed in MemoryStore with expiry, not persistent files. Thread state includes active topic, confidence, and conversation history.
 - **Error Handling** – All workers catch JSON decoding errors from LLM responses and log meaningful messages instead of crashing.
@@ -126,9 +124,6 @@ The `/chat` endpoint uses Server-Sent Events for real-time streaming:
     |--(episode_job)----> [Episodic Memory Queue] → [Episodic Memory Worker] →
         SQLite Episodes Table
 
-[Routing Stability Regulator] ← reads routing_decisions (24h cycle)
-    → adjusts configs/generated/mode_router_config.json
-
 [Routing Reflection Service] ← reads reflection-queue (idle-time)
-    → writes routing_decisions.reflection → feeds pressure to regulator
+    → writes routing_decisions.reflection
 ```

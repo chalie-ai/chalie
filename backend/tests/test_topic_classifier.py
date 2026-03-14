@@ -29,18 +29,8 @@ def _make_db_mock(fetchall_return=None, fetchone_return=None):
 
 def _make_classifier(mock_db):
     """Create a TopicClassifierService with mocked DB."""
-    reg_instance = MagicMock()
-    reg_instance.get_current_parameters.return_value = {
-        'switch_threshold': 0.65,
-        'decay_constant': 300,
-        'w_semantic': 0.6,
-        'w_freshness': 0.3,
-        'w_salience': 0.1,
-    }
-
     with patch('services.topic_classifier_service.get_shared_db_service', return_value=mock_db), \
-         patch('services.topic_classifier_service.EmbeddingService'), \
-         patch('services.topic_stability_regulator_service.TopicStabilityRegulator', return_value=reg_instance):
+         patch('services.topic_classifier_service.EmbeddingService'):
 
         from services.topic_classifier_service import TopicClassifierService
         svc = TopicClassifierService()
