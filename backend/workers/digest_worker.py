@@ -2518,6 +2518,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     max_working_memory_turns = cortex_config.get('max_working_memory_turns', 10)
     working_memory = WorkingMemoryService(max_turns=max_working_memory_turns)
 
+    # Hydrate working memory from SQLite if empty (e.g. after container restart)
+    working_memory.hydrate_from_db(thread_id)
+
     # Initialize interaction log
     interaction_log = None
     try:

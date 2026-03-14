@@ -144,3 +144,73 @@ class WorkingMemoryService:
         """
         memory_key = self._get_memory_key(identifier)
         return self.store.llen(memory_key)
+
+    def hydrate_from_db(self, identifier: str) -> int:
+        """
+        Repopulate working memory from interaction_log (SQLite).
+
+        Called on container restart when MemoryStore is empty but
+        conversation history exists in the database. Loads the most
+        recent user_input and system_response events.
+
+        Args:
+            identifier: Thread ID or topic name
+
+        Returns:
+            Number of turns loaded (0 if already populated or no history)
+        """
+        # Skip if already populated
+        if self.get_buffer_size(identifier) > 0:
+            return 0
+
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                # Get the most recent user/system exchanges (newest first, then reverse)
+                cursor.execute("""
+                    SELECT event_type, payload, created_at
+                    FROM interaction_log
+                    WHERE event_type IN ('user_input', 'system_response')
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (self.max_entries,))
+                rows = cursor.fetchall()
+
+            if not rows:
+                return 0
+
+            # Reverse to chronological order
+            rows.reverse()
+
+            loaded = 0
+            for row in rows:
+                event_type, payload_raw, created_at = row
+                try:
+                    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                if event_type == 'user_input':
+                    content = payload.get('text', payload.get('message', ''))
+                    if content:
+                        self.append_turn(identifier, 'user', content)
+                        loaded += 1
+                elif event_type == 'system_response':
+                    content = payload.get('response', payload.get('text', ''))
+                    if content:
+                        self.append_turn(identifier, 'assistant', content)
+                        loaded += 1
+
+            if loaded:
+                logging.info(
+                    f"[WORKING MEMORY] Hydrated {loaded} turns from database "
+                    f"for '{identifier}'"
+                )
+            return loaded
+
+        except Exception as e:
+            logging.warning(f"[WORKING MEMORY] Hydration failed (non-fatal): {e}")
+            return 0

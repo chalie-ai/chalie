@@ -325,8 +325,11 @@ class PersistentTaskService:
 
     def complete_task(self, task_id: int, result: str, artifact: Optional[Dict] = None) -> bool:
         """Mark a task as completed with final result."""
-        # Read task before update (for priority check)
-        task = self.get_task(task_id)
+        # Read task before update (for priority check — non-fatal)
+        try:
+            task = self.get_task(task_id)
+        except Exception:
+            task = None
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
