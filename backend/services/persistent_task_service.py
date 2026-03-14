@@ -190,6 +190,20 @@ class PersistentTaskService:
             """, (new_status, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id}: {current} -> {new_status}")
+
+        # Wake the persistent task worker immediately when a task becomes eligible
+        if new_status in ('accepted', 'in_progress'):
+            try:
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
+                store.rpush(
+                    'persistent_task:execute',
+                    json.dumps({'task_id': task_id, 'reason': new_status}),
+                )
+                logger.debug(f"{LOG_PREFIX} Pushed execute signal for task {task_id} ({new_status})")
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Failed to push execute signal: {e}")
+
         try:
             from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
             emit_reasoning_signal(ReasoningSignal(

@@ -300,10 +300,10 @@ def _tool_worker_orchestrator(
             original_created_at=job_data.get('created_at', time.time()),
         )
 
-    total_time = time.time() - (time.time() - result.fatigue_telemetry.get('elapsed_seconds', 0))
     logger.info(
         f"[TOOL WORKER] ACT loop complete (orchestrator): {result.iterations_used} iterations, "
-        f"{len(result.act_history)} actions, termination={result.termination_reason}"
+        f"{len(result.act_history)} actions, termination={result.termination_reason}, "
+        f"elapsed={result.loop_telemetry.get('elapsed_seconds', 0):.1f}s"
     )
 
     # Record performance metrics

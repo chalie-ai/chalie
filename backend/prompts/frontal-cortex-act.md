@@ -99,6 +99,8 @@ Skill/tool output reading: recall groups by layer with confidence. introspect re
 Previous Internal Actions:
 {{act_history}}
 
+Older actions and large results are stored in your notes — use the notes skill to retrieve them when needed. Call `{"type": "notes", "action": "list"}` to see what's stored, or `{"type": "notes", "action": "read", "query": "keyword"}` to retrieve specific content.
+
 {{world_state}}
 
 ────────────────────────────────
@@ -129,7 +131,7 @@ Respond ONLY with valid JSON. Two formats allowed:
 
 Rules:
 - Return empty `"actions": []` when you have gathered enough information. The system will then generate a response using everything in act_history.
-- Each action must have `type` from: recall, memorize, introspect, associate, autobiography, schedule, list, persistent_task, focus, document, **emit_card**, or any registered tool name
+- Each action must have `type` from: recall, memorize, introspect, associate, autobiography, schedule, list, persistent_task, focus, document, **emit_card**, **notes**, or any registered tool name
 - `response` MUST always be empty string (response generated after actions complete by a separate system)
 - Do NOT call the same tool/skill with identical parameters. Calling the same tool with different parameters (e.g., a broader query or different region) is fine. If you already have adequate results, STOP.
 - World state is authoritative and immutable

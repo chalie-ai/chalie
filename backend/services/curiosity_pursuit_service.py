@@ -232,14 +232,15 @@ class CuriosityPursuitService:
     def _run_act_loop(self, self_prompt: str, thread: Dict, fatigue_budget: float) -> Optional[str]:
         """Route a self-prompt through the ACT loop machinery.
 
-        Builds an ActLoopService with an adaptive fatigue budget derived from
+        Builds an ActLoopService with a bounded iteration cap derived from
         the thread's engagement score, runs up to max_iterations cycles, then
         summarises the resulting act_history into a learning note.
 
         Args:
             self_prompt: Internally generated exploration prompt string.
             thread: Thread dict containing at minimum 'thread_type' and 'seed_topic'.
-            fatigue_budget: ACT loop fatigue budget scaled by thread engagement.
+            fatigue_budget: Ignored — kept for call-site compatibility; iteration
+                cap is now the sole budget constraint.
 
         Returns:
             1-3 sentence learning note summary string, or None on failure.
@@ -251,10 +252,6 @@ class CuriosityPursuitService:
             from services.innate_skills import register_innate_skills
 
             cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
-
-            # Override fatigue budget for pursuit (lower than user ACT)
-            cortex_config = dict(cortex_config)
-            cortex_config['fatigue_budget'] = fatigue_budget
 
             act_config = ConfigService.resolve_agent_config("frontal-cortex")
             act_prompt_template = ConfigService.get_agent_prompt("frontal-cortex-act")
@@ -314,7 +311,6 @@ class CuriosityPursuitService:
                     actions=actions,
                 )
                 act_loop.append_results(results)
-                act_loop.accumulate_fatigue(results, act_loop.iteration_number)
                 act_loop.iteration_number += 1
 
             # Summarize act_history into a learning note

@@ -132,7 +132,7 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 18
+        assert mock_service.set_job_assignment.call_count == 19
 
         assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
         expected_jobs = sorted([
@@ -141,7 +141,7 @@ class TestProvidersAPI:
             'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
             'frontal-cortex-proactive',
             'frontal-cortex-scheduled-tool', 'mode-reflection',
-            'semantic-memory', 'cognitive-triage', 'experience-assimilation',
+            'semantic-memory', 'cognitive-triage', 'failure-analysis', 'experience-assimilation',
             'trait-extraction',
             'moment-enrichment', 'document-synthesis',
             'document-classification',

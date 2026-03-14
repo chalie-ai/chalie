@@ -637,7 +637,7 @@ _JOB_RECOMMENDED_TIER = {
     'cognitive-drift': 'pro', 'episodic-memory': 'pro',
     'frontal-cortex-clarify': 'pro', 'frontal-cortex-proactive': 'pro',
     'mode-reflection': 'pro', 'semantic-memory': 'pro',
-    'cognitive-triage': 'lite', 'experience-assimilation': 'lite',
+    'cognitive-triage': 'lite', 'failure-analysis': 'lite', 'experience-assimilation': 'lite',
     'fact-store': 'lite', 'autonomous-nurture': 'lite',
     'autonomous-ambient-tool': 'lite', 'autonomous-suggest': 'lite',
     'frontal-cortex-reflexive': 'lite', 'frontal-cortex-scheduled-tool': 'lite',
@@ -712,6 +712,22 @@ def observability_provider_health():
     except Exception as e:
         logger.error(f"[REST API] observability/provider-health error: {e}")
         return jsonify({"error": "Failed to retrieve provider health"}), 500
+
+
+@system_bp.route('/system/observability/failures', methods=['GET'])
+@require_session
+def observability_failures():
+    """Return failure-analysis blame distribution and lesson statistics."""
+    try:
+        from services.database_service import get_shared_db_service
+        from services.failure_analysis_service import FailureAnalysisService
+        db = get_shared_db_service()
+        fas = FailureAnalysisService(db)
+        stats = fas.get_stats()
+        return jsonify({'generated_at': _now_iso(), **stats}), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/failures error: {e}")
+        return jsonify({"error": "Failed to retrieve failure stats"}), 500
 
 
 # ──────────────────────────────────────────────

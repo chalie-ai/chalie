@@ -168,6 +168,15 @@ class FallbackLLMService:
             logger.warning(f"Primary LLM failed, using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
 
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        try:
+            return self._primary.send_messages(system_prompt, messages, cache_prefix)
+        except RateLimitError:
+            raise
+        except Exception as e:
+            logger.warning(f"Primary LLM failed, using fallback: {e}")
+            return self._fallback.send_messages(system_prompt, messages, cache_prefix)
+
 
 def _build_service(config: dict):
     """Build a single LLM service from a config dict."""
@@ -323,6 +332,10 @@ class RefreshableLLMService:
         self._ensure_fresh()
         return self._service.send_message(system_prompt, user_message, stream=stream)
 
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        self._ensure_fresh()
+        return self._service.send_messages(system_prompt, messages, cache_prefix)
+
 
 def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
     """
@@ -362,6 +375,11 @@ class AnthropicService:
         self.model = config.get('model', 'claude-haiku-4-5-20251001')
         self.timeout = config.get('timeout', 120)
 
+    def _get_client(self):
+        import anthropic
+        api_key = _resolve_api_key(self._config)
+        return anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
+
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         """Send a message to the Anthropic Messages API.
 
@@ -385,9 +403,7 @@ class AnthropicService:
 
         import anthropic
 
-        api_key = _resolve_api_key(self._config)
-        client = anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
-
+        client = self._get_client()
         start_time = time.time()
 
         def _call():
@@ -397,6 +413,57 @@ class AnthropicService:
                     max_tokens=self._MAX_TOKENS,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_message}],
+                )
+            except anthropic.RateLimitError as e:
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+
+        response = _call_with_retry(_call)
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        text = response.content[0].text if response.content else ""
+
+        logger.info(
+            f"[AnthropicService] model={response.model}, "
+            f"tokens={response.usage.input_tokens}+{response.usage.output_tokens}, "
+            f"latency={latency_ms}ms"
+        )
+
+        return LLMResponse(
+            text=text,
+            model=response.model,
+            provider='anthropic',
+            tokens_input=response.usage.input_tokens,
+            tokens_output=response.usage.output_tokens,
+            latency_ms=latency_ms,
+        )
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        import anthropic
+
+        client = self._get_client()
+        start_time = time.time()
+
+        system = (
+            [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+            if cache_prefix
+            else system_prompt
+        )
+
+        def _call():
+            try:
+                return client.messages.create(
+                    model=self.model,
+                    max_tokens=self._MAX_TOKENS,
+                    system=system,
+                    messages=messages,
                 )
             except anthropic.RateLimitError as e:
                 retry_after = None
@@ -448,6 +515,11 @@ class OpenAIService:
         self.timeout = config.get('timeout', 120)
         self.format = config.get('format', 'text')
 
+    def _get_client(self):
+        from openai import OpenAI
+        api_key = _resolve_api_key(self._config)
+        return OpenAI(api_key=api_key, timeout=self.timeout)
+
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         """Send a message to the OpenAI Chat Completions API.
 
@@ -474,11 +546,8 @@ class OpenAIService:
             raise NotImplementedError("Streaming not yet supported")
 
         import openai as openai_mod
-        from openai import OpenAI
 
-        api_key = _resolve_api_key(self._config)
-        client = OpenAI(api_key=api_key, timeout=self.timeout)
-
+        client = self._get_client()
         start_time = time.time()
 
         create_kwargs = {
@@ -487,6 +556,62 @@ class OpenAIService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
+        }
+        if self.format == 'json':
+            create_kwargs['response_format'] = {"type": "json_object"}
+
+        def _call():
+            try:
+                return client.chat.completions.create(**create_kwargs)
+            except openai_mod.RateLimitError as e:
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
+
+        response = _call_with_retry(_call)
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        text = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason
+
+        if not text or not text.strip():
+            logger.warning(
+                f"[OpenAIService] Empty response from model={response.model}, "
+                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+                f"latency={latency_ms}ms, finish_reason={finish_reason}. "
+                f"Content was: {repr(response.choices[0].message.content)}"
+            )
+        else:
+            logger.info(
+                f"[OpenAIService] model={response.model}, "
+                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+                f"latency={latency_ms}ms"
+            )
+
+        return LLMResponse(
+            text=text,
+            model=response.model,
+            provider='openai',
+            tokens_input=response.usage.prompt_tokens,
+            tokens_output=response.usage.completion_tokens,
+            latency_ms=latency_ms,
+        )
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        import openai as openai_mod
+
+        client = self._get_client()
+        start_time = time.time()
+
+        create_kwargs = {
+            'model': self.model,
+            'messages': [{"role": "system", "content": system_prompt}] + messages,
         }
         if self.format == 'json':
             create_kwargs['response_format'] = {"type": "json_object"}
@@ -605,6 +730,75 @@ class GeminiService:
                 if 'ResourceExhausted' in ename or '429' in str(e):
                     raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
                 # 5xx server errors are permanent — do not retry
+                if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
+                    raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
+                raise
+
+        response = _call_with_retry(_call)
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        text = response.text if response.text else ""
+        if not text:
+            finish_reason = getattr(response, 'finish_reason', 'unknown')
+            logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
+            raise ValueError(f"Empty Gemini response (finish_reason={finish_reason})")
+
+        usage = getattr(response, 'usage_metadata', None)
+        tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
+        tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
+
+        logger.info(
+            f"[GeminiService] model={self.model}, "
+            f"tokens={tokens_input}+{tokens_output}, "
+            f"latency={latency_ms}ms"
+        )
+
+        return LLMResponse(
+            text=text,
+            model=self.model,
+            provider='gemini',
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            latency_ms=latency_ms,
+        )
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        try:
+            from google import genai
+        except ImportError:
+            raise RuntimeError(
+                "google-genai package is not installed. "
+                "Run: pip install google-genai"
+            )
+
+        api_key = _resolve_api_key(self._config)
+        client = genai.Client(api_key=api_key)
+
+        start_time = time.time()
+
+        gemini_contents = [
+            {
+                "role": "model" if m["role"] == "assistant" else m["role"],
+                "parts": [{"text": m["content"]}],
+            }
+            for m in messages
+        ]
+
+        gen_config_kwargs = {'system_instruction': system_prompt}
+        if self.format == 'json':
+            gen_config_kwargs['response_mime_type'] = 'application/json'
+
+        def _call():
+            try:
+                return client.models.generate_content(
+                    model=self.model,
+                    contents=gemini_contents,
+                    config=genai.types.GenerateContentConfig(**gen_config_kwargs),
+                )
+            except Exception as e:
+                ename = type(e).__name__
+                if 'ResourceExhausted' in ename or '429' in str(e):
+                    raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
                 if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
                     raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
                 raise

@@ -129,6 +129,63 @@ class OllamaService:
                 else:
                     raise
 
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        url = f"{self.host}/api/chat"
+
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}] + messages,
+            "stream": False,
+            "keep_alive": self.keep_alive,
+            "options": {
+                "temperature": self.temperature,
+            },
+        }
+
+        last_exception = None
+        for attempt in range(1 + self.max_retries):
+            try:
+                response = requests.post(url, json=payload, timeout=self.timeout)
+                response.raise_for_status()
+                data = response.json()
+                return LLMResponse(
+                    text=data['message']['content'],
+                    model=data.get('model', self.model),
+                    provider='ollama',
+                    tokens_input=data.get('prompt_eval_count'),
+                    tokens_output=data.get('eval_count'),
+                )
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_exception = e
+                if attempt < self.max_retries:
+                    backoff = 2 * (2 ** attempt)
+                    logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after {type(e).__name__}: {e} — backoff {backoff}s")
+                    time.sleep(backoff)
+                else:
+                    logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
+                    raise
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 429:
+                    retry_after = None
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                    raise RateLimitError(str(e), retry_after=retry_after, provider='ollama') from e
+                elif e.response is not None and e.response.status_code >= 500:
+                    last_exception = e
+                    if attempt < self.max_retries:
+                        backoff = 1.5 * (2 ** attempt)
+                        logging.warning(f"[OllamaService] Retry {attempt + 1}/{self.max_retries} after HTTP {e.response.status_code} — backoff {backoff}s")
+                        time.sleep(backoff)
+                    else:
+                        logging.error(f"[OllamaService] All {1 + self.max_retries} attempts failed: {e}")
+                        raise
+                else:
+                    raise
+
     def generate_embedding(self, text: str, embedding_model: str = None, target_dimensions: int = None) -> list:
         """
         Generate embedding vector using sentence-transformers (no Ollama required).

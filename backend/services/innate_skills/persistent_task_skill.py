@@ -173,24 +173,12 @@ def _confirm(topic: str, params: dict) -> str:
     if not ok:
         return f"Cannot start task: {msg}"
 
-    mode = params.get("mode", "now").lower()
-    if mode not in ("now", "later"):
-        logger.info(f"{LOG_PREFIX} Unknown mode '{mode}' for task {task_id}, defaulting to 'now'")
-        mode = "now"
-
-    if mode == "now":
-        _enqueue_immediate_task(task_id)
-        return (
-            f"On it — executing \"{task['goal'][:60]}\" now. "
-            f"I'll let you know when I have results."
-        )
-    else:
-        # Periodic — background worker picks it up on next 30-min cycle
-        service.set_next_run(task_id, delay_seconds=0)
-        return (
-            f"Deep dive started for \"{task['goal'][:60]}\". "
-            f"I'll work on this thoroughly in the background and update you as I go."
-        )
+    # The transition to 'accepted' pushes a signal to `persistent_task:execute`,
+    # waking the worker immediately — no separate enqueue needed.
+    return (
+        f"On it — starting \"{task['goal'][:60]}\" now. "
+        f"I'll let you know when I have results."
+    )
 
 
 def _status(topic: str, params: dict) -> str:
@@ -353,17 +341,6 @@ def _show_plan(topic: str, params: dict) -> str:
     return '\n'.join(lines)
 
 
-def _enqueue_immediate_task(task_id: int):
-    """Enqueue immediate full execution for a task via RQ."""
-    try:
-        from services.prompt_queue import PromptQueue
-        from workers.persistent_task_worker import run_immediate_task
-        queue = PromptQueue(queue_name="persistent-task-immediate", worker_func=run_immediate_task)
-        queue.enqueue(task_id)
-        logger.info(f"{LOG_PREFIX} Enqueued immediate execution for task {task_id}")
-    except Exception as e:
-        # Non-fatal: periodic worker will pick it up on next cycle
-        logger.warning(f"{LOG_PREFIX} Could not enqueue immediate task {task_id}: {e}")
 
 
 def _resolve_task_id(params: dict) -> int | None:

@@ -4,6 +4,22 @@ Unlike regular ACT mode, this task spans multiple sessions. You are resuming wor
 
 ────────────────────────────────
 
+## Cognitive Context
+
+Working Memory:
+{{working_memory}}
+
+Relevant Memories:
+{{episodic_memory}}
+
+Knowledge:
+{{semantic_concepts}}
+
+User Traits:
+{{user_traits}}
+
+────────────────────────────────
+
 ## Task Goal
 {{task_goal}}
 

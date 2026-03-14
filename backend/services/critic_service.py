@@ -1,22 +1,23 @@
 """
-Critic Service — Post-action verification for the ACT loop.
+Critic Service — Post-execution reflection and verification for the ACT loop.
 
-Evaluates action results for correctness after execution.
-Catches silent errors (wrong dates, irrelevant recalls) before they compound.
+Primary role (new): post-loop learning signal via reflect_on_execution().
+  Runs once after the full loop completes. Produces a structured reflection
+  that feeds procedural memory. Never blocks output.
 
-Skip conditions:
-  - Simple reads with high-confidence structured results
-  - Dispatcher confidence >= 0.9 (subject to calibration)
-  - Deterministic actions with no ambiguity
+Legacy role (kept): per-action evaluate() for callers that still use it
+  directly (e.g. routing_reflection_service). The per-action critic path
+  in ACTOrchestrator has been removed — evaluate() is dead code in that
+  context but remains for external callers.
 
-Supervised autonomy:
+Supervised autonomy (legacy):
   - Safe actions (recall, memorize, introspect, associate): silent correction
   - Consequential actions (schedule, list, tools): pause + ask user
 """
 
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CRITIC]"
@@ -183,6 +184,52 @@ class CriticService:
         """
         return action_type in SAFE_ACTIONS
 
+    def reflect_on_execution(
+        self,
+        actions_taken: List[dict],
+        results: List[dict],
+        original_goal: str,
+        iterations: int,
+        termination_reason: str = '',
+    ) -> Optional[dict]:
+        """Post-execution reflection — learning signal, not a gate.
+
+        Runs a single lightweight LLM call after the full ACT loop completes.
+        Returns a structured reflection for procedural memory storage.
+        Never raises — returns None on any failure.
+
+        Args:
+            actions_taken: List of action specs that were dispatched
+            results: List of execution result dicts
+            original_goal: The user's original request/goal
+            iterations: Total number of loop iterations executed
+            termination_reason: Why the loop exited
+
+        Returns:
+            Structured reflection dict or None on failure:
+            {outcome_quality, what_worked, what_failed, lesson, confidence}
+        """
+        try:
+            llm = self._get_llm()
+            prompt = self._build_reflection_prompt(
+                actions_taken=actions_taken,
+                results=results,
+                original_goal=original_goal,
+                iterations=iterations,
+                termination_reason=termination_reason,
+            )
+            response_text = llm.send_message("", prompt).text
+            reflection = self._parse_reflection(response_text)
+            if reflection:
+                logger.info(
+                    f"{LOG_PREFIX} Post-loop reflection: quality={reflection.get('outcome_quality')}, "
+                    f"confidence={reflection.get('confidence')}"
+                )
+            return reflection
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} reflect_on_execution failed (non-fatal): {e}")
+            return None
+
     def get_telemetry(self) -> Dict[str, Any]:
         """Return critic telemetry metrics for logging to cortex_iterations.
 
@@ -206,6 +253,90 @@ class CriticService:
         }
 
     # ── Internal ──────────────────────────────────────────────────────
+
+    def _build_reflection_prompt(
+        self,
+        actions_taken: List[dict],
+        results: List[dict],
+        original_goal: str,
+        iterations: int,
+        termination_reason: str,
+    ) -> str:
+        """Build the post-loop reflection prompt from the template."""
+        template = self._load_reflection_prompt()
+
+        # Build a compact actions summary — type + status + brief result excerpt
+        action_lines = []
+        for i, result in enumerate(results):
+            atype = result.get('action_type', 'unknown')
+            status = result.get('status', 'unknown')
+            raw_result = result.get('result', '')
+            excerpt = str(raw_result)[:120].replace('\n', ' ')
+            action_lines.append(f"{i + 1}. {atype} → {status}: {excerpt}")
+
+        actions_summary = '\n'.join(action_lines) if action_lines else '(no actions executed)'
+
+        from services.time_utils import utc_now
+        _current_datetime = utc_now().strftime('%A, %Y-%m-%d %H:%M UTC')
+
+        return (
+            template
+            .replace('{{current_datetime}}', _current_datetime)
+            .replace('{{original_goal}}', original_goal[:500])
+            .replace('{{iterations}}', str(iterations))
+            .replace('{{termination_reason}}', termination_reason or 'natural_completion')
+            .replace('{{actions_summary}}', actions_summary)
+        )
+
+    def _parse_reflection(self, response_text: str) -> Optional[dict]:
+        """Parse the LLM reflection response into a structured dict.
+
+        Attempts JSON parsing directly, then from a markdown code fence.
+        Returns None if parsing fails or required fields are missing.
+        """
+        parsed = None
+
+        try:
+            parsed = json.loads(response_text)
+        except json.JSONDecodeError:
+            pass
+
+        if parsed is None:
+            try:
+                import re
+                match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group(1))
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        if not isinstance(parsed, dict):
+            return None
+
+        # Validate and clamp numeric fields
+        try:
+            return {
+                'outcome_quality': max(0.0, min(1.0, float(parsed.get('outcome_quality', 0.5)))),
+                'what_worked': parsed.get('what_worked') or None,
+                'what_failed': parsed.get('what_failed') or None,
+                'lesson': parsed.get('lesson') or None,
+                'confidence': max(0.0, min(1.0, float(parsed.get('confidence', 0.5)))),
+            }
+        except (TypeError, ValueError):
+            return None
+
+    def _load_reflection_prompt(self) -> str:
+        """Load the post-loop reflection prompt template from prompts/act-reflection.md.
+
+        Result is cached on first call.
+        """
+        if not hasattr(self, '_reflection_prompt_template') or self._reflection_prompt_template is None:
+            import os
+            prompts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts')
+            path = os.path.join(prompts_dir, 'act-reflection.md')
+            with open(path, 'r') as f:
+                self._reflection_prompt_template = f.read()
+        return self._reflection_prompt_template
 
     def _get_calibrated_threshold(self, action_type: str) -> float:
         """

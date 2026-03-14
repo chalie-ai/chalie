@@ -29,6 +29,7 @@ from services.innate_skills.emit_card_skill import handle_emit_card
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
 from services.innate_skills.reflect_skill import handle_reflect
+from services.innate_skills.notes_skill import handle_notes
 
 
 _SKILL_HANDLERS = {
@@ -46,6 +47,7 @@ _SKILL_HANDLERS = {
     'document': handle_document,
     'read': handle_read,
     'reflect': handle_reflect,
+    'notes': handle_notes,
 }
 
 
@@ -76,6 +78,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
     dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)
     dispatcher.handlers["reflect"] = lambda topic, action: handle_reflect(topic, action)
+    dispatcher.handlers["notes"] = lambda topic, action: handle_notes(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)
