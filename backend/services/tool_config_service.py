@@ -275,3 +275,31 @@ class ToolConfigService:
         except Exception as e:
             logger.warning(f"[TOOL CONFIG] delete_tool_config_key('{tool_name}', '{key}'): {e}")
             return False
+
+    def delete_tool_config(self, tool_name: str) -> bool:
+        """Delete ALL config rows for a tool (used during uninstall).
+
+        Removes every row in ``tool_configs`` whose ``tool_name`` matches the
+        provided value, including reserved system keys such as ``_enabled``,
+        ``_webhook_key``, and OAuth fields.
+
+        Args:
+            tool_name: The tool identifier whose config rows should be purged.
+
+        Returns:
+            True if at least one row was deleted, False if no rows existed or
+            an exception occurred.
+        """
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM tool_configs WHERE tool_name = ?",
+                    (tool_name,)
+                )
+                rowcount = cursor.rowcount
+                cursor.close()
+                return rowcount > 0
+        except Exception as e:
+            logger.warning(f"[TOOL CONFIG] delete_tool_config('{tool_name}'): {e}")
+            return False
