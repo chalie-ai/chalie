@@ -33,6 +33,14 @@ class ChalieApp {
     this.renderer = null;
     this.voice = null;
 
+    // Scroll-up pagination state
+    this._historyOffset = 0;
+    this._historyTotal = 0;
+    this._historyLoading = false;
+    this._historyExhausted = false;
+    this._historyLimit = 12;
+    this._historyMaxTurns = 120;
+
     // Attached images for current message
     this._attachedImages = [];  // [{id: string, element: HTMLElement}]
 
@@ -178,6 +186,14 @@ class ChalieApp {
       // Poll every 60s as a safety net for tasks that complete without a drift event
       this._taskStripInterval = setInterval(() => this._loadActiveTasks(), 60_000);
       this._connectWebSocket();
+      window.addEventListener('scroll', () => {
+        if (window.scrollY < 150 && !this._historyLoading && !this._historyExhausted) {
+          const anchor = document.body.scrollHeight - window.scrollY;
+          this._loadRecentConversation().then(() => {
+            window.scrollTo(0, document.body.scrollHeight - anchor);
+          });
+        }
+      });
       window.addEventListener('beforeunload', () => {
         this.ws.close();
         clearInterval(this._taskStripInterval);
@@ -888,30 +904,85 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   async _loadRecentConversation() {
+    if (this._historyLoading || this._historyExhausted) return;
+    this._historyLoading = true;
+
+    const loader = document.getElementById('historyLoader');
+    if (loader) loader.style.display = 'flex';
+
     try {
-      const data = await this.api.getRecentConversation();
-      if (!data.exchanges || data.exchanges.length === 0) {
+      const data = await this.api.getRecentConversation({
+        limit: this._historyLimit,
+        offset: this._historyOffset,
+      });
+
+      const exchanges = data.exchanges || [];
+
+      if (exchanges.length === 0 && this._historyOffset === 0) {
+        this._historyExhausted = true;
+        this._showHistoryEndPill();
         return;
       }
 
-      for (const exchange of data.exchanges) {
-        if (exchange.prompt) {
-          this.renderer.appendUserForm(exchange.prompt, exchange.timestamp);
+      if (this._historyOffset === 0) {
+        // Initial load — append in chronological order; use in_working_memory from API
+        for (const exchange of exchanges) {
+          this._appendExchange(exchange, exchange.in_working_memory !== false);
         }
-        if (exchange.response) {
-          this.renderer.appendChalieForm(exchange.response, {
-            topic: exchange.topic,
-            ts: exchange.timestamp,
-            exchange_id: exchange.id,
-          });
+      } else {
+        // Subsequent pages — prepend in reverse so oldest ends up at top
+        for (let i = exchanges.length - 1; i >= 0; i--) {
+          this._prependExchange(exchanges[i], false);
         }
+      }
+
+      this._historyOffset += exchanges.length;
+      this._historyTotal = data.total ?? this._historyOffset;
+
+      if (!data.has_more || this._historyOffset >= this._historyMaxTurns) {
+        this._historyExhausted = true;
+        this._showHistoryEndPill();
       }
     } catch (err) {
       if (err.message === 'AUTH') {
         this._handleAuthFailure();
       }
       // Otherwise silently fail — conversation history is nice-to-have
+    } finally {
+      if (loader) loader.style.display = 'none';
+      this._historyLoading = false;
     }
+  }
+
+  _appendExchange(exchange, inWorkingMemory) {
+    if (exchange.prompt) {
+      this.renderer.appendUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
+    }
+    if (exchange.response) {
+      this.renderer.appendChalieForm(exchange.response, {
+        topic: exchange.topic,
+        ts: exchange.timestamp,
+        exchange_id: exchange.id,
+      }, { inWorkingMemory });
+    }
+  }
+
+  _prependExchange(exchange, inWorkingMemory) {
+    if (exchange.response) {
+      this.renderer.prependChalieForm(exchange.response, {
+        topic: exchange.topic,
+        ts: exchange.timestamp,
+        exchange_id: exchange.id,
+      }, { inWorkingMemory });
+    }
+    if (exchange.prompt) {
+      this.renderer.prependUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
+    }
+  }
+
+  _showHistoryEndPill() {
+    const pill = document.getElementById('historyEndPill');
+    if (pill) pill.style.display = 'flex';
   }
 
   _showSparkOverlay() {
