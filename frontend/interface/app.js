@@ -1038,9 +1038,10 @@ class ChalieApp {
       return;
     }
 
-    // Task progress/completion — refresh the task strip
+    // Task progress/completion — refresh the task strip (sticky bar only)
     if (data.type === 'task') {
       this._loadActiveTasks();
+      return;
     }
 
     // Tool result card event

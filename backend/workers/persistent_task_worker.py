@@ -228,6 +228,7 @@ def _execute_task_act_loop(task: dict) -> dict:
     # Build task context for prompt
     progress = task.get('progress', {}) or {}
     task_context = {
+        'task_id': str(task['id']),
         'task_goal': task['goal'],
         'task_scope': task.get('scope', 'No specific scope defined'),
         'task_progress': json.dumps(progress, indent=2) if progress else 'No previous progress',
@@ -271,6 +272,7 @@ def _execute_task_act_loop(task: dict) -> dict:
         session_id='persistent_task',
         exchange_id=f"ptask_{task['id']}",
         assembled_context=assembled_context,
+        context_extras={'persistent_task_id': task['id']},
     )
 
     progress_update = {

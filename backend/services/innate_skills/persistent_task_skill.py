@@ -10,6 +10,8 @@ Provides natural language commands:
   - cancel: Cancel a task
   - expand: Update task scope
   - priority: Change task priority
+  - complete: Mark a task as done with a final result
+  - progress: Update coverage estimate and optional summary
 
 All DB access via get_shared_db_service() (lazy import inside function).
 """
@@ -53,6 +55,10 @@ def handle_persistent_task(topic: str, params: dict) -> str:
         return _show_plan(topic, params)
     elif action == "list":
         return _list_tasks(topic, params)
+    elif action == "complete":
+        return _complete(topic, params)
+    elif action == "progress":
+        return _progress_update(topic, params)
     else:
         return f"Unknown persistent task action: {action}"
 
@@ -341,6 +347,80 @@ def _show_plan(topic: str, params: dict) -> str:
     return '\n'.join(lines)
 
 
+
+
+def _complete(topic: str, params: dict) -> str:
+    """Mark a task as completed with a final result."""
+    task_id = _resolve_task_id(params)
+    if not task_id:
+        # Fallback: check if persistent_task_id was injected via context_extras
+        task_id = params.get('persistent_task_id')
+    if not task_id:
+        return "Could not identify which task to complete."
+
+    service = _get_service()
+    task = service.get_task(int(task_id))
+    if not task:
+        return f"Task {task_id} not found."
+
+    result = params.get("result", params.get("text", "Task completed."))
+    artifact = params.get("artifact")
+
+    service.complete_task(int(task_id), result, artifact)
+    _surface_completion_from_skill(task, result)
+
+    return f"Task #{task_id} \"{task['goal'][:60]}\" marked as completed."
+
+
+def _progress_update(topic: str, params: dict) -> str:
+    """Update coverage estimate and optional summary for a task."""
+    task_id = _resolve_task_id(params)
+    if not task_id:
+        # Fallback: check if persistent_task_id was injected via context_extras
+        task_id = params.get('persistent_task_id')
+    if not task_id:
+        return "Could not identify which task to update progress for."
+
+    service = _get_service()
+    task = service.get_task(int(task_id))
+    if not task:
+        return f"Task {task_id} not found."
+
+    coverage = params.get("coverage", params.get("value"))
+    if coverage is not None:
+        coverage = max(0.0, min(1.0, float(coverage)))
+
+    summary = params.get("summary", params.get("text"))
+
+    # Merge into existing progress
+    progress = dict(task.get('progress', {}) or {})
+    if coverage is not None:
+        progress['coverage_estimate'] = coverage
+    if summary:
+        progress['last_summary'] = summary
+
+    service.checkpoint(int(task_id), progress=progress)
+
+    parts = [f"Task #{task_id} progress updated"]
+    if coverage is not None:
+        parts.append(f"coverage: {coverage:.0%}")
+    if summary:
+        parts.append(f"summary: {summary[:80]}")
+    return " — ".join(parts) + "."
+
+
+def _surface_completion_from_skill(task: dict, result: str):
+    """Surface task completion to user when completed via skill."""
+    try:
+        from services.output_service import OutputService
+        output = OutputService()
+        message = (
+            f"I've finished working on \"{task['goal'][:60]}\". "
+            f"Here's what I found:\n\n{result}"
+        )
+        output.enqueue_proactive(task.get('thread_id'), message, source='persistent_task')
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Completion surfacing failed: {e}")
 
 
 def _resolve_task_id(params: dict) -> int | None:
