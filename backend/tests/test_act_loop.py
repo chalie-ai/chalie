@@ -1,9 +1,9 @@
-"""Tests for ActLoopService — fatigue model, concurrent execution, net value, telemetry."""
+"""Tests for ActLoopService — iteration manager, execution, telemetry."""
 
 import time
 import pytest
 from unittest.mock import patch, MagicMock
-from services.act_loop_service import ActLoopService, ACTION_FATIGUE_COSTS
+from services.act_loop_service import ActLoopService
 
 
 pytestmark = pytest.mark.unit
@@ -12,10 +12,6 @@ pytestmark = pytest.mark.unit
 def _make_config(**overrides):
     config = {
         'cost_base': 1.0,
-        'cost_growth_factor': 1.5,
-        'fatigue_budget': 10.0,
-        'fatigue_growth_rate': 0.3,
-        'fatigue_costs': {},
     }
     config.update(overrides)
     return config
@@ -30,124 +26,119 @@ def _make_result(action_type='recall', status='success', result='found 3 items',
     }
 
 
-# ── Fatigue Accumulation ────────────────────────────────────
+# ── Loop Termination Conditions ──────────────────────────────
 
 
-class TestFatigueAccumulation:
+class TestCanContinue:
 
-    def test_basic_fatigue_accumulation(self):
-        """Single action at iteration 0 costs its base cost."""
-        svc = ActLoopService(_make_config())
-        actions = [_make_result('introspect')]
-        added = svc.accumulate_fatigue(actions, iteration_number=0)
-        assert added == pytest.approx(0.5)
-        assert svc.fatigue == pytest.approx(0.5)
-
-    def test_fatigue_grows_with_iteration(self):
-        """Same action costs more at higher iterations (non-linear growth)."""
-        svc = ActLoopService(_make_config())
-        # Iteration 0: base_cost * (1 + 0.3*0) = 1.0
-        added_0 = svc.accumulate_fatigue([_make_result('recall')], iteration_number=0)
-        assert added_0 == pytest.approx(1.0)
-        # Iteration 2: base_cost * (1 + 0.3*2) = 1.6
-        added_2 = svc.accumulate_fatigue([_make_result('recall')], iteration_number=2)
-        assert added_2 == pytest.approx(1.6)
-        assert svc.fatigue == pytest.approx(2.6)
-
-    def test_multiple_actions_accumulate(self):
-        """Multiple actions in one iteration sum their costs."""
-        svc = ActLoopService(_make_config())
-        actions = [_make_result('introspect'), _make_result('recall')]
-        added = svc.accumulate_fatigue(actions, iteration_number=0)
-        assert added == pytest.approx(1.5)  # 0.5 + 1.0
-
-    def test_expensive_actions_cost_more(self):
-        """Default-cost actions cost more than introspect (cheapest at 0.5)."""
-        svc = ActLoopService(_make_config())
-        svc.accumulate_fatigue([_make_result('delegate')], iteration_number=0)
-        delegate_fatigue = svc.fatigue
-        svc2 = ActLoopService(_make_config())
-        svc2.accumulate_fatigue([_make_result('introspect')], iteration_number=0)
-        assert delegate_fatigue > svc2.fatigue
-
-    def test_custom_fatigue_costs_override(self):
-        """Config-level fatigue_costs override defaults."""
-        config = _make_config(fatigue_costs={'recall': 5.0})
-        svc = ActLoopService(config)
-        added = svc.accumulate_fatigue([_make_result('recall')], iteration_number=0)
-        assert added == pytest.approx(5.0)
-
-
-# ── Fatigue Stops Loop ──────────────────────────────────────
-
-
-class TestFatigueStopsLoop:
-
-    def test_fatigue_exhausted_stops_loop(self):
-        """When fatigue >= budget, can_continue returns False."""
-        svc = ActLoopService(_make_config(fatigue_budget=2.0))
+    def test_can_continue_within_timeout(self):
+        """Under timeout → can_continue returns True."""
+        svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
         svc.start_time = time.time()
-        svc.fatigue = 2.0
-        can, reason = svc.can_continue()
-        assert can is False
-        assert reason == 'fatigue_exhausted'
-
-    def test_fatigue_below_budget_continues(self):
-        """When fatigue < budget, can_continue returns True."""
-        svc = ActLoopService(_make_config(fatigue_budget=10.0))
-        svc.start_time = time.time()
-        svc.fatigue = 5.0
-        can, reason = svc.can_continue()
+        can, reason = svc.can_continue(mode='ACT')
         assert can is True
         assert reason is None
 
-    def test_fatigue_checked_before_timeout(self):
-        """Fatigue is checked first — even if timeout not reached."""
-        svc = ActLoopService(_make_config(fatigue_budget=1.0))
-        svc.start_time = time.time()  # Just started
-        svc.fatigue = 1.5  # Over budget
-        can, reason = svc.can_continue()
+    def test_stops_on_timeout(self):
+        """Over timeout → can_continue returns False with 'timeout'."""
+        svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
+        svc.start_time = time.time() - 61
+        can, reason = svc.can_continue(mode='ACT')
         assert can is False
-        assert reason == 'fatigue_exhausted'
+        assert reason == 'timeout'
+
+    def test_stops_on_max_iterations(self):
+        """At max_iterations → can_continue returns False."""
+        svc = ActLoopService(_make_config(), cumulative_timeout=60.0, max_iterations=3)
+        svc.start_time = time.time()
+        svc.iteration_number = 3
+        can, reason = svc.can_continue(mode='ACT')
+        assert can is False
+        assert reason == 'max_iterations'
+
+    def test_terminal_mode_stops(self):
+        """Non-ACT mode → always stops."""
+        svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
+        svc.start_time = time.time()
+        can, reason = svc.can_continue(mode='RESPOND')
+        assert can is False
+        assert reason == 'terminal_mode_respond'
+
+    def test_default_max_iterations_is_30(self):
+        """Default hard cap is 30."""
+        svc = ActLoopService(_make_config())
+        assert svc.max_iterations == 30
+
+    def test_continues_below_max_iterations(self):
+        """Below max_iterations → continues."""
+        svc = ActLoopService(_make_config(), max_iterations=30)
+        svc.start_time = time.time()
+        svc.iteration_number = 29
+        can, reason = svc.can_continue(mode='ACT')
+        assert can is True
+        assert reason is None
 
 
-# ── Cheap Actions = More Iterations ─────────────────────────
+# ── History Token Budget ─────────────────────────────────────
 
 
-class TestCheapActionsMoreIterations:
+class TestHistoryTokenBudget:
 
-    def test_introspect_loop_more_iterations_than_recall(self):
-        """Pure introspect loop should get more iterations than recall loop before fatigue."""
-        budget = 10.0
-        config = _make_config(fatigue_budget=budget)
+    def test_can_continue_respects_max_history_tokens(self):
+        """can_continue returns False when history exceeds token budget."""
+        svc = ActLoopService(_make_config())
+        svc.start_time = time.time()
+        # Add many large results with realistic multi-word text to exceed token budget
+        large_text = ' '.join(['word'] * 200)  # 200 words per result
+        for i in range(10):
+            svc.append_results([_make_result('recall', result=large_text)])
+        can, reason = svc.can_continue(max_history_tokens=100)
+        assert can is False
+        assert reason == 'history_token_budget'
 
-        # Introspect-only loop (cost 0.5)
-        svc1 = ActLoopService(config)
-        svc1.start_time = time.time()
-        introspect_iters = 0
-        while svc1.fatigue < budget:
-            svc1.accumulate_fatigue([_make_result('introspect')], iteration_number=introspect_iters)
-            introspect_iters += 1
+    def test_can_continue_passes_within_token_budget(self):
+        """can_continue returns True when history is within token budget."""
+        svc = ActLoopService(_make_config())
+        svc.start_time = time.time()
+        svc.append_results([_make_result('recall', result='short result')])
+        can, reason = svc.can_continue(max_history_tokens=4000)
+        assert can is True
+        assert reason is None
 
-        # Recall-only loop (cost 1.0)
-        svc2 = ActLoopService(config)
-        svc2.start_time = time.time()
-        recall_iters = 0
-        while svc2.fatigue < budget:
-            svc2.accumulate_fatigue([_make_result('recall')], iteration_number=recall_iters)
-            recall_iters += 1
+    def test_get_history_context_truncates_when_over_budget(self):
+        """get_history_context moves older entries to notes, keeps most recent 3."""
+        svc = ActLoopService(_make_config())
+        # Add 6 results with realistic multi-word text
+        for i in range(6):
+            svc.append_results([_make_result('recall', result=f'Result {i}: ' + ' '.join(['data'] * 100))])
 
-        assert introspect_iters > recall_iters
+        # Very small budget forces pruning
+        context = svc.get_history_context(max_history_tokens=50)
+        assert "moved to notes" in context
+        # Should still have the last 3 results
+        assert "Result 3" in context
+        assert "Result 4" in context
+        assert "Result 5" in context
+        # First 3 should be pruned
+        assert "Result 0:" not in context
+
+    def test_get_history_context_no_truncation_within_budget(self):
+        """get_history_context returns all entries when within budget."""
+        svc = ActLoopService(_make_config())
+        svc.append_results([_make_result('recall', result='short')])
+        context = svc.get_history_context(max_history_tokens=4000)
+        assert "truncated" not in context
+        assert "[recall]" in context
 
 
-# ── Concurrent Execution ────────────────────────────────────
+# ── Concurrent Execution ─────────────────────────────────────
 
 
 class TestConcurrentExecution:
 
     @patch('services.act_dispatcher_service.ActDispatcherService')
     def test_single_action_runs_directly(self, mock_dispatcher_cls):
-        """Single action doesn't use ThreadPoolExecutor."""
+        """Single action dispatches via the dispatcher."""
         mock_dispatcher = MagicMock()
         mock_dispatcher.dispatch_action.return_value = _make_result('recall')
         mock_dispatcher_cls.return_value = mock_dispatcher
@@ -197,96 +188,10 @@ class TestConcurrentExecution:
             ])
 
 
-# ── Net Value Estimator ─────────────────────────────────────
+# ── History and Append ───────────────────────────────────────
 
 
-class TestNetValueEstimator:
-
-    def test_success_with_substantial_result(self):
-        """Success with >50 chars = 1.0 value."""
-        actions = [_make_result('recall', result='A' * 51)]
-        value = ActLoopService.estimate_net_value(actions, iteration_number=0)
-        assert value == pytest.approx(1.0)
-
-    def test_success_with_minimal_result(self):
-        """Success with <=50 chars = 0.3 value."""
-        actions = [_make_result('recall', result='short')]
-        value = ActLoopService.estimate_net_value(actions, iteration_number=0)
-        assert value == pytest.approx(0.3)
-
-    def test_timeout_penalized(self):
-        """Timeout = -0.5 value."""
-        actions = [_make_result('recall', status='timeout', result='')]
-        value = ActLoopService.estimate_net_value(actions, iteration_number=0)
-        assert value == pytest.approx(-0.5)
-
-    def test_diminishing_returns(self):
-        """Same action at higher iteration yields less value."""
-        actions = [_make_result('recall', result='A' * 51)]
-        v0 = ActLoopService.estimate_net_value(actions, iteration_number=0)
-        v3 = ActLoopService.estimate_net_value(actions, iteration_number=3)
-        assert v0 > v3
-
-
-# ── Fatigue Telemetry ───────────────────────────────────────
-
-
-class TestFatigueTelemetry:
-
-    def test_telemetry_structure(self):
-        """get_fatigue_telemetry returns expected keys and values."""
-        svc = ActLoopService(_make_config(fatigue_budget=10.0))
-        svc.fatigue = 5.0
-        svc.iteration_number = 3
-        svc.act_history = [_make_result(), _make_result(), _make_result()]
-
-        telemetry = svc.get_fatigue_telemetry()
-
-        assert telemetry['fatigue_total'] == 5.0
-        assert telemetry['fatigue_budget'] == 10.0
-        assert telemetry['fatigue_utilization'] == pytest.approx(0.5)
-        assert telemetry['iterations_used'] == 3
-        assert telemetry['actions_total'] == 3
-        assert telemetry['budget_headroom'] == 5.0
-
-
-# ── Existing Behavior (preserved) ──────────────────────────
-
-
-class TestExistingBehavior:
-
-    def test_can_continue_within_timeout(self):
-        """Under 60s → can_continue returns True."""
-        svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
-        svc.start_time = time.time()
-        can, reason = svc.can_continue(mode='ACT')
-        assert can is True
-        assert reason is None
-
-    def test_stops_on_timeout(self):
-        """Over 60s → can_continue returns False with 'timeout'."""
-        svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
-        svc.start_time = time.time() - 61
-        can, reason = svc.can_continue(mode='ACT')
-        assert can is False
-        assert reason == 'timeout'
-
-    def test_stops_on_max_iterations(self):
-        """At max_iterations → can_continue returns False."""
-        svc = ActLoopService(_make_config(), cumulative_timeout=60.0, max_iterations=3)
-        svc.start_time = time.time()
-        svc.iteration_number = 3
-        can, reason = svc.can_continue(mode='ACT')
-        assert can is False
-        assert reason == 'max_iterations'
-
-    def test_terminal_mode_stops(self):
-        """Non-ACT mode → always stops."""
-        svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
-        svc.start_time = time.time()
-        can, reason = svc.can_continue(mode='RESPOND')
-        assert can is False
-        assert reason == 'terminal_mode_respond'
+class TestHistoryManagement:
 
     def test_append_results_updates_history(self):
         """Results added to act_history."""
@@ -308,53 +213,44 @@ class TestExistingBehavior:
         assert "found data" in context
 
 
-# ── History Token Budget (Phase 4) ────────────────────────
+# ── Loop Telemetry ───────────────────────────────────────────
 
 
-class TestHistoryTokenBudget:
+class TestLoopTelemetry:
 
-    def test_can_continue_respects_max_history_tokens(self):
-        """can_continue returns False when history exceeds token budget."""
-        svc = ActLoopService(_make_config(fatigue_budget=100.0))
-        svc.start_time = time.time()
-        # Add many large results with realistic multi-word text to exceed token budget
-        large_text = ' '.join(['word'] * 200)  # 200 words per result
-        for i in range(10):
-            svc.append_results([_make_result('recall', result=large_text)])
-        can, reason = svc.can_continue(max_history_tokens=100)
-        assert can is False
-        assert reason == 'history_token_budget'
-
-    def test_can_continue_passes_within_token_budget(self):
-        """can_continue returns True when history is within token budget."""
-        svc = ActLoopService(_make_config(fatigue_budget=100.0))
-        svc.start_time = time.time()
-        svc.append_results([_make_result('recall', result='short result')])
-        can, reason = svc.can_continue(max_history_tokens=4000)
-        assert can is True
-        assert reason is None
-
-    def test_get_history_context_truncates_when_over_budget(self):
-        """get_history_context truncates older entries, keeps most recent 3."""
+    def test_telemetry_structure(self):
+        """get_loop_telemetry returns expected keys and values."""
         svc = ActLoopService(_make_config())
-        # Add 6 results with realistic multi-word text
-        for i in range(6):
-            svc.append_results([_make_result('recall', result=f'Result {i}: ' + ' '.join(['data'] * 100))])
+        svc.iteration_number = 3
+        svc.act_history = [_make_result(), _make_result(), _make_result()]
 
-        # Very small budget forces truncation
-        context = svc.get_history_context(max_history_tokens=50)
-        assert "truncated" in context
-        # Should still have the last 3 results
-        assert "Result 3" in context
-        assert "Result 4" in context
-        assert "Result 5" in context
-        # First 3 should be truncated
-        assert "Result 0:" not in context
+        telemetry = svc.get_loop_telemetry()
 
-    def test_get_history_context_no_truncation_within_budget(self):
-        """get_history_context returns all entries when within budget."""
+        assert telemetry['iterations_used'] == 3
+        assert telemetry['max_iterations'] == 30
+        assert telemetry['actions_total'] == 3
+        assert 'elapsed_seconds' in telemetry
+
+    def test_telemetry_no_fatigue_keys(self):
+        """Loop telemetry contains no fatigue-related keys."""
         svc = ActLoopService(_make_config())
-        svc.append_results([_make_result('recall', result='short')])
-        context = svc.get_history_context(max_history_tokens=4000)
-        assert "truncated" not in context
-        assert "[recall]" in context
+        telemetry = svc.get_loop_telemetry()
+        for key in telemetry:
+            assert 'fatigue' not in key.lower(), f"Unexpected fatigue key: {key}"
+
+
+# ── Soft Nudge Flag ──────────────────────────────────────────
+
+
+class TestSoftNudge:
+
+    def test_soft_nudge_injected_flag_default_false(self):
+        """soft_nudge_injected starts False."""
+        svc = ActLoopService(_make_config())
+        assert svc.soft_nudge_injected is False
+
+    def test_soft_nudge_flag_can_be_set(self):
+        """Orchestrator sets soft_nudge_injected when nudge is emitted."""
+        svc = ActLoopService(_make_config())
+        svc.soft_nudge_injected = True
+        assert svc.soft_nudge_injected is True

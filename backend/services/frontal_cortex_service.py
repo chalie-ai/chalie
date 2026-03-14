@@ -321,6 +321,118 @@ class FrontalCortexService:
                 f"{response_text[:500]}"
             )
 
+        return self._parse_response_text(response_text, generation_time)
+
+    def build_system_prompt(
+        self,
+        system_prompt_template: str,
+        original_prompt: str,
+        classification: dict,
+        chat_history: list,
+        assembled_context: dict = None,
+        relevant_tools: list = None,
+        selected_tools: list = None,
+        selected_skills: list = None,
+        thread_id: str = None,
+        returning_from_silence: bool = False,
+        inclusion_map: dict = None,
+    ) -> str:
+        """Build the stable system prompt WITHOUT act_history.
+
+        Called once at the start of the ACT loop in append mode.  The
+        act_history is kept out of the system prompt deliberately — it is
+        instead passed as part of the growing message array so that
+        provider-side prompt caching can treat the system prompt as a stable
+        prefix across all loop iterations.
+
+        Args:
+            system_prompt_template: Template with {{variable}} placeholders
+            original_prompt: The user's original message
+            classification: Dict containing topic, confidence, etc.
+            chat_history: List of previous exchanges
+            assembled_context: Pre-assembled context dict
+            relevant_tools: Tools scored by embedding relevance
+            selected_tools: Triage-selected tools
+            selected_skills: Triage-selected innate skills
+            thread_id: Conversation thread identifier
+            returning_from_silence: Whether the user is returning after a gap
+            inclusion_map: Context node inclusion decisions
+
+        Returns:
+            str: Fully injected system prompt (act_history left empty)
+        """
+        return self._inject_parameters(
+            system_prompt_template,
+            original_prompt,
+            classification,
+            chat_history,
+            act_history="",  # act_history goes in the message array, not the system prompt
+            assembled_context=assembled_context,
+            relevant_tools=relevant_tools,
+            selected_tools=selected_tools,
+            selected_skills=selected_skills,
+            thread_id=thread_id,
+            returning_from_silence=returning_from_silence,
+            inclusion_map=inclusion_map,
+        )
+
+    def generate_response_appended(
+        self,
+        system_prompt: str,
+        messages: list,
+        cache_prefix: bool = False,
+    ) -> dict:
+        """Multi-turn LLM call using a pre-built system prompt.
+
+        Used by the ACT loop in append mode: the system prompt is built once
+        at loop start via :meth:`build_system_prompt` and the act_history
+        grows as a message array across iterations, enabling provider-level
+        prompt caching on the stable system prefix.
+
+        Args:
+            system_prompt: Pre-built system prompt (no act_history placeholder)
+            messages: Growing list of {"role": ..., "content": ...} dicts
+            cache_prefix: When True, hint to the provider to cache the system
+                prompt prefix (Anthropic / OpenAI prompt-caching APIs)
+
+        Returns:
+            Same dict structure as :meth:`generate_response`, plus
+            ``raw_response`` containing the unmodified LLM text (needed by
+            the orchestrator to append the assistant turn to the message array).
+        """
+        start_time = time.time()
+
+        try:
+            response_text = self.llm.send_messages(system_prompt, messages, cache_prefix).text
+        except Exception as e:
+            raise Exception(f"LLM generation failed: {str(e)}") from e
+
+        generation_time = time.time() - start_time
+
+        result = self._parse_response_text(response_text, generation_time)
+        # Expose the raw text so the orchestrator can append the assistant turn
+        result['raw_response'] = response_text
+        return result
+
+    def _parse_response_text(self, response_text: str, generation_time: float) -> dict:
+        """Parse a raw LLM response string into the standard cortex result dict.
+
+        Shared by both :meth:`generate_response` (single-turn) and
+        :meth:`generate_response_appended` (multi-turn append mode) so that
+        all JSON recovery logic lives in exactly one place.
+
+        Args:
+            response_text: Raw text returned by the LLM provider
+            generation_time: Wall-clock seconds for the LLM call
+
+        Returns:
+            dict: {mode, modifiers, response, generation_time, actions,
+                   confidence, alternative_paths, downstream_mode} plus
+                   optional narrated/narration pass-through keys.
+
+        Raises:
+            Exception: When JSON parsing fails after all recovery layers.
+        """
         # Parse JSON response (format: "json" is set in config)
         # Strip markdown code fences if the model wrapped the JSON
         try:

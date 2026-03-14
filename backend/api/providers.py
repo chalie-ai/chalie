@@ -63,7 +63,7 @@ def create_provider():
                 'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
                 'frontal-cortex-proactive',
                 'frontal-cortex-scheduled-tool', 'mode-reflection',
-                'semantic-memory', 'cognitive-triage', 'experience-assimilation',
+                'semantic-memory', 'cognitive-triage', 'failure-analysis', 'experience-assimilation',
                 'trait-extraction',
                 'moment-enrichment', 'document-synthesis',
                 'document-classification',

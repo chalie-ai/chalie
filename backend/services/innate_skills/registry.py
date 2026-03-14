@@ -5,7 +5,7 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 14 skills).
+register_innate_skills() in __init__.py (currently 15 skills).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
@@ -13,7 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'moment', 'persistent_task', 'emit_card', 'document',
-    'read', 'reflect',
+    'read', 'reflect', 'notes',
 })
 
 # ── LLM-visible for planning: excludes emit_card (internal trigger) and
@@ -64,6 +64,7 @@ SKILL_DESCRIPTIONS: dict = {
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
+    'notes': 'Query working notes from this session — large tool results and older action history are stored here for on-demand retrieval',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
@@ -82,6 +83,7 @@ SKILL_EFFORT: dict = {
     'document': 'light',
     'read': 'light',
     'reflect': 'light',
+    'notes': 'trivial',
 }
 
 # ── Skill categories ───────────────────────────────────────────────────────────
@@ -100,4 +102,5 @@ SKILL_CATEGORIES: dict = {
     'document': 'knowledge',
     'read': 'research',
     'reflect': 'cognition',
+    'notes': 'memory',
 }
