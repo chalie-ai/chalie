@@ -3194,6 +3194,18 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             thread_id=thread_id,
         )
 
+    # Step 11c: Enqueue trait extraction for user message
+    try:
+        enqueue_trait_extraction(
+            prompt_message=text[:1000],
+            metadata={
+                'source': f'chat:{source}',
+                'topic': topic,
+            },
+            thread_id=thread_id,
+        )
+    except Exception as e:
+        logging.debug(f"[DIGEST] Trait extraction enqueue failed: {e}")
 
     # Step 11e: Detect saveable content in response
     if not is_fast_path_ack:
