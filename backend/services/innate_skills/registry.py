@@ -58,7 +58,7 @@ SKILL_DESCRIPTIONS: dict = {
     'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
     'focus': 'Start and manage deep focus or work sessions, Pomodoro-style timers',
     'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
-    'persistent_task': 'Create, manage, and track multi-session background tasks with state machine lifecycle',
+    'persistent_task': 'Create, manage, track, complete, and update progress on multi-session background tasks with state machine lifecycle',
     'moment': 'Capture and read ambient context snapshots (time, place, energy, device)',
     'emit_card': 'Render deferred tool cards into the conversation stream (internal trigger)',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
