@@ -643,7 +643,24 @@ function renderCognition() {
         return;
     }
 
-    el.innerHTML = JOBS.map(job => {
+    // Suggestion bar: show when 2+ providers and any job is yellow
+    const yellowCount = Object.values(providerHealth).filter(h => h.health === 'yellow').length;
+    const dismissed = localStorage.getItem('chalie_autoassign_dismissed') === String(providers.length);
+    let suggestionHtml = '';
+    if (providers.length >= 2 && yellowCount > 0 && !dismissed) {
+        suggestionHtml = `
+            <div class="auto-assign-bar">
+                <span class="auto-assign-bar__text">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    ${yellowCount} job${yellowCount > 1 ? 's' : ''} could perform better with a different provider.
+                </span>
+                <button class="auto-assign-bar__btn" onclick="applyAutoAssign()">Optimize assignments</button>
+                <button class="auto-assign-bar__dismiss" onclick="dismissAutoAssign()" title="Dismiss">&times;</button>
+            </div>
+        `;
+    }
+
+    el.innerHTML = suggestionHtml + JOBS.map(job => {
         const currentAssignment = assignments[job.id];
         const options = providers.map(p =>
             `<option value="${p.id}" ${p.id === currentAssignment ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
@@ -711,6 +728,30 @@ async function assignJob(jobName, selectEl) {
     } catch (e) {
         showToast('Network error', 'error');
     }
+}
+
+async function applyAutoAssign() {
+    try {
+        const res = await apiFetch('/providers/jobs/auto-assign', {
+            method: 'POST', body: JSON.stringify({}),
+        });
+        if (res.ok) {
+            showToast('Assignments optimized', 'success');
+            localStorage.setItem('chalie_autoassign_dismissed', String(providers.length));
+            await loadAssignments();
+            await loadProviderHealth();
+            renderCognition();
+        } else {
+            showToast('Auto-assign failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function dismissAutoAssign() {
+    localStorage.setItem('chalie_autoassign_dismissed', String(providers.length));
+    renderCognition();
 }
 
 // ==========================================
