@@ -2921,6 +2921,20 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     })
                     working_memory.append_turn(thread_id, 'assistant', dedup_response)
                     _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
+                    # Enqueue trait extraction for the user message even on the dedup path,
+                    # so personal context (e.g. "I'm a nurse") is never silently discarded
+                    # when the message arrives while active tool work is already in progress.
+                    try:
+                        enqueue_trait_extraction(
+                            prompt_message=text[:1000],
+                            metadata={
+                                'source': f'chat:{source}',
+                                'topic': topic,
+                            },
+                            thread_id=thread_id,
+                        )
+                    except Exception as e:
+                        logging.debug(f"[DIGEST] Trait extraction enqueue failed (dedup path): {e}")
                     return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
         # ── Branch dispatch ──
