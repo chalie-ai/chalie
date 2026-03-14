@@ -673,6 +673,60 @@ class CommunicateAction(AutonomousAction):
             pass
         return (True, {'load_state': 'NORMAL'})
 
+    # ── Idle fallback ─────────────────────────────────────────────
+
+    def _try_idle_fallback(self) -> Optional[Dict]:
+        """
+        After 50+ consecutive quality rejections and 24h+ idle, produce a
+        simple check-in from the most recent episode gist.  Rate-limited
+        to one per 48 hours.
+        """
+        now = time.time()
+
+        last_ts = self.store.get(_key('last_interaction_ts'))
+        if not last_ts or (now - float(last_ts)) < 86400:
+            return None
+
+        if self.store.get(_key('paused')) == '1':
+            return None
+
+        if self._is_quiet_hours(self._get_user_hour()):
+            return None
+
+        last_fb = self.store.get(_key('last_fallback_ts'))
+        if last_fb and (now - float(last_fb)) < 172800:
+            return None
+
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT gist FROM episodes ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+            if not row:
+                return None
+            gist = row[0] if not isinstance(row, dict) else row['gist']
+            if not gist or len(gist.strip()) < 10:
+                return None
+        except Exception:
+            return None
+
+        logger.info(f"{LOG_PREFIX} Idle fallback triggered after 50+ quality rejections")
+        return {
+            'id': str(uuid.uuid4()),
+            'type': 'reflection',
+            'content': gist,
+            'topic': 'check_in',
+            'seed_concept': 'idle_fallback',
+            'activation_energy': 0.5,
+            'score': 0.5,
+            'created_at': now,
+            'gist_ttl': 1800,
+            'embedding': None,
+            'is_fallback': True,
+        }
+
     # ── Main interface ────────────────────────────────────────────
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
@@ -681,6 +735,9 @@ class CommunicateAction(AutonomousAction):
 
         Always records activation energy for self-calibration.
         If quality passes but timing/engagement don't, adds to candidate queue.
+
+        Idle fallback: after 50+ consecutive quality rejections AND 24h+ idle,
+        bypasses quality gate with a check-in from the last episode gist.
         """
         self.last_gate_result = None
 
@@ -689,7 +746,35 @@ class CommunicateAction(AutonomousAction):
 
         # Gate 1: Quality
         quality_score, quality_passes, quality_details = self._quality_score(thought)
-        if not quality_passes:
+
+        if quality_passes:
+            self.store.set(_key('consecutive_quality_rejections'), '0')
+        else:
+            self.store.incr(_key('consecutive_quality_rejections'))
+            rejection_count = int(self.store.get(_key('consecutive_quality_rejections')) or 0)
+
+            if rejection_count >= 50:
+                fallback = self._try_idle_fallback()
+                if fallback:
+                    timing_ok, timing_d = self._timing_passes(thought)
+                    if not timing_ok:
+                        self.last_gate_result = {'gate': 'timing', 'reason': timing_d.get('rejected', 'timing'), 'fallback': True}
+                        return (0.0, False)
+                    eng_ok, eng_d = self._engagement_passes(thought)
+                    if not eng_ok:
+                        self.last_gate_result = {'gate': 'engagement', 'reason': eng_d.get('rejected', 'engagement'), 'fallback': True}
+                        return (0.0, False)
+                    load_ok, _ = self._cognitive_load_gate(thought)
+                    if not load_ok:
+                        self.last_gate_result = {'gate': 'cognitive_load', 'reason': 'user_disengaging', 'fallback': True}
+                        return (0.0, False)
+
+                    self.store.zadd(_key('candidates'), {json.dumps(fallback): fallback['score']})
+                    self.store.set(_key('last_fallback_ts'), str(time.time()))
+                    self.store.set(_key('consecutive_quality_rejections'), '0')
+                    logger.info(f"{LOG_PREFIX} Idle fallback passed all gates — delivering check-in")
+                    return (fallback['score'], True)
+
             reason = quality_details.get('rejected', 'unknown')
             self.last_gate_result = {'gate': 'quality', 'reason': reason, 'details': quality_details}
             return (0.0, False)
@@ -939,6 +1024,7 @@ class CommunicateAction(AutonomousAction):
             'drift_count': int(self.store.get(_key('drift_count')) or 0),
             'candidate_count': self.store.zcard(_key('candidates')),
             'deferred_count': self.store.zcard(_key('deferred')),
+            'consecutive_quality_rejections': int(self.store.get(_key('consecutive_quality_rejections')) or 0),
         }
 
     def get_weekly_engagement(self) -> List[float]:
