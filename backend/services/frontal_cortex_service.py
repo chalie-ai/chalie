@@ -1185,6 +1185,13 @@ class FrontalCortexService:
             logging.debug(f"Self-awareness not available: {e}")
             return ""
 
+    def get_skill_docs(self, skills: list) -> str:
+        """Public API for loading skill documentation by name.
+
+        Used by the orchestrator for mid-loop skill escalation.
+        """
+        return self._get_injected_skills(skills)
+
     def _get_injected_skills(self, skills: list) -> str:
         """
         Load skill doc files for the selected skills and concatenate them.

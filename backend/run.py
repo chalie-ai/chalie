@@ -263,8 +263,14 @@ def main():
                 logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
             else:
                 logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+            svc._ready = True
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
+            # Mark ready even on failure — system degrades gracefully to LLM fallback
+            try:
+                svc._ready = True
+            except Exception:
+                pass
 
     _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
 

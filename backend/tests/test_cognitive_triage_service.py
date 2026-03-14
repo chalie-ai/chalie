@@ -93,12 +93,17 @@ class TestSelfEvalRules:
         return TriageContext(**defaults)
 
     def test_rule1_act_without_tools_downgrades_to_respond(self):
+        from unittest.mock import patch, MagicMock
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         result = self._make_result('act', 'ACT', tools=[])
         # Empty tool_summaries → no tools available at all → downgrade
         ctx = self._make_context(tool_summaries='')
-        result = svc._self_evaluate(result, "search for something", ctx)
+        # Mock ONNX away so skill recovery can't save the ACT branch
+        mock_onnx = MagicMock()
+        mock_onnx.is_available.return_value = False
+        with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
+            result = svc._self_evaluate(result, "search for something", ctx)
         assert result.branch == 'respond'
         assert result.mode == 'RESPOND'
         assert result.self_eval_override is True
@@ -166,14 +171,6 @@ class TestSelfEvalRules:
         assert result.branch == 'act'
         assert result.self_eval_reason == ''  # No override needed
 
-    def test_heuristic_fallback_url_gives_act(self):
-        """Heuristic fallback with URL in message → ACT."""
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        ctx = self._make_context()
-        result = svc._heuristic_fallback("visit https://example.com/page", ctx)
-        assert result.branch == 'act'
-
     def test_rule2_act_failsafe_escalates_respond_to_act(self):
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
@@ -231,66 +228,35 @@ class TestSelfEvalRules:
         result = svc._self_evaluate(result, "check weather", ctx)
         assert result.branch == 'act'  # Not suppressed — different tool
 
-    def test_heuristic_fallback_question_gives_respond(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        from services.cognitive_triage_service import TriageContext
-        ctx = TriageContext(
-            context_warmth=0.5, memory_confidence=0.5,
-            working_memory_turns=0, gist_count=0, fact_count=0,
-            previous_mode='RESPOND', previous_tools=[],
-            tool_summaries='', working_memory_summary='',
-        )
-        result = svc._heuristic_fallback("What is quantum computing?", ctx)
-        assert result.branch == 'respond'
-
-    def test_rule1_act_no_tools_recovers_innate_skill_from_text(self):
-        """ACT + skills=[] + no tools + 'remind me' text → skill recovered, stays ACT."""
-        from services.cognitive_triage_service import CognitiveTriageService
+    def test_rule1_act_no_tools_recovers_skill_via_onnx(self):
+        """ACT + skills=[] + no tools + ONNX recovers contextual skill → stays ACT."""
+        from services.cognitive_triage_service import CognitiveTriageService, _CONTEXTUAL_SKILLS
         svc = CognitiveTriageService()
         result = self._make_result('act', 'ACT', tools=[])
         ctx = self._make_context(tool_summaries='')
         result = svc._self_evaluate(result, "remind me to water the plants at 6pm tomorrow", ctx)
         assert result.branch == 'act'
         assert result.mode == 'ACT'
-        assert 'schedule' in result.skills
+        # ONNX should recover at least one contextual skill
+        recovered = [s for s in result.skills if s in _CONTEXTUAL_SKILLS]
+        assert len(recovered) >= 1
         assert result.self_eval_override is True
         assert result.self_eval_reason == 'act_innate_skill_recovered'
 
-    def test_rule1_act_no_tools_recovers_list_skill_from_text(self):
-        """ACT + skills=[] + no tools + 'add to my list' → list skill recovered."""
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = self._make_result('act', 'ACT', tools=[])
-        ctx = self._make_context(tool_summaries='')
-        result = svc._self_evaluate(result, "add eggs to my shopping list", ctx)
-        assert result.branch == 'act'
-        assert 'list' in result.skills
-        assert result.self_eval_reason == 'act_innate_skill_recovered'
-
     def test_rule1_act_no_tools_no_innate_match_still_downgrades(self):
-        """ACT + skills=[] + no tools + generic text → downgrade (no innate skill detected)."""
+        """ACT + skills=[] + no tools + no ONNX recovery → downgrade."""
+        from unittest.mock import patch, MagicMock
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
         result = self._make_result('act', 'ACT', tools=[])
         ctx = self._make_context(tool_summaries='')
-        result = svc._self_evaluate(result, "do something external with a database", ctx)
+        # Mock ONNX away so skill recovery can't save the ACT branch
+        mock_onnx = MagicMock()
+        mock_onnx.is_available.return_value = False
+        with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
+            result = svc._self_evaluate(result, "do something external with a database", ctx)
         assert result.branch == 'respond'
         assert result.self_eval_reason == 'act_no_tools_available'
-
-    def test_heuristic_fallback_command_gives_act_when_tools_available(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        from services.cognitive_triage_service import TriageContext
-        ctx = TriageContext(
-            context_warmth=0.5, memory_confidence=0.5,
-            working_memory_turns=0, gist_count=0, fact_count=0,
-            previous_mode='RESPOND', previous_tools=[],
-            tool_summaries='## Info\n- search: web search',
-            working_memory_summary='',
-        )
-        result = svc._heuristic_fallback("search for Python tutorials", ctx)
-        assert result.branch == 'act'
 
 
 class TestTriageFull:

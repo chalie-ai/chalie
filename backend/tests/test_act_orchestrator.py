@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from services.act_orchestrator_service import ACTOrchestrator, ACTResult, _action_fingerprint, _action_types
+from services.innate_skills.registry import CONTEXTUAL_SKILLS
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -693,3 +694,204 @@ class TestAppendMode:
         cortex.generate_response.assert_called()
         cortex.build_system_prompt.assert_not_called()
         cortex.generate_response_appended.assert_not_called()
+
+
+# ── Orchestrator: skill escalation ───────────────────────────────
+
+@pytest.mark.unit
+class TestSkillEscalation:
+    """Skill escalation injects full skill catalog when the loop is stuck
+    using only cognitive primitives (recall, memorize, introspect, associate)."""
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_escalation_triggers_after_two_primitive_only_iterations(self, MockActLoop):
+        """After 2 iterations of only-primitive actions, missing skill docs are injected."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+
+        # Always allow continuation — loop exits via no_actions from cortex
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found something'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Vary action types to avoid type-based repetition detection (3x same type)
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'test'}]),
+            _make_response(actions=[{'type': 'memorize', 'text': 'note'}]),
+            _make_response(actions=[{'type': 'introspect', 'topic': 'x'}]),
+            _make_response(actions=[]),  # exit
+        ])
+        cortex.get_skill_docs = MagicMock(return_value='## Schedule\nCreate reminders...')
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='add item pickup mom', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate', 'list'],
+        )
+
+        # Skill escalation should have called get_skill_docs with missing contextual skills
+        cortex.get_skill_docs.assert_called_once()
+        escalated_skills = cortex.get_skill_docs.call_args[0][0]
+        # 'list' was already selected, so it should NOT be in the escalated set
+        assert 'list' not in escalated_skills
+        # 'schedule' should be in the escalated set (it's a contextual skill not in selected)
+        assert 'schedule' in escalated_skills
+
+        # The escalation message should be injected via append_results (legacy mode)
+        system_injections = [
+            call for call in mock_loop.append_results.call_args_list
+            if any(
+                r.get('action_type') == 'system'
+                and 'Skill Escalation' in r.get('result', '')
+                for r in call[0][0]
+            )
+        ]
+        assert len(system_injections) == 1
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_no_escalation_when_contextual_skill_succeeds(self, MockActLoop):
+        """If a contextual skill succeeds in iteration 0, no escalation occurs."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('list', 'success', 'Added item'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'list', 'action': 'add'}]),
+            _make_response(actions=[]),  # exit
+        ])
+        cortex.get_skill_docs = MagicMock()
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='add milk to grocery list', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate', 'list'],
+        )
+
+        # get_skill_docs should NOT have been called — contextual skill succeeded
+        cortex.get_skill_docs.assert_not_called()
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_escalation_fires_only_once(self, MockActLoop):
+        """Skill escalation fires at most once per loop run."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        # Always allow — loop exits via no_actions
+        mock_loop.can_continue.return_value = (True, None)
+        # All iterations return only primitive results
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Alternate action types to avoid type-based repetition (3x same)
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'a'}]),
+            _make_response(actions=[{'type': 'memorize', 'text': 'b'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'c'}]),
+            _make_response(actions=[{'type': 'memorize', 'text': 'd'}]),
+            _make_response(actions=[]),  # exit
+        ])
+        cortex.get_skill_docs = MagicMock(return_value='## Extra Skills')
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='test', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate'],
+        )
+
+        # get_skill_docs should be called exactly once (not on every subsequent iteration)
+        assert cortex.get_skill_docs.call_count == 1
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_escalation_in_append_mode_injects_user_message(self, MockActLoop):
+        """In append mode, escalation adds a user message to the message array."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = MagicMock()
+        cortex.build_system_prompt.return_value = 'system prompt'
+        cortex.get_skill_docs.return_value = '## Schedule\nCreate reminders...'
+
+        # 3 iterations of primitives (alternating types to avoid repetition) + exit
+        cortex.generate_response_appended.side_effect = [
+            {'actions': [{'type': 'recall', 'query': 'a'}], 'confidence': 0.8,
+             'response': 'r1', 'raw_response': 'r1'},
+            {'actions': [{'type': 'memorize', 'text': 'b'}], 'confidence': 0.8,
+             'response': 'r2', 'raw_response': 'r2'},
+            {'actions': [{'type': 'introspect', 'topic': 'c'}], 'confidence': 0.8,
+             'response': 'r3', 'raw_response': 'r3'},
+            {'actions': [], 'confidence': 0.8, 'response': 'done', 'raw_response': 'done'},
+        ]
+
+        orchestrator = ACTOrchestrator(
+            config={'append_mode': True}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='pickup mom', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate'],
+        )
+
+        # In append mode, escalation should NOT use append_results
+        # Instead it adds directly to messages array — verify by checking
+        # that get_skill_docs was called (escalation triggered)
+        cortex.get_skill_docs.assert_called_once()
+
+        # append_results should not contain any skill escalation system messages
+        escalation_system_calls = [
+            call for call in mock_loop.append_results.call_args_list
+            if any(
+                r.get('action_type') == 'system'
+                and 'Skill Escalation' in r.get('result', '')
+                for r in call[0][0]
+            )
+        ]
+        assert len(escalation_system_calls) == 0  # append mode uses messages, not append_results

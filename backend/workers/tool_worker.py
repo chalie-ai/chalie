@@ -253,6 +253,7 @@ def _tool_worker_orchestrator(
         on_iteration_complete=on_iteration_complete,
         context_extras={
             'triage_tools': context_snapshot.get('triage_selected_tools', []),
+            'exchange_id': exchange_id,
         },
         session_id='tool_worker',
         exchange_id=exchange_id,
@@ -279,7 +280,7 @@ def _tool_worker_orchestrator(
     _enqueue_tool_reflection(result.act_history, topic, text)
 
     # Render and deliver cards
-    card_replaces = _enqueue_tool_cards(result.act_history, topic, metadata, cycle_id=cycle_id)
+    card_replaces = _enqueue_tool_cards(result.act_history, topic, metadata, cycle_id=cycle_id, exchange_id=exchange_id)
 
     # Suppress follow-up when emit_card was called
     if not card_replaces:
@@ -367,7 +368,7 @@ def _notify_sse_error(metadata: dict, error_message: str):
         logger.warning(f"[TOOL WORKER] Failed to notify WebSocket of error: {e}")
 
 
-def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:
+def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None, exchange_id: str = '') -> bool:
     """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
     tool was found (suppresses the text follow-up since the card was already rendered inline).
 
@@ -384,8 +385,9 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id:
         from services.output_service import OutputService
 
         store = MemoryClientService.create_connection()
-        raw_items = store.lrange(f"tool_raw_cache:{topic}", 0, -1)
-        store.delete(f"tool_raw_cache:{topic}")
+        from services import act_memory_keys as _amk
+        raw_items = store.lrange(_amk.tool_raw_cache(topic, exchange_id), 0, -1)
+        store.delete(_amk.tool_raw_cache(topic, exchange_id))
 
         # Build {tool_name: raw_result} map (last result per tool wins)
         raw_map = {}
