@@ -32,6 +32,7 @@ let pollTimer = null;           // setInterval id for build polling
 let obsData = {};               // cached API responses keyed by subtab name
 let obsLoaded = {};             // whether a subtab has been fetched
 let activeSubtab = 'jobs';      // currently active cognition sub-tab
+let providerHealth = {};        // job_id → {health, tooltip}
 
 // ==========================================
 // LLM Jobs
@@ -223,9 +224,21 @@ async function loadData() {
 
     await loadAssignments();
     renderMain();
+    loadProviderHealth().then(() => renderCognition());
 
     // Handle OAuth callback URL parameters
     handleOAuthCallback();
+}
+
+async function loadProviderHealth() {
+    try {
+        const res = await apiFetch('/system/observability/provider-health');
+        if (res.ok) {
+            const data = await res.json();
+            providerHealth = {};
+            for (const j of (data.jobs || [])) providerHealth[j.job_id] = j;
+        }
+    } catch (e) { /* non-critical */ }
 }
 
 // ==========================================
@@ -640,11 +653,16 @@ function renderCognition() {
             `<span class="job-strength">${escapeHtml(s)}</span>`
         ).join('');
 
+        const ph = providerHealth[job.id];
+        const healthDot = ph
+            ? `<span class="job-health-dot --${ph.health}" title="${escapeHtml(ph.tooltip || '')}"></span>`
+            : '';
+
         return `
             <div class="job-card">
                 <div class="job-card__top">
                     <div class="job-info">
-                        <div class="job-name">${escapeHtml(job.name)}</div>
+                        <div class="job-name">${escapeHtml(job.name)}${healthDot}</div>
                         <div class="job-desc">${escapeHtml(job.desc)}</div>
                     </div>
                     <span class="job-badge ${job.badgeClass}">${escapeHtml(job.badge)}</span>
@@ -686,6 +704,7 @@ async function assignJob(jobName, selectEl) {
             const indicator = document.getElementById(`save-${jobName}`);
             indicator.classList.add('visible');
             setTimeout(() => indicator.classList.remove('visible'), 2000);
+            loadProviderHealth().then(() => renderCognition());
         } else {
             showToast('Failed to save assignment', 'error');
         }

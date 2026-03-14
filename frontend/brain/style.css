@@ -329,6 +329,27 @@ body::before {
     font-size: 14px;
 }
 
+.job-health-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+.job-health-dot.--green {
+    background: #00F0FF;
+    box-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
+}
+.job-health-dot.--yellow {
+    background: #FFB800;
+    box-shadow: 0 0 6px rgba(255, 184, 0, 0.4);
+}
+.job-health-dot.--red {
+    background: #FF4444;
+    box-shadow: 0 0 6px rgba(255, 68, 68, 0.4);
+}
+
 .job-desc {
     color: var(--text-muted);
     font-size: 12px;
