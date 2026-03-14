@@ -198,6 +198,12 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 if not result:
                     return
 
+                # Strip markdown fences if present
+                import re
+                fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', result, re.DOTALL)
+                if fence_match:
+                    result = fence_match.group(1).strip()
+
                 parsed = json.loads(result)
                 traits = parsed.get('traits', [])
 
@@ -205,7 +211,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 CORE_KEYS = {
                     'name', 'age', 'gender', 'occupation', 'nationality', 'language',
                     'education', 'culture_region', 'language_preference',
-                    'relationship_status', 'ethnicity', 'birthday',
+                    'relationship_status', 'ethnicity', 'birthday', 'location',
                 }
 
                 db = get_shared_db_service()
@@ -736,6 +742,13 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
     Returns:
         tuple: (response_data dict, routing_result dict)
     """
+    # Trait extraction — runs in background thread, non-blocking
+    enqueue_trait_extraction(
+        prompt_message=text[:1000],
+        metadata={'source': 'chat'},
+        thread_id=thread_id,
+    )
+
     if pre_routing_result:
         # Use pre-computed routing result — skip mode router and DB query entirely
         routing_result = pre_routing_result
