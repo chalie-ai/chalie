@@ -20,7 +20,7 @@ class ThreadConversationService:
     """Manages conversation exchanges stored in MemoryStore, scoped by thread."""
 
     TTL_SECONDS = 86400  # 24 hours
-    MAX_EXCHANGES = 50
+    MAX_EXCHANGES = 120
 
     def __init__(self):
         self.store = MemoryClientService.create_connection()
@@ -212,6 +212,52 @@ class ThreadConversationService:
         """Get exchange count (O(1) via index key)."""
         count = self.store.get(self._index_key(thread_id))
         return int(count) if count else 0
+
+    def get_paginated_history(self, thread_id: str, limit: int = 12, offset: int = 0) -> dict:
+        """Get a paginated slice of conversation history for a thread.
+
+        Args:
+            thread_id: Thread identifier.
+            limit: Number of exchanges to return.
+            offset: Number of exchanges to skip from the END (0 = most recent).
+
+        Returns:
+            Dict with keys: exchanges (chronological slice), total, has_more.
+        """
+        conv_key = self._conv_key(thread_id)
+        total = self.store.llen(conv_key)
+        if total == 0:
+            return {"exchanges": [], "total": 0, "has_more": False}
+
+        # Compute lrange indices using negative indexing from end.
+        # offset=0, limit=12  → lrange(key, -12, -1)
+        # offset=12, limit=12 → lrange(key, -24, -13)
+        end_idx = -(offset + 1) if offset > 0 else -1
+        start_idx = -(offset + limit)
+
+        raw = self.store.lrange(conv_key, start_idx, end_idx)
+        exchanges = [json.loads(item) if isinstance(item, str) else item for item in raw]
+        has_more = (offset + limit) < total
+        return {"exchanges": exchanges, "total": total, "has_more": has_more}
+
+    def get_most_recent_expired_thread_id(self) -> Optional[str]:
+        """Return the thread_id of the most recently expired thread from SQLite."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT thread_id FROM threads
+                    WHERE state = 'expired'
+                    ORDER BY expired_at DESC
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                cursor.close()
+                return row[0] if row else None
+        except Exception:
+            return None
 
     def remove_exchanges(self, thread_id: str, exchange_ids: list) -> None:
         """Remove specific exchanges by ID (for post-episodic cleanup)."""

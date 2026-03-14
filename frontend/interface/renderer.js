@@ -35,9 +35,15 @@ export class Renderer {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /** Append a user speech form. */
-  appendUserForm(text, ts = null) {
+  /**
+   * Append a user speech form.
+   * @param {string} text
+   * @param {string|null} [ts]
+   * @param {{inWorkingMemory?: boolean}} [options]
+   */
+  appendUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--user');
+    if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.textContent = text;
     el.appendChild(textEl);
@@ -55,12 +61,37 @@ export class Renderer {
   }
 
   /**
+   * Prepend a user speech form (for scroll-up pagination).
+   * @param {string} text
+   * @param {string|null} [ts]
+   * @param {{inWorkingMemory?: boolean}} [options]
+   */
+  prependUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
+    const el = this._createEl('div', 'speech-form speech-form--user');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+    const textEl = this._createEl('div', 'speech-form__text');
+    textEl.textContent = text;
+    el.appendChild(textEl);
+
+    const metaRow = this._createEl('div', 'speech-form__meta');
+    const timestampEl = this._createEl('span', 'speech-form__timestamp');
+    timestampEl.textContent = this._formatTimestamp(ts);
+    metaRow.appendChild(timestampEl);
+    el.appendChild(metaRow);
+
+    this._spine.prepend(el);
+    return el;
+  }
+
+  /**
    * Append a Chalie speech form.
    * @param {string} text
    * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
+   * @param {{inWorkingMemory?: boolean}} [options]
    */
-  appendChalieForm(text, meta = {}) {
+  appendChalieForm(text, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
+    if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.innerHTML = parseMarkdown(text);
     el.appendChild(textEl);
@@ -78,6 +109,30 @@ export class Renderer {
     this._spine.appendChild(el);
     this._setActiveForm(el);
     this._scrollToBottom();
+    return el;
+  }
+
+  /**
+   * Prepend a Chalie speech form (for scroll-up pagination).
+   * @param {string} text
+   * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
+   * @param {{inWorkingMemory?: boolean}} [options]
+   */
+  prependChalieForm(text, meta = {}, { inWorkingMemory = true } = {}) {
+    const el = this._createEl('div', 'speech-form speech-form--chalie');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+    const textEl = this._createEl('div', 'speech-form__text');
+    textEl.innerHTML = parseMarkdown(text);
+    el.appendChild(textEl);
+
+    if (meta.actions?.length) {
+      el.appendChild(this._buildActionButtons(meta.actions));
+    }
+
+    const metaRow = this._buildMetaRow(text, meta);
+    el.appendChild(metaRow);
+
+    this._spine.prepend(el);
     return el;
   }
 
