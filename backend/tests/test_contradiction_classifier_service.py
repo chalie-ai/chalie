@@ -27,9 +27,8 @@ from services.contradiction_classifier_service import (
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _schema_sql():
-    schema_path = os.path.join(os.path.dirname(__file__), '..', 'schema.sql')
-    with open(schema_path, 'r') as f:
-        return f.read()
+    from tests.test_helpers import load_schema_sql
+    return load_schema_sql()
 
 
 def _pack_embedding(values: list) -> bytes:

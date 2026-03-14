@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 from services.act_loop_service import ActLoopService
-from services.innate_skills.registry import COGNITIVE_PRIMITIVES
+from services.innate_skills.registry import COGNITIVE_PRIMITIVES, CONTEXTUAL_SKILLS
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -210,6 +210,14 @@ class ACTOrchestrator:
         pivot_hint_injected = False
         recent_action_entries = []  # (fingerprint, types_set) for smart repetition
 
+        # ── Skill escalation state ───────────────────────────────────────
+        # Track whether any contextual skill (non-primitive) succeeded.
+        # After _ESCALATION_AFTER iterations of only primitives, inject
+        # the full skill catalog so the LLM can self-correct.
+        _ESCALATION_AFTER = 2
+        _skill_escalated = False
+        _contextual_skill_used = False
+
         # ── Tool health tracking (cross-loop via MemoryStore) ─────────
         from services.tool_health_service import (
             get_potential, record_outcome as _record_health,
@@ -261,7 +269,7 @@ class ACTOrchestrator:
                 act_history_str = act_loop.get_history_context()
                 if self.deferred_card_context:
                     act_history_str = self._inject_deferred_card_context(
-                        act_history_str, topic
+                        act_history_str, topic, exchange_id
                     )
                 if act_history_str and act_history_str != "(none)":
                     context_updates.append(act_history_str)
@@ -292,7 +300,7 @@ class ACTOrchestrator:
                 act_history_str = act_loop.get_history_context()
                 if self.deferred_card_context:
                     act_history_str = self._inject_deferred_card_context(
-                        act_history_str, topic
+                        act_history_str, topic, exchange_id
                     )
 
                 # Inject user steering input (if any)
@@ -497,6 +505,49 @@ class ACTOrchestrator:
                 record_skill_outcomes(actions_executed, topic)
             except Exception:
                 pass
+
+            # ── Skill escalation: unlock full catalog when stuck ──────
+            if not _skill_escalated and not _contextual_skill_used:
+                # Check if any contextual skill succeeded this iteration
+                for r in actions_executed:
+                    atype = r.get('action_type', '')
+                    if atype in CONTEXTUAL_SKILLS and r.get('status') == 'success':
+                        _contextual_skill_used = True
+                        break
+
+                if (
+                    not _contextual_skill_used
+                    and act_loop.iteration_number >= _ESCALATION_AFTER
+                ):
+                    # Build the missing skill docs and inject them
+                    current_skills = set(selected_skills or [])
+                    missing_skills = sorted(CONTEXTUAL_SKILLS - current_skills)
+                    if missing_skills:
+                        extra_docs = cortex_service.get_skill_docs(missing_skills)
+                        if extra_docs:
+                            escalation_msg = (
+                                "[Skill Escalation] The skills you've tried so far "
+                                "haven't resolved the request. Additional skills are "
+                                "now available:\n\n" + extra_docs
+                            )
+                            if append_mode and _messages is not None:
+                                _messages.append({
+                                    "role": "user",
+                                    "content": escalation_msg,
+                                })
+                            else:
+                                act_loop.append_results([{
+                                    'action_type': 'system',
+                                    'status': 'info',
+                                    'execution_time': 0.0,
+                                    'result': escalation_msg,
+                                }])
+                            logger.info(
+                                f"{LOG_PREFIX} Skill escalation triggered at iteration "
+                                f"{act_loop.iteration_number} — injected {len(missing_skills)} "
+                                f"skills: {missing_skills}"
+                            )
+                    _skill_escalated = True
 
             # ── Check timeout/max_iterations if no reason yet ───────────
             if not termination_reason:
@@ -949,14 +1000,15 @@ class ACTOrchestrator:
 
     @staticmethod
     def _inject_deferred_card_context(
-        act_history_str: str, topic: str
+        act_history_str: str, topic: str, exchange_id: str = ''
     ) -> str:
         """Append deferred card offers to act_history context string."""
         try:
             from services.memory_client import MemoryClientService as _RCS
+            from services import act_memory_keys
             _store_dc = _RCS.create_connection()
             _deferred_items = _store_dc.lrange(
-                f"deferred_cards:{topic}", 0, -1
+                act_memory_keys.deferred_cards(topic, exchange_id), 0, -1
             )
             if _deferred_items:
                 _cards = [json.loads(i) for i in _deferred_items]

@@ -173,6 +173,14 @@ class OnnxInferenceService:
         self._heads: Dict[str, object] = {}
         self._heads_lock = threading.Lock()
 
+        # Boot readiness — set to True after ensure_models() + warmup complete
+        self._ready = False
+
+    @property
+    def ready(self) -> bool:
+        """True after ensure_models() + warmup inference have completed."""
+        return self._ready
+
     # ── Download & Version Check ──────────────────────────────
 
     def ensure_models(self):

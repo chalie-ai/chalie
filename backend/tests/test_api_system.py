@@ -233,32 +233,36 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_memory_returns_all_layers(self, client):
-        """GET /system/observability/memory returns SelfModel snapshot layers and MemoryStore counts."""
+        """GET /system/observability/memory returns flat counts from SQLite and MemoryStore."""
         mock_store = MagicMock()
         mock_store.keys.side_effect = lambda pattern: {
-            'working_memory:*': ['wm1'],
+            'working_memory:*': ['wm:t1', 'wm:t2'],
+            'facts:*': [],
         }.get(pattern, [])
-        mock_store.llen.return_value = 0
+        mock_store.llen.side_effect = lambda key: {
+            'wm:t1': 3, 'wm:t2': 5, 'prompt-queue': 0, 'output-queue': 0,
+        }.get(key, 0)
 
-        fake_snapshot = {
-            'operational': {'memory_pressure': {'episode_count': 100}},
-            'epistemic': {'knowledge_gaps': []},
-            'noteworthy': ['something interesting'],
-        }
-
-        mock_self_model = MagicMock()
-        mock_self_model.get_snapshot.return_value = fake_snapshot
+        mock_db = MagicMock()
+        mock_db.fetch_all.side_effect = lambda sql, *a, **kw: {
+            'episodes': [{'cnt': 42, 'avg_act': 0.7123}],
+            'semantic_concepts': [{'cnt': 15}],
+            'user_traits': [{'cnt': 8, 'avg_conf': 0.6234}],
+        }.get(next((t for t in ('episodes', 'semantic_concepts', 'user_traits') if t in sql), ''), [])
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.self_model_service.SelfModelService', return_value=mock_self_model):
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['operational'] == fake_snapshot['operational']
-        assert data['epistemic'] == fake_snapshot['epistemic']
-        assert data['noteworthy'] == fake_snapshot['noteworthy']
-        assert data['working_memory'] == 1
+        assert data['episodes'] == 42
+        assert data['concepts'] == 15
+        assert data['traits'] == 8
+        assert data['facts'] == 8  # falls back to traits when no facts:* keys
+        assert data['avg_episode_activation'] == 0.7123
+        assert data['avg_trait_strength'] == 0.6234
+        assert data['working_memory'] == 8  # 3 + 5 turns across two threads
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -571,21 +575,31 @@ class TestSystemAPI:
         mock_auto_cls.assert_called_once_with(mock_db)
         mock_delta_cls.assert_called_once_with(mock_db)
 
-    def test_observability_memory_returns_structured_snapshot(self, client):
-        """Memory endpoint returns SelfModelService snapshot (refactored from raw SQL)."""
-        mock_self_model = MagicMock()
-        mock_self_model.get_snapshot.return_value = {
-            'operational': {'working_memory_turns': 2, 'active_gists': 1},
-            'epistemic': {'episodes': 10, 'concepts': 5, 'traits': 3},
-            'noteworthy': False,
-        }
+    def test_observability_memory_returns_flat_structure(self, client):
+        """Memory endpoint returns flat counts (episodes, concepts, traits, etc.)."""
+        mock_store = MagicMock()
+        mock_store.keys.return_value = []
+        mock_store.llen.return_value = 0
 
-        with patch('services.self_model_service.SelfModelService', return_value=mock_self_model):
+        mock_db = MagicMock()
+        mock_db.fetch_all.side_effect = lambda sql, *a, **kw: {
+            'episodes': [{'cnt': 10, 'avg_act': 0.5}],
+            'semantic_concepts': [{'cnt': 5}],
+            'user_traits': [{'cnt': 3, 'avg_conf': 0.4}],
+        }.get(next((t for t in ('episodes', 'semantic_concepts', 'user_traits') if t in sql), ''), [])
+
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert 'operational' in data or 'epistemic' in data
+        assert 'episodes' in data
+        assert 'concepts' in data
+        assert 'traits' in data
+        assert 'avg_episode_activation' in data
+        assert 'avg_trait_strength' in data
+        assert 'working_memory' in data
 
     # ────────────────────────────────────────────
     # generated_at field on all observability endpoints
@@ -647,10 +661,15 @@ class TestSystemAPI:
         # Patch the embedding model sentinel so the embeddings component reports 'ok'
         mock_st_model = MagicMock()  # any non-None value means model is loaded
 
+        # Patch ONNX service to report ready
+        mock_onnx_svc = MagicMock()
+        mock_onnx_svc.ready = True
+
         patches = {
             'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
             'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
             'services.embedding_service._st_model': mock_st_model,
+            'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
         if not worker_ok:
             patches['services.prompt_queue.PromptQueue'] = MagicMock(side_effect=ImportError('no queue'))

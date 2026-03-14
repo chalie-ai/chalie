@@ -53,6 +53,7 @@ def handle_emit_card(topic: str, params: dict) -> dict:
     summary = params.get("summary", "").strip()
     response_text = params.get("response", "").strip()
     invocation_id = params.get("invocation_id", "").strip()
+    exchange_id = params.get("exchange_id", "")
 
     if not summary:
         return "Error: summary is required"
@@ -62,8 +63,10 @@ def handle_emit_card(topic: str, params: dict) -> dict:
     # ── 1. Resolve the cached tool result ────────────────────────────────────
     entry = None
 
+    from services import act_memory_keys
+
     if invocation_id:
-        raw = store.get(f"tool_card_cache:{topic}:{invocation_id}")
+        raw = store.get(act_memory_keys.tool_card_cache(topic, invocation_id, exchange_id))
         if raw:
             try:
                 entry = json.loads(raw)
@@ -72,13 +75,13 @@ def handle_emit_card(topic: str, params: dict) -> dict:
 
     if not entry:
         # Fallback: use the most recent deferred card registered for this topic
-        deferred_items = store.lrange(f"deferred_cards:{topic}", 0, -1)
+        deferred_items = store.lrange(act_memory_keys.deferred_cards(topic, exchange_id), 0, -1)
         if deferred_items:
             try:
                 last_deferred = json.loads(deferred_items[-1])
                 fallback_id = last_deferred.get("invocation_id", "")
                 if fallback_id:
-                    raw = store.get(f"tool_card_cache:{topic}:{fallback_id}")
+                    raw = store.get(act_memory_keys.tool_card_cache(topic, fallback_id, exchange_id))
                     if raw:
                         entry = json.loads(raw)
             except Exception as e:
@@ -163,21 +166,22 @@ def handle_emit_card(topic: str, params: dict) -> dict:
     # ── 6. Clean up deferred state so subsequent emit_card calls and
     #    _enqueue_tool_cards don't recycle stale data (B7/B11 fix)
     try:
-        store.delete(f"deferred_cards:{topic}")
+        store.delete(act_memory_keys.deferred_cards(topic, exchange_id))
         # B7: Also remove this tool from tool_raw_cache so _enqueue_tool_cards
         # doesn't re-render the same data after the loop.
-        raw_items = store.lrange(f"tool_raw_cache:{topic}", 0, -1)
+        _raw_cache_key = act_memory_keys.tool_raw_cache(topic, exchange_id)
+        raw_items = store.lrange(_raw_cache_key, 0, -1)
         for raw_item in raw_items:
             try:
                 import json as _json
                 parsed = _json.loads(raw_item)
                 if parsed.get('tool') == tool_name:
-                    store.lrem(f"tool_raw_cache:{topic}", 1, raw_item)
+                    store.lrem(_raw_cache_key, 1, raw_item)
             except Exception:
                 pass
         # B11: Delete per-invocation cache to prevent re-render on second emit_card call
         used_id = invocation_id or entry.get("invocation_id", "latest")
-        store.delete(f"tool_card_cache:{topic}:{used_id}")
+        store.delete(act_memory_keys.tool_card_cache(topic, used_id, exchange_id))
     except Exception:
         pass
 
