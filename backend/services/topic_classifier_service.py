@@ -96,47 +96,13 @@ class TopicClassifierService:
         # Topic naming is now deterministic (keyword extraction, no LLM)
 
     def _load_weights(self):
-        """
-        Load regulated parameters from stability regulator.
-
-        Falls back to defaults if regulator hasn't run yet.
-        """
-        try:
-            from services.topic_stability_regulator_service import TopicStabilityRegulator
-            regulator = TopicStabilityRegulator()
-            weights = regulator.get_current_parameters()
-
-            self.SWITCH_THRESHOLD = weights['switch_threshold']
-            self.DECAY_CONSTANT = weights['decay_constant']
-            self.W_SEMANTIC = weights['w_semantic']
-            self.W_FRESHNESS = weights['w_freshness']
-            self.W_SALIENCE = weights['w_salience']
-            self._boundary_params = {
-                'accumulator_leak_rate': weights.get('accumulator_leak_rate', 0.4),
-                'accumulator_boundary_base': weights.get('accumulator_boundary_base', 2.5),
-                'newma_window_fast': weights.get('newma_window_fast', 4),
-                'newma_window_slow': weights.get('newma_window_slow', 18),
-            }
-
-            logger.info(
-                f"[TOPIC CLASSIFIER] Loaded adaptive weights: "
-                f"threshold={self.SWITCH_THRESHOLD:.3f}, "
-                f"decay={self.DECAY_CONSTANT:.0f}s, "
-                f"w_sem={self.W_SEMANTIC:.2f}, "
-                f"w_fresh={self.W_FRESHNESS:.2f}, "
-                f"w_sal={self.W_SALIENCE:.2f}"
-            )
-
-        except Exception as e:
-            logger.warning(f"[TOPIC CLASSIFIER] Could not load adaptive weights: {e}")
-            logger.info("[TOPIC CLASSIFIER] Using default weights")
-
-            self.SWITCH_THRESHOLD = self.DEFAULT_SWITCH_THRESHOLD
-            self.DECAY_CONSTANT = self.DEFAULT_DECAY_CONSTANT
-            self.W_SEMANTIC = self.DEFAULT_W_SEMANTIC
-            self.W_FRESHNESS = self.DEFAULT_W_FRESHNESS
-            self.W_SALIENCE = self.DEFAULT_W_SALIENCE
-            self._boundary_params = {}
+        """Load default topic classification weights."""
+        self.SWITCH_THRESHOLD = self.DEFAULT_SWITCH_THRESHOLD
+        self.DECAY_CONSTANT = self.DEFAULT_DECAY_CONSTANT
+        self.W_SEMANTIC = self.DEFAULT_W_SEMANTIC
+        self.W_FRESHNESS = self.DEFAULT_W_FRESHNESS
+        self.W_SALIENCE = self.DEFAULT_W_SALIENCE
+        self._boundary_params = {}
 
     def classify(self, message_text: str, recent_topic: str = None, thread_id: str = None) -> Dict:
         """

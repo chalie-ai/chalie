@@ -311,9 +311,7 @@ def main():
     # Import worker functions
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
-    from services.topic_stability_regulator_service import topic_stability_regulator_worker
     from services.reasoning_loop_service import reasoning_loop_worker
-    from services.routing_stability_regulator_service import routing_stability_regulator_worker
     from services.routing_reflection_service import routing_reflection_worker
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.thread_expiry_service import thread_expiry_worker
@@ -330,9 +328,7 @@ def main():
     # Register service workers
     manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
-    manager.register_service("topic-stability-regulator-service", topic_stability_regulator_worker)
     manager.register_service("reasoning-loop", reasoning_loop_worker)
-    manager.register_service("routing-stability-regulator-service", routing_stability_regulator_worker)
     manager.register_service("routing-reflection-service", routing_reflection_worker)
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
     manager.register_service("thread-expiry-service", thread_expiry_worker)

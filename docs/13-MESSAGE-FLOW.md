@@ -668,7 +668,7 @@ Component latency breakdown (Path C RESPOND, typical):
 | **Judgment over activity** | Two-layer routing: fast social filter first, then LLM triage only if needed; mode router is deterministic not generative |
 | **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
 | **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
-| **Single authority** | `RoutingStabilityRegulator` is the only process that mutates router weights (24h cycle); no tug-of-war possible |
+| **Single authority** | Router weights are fixed at deployment; no runtime weight mutation, no tug-of-war possible |
 
 ---
 
