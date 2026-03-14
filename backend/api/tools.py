@@ -693,6 +693,100 @@ def enable_tool(tool_name: str):
         return jsonify({"error": f"Failed to enable tool: {str(e)[:200]}"}), 500
 
 
+@tools_bp.route("/tools/<tool_name>", methods=["DELETE"])
+@require_session
+def delete_tool(tool_name: str):
+    """Permanently uninstall a tool.
+
+    Removes the tool directory, deregisters it from the in-memory registry,
+    purges all ``tool_configs`` rows, cleans up satellite DB tables, and
+    (best-effort) removes the associated Docker image.
+
+    Guards:
+    - 404 if the tool directory does not exist.
+    - 400 if the tool is trusted (a curated system tool from embodiment_library).
+    - 409 if the tool is currently being built.
+
+    Args:
+        tool_name: The tool directory name as it appears in the URL path.
+
+    Returns:
+        ``{"ok": true, "deleted": "<actual_name>"}`` with HTTP 200 on success.
+        ``{"error": "..."}`` with an appropriate 4xx/5xx status on failure.
+    """
+    try:
+        from services.tool_registry_service import ToolRegistryService
+        from services.tool_config_service import ToolConfigService
+        from services.database_service import get_shared_db_service
+
+        registry = ToolRegistryService()
+        tools_dir = registry.tools_dir
+        tool_path = tools_dir / tool_name
+
+        # 1. Verify the tool directory exists.
+        if not tool_path.exists():
+            return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
+
+        # 2. Read manifest to get the canonical tool name (may differ from dir name).
+        try:
+            with open(tool_path / "manifest.json") as f:
+                manifest = json.load(f)
+            actual_name = manifest.get("name", tool_name)
+        except Exception:
+            actual_name = tool_name
+            manifest = {}
+
+        # 3. Guard: refuse to delete trusted (curated system) tools.
+        if registry._is_tool_trusted(actual_name):
+            return jsonify({"error": f"Tool '{actual_name}' is a trusted system tool and cannot be deleted"}), 400
+
+        # 4. Guard: refuse to delete a tool that is currently building.
+        build_statuses = registry.get_all_build_statuses()
+        if build_statuses.get(actual_name, {}).get("status") == "building":
+            return jsonify({"error": f"Tool '{actual_name}' is currently building and cannot be deleted"}), 409
+
+        # 5. Deregister from the in-memory tool registry.
+        registry.unregister_tool(actual_name)
+
+        # 6. Purge all config rows for the tool from the primary config table.
+        db = get_shared_db_service()
+        ToolConfigService(db).delete_tool_config(actual_name)
+
+        # 7. Clean up satellite DB tables using explicit parameterized statements.
+        with db.connection() as conn:
+            conn.execute(
+                "DELETE FROM tool_capability_profiles WHERE tool_name = ?",
+                (actual_name,),
+            )
+            conn.execute(
+                "DELETE FROM tool_performance_metrics WHERE tool_name = ?",
+                (actual_name,),
+            )
+            conn.execute(
+                "DELETE FROM user_tool_preferences WHERE tool_name = ?",
+                (actual_name,),
+            )
+
+        # 8. Best-effort Docker image removal (sandboxed tools only).
+        version = manifest.get("version", "latest")
+        image_tag = f"chalie-tool-{actual_name}:{version}"
+        try:
+            from services.tool_container_service import ToolContainerService
+            ToolContainerService().remove_image(image_tag)
+        except Exception as docker_err:
+            logger.debug(f"[TOOLS API] Docker image cleanup skipped for '{actual_name}': {docker_err}")
+
+        # 9. Remove the tool directory from disk.
+        shutil.rmtree(tool_path)
+
+        logger.info(f"[TOOLS API] Deleted tool: {actual_name} (dir={tool_name})")
+        return jsonify({"ok": True, "deleted": actual_name}), 200
+
+    except Exception as e:
+        logger.error(f"[TOOLS API] Delete error for '{tool_name}': {e}", exc_info=True)
+        return jsonify({"error": f"Failed to delete tool: {str(e)[:200]}"}), 500
+
+
 @tools_bp.route("/tools", methods=["GET"])
 @require_session
 def list_tools():
