@@ -637,7 +637,7 @@ _JOB_RECOMMENDED_TIER = {
     'cognitive-drift': 'pro', 'episodic-memory': 'pro',
     'frontal-cortex-clarify': 'pro', 'frontal-cortex-proactive': 'pro',
     'mode-reflection': 'pro', 'semantic-memory': 'pro',
-    'cognitive-triage': 'lite', 'experience-assimilation': 'lite',
+    'cognitive-triage': 'lite', 'failure-analysis': 'lite', 'experience-assimilation': 'lite',
     'fact-store': 'lite', 'autonomous-nurture': 'lite',
     'autonomous-ambient-tool': 'lite', 'autonomous-suggest': 'lite',
     'frontal-cortex-reflexive': 'lite', 'frontal-cortex-scheduled-tool': 'lite',
