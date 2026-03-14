@@ -482,3 +482,52 @@ class TestTraitExtractionEnqueue:
         mock_enqueue.assert_called_once()
         assert isinstance(result, str)
         assert len(result) > 0
+
+    def test_dedup_path_enqueues_trait_extraction(self):
+        """
+        When ``_check_active_tool_work()`` returns a truthy dedup response,
+        the dedup early-return path must still call ``enqueue_trait_extraction``
+        exactly once with the correct arguments so that personal context
+        embedded in the user message (e.g. occupation, name) is never silently
+        discarded when the message arrives while active tool work is already in
+        progress on the same topic.
+
+        The return value must contain the string ``'DEDUP'`` to confirm that
+        the dedup code path was actually taken rather than the normal Phase D
+        path.
+
+        Args:
+            None — all dependencies are provided via mock patches.
+
+        Asserts:
+            - ``enqueue_trait_extraction`` is called exactly once.
+            - The ``prompt_message`` kwarg equals ``text[:1000]``.
+            - The ``thread_id`` kwarg equals ``'thread-123'`` (from the mock
+              thread service configured in ``_make_pipeline_patches``).
+            - The ``metadata['source']`` kwarg starts with ``'chat:'``.
+            - The return value of ``digest_worker()`` contains ``'DEDUP'``.
+        """
+        text = "I'm a software engineer, what's the status of that search?"
+
+        with _make_pipeline_patches() as mock_enqueue:
+            # Override the _check_active_tool_work patch from _make_pipeline_patches
+            # to simulate an active-tool-work hit (dedup path).
+            # Also patch get_orchestrator so the route_path() call in the dedup
+            # block does not raise due to missing real infrastructure.
+            with patch(f'{MODULE}._check_active_tool_work',
+                       return_value='Still working on your previous request.'), \
+                 patch(f'{MODULE}.get_orchestrator', return_value=MagicMock()):
+                from workers.digest_worker import digest_worker
+                result = digest_worker(text, {'source': 'web'})
+
+        # Confirm the dedup code path was taken (not the normal Phase D path)
+        assert 'DEDUP' in result
+
+        # enqueue_trait_extraction must be called exactly once on the dedup path …
+        mock_enqueue.assert_called_once()
+
+        # … with the expected keyword arguments
+        _, kwargs = mock_enqueue.call_args
+        assert kwargs['prompt_message'] == text[:1000]
+        assert kwargs['thread_id'] == 'thread-123'
+        assert kwargs['metadata']['source'].startswith('chat:')
