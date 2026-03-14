@@ -1,0 +1,6 @@
+{
+  "temperature": 0.4,
+  "format": "text",
+  "timeout": 30,
+  "keep_alive": "5m"
+}

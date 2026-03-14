@@ -369,6 +369,8 @@ def main():
                   "services.temporal_pattern_service", "temporal_pattern_worker")
     _try_register(manager, "tool-update-checker",
                   "services.tool_update_service", "tool_update_worker")
+    _try_register(manager, "app-update-checker",
+                  "workers.app_update_worker", "app_update_worker")
 
     # Auto-install any missing default tools (synchronous, blocks until complete)
     _install_default_tools()

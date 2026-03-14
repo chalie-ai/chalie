@@ -302,7 +302,7 @@ class AmbientToolAction(AutonomousAction):
                 from services.llm_service import create_llm_service
 
                 try:
-                    config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
+                    config = ConfigService.resolve_agent_config("autonomous-ambient-tool")
                 except Exception:
                     config = ConfigService.resolve_agent_config("frontal-cortex")
 

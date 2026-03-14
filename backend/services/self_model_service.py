@@ -90,12 +90,25 @@ class SelfModelService:
         return len(snapshot.get("noteworthy", [])) > 0
 
     def get_memory_richness(self) -> float:
-        """0.0 (empty system) to 1.0 (rich memory), from cached snapshot.
+        """0.0 (no activity) to 1.0 (rich memory), from cached snapshot.
 
-        Composite score from episode count, concept count, trait count,
-        and epistemic warmth. Workers use this to self-regulate: skip
-        expensive cycles when memory is too thin to produce useful results.
+        Logarithmic composite — models cognitive development where early
+        experiences carry disproportionate weight. A toddler's first trip
+        to the park is intensely rich; by adulthood it barely registers.
+
+        Early on, even 1-2 episodes push richness well above zero because
+        they represent 100% of accumulated experience. As memories grow,
+        each additional one contributes less (diminishing returns). Hard
+        cap at 1.0 ensures stabilisation once the system has a solid
+        foundation.
+
+        Workers use this to self-regulate: skip expensive cycles when
+        memory is too thin to produce useful results. The logarithmic
+        curve ensures fresh installations are never starved — the gate
+        only blocks when there is genuinely zero activity.
         """
+        import math
+
         snapshot = self.get_snapshot()
 
         # Extract counts from operational.memory_pressure
@@ -107,11 +120,19 @@ class SelfModelService:
         # Epistemic warmth (current conversation context)
         context_warmth = snapshot.get("epistemic", {}).get("context_warmth", 0.0)
 
-        # Weighted composite — saturate at reasonable ceilings
+        # Logarithmic scaling — early items contribute disproportionately,
+        # diminishing returns as counts grow, hard cap at 1.0.
+        # log(1+1)/log(1+50) ≈ 0.18, log(1+5)/log(1+50) ≈ 0.46,
+        # log(1+50)/log(1+50) = 1.0
+        def _log_saturate(count: int, ceiling: int) -> float:
+            if count <= 0:
+                return 0.0
+            return min(1.0, math.log(1 + count) / math.log(1 + ceiling))
+
         score = (
-            0.35 * min(1.0, episode_count / 50)
-            + 0.25 * min(1.0, concept_count / 30)
-            + 0.20 * min(1.0, trait_count / 10)
+            0.35 * _log_saturate(episode_count, 50)
+            + 0.25 * _log_saturate(concept_count, 30)
+            + 0.20 * _log_saturate(trait_count, 10)
             + 0.20 * context_warmth
         )
         return round(score, 3)

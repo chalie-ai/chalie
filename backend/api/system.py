@@ -474,8 +474,8 @@ def observability_traits():
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT trait_key, trait_value, confidence, category, source, "
-                "reinforcement_count, is_literal, updated_at "
+                "SELECT trait_key, trait_value, confidence, category, "
+                "reinforcement_count, updated_at "
                 "FROM user_traits "
                 "ORDER BY category, confidence DESC"
             )
@@ -485,14 +485,12 @@ def observability_traits():
                 cat = row[3] or 'general'
                 if cat not in categories:
                     categories[cat] = []
-                updated = row[7]
+                updated = row[5]
                 categories[cat].append({
                     'key': row[0],
                     'value': row[1],
                     'confidence': round(float(row[2] or 0), 3),
-                    'source': row[4],
-                    'reinforcement_count': row[5] or 0,
-                    'is_literal': bool(row[6]),
+                    'reinforcement_count': row[4] or 0,
                     'updated_at': str(updated) if updated and not isinstance(updated, str) else updated,
                 })
 
@@ -511,16 +509,11 @@ def observability_delete_trait(trait_key):
     """Delete a specific user trait by key."""
     try:
         from services.database_service import get_shared_db_service
+        from services.user_trait_service import UserTraitService
 
         db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_traits WHERE trait_key = ?",
-                (trait_key,)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
+        svc = UserTraitService(db)
+        deleted = svc.delete_trait(trait_key)
 
         if deleted:
             return jsonify({'ok': True, 'deleted': trait_key}), 200
@@ -641,6 +634,46 @@ def activity_feed():
     except Exception as e:
         logger.error(f"[REST API] activity feed error: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve activity feed"}), 500
+
+
+# ──────────────────────────────────────────────
+# In-place update endpoints
+# ──────────────────────────────────────────────
+
+@system_bp.route('/system/update/check', methods=['GET'])
+@require_session
+def update_check():
+    """Check GitHub for a newer Chalie release."""
+    try:
+        from services.app_update_service import AppUpdateService
+        info = AppUpdateService().check_for_update()
+        return jsonify(info), 200
+    except Exception as e:
+        logger.error(f"[REST API] update/check error: {e}")
+        return jsonify({"error": "Failed to check for updates"}), 500
+
+
+@system_bp.route('/system/update/apply', methods=['POST'])
+@require_session
+def update_apply():
+    """Apply an in-place update (installed mode only)."""
+    try:
+        from services.app_update_service import AppUpdateService
+        data = request.get_json(silent=True) or {}
+        tag = data.get('tag')
+        if not tag:
+            return jsonify({"ok": False, "message": "Missing 'tag' parameter"}), 400
+
+        svc = AppUpdateService()
+        result = svc.apply_update(tag)
+
+        if result.get('ok'):
+            svc.request_restart()
+
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"[REST API] update/apply error: {e}")
+        return jsonify({"ok": False, "message": f"Update failed: {e}"}), 500
 
 
 # ──────────────────────────────────────────────

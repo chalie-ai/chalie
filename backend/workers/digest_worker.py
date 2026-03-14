@@ -166,19 +166,19 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 import json
                 from services.user_trait_service import UserTraitService
                 from services.database_service import get_shared_db_service
-                from services.llm_service import LLMService
+                from services.provider_cache_service import ProviderCacheService
 
-                llm = LLMService()
+                provider_config = ProviderCacheService.resolve_for_job('trait-extraction')
+                if not provider_config:
+                    return
+
                 prompt_text = _load_trait_prompt(prompt_message)
                 if not prompt_text:
                     return
 
-                result = llm.generate(
-                    prompt_text,
-                    job='trait-extraction',
-                    temperature=0.3,
-                    timeout=30,
-                )
+                llm = create_llm_service(provider_config)
+                llm_resp = llm.send_message(prompt_text, "Return only the JSON extraction.")
+                result = llm_resp.text if llm_resp else None
                 if not result:
                     return
 

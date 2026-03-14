@@ -85,7 +85,7 @@
     "category": "research",
     "trigger": "on_demand",
     "trust": "trusted",
-    "installs_by_default": true
+    "installs_by_default": false
   },
   {
     "name": "youtube",
