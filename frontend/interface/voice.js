@@ -165,6 +165,7 @@ export class VoiceIO {
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      document.body.appendChild(audio);
 
       this._currentAudio = audio;
       this._els.audioPlayer.classList.remove('hidden');
@@ -179,13 +180,17 @@ export class VoiceIO {
       audio.addEventListener('ended', () => {
         this._updatePlayPauseIcon(true);
         this._speaking = false;
+        document.dispatchEvent(new CustomEvent('chalie:speak:done'));
       });
 
-      audio.play();
+      audio.play().catch(err => {
+        this._speaking = false;
+        document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
+      });
       this._updatePlayPauseIcon(false);
     } catch (err) {
-      console.error('TTS error:', err);
       this._speaking = false;
+      document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
     }
   }
 
@@ -223,6 +228,9 @@ export class VoiceIO {
       this._currentAudio.pause();
       if (this._currentAudio.src) {
         URL.revokeObjectURL(this._currentAudio.src);
+      }
+      if (this._currentAudio.parentNode) {
+        this._currentAudio.parentNode.removeChild(this._currentAudio);
       }
       this._currentAudio = null;
     }
