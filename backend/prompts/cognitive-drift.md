@@ -13,6 +13,9 @@ and past experiences. Your job is to synthesize a brief, natural internal though
 ## Related Experience
 {{grounding_episode}}
 
+## Who You're Thinking About
+{{user_context}}
+
 ## Current Rhythm
 {{temporal_rhythm}}
 
