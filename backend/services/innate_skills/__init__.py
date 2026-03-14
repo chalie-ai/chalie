@@ -100,7 +100,9 @@ def register_innate_skills(dispatcher) -> None:
             # contains type for dispatcher routing, tools don't need it
             dispatcher.handlers[tool_name] = (
                 lambda topic, action, tn=tool_name: registry.invoke(
-                    tn, topic, {k: v for k, v in action.items() if k != 'type'}
+                    tn, topic,
+                    {k: v for k, v in action.items() if k not in ('type', 'exchange_id')},
+                    exchange_id=action.get('exchange_id', ''),
                 )
             )
     except Exception as e:

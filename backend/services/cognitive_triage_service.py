@@ -10,7 +10,7 @@ The triage LLM reasons about the prompt with context and tool summaries,
 returning a structured decision. The self-eval applies deterministic
 guardrails to catch obvious errors.
 
-Timeout fallback: if LLM exceeds 500ms, falls back to simple heuristics.
+Timeout fallback: if LLM fails, falls back to ONNX classification.
 """
 
 import re
@@ -197,14 +197,14 @@ class CognitiveTriageService:
     def _cognitive_triage(self, text: str, context: TriageContext) -> TriageResult:
         """Call the LLM with the cognitive-triage prompt and parse the response.
 
-        Falls back to heuristics if the LLM times out or returns invalid JSON.
+        Falls back to ONNX classification if the LLM times out or returns invalid JSON.
 
         Args:
             text: The raw user message text.
             context: TriageContext carrying memory signals and tool summaries.
 
         Returns:
-            TriageResult parsed from the LLM response, or a heuristic fallback.
+            TriageResult parsed from the LLM response, or an ONNX fallback.
         """
         import json
 
@@ -285,108 +285,58 @@ class CognitiveTriageService:
             )
 
         except Exception as e:
-            logger.warning(f"{LOG_PREFIX} LLM triage failed ({type(e).__name__}: {e}), using heuristic fallback")
-            return self._heuristic_fallback(text, context)
+            logger.warning(f"{LOG_PREFIX} LLM triage failed ({type(e).__name__}: {e}), using ONNX fallback")
+            return self._onnx_fallback(text, context)
 
-    def _heuristic_fallback(self, text: str, context: TriageContext) -> TriageResult:
-        """Build a deterministic TriageResult when the LLM times out or fails.
+    def _onnx_fallback(self, text: str, context: TriageContext) -> TriageResult:
+        """Build a TriageResult from ONNX mode-tiebreaker when the LLM triage fails.
 
-        Uses keyword detection for innate skill patterns and command/real-time signals.
+        Only determines the mode. Skill selection is left to _apply_onnx_skills()
+        which runs immediately after in the triage() pipeline — no double classification.
+        Falls back to RESPOND if ONNX is unavailable.
 
         Args:
             text: The raw user message text.
             context: TriageContext carrying tool summaries and conversation state.
 
         Returns:
-            TriageResult with fast_filtered=True derived from keyword heuristics.
+            TriageResult with ONNX-predicted mode, skills populated by downstream step.
         """
-        lower = text.lower()
+        mode = 'RESPOND'
+        reasoning = 'onnx_fallback'
 
-        # Innate skill detection — these never need external tools
-        _innate_skill = self._detect_innate_skill(lower)
-        if _innate_skill:
-            return TriageResult(
-                branch='act',
-                mode='ACT',
-                tools=[],
-                skills=list(_PRIMITIVES) + [_innate_skill],
-                confidence_internal=0.3,
-                confidence_tool_need=0.8,
-                freshness_risk=0.2,
-                decision_entropy=0.0,
-                reasoning=f'heuristic_fallback_innate_{_innate_skill}',
-                triage_time_ms=0.0,
-                fast_filtered=True,
-                self_eval_override=False,
-                self_eval_reason='',
-            )
+        try:
+            from services.onnx_inference_service import get_onnx_inference_service
+            svc = get_onnx_inference_service()
 
-        looks_like_command = any(
-            w in lower for w in ['search', 'find', 'check', 'look up', 'look it up', 'get me', 'fetch',
-                                  'just look', 'pull up', 'google', 'browse', 'open', 'visit',
-                                  'go to', 'read this', 'check this']
-        ) or _contains_url(lower)
-        # Factual real-time signals: questions about events, results, current status, news
-        looks_like_realtime = any(
-            w in lower for w in ['who won', 'who is', 'who are', 'what happened', 'what is the current',
-                                  'what are the latest', 'latest', 'current', 'today', 'tonight',
-                                  'this week', 'this year', 'results', 'score', 'winner', 'winners',
-                                  'news', 'update', 'live', 'now', 'recently']
-        )
+            if svc.is_available("mode-tiebreaker"):
+                label, confidence = svc.predict("mode-tiebreaker", text)
+                if label is not None:
+                    mode = label.upper()
+                    if mode not in ('RESPOND', 'ACT', 'CLARIFY', 'IGNORE'):
+                        mode = 'RESPOND'
+                    reasoning = f'onnx_fallback_mode={mode}({confidence:.2f})'
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} ONNX fallback failed: {e}")
 
-        if (looks_like_command or looks_like_realtime) and context.tool_summaries:
-            mode = 'ACT'
-            branch = 'act'
-            freshness = 0.8
-        else:
-            mode = 'RESPOND'
-            branch = 'respond'
-            freshness = 0.2
+        branch = self._mode_to_branch(mode)
+        skills = list(_PRIMITIVES) if mode == 'ACT' else []
 
         return TriageResult(
             branch=branch,
             mode=mode,
             tools=[],
-            skills=list(_PRIMITIVES) if branch == 'act' else [],
-            confidence_internal=0.3 if branch == 'act' else 0.6,
-            confidence_tool_need=0.8 if branch == 'act' else 0.2,
-            freshness_risk=freshness,
+            skills=skills,
+            confidence_internal=0.5,
+            confidence_tool_need=0.5 if mode == 'ACT' else 0.2,
+            freshness_risk=0.3,
             decision_entropy=0.0,
-            reasoning='heuristic_fallback',
+            reasoning=reasoning,
             triage_time_ms=0.0,
             fast_filtered=True,
             self_eval_override=False,
             self_eval_reason='',
         )
-
-    @staticmethod
-    def _detect_innate_skill(lower: str) -> Optional[str]:
-        """Detect innate skill intent from message keywords. Returns skill name or None."""
-        # Schedule / reminder patterns
-        if any(w in lower for w in ['remind me', 'set a reminder', 'set reminder',
-                                     'schedule a', 'schedule this', 'alarm for',
-                                     'every morning', 'every evening', 'every day at',
-                                     'every week', 'notify me', 'alert me']):
-            return 'schedule'
-        # List patterns
-        if any(w in lower for w in ['add to my list', 'add to the list', 'remove from my list',
-                                     'shopping list', 'to-do list', 'todo list',
-                                     'check off', 'cross off']):
-            return 'list'
-        # Focus patterns
-        if any(w in lower for w in ['start a focus', 'focus session', 'deep work',
-                                     'am i focused', 'end focus']):
-            return 'focus'
-        # Persistent task patterns
-        if any(w in lower for w in ['research this over', 'background task',
-                                     'work on this over', 'task status']):
-            return 'persistent_task'
-        # Document patterns
-        if any(w in lower for w in ['my document', 'my warranty', 'uploaded file',
-                                     'in the document', 'in my file', 'search my documents',
-                                     'document library', 'what does my', 'look up my']):
-            return 'document'
-        return None
 
     def _mode_to_branch(self, mode: str) -> str:
         """Map an LLM mode string to the corresponding dispatch branch name.
@@ -492,7 +442,7 @@ class CognitiveTriageService:
         a rule fires.
 
         Args:
-            result: TriageResult from the LLM (or heuristic fallback).
+            result: TriageResult from the LLM (or ONNX fallback).
             text: The raw user message text.
             ctx: TriageContext for tool availability and conversation state.
 
@@ -518,11 +468,23 @@ class CognitiveTriageService:
             else:
                 # No external tools — but innate skills don't need them.
                 # Triage LLM sometimes omits skills[] when tool_summaries is empty.
-                # Recover by running the keyword heuristic directly on the text.
-                _recovered = self._detect_innate_skill(text.lower())
-                if _recovered and _recovered in _CONTEXTUAL_SKILLS:
-                    if _recovered not in result.skills:
-                        result.skills.append(_recovered)
+                # Recover via ONNX skill-selector if available.
+                _recovered_skill = None
+                try:
+                    from services.onnx_inference_service import get_onnx_inference_service
+                    _svc = get_onnx_inference_service()
+                    if _svc.is_available("skill-selector"):
+                        _onnx_preds = _svc.predict_multi_label("skill-selector", f"{text}\nSkills:")
+                        if _onnx_preds:
+                            for _s, _ in _onnx_preds:
+                                if _s in _CONTEXTUAL_SKILLS:
+                                    _recovered_skill = _s
+                                    break
+                except Exception:
+                    pass
+                if _recovered_skill:
+                    if _recovered_skill not in result.skills:
+                        result.skills.append(_recovered_skill)
                     for _p in _PRIMITIVES:
                         if _p not in result.skills:
                             result.skills.insert(0, _p)

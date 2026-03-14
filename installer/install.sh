@@ -112,17 +112,39 @@ _install_python_macos() {
   fi
 }
 
+_needs_sudo() {
+  # Running as root → no sudo needed; otherwise require sudo to be available
+  if [[ "$(id -u)" -eq 0 ]]; then
+    return 1
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    _error "This step requires root privileges but 'sudo' is not available."
+    _error "Either run the installer as root or install sudo first."
+    exit 1
+  fi
+  return 0
+}
+
+_run_privileged() {
+  # Run a command with sudo only when not already root
+  if _needs_sudo; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
 _install_python_linux() {
   local distro
   distro="$(_detect_linux_distro)"
   _info "Installing Python 3 via package manager…"
   case "$distro" in
     *debian*|*ubuntu*)
-      sudo apt-get update -qq
-      sudo apt-get install -y python3 python3-pip python3-venv
+      _run_privileged apt-get update -qq
+      _run_privileged apt-get install -y python3 python3-pip python3-venv
       ;;
     *fedora*|*rhel*|*centos*)
-      sudo dnf install -y python3 python3-pip
+      _run_privileged dnf install -y python3 python3-pip
       ;;
     *)
       _error "Cannot auto-install Python on distro: $distro"
@@ -192,11 +214,11 @@ _check_docker() {
     printf "\n"
     if [[ "${_docker_reply,,}" == "y" ]]; then
       _info "Installing Docker via get.docker.com…"
-      curl -fsSL https://get.docker.com | sudo sh
+      curl -fsSL https://get.docker.com | _run_privileged sh
       if id -nG "$USER" | grep -qw docker; then
         _ok "Already in docker group"
       else
-        sudo usermod -aG docker "$USER"
+        _run_privileged usermod -aG docker "$USER"
         _warn "Added $USER to docker group. Log out and back in for group membership to take effect."
       fi
       _ok "Docker installed"
@@ -234,10 +256,10 @@ _install_voice_deps() {
     _info "Installing voice system dependencies…"
     case "$distro" in
       *debian*|*ubuntu*)
-        sudo apt-get install -y libsndfile1 espeak-ng ffmpeg 2>/dev/null || true
+        _run_privileged apt-get install -y libsndfile1 espeak-ng ffmpeg 2>/dev/null || true
         ;;
       *fedora*|*rhel*|*centos*)
-        sudo dnf install -y libsndfile espeak-ng ffmpeg 2>/dev/null || true
+        _run_privileged dnf install -y libsndfile espeak-ng ffmpeg 2>/dev/null || true
         ;;
       *)
         _warn "Cannot auto-install voice deps on distro: $distro"
@@ -301,11 +323,25 @@ _download_release() {
   local tarball="$tmp_dir/chalie.tar.gz"
 
   _info "Downloading source archive…"
-  curl -fsSL --progress-bar "$tarball_url" -o "$tarball"
+  local http_code
+  http_code="$(curl -fSL -w '%{http_code}' --progress-bar "$tarball_url" -o "$tarball" 2>/dev/null)" || true
+
+  if [[ ! -f "$tarball" ]] || [[ "$(stat -c%s "$tarball" 2>/dev/null || stat -f%z "$tarball" 2>/dev/null)" -lt 1024 ]]; then
+    _error "Download failed (HTTP $http_code). The release archive could not be fetched."
+    _error "URL: $tarball_url"
+    _error "This usually means the release tag '$tag' does not have a matching archive."
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
 
   _info "Extracting to $CHALIE_HOME/app/…"
   mkdir -p "$CHALIE_HOME/app"
-  tar -xzf "$tarball" --strip-components=1 -C "$CHALIE_HOME/app"
+  if ! tar -xzf "$tarball" --strip-components=1 -C "$CHALIE_HOME/app"; then
+    _error "Extraction failed — downloaded file may be corrupt."
+    _error "URL: $tarball_url"
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
 
   rm -rf "$tmp_dir"
   _ok "Source extracted ($tag)"

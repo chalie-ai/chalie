@@ -87,6 +87,19 @@ def readiness_check():
         logger.debug(f'[READY] embedding model not ready: {e}')
         components['embeddings'] = {'status': 'error', 'message': str(e)}
 
+    # ONNX models — preloaded in background thread on boot. Not ready until
+    # ensure_models() + warmup inference have completed.
+    try:
+        from services.onnx_inference_service import get_onnx_inference_service
+        onnx_svc = get_onnx_inference_service()
+        if onnx_svc.ready:
+            components['onnx'] = {'status': 'ok'}
+        else:
+            components['onnx'] = {'status': 'loading'}
+    except Exception as e:
+        logger.debug(f'[READY] ONNX not ready: {e}')
+        components['onnx'] = {'status': 'error', 'message': str(e)}
+
     ready = all(c.get('status') == 'ok' for c in components.values())
     return jsonify({'ready': ready, **components}), (200 if ready else 503)
 
@@ -217,39 +230,77 @@ def observability_routing():
 @system_bp.route('/system/observability/memory', methods=['GET'])
 @require_session
 def observability_memory():
-    """Memory layer counts and health indicators."""
+    """Memory layer counts and health indicators.
+
+    Returns flat fields consumed by the brain admin frontend:
+      episodes, concepts, traits, facts,
+      avg_episode_activation, avg_trait_strength,
+      working_memory, queues
+    """
     try:
+        from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
-        from services.self_model_service import SelfModelService
 
-        # SelfModelService holds a cached (sub-ms) snapshot with the canonical
-        # nested structure: operational.memory_pressure.{episode_count, ...}
-        # Use it directly to avoid redundant DB queries and ensure the response
-        # shape matches what consumers (e.g. get_memory_richness()) expect.
-        snapshot = SelfModelService().get_snapshot()
+        db = get_shared_db_service()
 
-        result = {
-            'generated_at': _now_iso(),
-            'operational': snapshot.get('operational', {}),
-            'epistemic': snapshot.get('epistemic', {}),
-            'noteworthy': snapshot.get('noteworthy', []),
-            'working_memory': 0,
-            'gists': 0,
-            'facts': 0,
-            'queues': {},
-        }
+        # ── Long-term counts from SQLite ──
+        episode_row = db.fetch_all(
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(activation_score), 0) AS avg_act "
+            "FROM episodes WHERE deleted_at IS NULL"
+        )
+        episodes = episode_row[0]['cnt'] if episode_row else 0
+        avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
 
-        # MemoryStore counts (not in the snapshot — add alongside)
+        concept_row = db.fetch_all(
+            "SELECT COUNT(*) AS cnt FROM semantic_concepts"
+        )
+        concepts = concept_row[0]['cnt'] if concept_row else 0
+
+        trait_row = db.fetch_all(
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(confidence), 0) AS avg_conf "
+            "FROM user_traits"
+        )
+        traits = trait_row[0]['cnt'] if trait_row else 0
+        avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
+
+        # ── Short-term counts from MemoryStore ──
+        working_memory_turns = 0
+        facts = 0
+        queues = {}
+
         try:
             store = MemoryClientService.create_connection()
-            result['working_memory'] = len(store.keys("working_memory:*"))
+
+            # Count total buffered turns across all active working-memory keys.
+            # Each key is a list of JSON turn entries; sum their lengths.
+            wm_keys = store.keys("working_memory:*")
+            for key in wm_keys:
+                working_memory_turns += store.llen(key)
+
+            # "Facts" = short-term atomic assertions stored in MemoryStore
+            # under the "facts:*" namespace (if any), otherwise fall back to
+            # user_traits count which already covers persistent facts.
+            fact_keys = store.keys("facts:*")
+            facts = len(fact_keys) if fact_keys else traits
 
             for q in ["prompt-queue", "output-queue"]:
                 depth = store.llen(q)
                 if depth:
-                    result['queues'][q] = depth
+                    queues[q] = depth
         except Exception as e:
             logger.warning(f"[OBS] memory store error: {e}")
+
+        result = {
+            'generated_at': _now_iso(),
+            'episodes': episodes,
+            'concepts': concepts,
+            'traits': traits,
+            'facts': facts,
+            'avg_episode_activation': round(avg_episode_activation, 4),
+            'avg_trait_strength': round(avg_trait_strength, 4),
+            'working_memory': working_memory_turns,
+            'queues': queues,
+        }
 
         return jsonify(result), 200
     except Exception as e:
@@ -305,7 +356,7 @@ def observability_tools():
                 'updated_at': r.get('updated_at'),
             }
             if r['tool_name'] in perf_by_name:
-                entry['performance'] = perf_by_name[r['tool_name']]
+                entry.update(perf_by_name[r['tool_name']])
             tools.append(entry)
 
         return jsonify({

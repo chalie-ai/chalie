@@ -9,15 +9,11 @@ semantic_concepts tables. No mocks of the DB layer.
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from pathlib import Path
-
 import pytest
 
 from services.uncertainty_service import UncertaintyService
 from services.database_service import DatabaseService
 
-
-SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
 
 pytestmark = pytest.mark.unit
 
@@ -27,9 +23,10 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def db_service(tmp_path):
     """DatabaseService backed by a real SQLite file with the full schema."""
+    from tests.test_helpers import load_schema_sql
     db_path = str(tmp_path / "test_uncertainty.db")
     conn = sqlite3.connect(db_path)
-    conn.executescript(SCHEMA_PATH.read_text())
+    conn.executescript(load_schema_sql())
     conn.commit()
     conn.close()
 

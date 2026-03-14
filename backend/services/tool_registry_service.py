@@ -852,7 +852,7 @@ class ToolRegistryService:
         from services.tool_output_utils import build_tool_telemetry
         return build_tool_telemetry(raw_telemetry)
 
-    def invoke(self, tool_name: str, topic: str, params: dict) -> str:
+    def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
         """
         Invoke a tool by name via Docker container.
 
@@ -952,18 +952,20 @@ class ToolRegistryService:
             try:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()
+                from services import act_memory_keys
                 # Per-invocation cache entry
                 store.set(
-                    f"tool_card_cache:{topic}:{invocation_id}",
+                    act_memory_keys.tool_card_cache(topic, invocation_id, exchange_id),
                     json.dumps({"tool": tool_name, "data": result, "invocation_id": invocation_id}),
                     ex=300,
                 )
                 # Legacy flat list — kept for backwards compatibility with _enqueue_tool_cards
+                _raw_key = act_memory_keys.tool_raw_cache(topic, exchange_id)
                 store.rpush(
-                    f"tool_raw_cache:{topic}",
+                    _raw_key,
                     json.dumps({"tool": tool_name, "data": result})
                 )
-                store.expire(f"tool_raw_cache:{topic}", 300)
+                store.expire(_raw_key, 300)
             except Exception as e:
                 logger.debug(f"[TOOL REGISTRY] Raw result cache failed for {tool_name}: {e}")
 
@@ -1029,8 +1031,9 @@ class ToolRegistryService:
                     "source_count": meta.get("source_count", result.get("count", 0)),
                     "unique_domains": meta.get("unique_domains", 0),
                 }
-                _r.rpush(f"deferred_cards:{topic}", json.dumps(deferred_info))
-                _r.expire(f"deferred_cards:{topic}", 300)
+                _deferred_key = act_memory_keys.deferred_cards(topic, exchange_id)
+                _r.rpush(_deferred_key, json.dumps(deferred_info))
+                _r.expire(_deferred_key, 300)
             except Exception as _de:
                 logger.debug(f"[TOOL REGISTRY] Deferred card metadata cache failed: {_de}")
             # Fall through to normal text output — no hint injection into result_text
