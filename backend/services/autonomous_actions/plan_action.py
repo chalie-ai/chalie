@@ -13,7 +13,12 @@ Gates:
   4. Actionability: thought contains action verbs
   5. No similar active persistent task (Jaccard > 0.6)
   6. Active task count < MAX_ACTIVE_TASKS (5)
-  7. 48h cooldown
+  7. 48h cooldown (adaptive: multiplied by backoff from cancellation learning)
+
+Outcome learning:
+  - Cancelled tasks increase backoff multiplier (1.5x per cancellation, cap 4.0)
+  - Completed tasks decrease backoff multiplier (0.8x, floor 1.0)
+  - Backoff decays linearly to 1.0 after 7 days of no cancellations
 """
 
 import logging
@@ -30,6 +35,17 @@ LOG_PREFIX = "[PLAN ACTION]"
 TOPIC_SIGNALS_KEY = "plan:topic_signals"
 COOLDOWN_KEY = "plan:proposal_cooldown"
 COOLDOWN_TTL = 172800  # 48 hours
+
+# Backoff learning keys
+BACKOFF_MULTIPLIER_KEY = "plan_action:backoff_multiplier"
+LAST_CANCELLATION_KEY = "plan_action:last_cancellation_at"
+
+# Backoff constants
+BACKOFF_INCREASE_FACTOR = 1.5
+BACKOFF_DECREASE_FACTOR = 0.8
+BACKOFF_MAX = 4.0
+BACKOFF_MIN = 1.0
+BACKOFF_DECAY_DAYS = 7
 
 # Defaults
 DEFAULT_MIN_ACTIVATION = 0.7
@@ -176,9 +192,71 @@ class PlanAction(AutonomousAction):
             logger.debug(f"{LOG_PREFIX} Active count gate error: {e}")
             return True
 
-    def _cooldown_gate(self) -> bool:
-        """Gate 7: 48h cooldown between plan proposals."""
-        return self.store.get(COOLDOWN_KEY) is None
+    def _cooldown_gate(self) -> Tuple[bool, float]:
+        """Gate 7: Adaptive cooldown between plan proposals.
+
+        Base cooldown is 48h, multiplied by the backoff multiplier learned
+        from cancellation/completion outcomes. Returns (passes, effective_cooldown_hours).
+        """
+        backoff = self._get_effective_backoff()
+        # The cooldown key is set with TTL = base cooldown seconds.
+        # We check if it exists AND if enough time has passed with backoff applied.
+        cooldown_val = self.store.get(COOLDOWN_KEY)
+        if cooldown_val is None:
+            return (True, self.cooldown_seconds * backoff / 3600)
+
+        # Cooldown key exists — check if backoff extends it beyond the TTL.
+        # The key was set with base TTL. If backoff > 1.0, the effective cooldown
+        # is longer than the TTL, so we check the timestamp stored in the value.
+        try:
+            set_at = float(cooldown_val)
+            elapsed = time.time() - set_at
+            effective_cooldown = self.cooldown_seconds * backoff
+            if elapsed >= effective_cooldown:
+                # Backoff-extended cooldown has passed
+                self.store.delete(COOLDOWN_KEY)
+                return (True, effective_cooldown / 3600)
+        except (ValueError, TypeError):
+            pass
+
+        effective_cooldown = self.cooldown_seconds * backoff
+        return (False, effective_cooldown / 3600)
+
+    def _get_effective_backoff(self) -> float:
+        """Get the current backoff multiplier, applying time-based decay.
+
+        The multiplier decays linearly from its stored value back to 1.0
+        over BACKOFF_DECAY_DAYS since the last cancellation.
+        """
+        raw = self.store.get(BACKOFF_MULTIPLIER_KEY)
+        if raw is None:
+            return BACKOFF_MIN
+
+        stored_backoff = float(raw)
+        if stored_backoff <= BACKOFF_MIN:
+            return BACKOFF_MIN
+
+        # Apply time-based decay
+        last_cancel_raw = self.store.get(LAST_CANCELLATION_KEY)
+        if last_cancel_raw is None:
+            return stored_backoff
+
+        try:
+            last_cancel_ts = float(last_cancel_raw)
+        except (ValueError, TypeError):
+            return stored_backoff
+
+        elapsed_days = (time.time() - last_cancel_ts) / 86400
+        if elapsed_days >= BACKOFF_DECAY_DAYS:
+            # Full decay — reset
+            self.store.delete(BACKOFF_MULTIPLIER_KEY)
+            self.store.delete(LAST_CANCELLATION_KEY)
+            return BACKOFF_MIN
+
+        # Linear decay: backoff approaches 1.0 over BACKOFF_DECAY_DAYS
+        decay_progress = elapsed_days / BACKOFF_DECAY_DAYS
+        effective = stored_backoff - (stored_backoff - BACKOFF_MIN) * decay_progress
+        return max(BACKOFF_MIN, effective)
 
     # -- Main interface --------------------------------------------------------
 
@@ -217,9 +295,13 @@ class PlanAction(AutonomousAction):
             self.last_gate_result = {'gate': 'active_count', 'reason': f"active tasks >= {self.max_active_tasks}"}
             return (0.0, False)
 
-        # Gate 7: Cooldown
-        if not self._cooldown_gate():
-            self.last_gate_result = {'gate': 'cooldown', 'reason': '48h cooldown active'}
+        # Gate 7: Cooldown (adaptive — base 48h * backoff multiplier)
+        cooldown_passes, effective_hours = self._cooldown_gate()
+        if not cooldown_passes:
+            self.last_gate_result = {
+                'gate': 'cooldown',
+                'reason': f'{effective_hours:.0f}h cooldown active (backoff={self._get_effective_backoff():.1f}x)',
+            }
             return (0.0, False)
 
         score = thought.activation_energy * 0.7
@@ -270,8 +352,8 @@ class PlanAction(AutonomousAction):
             task_service.transition(task_id, 'accepted')
             self._surface_auto_start(thought, plan)
 
-            # Set cooldown
-            self.store.setex(COOLDOWN_KEY, self.cooldown_seconds, '1')
+            # Set cooldown — store timestamp as value for backoff-extended checks
+            self.store.setex(COOLDOWN_KEY, self.cooldown_seconds, str(time.time()))
 
             # Log
             self._log_plan_event(thought, task_id, cost_class)
@@ -299,6 +381,105 @@ class PlanAction(AutonomousAction):
                 action_name='PLAN', success=False,
                 details={'reason': str(e)},
             )
+
+    # -- Outcome learning ------------------------------------------------------
+
+    def on_outcome(self, outcome: str, task_id: Optional[int] = None) -> None:
+        """Learn from task outcome by adjusting the backoff multiplier.
+
+        Args:
+            outcome: One of 'completed', 'cancelled', 'expired'.
+            task_id: Optional task ID for logging context.
+        """
+        if outcome == 'cancelled':
+            self._handle_cancellation(task_id)
+        elif outcome == 'completed':
+            self._handle_completion(task_id)
+        elif outcome == 'expired':
+            self._handle_expiry(task_id)
+        else:
+            logger.debug(f"{LOG_PREFIX} Unknown outcome: {outcome}")
+
+    def _handle_cancellation(self, task_id: Optional[int]) -> None:
+        """Increase backoff on cancellation and record negative procedural memory."""
+        # Update backoff multiplier
+        current = float(self.store.get(BACKOFF_MULTIPLIER_KEY) or BACKOFF_MIN)
+        new_backoff = min(current * BACKOFF_INCREASE_FACTOR, BACKOFF_MAX)
+        self.store.set(BACKOFF_MULTIPLIER_KEY, str(new_backoff))
+        self.store.set(LAST_CANCELLATION_KEY, str(time.time()))
+
+        logger.info(
+            f"{LOG_PREFIX} Cancellation backoff: {current:.1f}x -> {new_backoff:.1f}x"
+            f" (task {task_id})" if task_id else ""
+        )
+
+        # Record negative outcome in procedural memory
+        self._record_procedural_outcome(success=False, reward=-0.5, task_id=task_id)
+
+        # Log to interaction_log
+        self._log_outcome_event('plan_cancelled', task_id)
+
+    def _handle_completion(self, task_id: Optional[int]) -> None:
+        """Decrease backoff on completion and record positive procedural memory."""
+        current = float(self.store.get(BACKOFF_MULTIPLIER_KEY) or BACKOFF_MIN)
+        new_backoff = max(current * BACKOFF_DECREASE_FACTOR, BACKOFF_MIN)
+        if new_backoff < BACKOFF_MIN + 0.01:
+            new_backoff = BACKOFF_MIN
+        self.store.set(BACKOFF_MULTIPLIER_KEY, str(new_backoff))
+
+        logger.info(
+            f"{LOG_PREFIX} Completion backoff: {current:.1f}x -> {new_backoff:.1f}x"
+            f" (task {task_id})" if task_id else ""
+        )
+
+        # Record positive outcome in procedural memory
+        self._record_procedural_outcome(success=True, reward=0.5, task_id=task_id)
+
+        # Log to interaction_log
+        self._log_outcome_event('plan_completed', task_id)
+
+    def _handle_expiry(self, task_id: Optional[int]) -> None:
+        """Record neutral outcome for expired tasks."""
+        self._record_procedural_outcome(success=False, reward=0.0, task_id=task_id)
+        self._log_outcome_event('plan_expired', task_id)
+
+    def _record_procedural_outcome(self, success: bool, reward: float,
+                                   task_id: Optional[int] = None) -> None:
+        """Record outcome in procedural memory (non-fatal)."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.procedural_memory_service import ProceduralMemoryService
+
+            db = get_shared_db_service()
+            proc = ProceduralMemoryService(db)
+            proc.record_action_outcome(
+                action_name='PLAN',
+                success=success,
+                reward=reward,
+            )
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Procedural memory recording failed: {e}")
+
+    def _log_outcome_event(self, event_type: str, task_id: Optional[int]) -> None:
+        """Log outcome to interaction_log (non-fatal)."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+
+            db = get_shared_db_service()
+            log_service = InteractionLogService(db)
+            log_service.log_event(
+                event_type=event_type,
+                payload={
+                    'task_id': task_id,
+                    'backoff_multiplier': float(
+                        self.store.get(BACKOFF_MULTIPLIER_KEY) or BACKOFF_MIN
+                    ),
+                },
+                source='plan_action',
+            )
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Outcome event logging failed: {e}")
 
     # -- Helpers ---------------------------------------------------------------
 

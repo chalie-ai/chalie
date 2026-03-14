@@ -243,13 +243,21 @@ def _resume(topic: str, params: dict) -> str:
 
 
 def _cancel(topic: str, params: dict) -> str:
-    """Cancel a task."""
+    """Cancel a task. If system-originated, notifies PlanAction for backoff learning."""
     service = _get_service()
     task_id = _resolve_task_id(params)
     if not task_id:
         return "Could not identify which task to cancel."
 
+    # Check if system-originated before transitioning (priority 7 = PlanAction)
+    task = service.get_task(task_id)
+    is_system = task and task.get('priority') == 7
+
     ok, msg = service.transition(task_id, 'cancelled')
+
+    if ok and is_system:
+        _notify_plan_action_outcome('cancelled', task_id)
+
     return msg if ok else f"Cannot cancel: {msg}"
 
 
@@ -366,8 +374,13 @@ def _complete(topic: str, params: dict) -> str:
     result = params.get("result", params.get("text", "Task completed."))
     artifact = params.get("artifact")
 
+    is_system = task.get('priority') == 7
+
     service.complete_task(int(task_id), result, artifact)
     _surface_completion_from_skill(task, result)
+
+    if is_system:
+        _notify_plan_action_outcome('completed', int(task_id))
 
     return f"Task #{task_id} \"{task['goal'][:60]}\" marked as completed."
 
@@ -421,6 +434,20 @@ def _surface_completion_from_skill(task: dict, result: str):
         output.enqueue_proactive(task.get('thread_id'), message, source='persistent_task')
     except Exception as e:
         logger.debug(f"{LOG_PREFIX} Completion surfacing failed: {e}")
+
+
+def _notify_plan_action_outcome(outcome: str, task_id: int) -> None:
+    """Notify PlanAction of a task outcome for backoff learning.
+
+    Only called for system-originated tasks (priority 7 = PlanAction).
+    Non-fatal: swallows all exceptions.
+    """
+    try:
+        from services.autonomous_actions.plan_action import PlanAction
+        action = PlanAction()
+        action.on_outcome(outcome, task_id=task_id)
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} PlanAction outcome notification failed: {e}")
 
 
 def _resolve_task_id(params: dict) -> int | None:

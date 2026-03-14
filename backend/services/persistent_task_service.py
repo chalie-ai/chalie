@@ -325,6 +325,9 @@ class PersistentTaskService:
 
     def complete_task(self, task_id: int, result: str, artifact: Optional[Dict] = None) -> bool:
         """Mark a task as completed with final result."""
+        # Read task before update (for priority check)
+        task = self.get_task(task_id)
+
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -335,6 +338,16 @@ class PersistentTaskService:
             """, (result, json.dumps(artifact) if artifact else None, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id} completed")
+
+        # Notify PlanAction for system-originated tasks (priority 7)
+        if task and task.get('priority') == 7:
+            try:
+                from services.autonomous_actions.plan_action import PlanAction
+                action = PlanAction()
+                action.on_outcome('completed', task_id=task_id)
+            except Exception:
+                pass
+
         try:
             from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
             emit_reasoning_signal(ReasoningSignal(
