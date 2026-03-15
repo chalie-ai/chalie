@@ -132,20 +132,15 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 19
 
+        # Job list now comes from configs/cognitive_jobs.json
+        import json, os
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+        with open(config_path, 'r') as f:
+            expected_jobs = sorted(j['id'] for j in json.load(f)['jobs'])
+
+        assert mock_service.set_job_assignment.call_count == len(expected_jobs)
         assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
-        expected_jobs = sorted([
-            'autobiography', 'frontal-cortex', 'frontal-cortex-act',
-            'plan-decomposition', 'frontal-cortex-respond',
-            'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
-            'frontal-cortex-proactive',
-            'frontal-cortex-scheduled-tool', 'mode-reflection',
-            'semantic-memory', 'cognitive-triage', 'failure-analysis', 'experience-assimilation',
-            'trait-extraction',
-            'moment-enrichment', 'document-synthesis',
-            'document-classification',
-        ])
         assert assigned_jobs == expected_jobs
 
         # Each assignment should reference the newly created provider's id
