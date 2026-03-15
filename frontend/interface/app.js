@@ -813,8 +813,8 @@ class ChalieApp {
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
 
-    // Render user form with timestamp
-    this.renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp);
+    // Render user form with timestamp (pass imageIds so thumbnails are shown inline)
+    this.renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp, {}, pendingImageIds);
 
     // Create pending form and store reference for potential early resolution
     const pendingForm = this.renderer.createPendingForm();
