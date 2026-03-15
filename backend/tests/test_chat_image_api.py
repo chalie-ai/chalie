@@ -219,11 +219,11 @@ def test_status_returns_analyzing_after_bytes_expire(client, mock_store):
     still present with value 'analyzing' (B3 fix).
 
     Simulates the window where analysis is still in-flight but the 5-minute
-    bytes TTL has elapsed before the 2-minute progress TTL.
+    bytes TTL has elapsed before the 10-minute progress TTL.
     """
     image_id = 'b3test000b3test0'
     # Bytes key intentionally absent — simulates TTL expiry.
-    # Progress key still alive (within its 120 s window).
+    # Progress key still alive (within its 10 min window).
     mock_store.set(f'chat_image_progress:{image_id}', 'analyzing')
 
     with patch('api.chat_image._get_store', return_value=mock_store):
