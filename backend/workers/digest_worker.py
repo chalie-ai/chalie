@@ -2211,6 +2211,22 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _wm_text = f"{text}\n[Attached: {_visual_note}]" if text else f"[Attached: {_visual_note}]"
     working_memory.append_turn(thread_id, 'user', _wm_text)
 
+    # Situational intelligence — update conversation phase and situation model for this
+    # user message.  Both calls are non-blocking, fail-open, and write to MemoryStore
+    # only.  The updated state is ready when the frontal cortex generates its response.
+    try:
+        from services.conversation_phase_service import get_conversation_phase_service
+        _phase_svc = get_conversation_phase_service()
+        _phase_svc.update(thread_id, text, is_user=True, topic=context_topic)
+    except Exception:
+        logging.debug("[DIGEST] Phase update failed", exc_info=True)
+
+    try:
+        from services.situation_model_service import get_situation_model_service
+        get_situation_model_service().update_on_message(thread_id)
+    except Exception:
+        logging.debug("[DIGEST] Situation update failed", exc_info=True)
+
     # IIP: Immediate Identity Promotion — synchronous, before any LLM call
     # Detects explicit name statements and writes to MemoryStore + SQLite immediately.
     try:
@@ -2567,22 +2583,21 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             # Pre-filter skills via ONNX
             selected_skills, needs_external_tool = gate_service.prefilter_skills(gate_text)
 
-            # Ensure cognitive primitives for ACT
-            _PRIMITIVES = ['recall', 'memorize', 'introspect']
-            for p in _PRIMITIVES:
-                if p not in selected_skills:
-                    selected_skills.insert(0, p)
+            if selected_skills:
+                # ONNX model available — ensure cognitive primitives are present
+                _PRIMITIVES = ['recall', 'memorize', 'introspect']
+                for p in _PRIMITIVES:
+                    if p not in selected_skills:
+                        selected_skills.insert(0, p)
+            else:
+                # ONNX model unavailable — inject all skills so the LLM can
+                # pick what it needs (read, schedule, list, document, etc.)
+                selected_skills = None
+                needs_external_tool = True
 
-            # Get tool hints if external tools needed
-            selected_tools = []
-            if needs_external_tool:
-                try:
-                    from services.tool_profile_service import ToolProfileService
-                    from services.tool_performance_service import ToolPerformanceService
-                    # Don't pre-select specific tools — let ACT loop decide
-                    # Just signal that external tools are available
-                except Exception:
-                    pass
+            # When external tools may be needed, pass None so _get_available_tools
+            # injects the full tool registry instead of an empty list.
+            selected_tools = None if needs_external_tool else []
 
             # Active tool work dedup
             if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
@@ -2691,6 +2706,15 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Step 11a: Append assistant turn to working memory (keyed by thread_id)
     working_memory.append_turn(thread_id, 'assistant', response_data['response'])
+
+    # Update conversation phase with Chalie's response so momentum and direction
+    # reflect the full exchange, not just the user turn.
+    try:
+        from services.conversation_phase_service import get_conversation_phase_service
+        _phase_svc_resp = get_conversation_phase_service()
+        _phase_svc_resp.update(thread_id, response_data['response'], is_user=False, topic=topic)
+    except Exception:
+        pass
 
     # Step 11b: Log system response event
     if interaction_log:

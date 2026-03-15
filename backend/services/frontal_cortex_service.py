@@ -688,6 +688,20 @@ class FrontalCortexService:
         result = result.replace('{{chat_history}}', formatted_context)
         result = result.replace('{{world_state}}', world_state if _include('world_state') else '')
         result = result.replace('{{episodic_memory}}', episodic_context if _include('episodic_memory') else '')
+
+        # Situation directive — plain-language behavioral guidance derived from the
+        # situation model.  Returns None when the situation is unremarkable; the
+        # placeholder is then replaced with empty string so zero tokens are added.
+        situation_directive = ''
+        if '{{situation}}' in result:
+            try:
+                from services.situation_model_service import get_situation_model_service
+                _directive = get_situation_model_service().get_directive()
+                if _directive:
+                    situation_directive = f"## Situation\n{_directive}"
+            except Exception:
+                pass
+            result = result.replace('{{situation}}', situation_directive)
         result = result.replace('{{semantic_concepts}}', concepts_context)
         result = result.replace('{{act_history}}', act_history)
         result = result.replace('{{facts}}', facts_context if _include('facts') else '')
@@ -733,8 +747,12 @@ class FrontalCortexService:
         if selected_skills and '{{injected_skills}}' not in template:
             logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")
 
-        # Inject selected skill docs — always replace placeholder; empty string when no skills selected
-        injected_skills = self._get_injected_skills(selected_skills or [])
+        # Inject skill docs — None means "all skills" (ONNX unavailable), [] means none
+        if selected_skills is None:
+            from services.innate_skills.registry import PLANNING_SKILLS
+            injected_skills = self._get_injected_skills(sorted(PLANNING_SKILLS))
+        else:
+            injected_skills = self._get_injected_skills(selected_skills)
         result = result.replace('{{injected_skills}}', injected_skills)
 
         # Legacy {{available_skills}} — removed from ACT template; kept as no-op for other templates
