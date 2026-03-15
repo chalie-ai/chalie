@@ -827,12 +827,10 @@ CREATE TABLE IF NOT EXISTS uncertainties (
     reasoning TEXT,
     temporal_signal INTEGER DEFAULT 0,        -- BOOLEAN: 1 if uncertainty is time-sensitive
     surface_context TEXT,                     -- optional text to surface alongside the uncertainty
-    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'surfaced' | 'resolved'
+    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'resolved'
     resolution_strategy TEXT,                 -- 'accepted' | 'rejected' | 'merged' | 'superseded'
     resolution_detail TEXT,
     resolved_at TEXT,
-    surfaced_count INTEGER DEFAULT 0,
-    last_surfaced_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
