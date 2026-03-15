@@ -42,7 +42,7 @@ PROMPTS = [
 
     # --- Session C: memory probing (cold start) ---
     ("smoke-c", "Hi!", "RESPOND", "greeting"),
-    ("smoke-c", "Do you remember my name?", "CLARIFY", "memory"),
+    ("smoke-c", "Do you remember my name?", "RESPOND", "memory"),
     ("smoke-c", "What did we talk about yesterday?", "ACT", "memory"),
     ("smoke-c", "You mentioned something about weather last time", "ACT", "memory"),
     ("smoke-c", "Interesting", "RESPOND", "feedback"),
@@ -58,7 +58,7 @@ PROMPTS = [
     ("smoke-e", "yo", "RESPOND", "greeting"),
     ("smoke-e", "sup", "RESPOND", "greeting"),
     ("smoke-e", "ok", "RESPOND", "feedback"),
-    ("smoke-e", "why?", "CLARIFY", "question"),
+    ("smoke-e", "why?", "RESPOND", "question"),
     ("smoke-e", "hmm", "RESPOND", "feedback"),
 
     # --- Session F: emotional/feedback heavy (cold start) ---
@@ -89,7 +89,7 @@ PROMPTS = [
     ("smoke-i", "Greetings", "RESPOND", "greeting"),
     ("smoke-i", "Tell me something interesting", "RESPOND", "question"),
     ("smoke-i", "Go on", "RESPOND", "statement"),
-    ("smoke-i", "That's not what I meant", "CLARIFY", "feedback"),
+    ("smoke-i", "That's not what I meant", "RESPOND", "feedback"),
     ("smoke-i", "Never mind, thanks anyway", "RESPOND", "feedback"),
 
     # --- Session J: rapid fire (same uuid, context accumulates) ---
@@ -198,7 +198,7 @@ def run():
     print("=" * 70)
 
     print("\nMode distribution:")
-    for mode in ["RESPOND", "CLARIFY", "ACT", "IGNORE", "ERROR"]:
+    for mode in ["RESPOND", "ACT", "IGNORE", "ERROR"]:
         count = mode_counts.get(mode, 0)
         if count > 0:
             print("  %-12s: %d/%d (%.0f%%)" % (mode, count, n, 100 * count / n))

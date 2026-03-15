@@ -402,7 +402,7 @@ def _format_visual_context(image_contexts: list) -> str:
 
 def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None, message_embedding=None):
     """
-    Generate response for a terminal mode (RESPOND, CLARIFY).
+    Generate response for a terminal mode (RESPOND).
 
     Single LLM call with mode-specific prompt. No decision gate, no alternative paths.
 
@@ -882,7 +882,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
         )
 
     # Log the routing decision AFTER generation so the recorded mode reflects the
-    # terminal mode (ACT loops may re-route to RESPOND/CLARIFY after execution).
+    # terminal mode (ACT loops may re-route to RESPOND after execution).
     if routing_decision_service:
         try:
             terminal_routing = dict(routing_result)
@@ -918,7 +918,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
                 'destination': metadata.get('destination', 'web'),
                 'metadata': metadata,
                 'actions': response_data.get('actions', []),
-                'clarification_question': response_data.get('response', '') if response_data.get('mode') == 'CLARIFY' else None,
+                'clarification_question': None,
                 'reply_actions': response_data.get('reply_actions'),
             }
 
@@ -949,7 +949,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             logging.error(f"[ORCHESTRATOR] Failed: {e}")
 
     # Signal completion for IGNORE/card-only mode on sync WebSocket channels.
-    # RESPOND/CLARIFY handlers call OutputService.enqueue_text() which signals
+    # RESPOND handlers call OutputService.enqueue_text() which signals
     # the WebSocket handler directly. For card-only ACT results that resolve to
     # IGNORE, we also call enqueue_text() with an empty response so the frontend
     # receives a proper `message` event (carrying exchange_id, topic, mode, etc.)
@@ -2381,7 +2381,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         f"similarity={distraction['similarity_to_focus']:.3f} "
                         f"to '{distraction['focus_description'][:50]}'"
                     )
-                    # Store as routing signal for potential CLARIFY nudge
+                    # Store as routing signal for focus distraction detection
                     signals_extra = {'focus_distraction': True,
                                      'focus_similarity': distraction['similarity_to_focus']}
                 else:

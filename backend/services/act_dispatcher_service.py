@@ -95,7 +95,7 @@ class ActDispatcherService:
         Phase 3 — Pre-action reliability check: if the action references a
         memory marked as 'uncertain' or 'contradicted', log a warning and
         annotate the result so the ACT loop / critic can decide whether to
-        proceed or route to CLARIFY.
+        proceed or ask for clarification.
 
         Args:
             topic: Current conversation topic

@@ -111,7 +111,7 @@ class ActLoopService:
         Determine if ACT loop should continue.
 
         Exit conditions (in priority order):
-        1. Non-ACT terminal mode (RESPOND, CLARIFY, etc.)
+        1. Non-ACT terminal mode (RESPOND, etc.)
         2. Cumulative timeout exceeded (safety limit)
         3. Hard iteration cap reached (max_iterations, default 30)
         4. History token budget exceeded (prevents unbounded prompt growth)
@@ -126,7 +126,7 @@ class ActLoopService:
         Returns:
             Tuple of (can_continue: bool, termination_reason: str | None)
         """
-        # Terminal modes always exit (RESPOND, CLARIFY, etc)
+        # Terminal modes always exit (RESPOND, etc.)
         if mode != 'ACT':
             return False, f'terminal_mode_{mode.lower()}'
 
