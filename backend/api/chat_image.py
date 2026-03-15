@@ -16,7 +16,7 @@ Design:
   returns the existing image_id without re-analysis.
 
   Progress tracking: a lightweight ``chat_image_progress:{image_id}`` key with
-  a 120 s TTL is written at upload time and updated by the analysis thread.
+  a 10 min TTL is written at upload time and updated by the analysis thread.
   This acts as a tertiary fallback for GET /status so that the endpoint never
   returns 404 while analysis is still in-flight, even after the 5-minute bytes
   key has expired (B3 fix).
@@ -51,7 +51,7 @@ _KEY_PROGRESS = 'chat_image_progress:{image_id}' # in-flight tracker ('analyzing
 _TTL_BYTES = 300    # 5 minutes
 _TTL_RESULT = 600   # 10 minutes
 _TTL_HASH = 300     # 5 minutes
-_TTL_PROGRESS = 120 # 2 minutes — covers worst-case 60s analysis with margin
+_TTL_PROGRESS = 600 # 10 minutes — must outlive _TTL_BYTES so it can serve as fallback
 
 
 def _get_store():
@@ -68,7 +68,7 @@ def upload_image():
     Multipart image upload.
 
     Accepts multipart field ``image``. Stores raw bytes in MemoryStore, writes
-    a ``chat_image_progress:{image_id}`` key (TTL=120 s) for in-flight tracking,
+    a ``chat_image_progress:{image_id}`` key (TTL=10 min) for in-flight tracking,
     then kicks off background analysis in a daemon thread and returns
     ``{image_id, status: 'analyzing'}`` immediately.
 
@@ -186,7 +186,7 @@ def image_status(image_id):
         if store.exists(bytes_key):
             return jsonify({'status': 'analyzing', 'result': None})
         # B3 fix: secondary fallback — progress key survives longer than bytes key
-        # (120 s vs 300 s) and is updated by the analysis thread to 'ready'/'failed'.
+        # (600 s vs 300 s) and is updated by the analysis thread to 'ready'/'failed'.
         # This prevents a 404 being returned while analysis is still running after
         # the bytes key has expired.
         progress_key = _KEY_PROGRESS.format(image_id=image_id)
