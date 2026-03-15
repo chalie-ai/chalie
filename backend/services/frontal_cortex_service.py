@@ -1309,7 +1309,7 @@ class FrontalCortexService:
         """
         Get tool profiles for ACT prompt injection.
 
-        When selected_tools is provided (from CognitiveTriageService), injects
+        When selected_tools is provided (from MessageGateService), injects
         full profiles for those specific tools from tool_capability_profiles table.
         Falls back to manifest-based summaries if profiles unavailable.
         """
