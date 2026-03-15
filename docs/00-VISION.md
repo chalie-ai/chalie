@@ -109,7 +109,7 @@ It decides:
 ### 1. Protects Attention
 Filters noise and low-value inputs, summarizes and prioritizes information, delays non-urgent interruptions.
 
-*Codebase: ambient inference service, focus session service, cognitive drift attention gating, event bridge confidence gates and cooldowns.*
+*Codebase: ambient inference service, focus session service, reasoning loop attention gating, event bridge confidence gates and cooldowns.*
 
 ### 2. Executes Intent
 Converts direction into completed actions — drafts, sends, schedules, researches, builds. Completes operational loops autonomously.
@@ -119,7 +119,7 @@ Converts direction into completed actions — drafts, sends, schedules, research
 ### 3. Exercises Judgment
 Decides what deserves attention, chooses depth of reasoning based on value, escalates only when user input is necessary.
 
-*Codebase: mode router (deterministic ~5ms), critic service (EMA confidence calibration), cognitive triage service.*
+*Codebase: message gate service (deterministic ONNX mode gate, ~5ms), mode router (deterministic scorer for non-user flows), critic service (post-execution learning signal with EMA confidence calibration).*
 
 ### 4. Maintains Continuity
 Remembers context and priorities, understands recurring patterns, avoids requiring users to repeat themselves.
@@ -129,7 +129,7 @@ Remembers context and priorities, understands recurring patterns, avoids requiri
 ### 5. Provides Reflective Intelligence
 Offers perspective and advice when appropriate, supports decision clarity.
 
-*Codebase: cognitive drift engine (DMN), curiosity thread service, introspect skill, reflect skill (on-demand + automatic post-loop), ACT orchestrator auto-reflection trigger.*
+*Codebase: reasoning loop service (event-driven continuous reasoning, replaces timer-based DMN), curiosity thread service, introspect skill, reflect skill (on-demand + automatic post-loop), ACT orchestrator auto-reflection trigger.*
 
 ---
 
@@ -143,7 +143,7 @@ Offers perspective and advice when appropriate, supports decision clarity.
 - Summarization and prioritization
 - Execution of clear intent
 
-*Maps to: mode router selecting ACT, tool dispatch, persistent tasks running in background.*
+*Maps to: message gate routing to ACT pipeline, tool dispatch, persistent tasks running in background.*
 
 ### Chalie must escalate when:
 - Values or identity are involved
@@ -151,7 +151,7 @@ Offers perspective and advice when appropriate, supports decision clarity.
 - Ambiguity or tradeoffs require human judgment
 - The user's voice or presence matters
 
-*Maps to: mode router selecting CLARIFY or RESPOND, critic service pausing consequential actions, persistent task service pausing for user input.*
+*Maps to: mode router selecting RESPOND, ACT loop requesting clarification as part of its reasoning, persistent task service pausing for user input.*
 
 ---
 
@@ -160,12 +160,12 @@ Offers perspective and advice when appropriate, supports decision clarity.
 ### 1. Judgment Over Activity
 Do not act unless action improves outcomes. Fewer high-quality actions are better than many low-confidence ones.
 
-*Codebase anchor: critic service's EMA confidence calibration — safe actions get silent correction, consequential actions pause. The critic embodies this principle at runtime.*
+*Codebase anchor: critic service's post-execution learning signal — EMA confidence calibration tracks action quality over time. The message gate's deterministic ONNX scoring and the ACT loop's iteration budget embody this principle at runtime.*
 
 ### 2. Protect Attention Ruthlessly
 Reducing noise is as valuable as completing tasks. Every notification, prompt, and interruption must justify its existence.
 
-*Codebase anchor: ambient inference service (deterministic, <1ms, zero LLM), focus session with distraction detection, cognitive drift's attention gate that skips drift when user is in deep focus.*
+*Codebase anchor: ambient inference service (deterministic, <1ms, zero LLM), focus session with distraction detection, reasoning loop's attention gate that skips reasoning when user is in deep focus.*
 
 ### 3. Involve the User Only When Necessary
 Escalate based on importance and ambiguity, not system convenience. Silent autonomous handling is the default.
@@ -213,17 +213,17 @@ Chalie evolves through capability stages, each building on the previous:
 
 | Stage | Capability | Status | Architectural Focus |
 |-------|-----------|--------|---------------------|
-| 1 | Memory & continuity | Active | Progressive abstraction, decay, uncertainty |
-| 2 | Intent execution | Active | ACT loop, persistent tasks, plan decomposition |
-| 3 | Judgment & attention protection | Active | Deterministic gates, critic, fatigue budgets |
-| 4 | Proactive reasoning | Active | Cognitive drift, curiosity, autonomous actions |
-| 5 | Continuous reasoning loop | **Next** | Goal inference, world model, event-driven execution |
-| 6 | Autonomous goal execution | Future | Delegation, monitoring, cross-session plan evolution |
+| 1 | Memory & continuity | **Complete** | Progressive abstraction, decay, uncertainty |
+| 2 | Intent execution | **Complete** | ACT loop, persistent tasks, plan decomposition |
+| 3 | Judgment & attention protection | **Complete** | Deterministic gates (message gate, ONNX classifiers), post-execution critic |
+| 4 | Proactive reasoning | **Complete** | Reasoning loop, curiosity, autonomous actions |
+| 5 | Continuous reasoning loop | **Complete** | Goal inference, world model, event-driven signal processing |
+| 6 | Autonomous goal execution | **Next** | Delegation, monitoring, cross-session plan evolution, Cognitive OS agent API |
 | 7 | Vertical model orchestration | Future | Optimal model per cognitive function, ensemble reasoning |
 | 8 | Ambient presence | Future | Multi-surface input (voice, sensors, APIs, calendar), interface-agnostic reasoning |
 | 9 | Ambient superintelligence | Future | Goal detection from casual signals, full autonomy within trust boundaries |
 
-**Current transition:** Stages 1–4 are operational. The architectural shift from message-level to goal-level processing (Stage 5) is the next major evolution. This requires: goal inference engine, continuous reasoning loop (PERCEIVE → UPDATE → REASON → ACT → REFLECT), event-driven persistent task execution, and world model tracking.
+**Current transition:** Stages 1–5 are complete. The continuous reasoning loop (PERCEIVE → UPDATE → REASON → ACT → REFLECT) is live with signal-driven processing, goal inference, and world model maintenance. Stage 6 — autonomous goal execution — is the next major evolution. This requires: the Cognitive OS agent API (Query/Observe/Judge/Report), cross-agent delegation and monitoring, and cross-session plan evolution with autonomous revision.
 
 **Interface trajectory:** Stages 1–7 use the chat interface as primary input surface. Stage 8 marks the transition to ambient presence — Chalie becomes input-agnostic, receiving observations from any surface (voice, notifications, sensors, API callbacks, calendar events). Stage 9 is full ambient superintelligence where the chat interface is one of many equal surfaces and Chalie operates primarily through silent autonomous action.
 

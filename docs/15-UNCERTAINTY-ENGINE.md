@@ -149,7 +149,7 @@ Before the ACT loop executes an action based on a memory:
 ACT loop selects action based on memory X
   -> Check: is X.reliability in ('uncertain', 'contradicted')?
   -> If yes:
-     Route through CLARIFY before executing.
+     Ask for clarification before executing.
      "I was going to [action], but I'm not certain about [memory].
       Should I proceed?"
   -> If no: execute normally
@@ -354,10 +354,10 @@ LLM-based classification of detected conflicts.
 - When contradiction flag is present in assembled context:
   - Include both conflicting memories in prompt
   - Instruct LLM to weave the contradiction naturally into the response
-  - Not a separate CLARIFY mode — it's woven into whatever mode was selected (usually RESPOND)
+  - Uncertainty surfacing is woven into whatever mode was selected (usually RESPOND)
 
 #### `ACTDispatcherService`
-- Pre-action reliability check: if action depends on unreliable memory, route through CLARIFY first
+- Pre-action reliability check: if action depends on unreliable memory, ask for clarification first
 
 ### New Worker
 
@@ -412,7 +412,7 @@ Episode -> Concept extraction
 Action selected
   |
   +---> Check: is source memory reliable?
-        -> if unreliable: CLARIFY before executing
+        -> if unreliable: ask for clarification before executing
         -> if reliable: proceed
 
 

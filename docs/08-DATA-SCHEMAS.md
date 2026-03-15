@@ -148,7 +148,7 @@ CREATE TABLE list_events (
 - Re-adding a previously removed item restores the original row (clears `removed_at`) instead of inserting a duplicate
 - `lists.updated_at` is touched on every item mutation for recency-based resolution
 - Name resolution is case-insensitive; `list_service._resolve_list()` tries exact ID first, then name match
-- Context injection: `list_service.get_lists_for_prompt()` formats a compact summary injected as `{{active_lists}}` into all four mode prompts (RESPOND, ACT, CLARIFY, ACKNOWLEDGE)
+- Context injection: `list_service.get_lists_for_prompt()` formats a compact summary injected as `{{active_lists}}` into all mode prompts (RESPOND, ACT, ACKNOWLEDGE)
 
 ## SQLite – Additional Core Tables
 
