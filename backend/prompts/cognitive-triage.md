@@ -33,9 +33,6 @@ Routing rules:
 
 Routing bias: prefer RESPOND for questions answerable from general knowledge or memory (recipes, definitions, advice, how-to, history, science, math). Reserve ACT for questions that genuinely need live or external data (current prices, today's news, real-time status, user-specific external lookups). When in doubt and the question is about timeless knowledge, choose RESPOND.
 - When the user sends an image (indicated by "[User sent image: ...]"), route to RESPOND so Chalie can describe and discuss the image. If the image contains a document, receipt, or actionable content (e.g. a contract, invoice, or form), route to ACT with the `document` skill.
-freshness_risk scale: 0.0 = timeless/opinion/general knowledge → 1.0 = live event results, today's data, current status.
-High freshness_risk (≥0.7) + available search tool = ACT. Low freshness_risk (<0.4) = RESPOND even if tools are available.
-
 Effort estimation — match effort to the user's actual request complexity:
 - trivial: single lookup, instant answer (weather, simple search, memory recall)
 - light: moderate processing, browsing (news, reddit, document search)
