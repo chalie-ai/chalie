@@ -329,72 +329,6 @@ body::before {
     font-size: 14px;
 }
 
-.auto-assign-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 16px;
-    margin-bottom: 16px;
-    border-radius: 8px;
-    background: rgba(255, 184, 0, 0.06);
-    border: 1px solid rgba(255, 184, 0, 0.18);
-}
-.auto-assign-bar__text {
-    flex: 1;
-    font-size: 13px;
-    color: #FFB800;
-}
-.auto-assign-bar__text i {
-    margin-right: 6px;
-}
-.auto-assign-bar__btn {
-    padding: 6px 14px;
-    font-size: 12px;
-    font-weight: 600;
-    border: none;
-    border-radius: 6px;
-    background: #8A5CFF;
-    color: #fff;
-    cursor: pointer;
-    transition: box-shadow 220ms ease;
-    white-space: nowrap;
-}
-.auto-assign-bar__btn:hover {
-    box-shadow: 0 0 12px rgba(138, 92, 255, 0.4);
-}
-.auto-assign-bar__dismiss {
-    background: none;
-    border: none;
-    color: rgba(234, 230, 242, 0.4);
-    font-size: 18px;
-    cursor: pointer;
-    padding: 0 4px;
-    line-height: 1;
-}
-.auto-assign-bar__dismiss:hover {
-    color: rgba(234, 230, 242, 0.7);
-}
-
-.job-health-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-left: 8px;
-    vertical-align: middle;
-}
-.job-health-dot.--green {
-    background: #00F0FF;
-    box-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
-}
-.job-health-dot.--yellow {
-    background: #FFB800;
-    box-shadow: 0 0 6px rgba(255, 184, 0, 0.4);
-}
-.job-health-dot.--red {
-    background: #FF4444;
-    box-shadow: 0 0 6px rgba(255, 68, 68, 0.4);
-}
 
 .job-desc {
     color: var(--text-muted);
@@ -402,38 +336,6 @@ body::before {
     margin-top: 2px;
 }
 
-.job-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 4px;
-    flex-shrink: 0;
-    white-space: nowrap;
-}
-
-.badge-30b {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
-}
-
-.badge-14b {
-    background: rgba(245, 158, 11, 0.12);
-    color: #fbbf24;
-}
-
-.badge-8b {
-    background: rgba(138, 92, 255, 0.12);
-    color: #9E74FF;
-}
-
-.badge-4b {
-    background: rgba(34, 197, 94, 0.12);
-    color: #4ade80;
-}
-.badge-vision {
-    background: rgba(0, 240, 255, 0.10);
-    color: #00F0FF;
-}
 
 .job-assign {
     display: flex;
@@ -474,43 +376,58 @@ body::before {
 .job-card__meta {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     padding: 8px 20px;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.job-meta-item {
-    font-size: 11px;
-    color: rgba(234, 230, 242, 0.45);
-    white-space: nowrap;
-}
-
-.job-meta-icon {
-    font-size: 10px;
-    opacity: 0.6;
-    margin-right: 3px;
-}
-
-.job-meta-sep {
-    width: 1px;
-    height: 12px;
-    background: rgba(255, 255, 255, 0.06);
-    flex-shrink: 0;
-}
-
-.job-strengths {
+.job-caps {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 5px;
 }
 
-.job-strength {
+.job-cap {
     font-size: 10px;
-    padding: 1px 6px;
+    font-weight: 500;
+    padding: 2px 8px;
     border-radius: 3px;
-    background: rgba(138, 92, 255, 0.06);
-    color: rgba(234, 230, 242, 0.50);
     white-space: nowrap;
+}
+
+/* Capability level colours */
+.cap--high {
+    background: rgba(255, 68, 68, 0.12);
+    color: #FF4444;
+}
+.cap--medium {
+    background: rgba(255, 184, 0, 0.12);
+    color: #FFB800;
+}
+.cap--low {
+    background: rgba(96, 165, 250, 0.12);
+    color: #60A5FA;
+}
+.cap--none {
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(234, 230, 242, 0.25);
+}
+
+/* Legend at bottom of jobs list */
+.cap-legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    margin-top: 8px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+}
+.cap-legend__title {
+    font-size: 11px;
+    color: rgba(234, 230, 242, 0.45);
+    margin-right: 4px;
 }
 
 /* Modals */

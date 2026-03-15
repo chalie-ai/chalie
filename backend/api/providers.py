@@ -3,6 +3,7 @@ Providers blueprint — manage LLM provider configuration via REST API.
 """
 
 import logging
+import os
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
@@ -57,18 +58,11 @@ def create_provider():
 
         # Auto-assign all cognitive jobs if this is the first provider
         if is_first_provider:
-            all_jobs = [
-                'autobiography', 'frontal-cortex', 'frontal-cortex-act',
-                'plan-decomposition', 'frontal-cortex-respond',
-                'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
-                'frontal-cortex-proactive',
-                'frontal-cortex-scheduled-tool', 'mode-reflection',
-                'semantic-memory', 'cognitive-triage', 'failure-analysis', 'experience-assimilation',
-                'trait-extraction',
-                'moment-enrichment', 'document-synthesis',
-                'document-classification',
-            ]
             try:
+                import json
+                config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+                with open(config_path, 'r') as f:
+                    all_jobs = [j['id'] for j in json.load(f).get('jobs', [])]
                 for job in all_jobs:
                     service.set_job_assignment(job, provider["id"])
             except Exception as e:
@@ -311,60 +305,22 @@ def test_provider():
         return jsonify({"success": False, "error": "Test failed unexpectedly"}), 500
 
 
-@providers_bp.route('/jobs/auto-assign', methods=['POST'])
+@providers_bp.route('/jobs/definitions', methods=['GET'])
 @require_session
-def auto_assign_jobs():
-    """Optimally assign jobs to providers based on model tier vs job requirement.
+def list_job_definitions():
+    """Return cognitive job definitions (id, name, desc, capability requirements).
 
-    For each job, picks the provider whose model tier best matches the
-    job's recommended tier — preferring exact match, then higher, then lower.
+    Source of truth: backend/configs/cognitive_jobs.json
     """
+    import json
     try:
-        from api.system import _JOB_RECOMMENDED_TIER, _detect_model_tier, _TIER_ORDER
-
-        service = get_provider_service()
-        providers_list = service.list_providers_summary()
-        if len(providers_list) < 2:
-            return jsonify({"error": "Need at least 2 providers for auto-assign"}), 400
-
-        # Score each provider per model tier
-        scored = []
-        for p in providers_list:
-            tier = _detect_model_tier(p.get('model', ''))
-            scored.append({'id': p['id'], 'name': p['name'], 'model': p.get('model', ''), 'tier': tier,
-                           'tier_rank': _TIER_ORDER.get(tier, 0)})
-
-        changed = []
-        for job_id, rec_tier in _JOB_RECOMMENDED_TIER.items():
-            rec_rank = _TIER_ORDER.get(rec_tier, 0)
-
-            # Sort providers: prefer exact tier match, then closest above, then closest below
-            def sort_key(p):
-                diff = p['tier_rank'] - rec_rank
-                # Exact match = 0, above = small positive, below = large positive
-                if diff == 0:
-                    return (0, 0)
-                if diff > 0:
-                    return (1, diff)       # over-provisioned (acceptable)
-                return (2, -diff)          # under-provisioned (least preferred)
-
-            best = min(scored, key=sort_key)
-            service.set_job_assignment(job_id, best['id'])
-            changed.append({'job_id': job_id, 'provider_id': best['id'],
-                            'provider_name': best['name'], 'model_tier': best['tier'],
-                            'recommended_tier': rec_tier})
-
-        # Invalidate provider cache
-        try:
-            from services.provider_cache_service import ProviderCacheService
-            ProviderCacheService.invalidate()
-        except Exception:
-            pass
-
-        return jsonify({"ok": True, "assignments": changed}), 200
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+        with open(config_path, 'r') as f:
+            data = json.load(f)
+        return jsonify(data), 200
     except Exception as e:
-        logger.error(f"[REST API] auto-assign failed: {e}")
-        return jsonify({"error": "Auto-assign failed"}), 500
+        logger.error(f"[REST API] Failed to load job definitions: {e}")
+        return jsonify({"error": "Failed to load job definitions"}), 500
 
 
 @providers_bp.route('/jobs', methods=['GET'])
