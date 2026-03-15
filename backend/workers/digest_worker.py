@@ -231,7 +231,10 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                     return
 
                 llm = create_llm_service(provider_config)
-                llm_resp = llm.send_message(prompt_text, "Return only the JSON extraction.")
+                llm_resp = llm.send_message(
+                    prompt_text,
+                    "Extract traits as JSON. Values must be clean noun phrases — the entity itself, no pronouns, articles, or conjunctions. Return only valid JSON."
+                )
                 result = llm_resp.text if llm_resp else None
                 if not result:
                     return
@@ -255,9 +258,26 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 db = get_shared_db_service()
                 trait_service = UserTraitService(db)
 
+                # Stop words to strip from trait values (LLMs sometimes
+                # include pronouns/conjunctions like "alex and i")
+                _VALUE_STRIP = {
+                    'i', 'me', 'my', 'and', 'or', 'the', 'a', 'an', 'is',
+                    'am', 'are', 'was', 'it', 'to', 'in', 'of', 'for',
+                }
+
+                def _clean_value(v: str) -> str:
+                    """Strip leading/trailing stop words from an extracted value."""
+                    words = v.split()
+                    # Trim stop words from both ends
+                    while words and words[0].lower() in _VALUE_STRIP:
+                        words.pop(0)
+                    while words and words[-1].lower() in _VALUE_STRIP:
+                        words.pop()
+                    return ' '.join(words) if words else v
+
                 for trait in traits:
                     key = trait.get('key', '').lower().strip()
-                    value = trait.get('value', '').strip()
+                    value = _clean_value(trait.get('value', '').strip())
                     conf_label = trait.get('confidence', 'low')
 
                     if not key or not value:
