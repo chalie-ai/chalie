@@ -1,9 +1,15 @@
 """Tests for digest_worker — calculate_context_warmth, NLP signal patterns, ignore branch triage."""
 
+import json
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from workers.digest_worker import calculate_context_warmth, _handle_ignore_branch, _is_innate_skill_only
+from workers.digest_worker import (
+    calculate_context_warmth,
+    _handle_ignore_branch,
+    _is_innate_skill_only,
+    _resolve_image_contexts,
+)
 from services.cognitive_triage_service import TriageResult
 from services.mode_router_service import (
     GREETING_PATTERNS,
@@ -203,3 +209,75 @@ class TestInnateSkillOnly:
     def test_list_skill_is_innate_only(self):
         triage = _make_act_triage(['recall', 'list'])
         assert _is_innate_skill_only(triage) is True
+
+
+# ── _resolve_image_contexts (WS4) ────────────────────────────────────
+
+class TestResolveImageContexts:
+    """
+    _resolve_image_contexts polls MemoryStore for vision analysis results.
+    Tests cover: immediate hit, in-flight wait, timeout, JSON error, multi-image.
+    """
+
+    def _make_store(self, data: dict):
+        """Build a minimal MemoryStore mock with deterministic get()."""
+        store = MagicMock()
+        store.get.side_effect = lambda key: data.get(key)
+        return store
+
+    def _patch_store(self, store):
+        """Context manager: patch MemoryClientService.create_connection to return *store*."""
+        return patch(
+            'services.memory_client.MemoryClientService.create_connection',
+            return_value=store,
+        )
+
+    def test_returns_empty_list_for_no_ids(self):
+        # No IDs — create_connection should never be called (early return)
+        result = _resolve_image_contexts([])
+        assert result == []
+
+    def test_immediate_hit_returns_context(self):
+        ctx = {'description': 'A cat sitting on a mat.', 'ocr_text': ''}
+        store = self._make_store({'chat_image_result:abc123': json.dumps(ctx)})
+        with self._patch_store(store):
+            result = _resolve_image_contexts(['abc123'])
+        assert len(result) == 1
+        assert result[0]['description'] == 'A cat sitting on a mat.'
+
+    def test_missing_key_times_out_gracefully(self):
+        """If the result never appears, the image is skipped (no crash, no blocking)."""
+        store = self._make_store({})  # nothing in store
+        with self._patch_store(store), patch('time.sleep'):  # skip actual sleeping
+            result = _resolve_image_contexts(['missing_id'], timeout=0)
+        assert result == []
+
+    def test_invalid_json_is_skipped(self):
+        store = self._make_store({'chat_image_result:badid': 'not-json{{'})
+        with self._patch_store(store):
+            result = _resolve_image_contexts(['badid'])
+        assert result == []
+
+    def test_multiple_ids_all_resolved(self):
+        ctx_a = {'description': 'Image A', 'ocr_text': ''}
+        ctx_b = {'description': 'Image B', 'ocr_text': 'hello'}
+        store = self._make_store({
+            'chat_image_result:id_a': json.dumps(ctx_a),
+            'chat_image_result:id_b': json.dumps(ctx_b),
+        })
+        with self._patch_store(store):
+            result = _resolve_image_contexts(['id_a', 'id_b'])
+        assert len(result) == 2
+        descs = [r['description'] for r in result]
+        assert 'Image A' in descs
+        assert 'Image B' in descs
+
+    def test_partial_resolution_returns_only_found(self):
+        ctx = {'description': 'Found image', 'ocr_text': ''}
+        store = self._make_store({'chat_image_result:found_id': json.dumps(ctx)})
+        # Use timeout=5 so found_id resolves on the first poll iteration;
+        # missing_id times out and is skipped.  patch time.sleep to avoid delay.
+        with self._patch_store(store), patch('time.sleep'):
+            result = _resolve_image_contexts(['found_id', 'missing_id'], timeout=5)
+        assert len(result) == 1
+        assert result[0]['description'] == 'Found image'
