@@ -63,6 +63,44 @@ _thread_conv_service = None
 _context_relevance_service = None
 
 
+def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
+    """Resolve image IDs to analysis results from MemoryStore.
+
+    Polls with 1-second backoff up to *timeout* seconds per image.  The WS
+    handler passes ``image_ids`` through in metadata without blocking; this
+    function is where we actually wait for the vision analysis background thread
+    to finish before the LLM calls need the visual context.
+
+    Args:
+        image_ids: List of image ID strings (max 3, enforced by WS handler).
+        timeout: Maximum seconds to wait per image before giving up.
+
+    Returns:
+        List of image context dicts (``description``, ``ocr_text``, etc.).
+        Images that time out or fail to parse are silently skipped.
+    """
+    if not image_ids:
+        return []
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection()
+    contexts = []
+    for img_id in image_ids:
+        key = f'chat_image_result:{img_id}'
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            raw = store.get(key)
+            if raw:
+                try:
+                    contexts.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    pass
+                break
+            time.sleep(1)
+        else:
+            logging.debug(f"[DIGEST] Image resolution timed out for {img_id!r} after {timeout}s")
+    return contexts
+
+
 def get_context_relevance_service():
     """Get or create global ContextRelevanceService instance."""
     global _context_relevance_service
@@ -2542,6 +2580,20 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     cortex_config = configs['cortex']['config']
     cortex_prompt_map = configs['cortex']['prompt_map']
 
+    # Step 1b: Resolve image_ids → image_contexts (WS4b).
+    # The WS handler now passes image_ids in metadata without blocking.
+    # We resolve them here, before any LLM call, with a 30-second timeout so
+    # vision analysis has time to complete even if the user sends very quickly.
+    _image_ids = metadata.get('image_ids', [])
+    _image_contexts = metadata.get('image_contexts', [])  # backward-compat
+    if _image_ids and not _image_contexts:
+        _image_contexts = _resolve_image_contexts(_image_ids)
+        if _image_contexts:
+            metadata['image_contexts'] = _image_contexts
+        logging.debug(
+            f"[DIGEST] Resolved {len(_image_contexts)}/{len(_image_ids)} image(s) from MemoryStore"
+        )
+
     # Step 2: Resolve thread
     thread_service = get_thread_service()
     platform = metadata.get('source', 'unknown')
@@ -2925,7 +2977,24 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             working_memory_summary=_wm_summary,
         )
 
-        triage_result = triage_service.triage(text, triage_ctx)
+        # WS3a: Pass image summary to triage so it can route correctly.
+        # When the user sends only an image (text == '[Image attached]' or empty),
+        # replace the triage input with a short natural-language description of
+        # the visual content so triage can pick RESPOND vs ACT with document skill.
+        _triage_image_contexts = (metadata or {}).get('image_contexts', [])
+        triage_text = text
+        if _triage_image_contexts and (not text or text == '[Image attached]'):
+            _descs = [
+                ctx.get('description', '')
+                for ctx in _triage_image_contexts
+                if ctx.get('description')
+            ]
+            if _descs:
+                triage_text = f"[User sent image: {_descs[0][:200]}]"
+            else:
+                triage_text = "[User sent an image for analysis]"
+
+        triage_result = triage_service.triage(triage_text, triage_ctx)
 
         logging.info(
             f"[DIGEST] Triage: branch={triage_result.branch}, mode={triage_result.mode}, "
