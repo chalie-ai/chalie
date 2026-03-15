@@ -238,23 +238,19 @@ class TestResolveUncertainty:
 
 class TestGetActiveUncertainties:
 
-    def test_returns_open_and_surfaced_excludes_resolved(self, svc, db_service):
-        """get_active_uncertainties returns open+surfaced, not resolved."""
+    def test_returns_open_excludes_resolved(self, svc, db_service):
+        """get_active_uncertainties returns open uncertainties, not resolved."""
         t1 = _insert_trait(db_service)
         t2 = _insert_trait(db_service)
-        t3 = _insert_trait(db_service)
 
         uid_open = svc.create_uncertainty('trait', t1, detection_context='test')
-        uid_surfaced = svc.create_uncertainty('trait', t2, detection_context='test')
-        svc.mark_surfaced(uid_surfaced)
-        uid_resolved = svc.create_uncertainty('trait', t3, detection_context='test')
+        uid_resolved = svc.create_uncertainty('trait', t2, detection_context='test')
         svc.resolve_uncertainty(uid_resolved, strategy='accepted')
 
         results = svc.get_active_uncertainties()
         ids = [r['id'] for r in results]
 
         assert uid_open in ids
-        assert uid_surfaced in ids
         assert uid_resolved not in ids
 
     def test_severity_filter(self, svc, db_service):
@@ -335,31 +331,6 @@ class TestCheckMemoryReliability:
     def test_returns_reliable_for_unknown_type(self, svc, db_service):
         """Returns 'reliable' for unrecognised memory types."""
         assert svc.check_memory_reliability('unknown_type', 'any-id') == 'reliable'
-
-
-class TestMarkSurfaced:
-
-    def test_state_changes_to_surfaced(self, svc, db_service):
-        """mark_surfaced transitions state from open → surfaced."""
-        t1 = _insert_trait(db_service)
-        uid = svc.create_uncertainty('trait', t1, detection_context='test')
-
-        svc.mark_surfaced(uid)
-
-        record = _fetch_uncertainty(db_service, uid)
-        assert record['state'] == 'surfaced'
-        assert record['surfaced_count'] == 1
-
-    def test_surfaced_count_increments(self, svc, db_service):
-        """surfaced_count only increments while state == 'open' (idempotent thereafter)."""
-        t1 = _insert_trait(db_service)
-        uid = svc.create_uncertainty('trait', t1, detection_context='test')
-
-        svc.mark_surfaced(uid)  # open → surfaced, count=1
-        svc.mark_surfaced(uid)  # already surfaced, WHERE state='open' won't match
-
-        record = _fetch_uncertainty(db_service, uid)
-        assert record['surfaced_count'] == 1
 
 
 class TestResolveDecayed:

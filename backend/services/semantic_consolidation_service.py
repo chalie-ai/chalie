@@ -206,7 +206,7 @@ class SemanticConsolidationService:
                         )
                         already_tracked = any(
                             u.get('uncertainty_type') == 'contradiction'
-                            and u.get('state') in ('open', 'surfaced')
+                            and u.get('state') == 'open'
                             for u in existing_uncs
                         )
                         if not already_tracked:

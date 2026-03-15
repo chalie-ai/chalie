@@ -399,7 +399,7 @@ class UserTraitService:
                                 open_contradictions = [
                                     u for u in existing
                                     if u.get('uncertainty_type') == 'contradiction'
-                                    and u.get('state') in ('open', 'surfaced')
+                                    and u.get('state') == 'open'
                                 ]
                                 if not open_contradictions:
                                     unc_svc.create_uncertainty(
