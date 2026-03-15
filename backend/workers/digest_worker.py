@@ -894,17 +894,27 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
         except Exception as e:
             logging.error(f"[ORCHESTRATOR] Failed: {e}")
 
-    # Signal completion for IGNORE mode on sync WebSocket channels.
-    # RESPOND/CLARIFY handlers call OutputService.enqueue_text()
-    # which signals the WebSocket handler. IGNORE skips OutputService entirely,
-    # so the handler never receives a completion signal — send a close signal
-    # so it can emit "done" instead of "No response received".
+    # Signal completion for IGNORE/card-only mode on sync WebSocket channels.
+    # RESPOND/CLARIFY handlers call OutputService.enqueue_text() which signals
+    # the WebSocket handler directly. For card-only ACT results that resolve to
+    # IGNORE, we also call enqueue_text() with an empty response so the frontend
+    # receives a proper `message` event (carrying exchange_id, topic, mode, etc.)
+    # before the `done` event — instead of jumping straight to a bare close signal
+    # that would leave responseMeta unpopulated on the client.
     if response_data.get('mode') == 'IGNORE' and metadata and metadata.get('uuid'):
         try:
             from services.output_service import OutputService
-            OutputService().enqueue_close_signal(metadata['uuid'])
+            OutputService().enqueue_text(
+                topic=topic,
+                response='',
+                mode='ACT',
+                confidence=response_data.get('confidence', 1.0),
+                generation_time=response_data.get('generation_time', 0.0),
+                original_metadata=metadata,
+                reply_actions=response_data.get('reply_actions'),
+            )
         except Exception as e:
-            logging.warning(f"[IGNORE] Failed to publish close signal: {e}")
+            logging.warning(f"[IGNORE] Failed to publish empty-text message event: {e}")
 
     return response_data, routing_result
 
@@ -1863,13 +1873,27 @@ def _handle_innate_skill_dispatch(
     ws_uuid = metadata.get('uuid')
 
     if all_card_only:
-        # Card was already emitted by the skill — close the WebSocket response channel
+        # Card was already emitted by the skill — send empty text output so the
+        # frontend receives the message event (with exchange_id, mode, etc.) before
+        # the done event, rather than jumping straight to a close signal.
         if ws_uuid:
             try:
                 from services.output_service import OutputService
-                OutputService().enqueue_close_signal(ws_uuid)
+                OutputService().enqueue_text(
+                    topic=topic,
+                    response='',
+                    mode='ACT',
+                    confidence=0.9,
+                    generation_time=response_data.get('generation_time', 0.0),
+                    original_metadata=metadata,
+                    reply_actions=next(
+                        (r.get('reply_actions') for r in reversed(act_results)
+                         if r.get('status') == 'success' and r.get('reply_actions')),
+                        None,
+                    ),
+                )
             except Exception as _ce:
-                logging.warning(f"[DIGEST] Innate skill close signal failed: {_ce}")
+                logging.warning(f"[DIGEST] Innate skill sending empty text output for card-only result failed: {_ce}")
 
         return {
             'response': '',
@@ -2059,14 +2083,22 @@ def _handle_direct_tool_dispatch(
 
     if is_card_only and not _card_has_text:
         logging.info(
-            "[DIGEST] Direct dispatch: card-only result — closing channel"
+            "[DIGEST] Direct dispatch: card-only result — sending empty text output for card-only result"
         )
         if ws_uuid:
             try:
                 from services.output_service import OutputService
-                OutputService().enqueue_close_signal(ws_uuid)
+                OutputService().enqueue_text(
+                    topic=topic,
+                    response='',
+                    mode='ACT',
+                    confidence=0.9,
+                    generation_time=execution_time,
+                    original_metadata=metadata,
+                    reply_actions=result.get('reply_actions'),
+                )
             except Exception as _ce:
-                logging.warning(f"[DIGEST] Direct dispatch close signal failed: {_ce}")
+                logging.warning(f"[DIGEST] Direct dispatch sending empty text output for card-only result failed: {_ce}")
 
         routing_result = {
             'mode': 'ACT',
