@@ -283,15 +283,22 @@ def _handle_chat(ws, store, msg, active_request=None):
         return
 
     # Resolve image analysis results from MemoryStore.
-    # If analysis is still in-flight (bytes present but result not yet stored),
-    # wait up to 5s (10 × 500ms polls) before giving up.
+    # If analysis is still in-flight (bytes key or progress key present but result
+    # not yet stored), wait up to 5 s (10 × 500 ms polls) before giving up.
+    # With Steps 3+4 in place the frontend waits for the 'image_ready' WebSocket
+    # event before the user can send, so this poll is now a rare safety-net
+    # rather than the primary synchronisation mechanism.
+    # Step 5 / Option B: also check the progress key so we still poll when the
+    # 5-minute bytes key has expired but the 2-minute progress key is still alive
+    # (the B3 gap window).
     image_contexts = []
     for img_id in image_ids:
         result_key = f'chat_image_result:{img_id}'
         bytes_key = f'chat_image:{img_id}'
+        progress_key = f'chat_image_progress:{img_id}'
         raw = store.get(result_key)
-        if raw is None and store.exists(bytes_key):
-            # Analysis in-flight — poll briefly
+        if raw is None and (store.exists(bytes_key) or store.exists(progress_key)):
+            # Analysis in-flight — poll briefly (rare after Step 3+4 are in place)
             for _ in range(10):
                 time.sleep(0.5)
                 raw = store.get(result_key)
