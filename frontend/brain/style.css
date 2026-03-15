@@ -2538,6 +2538,21 @@ body::before {
     gap: 6px;
     flex-shrink: 0;
 }
+
+/* Image preview thumbnail in doc rows (chat_image source type) */
+.doc-row__image-preview {
+    flex-shrink: 0;
+    margin-right: 12px;
+}
+.doc-row__image-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: block;
+}
+
 .btn-danger-sm {
     color: #f87171 !important;
     border-color: rgba(248,113,113,0.2) !important;
