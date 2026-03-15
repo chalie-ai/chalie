@@ -165,7 +165,7 @@ class UncertaintyService:
         limit: int = 20,
     ) -> list:
         """
-        Return open or surfaced uncertainties, most severe first.
+        Return open uncertainties, most severe first.
         """
         severity_rank = "CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END"
         try:
@@ -174,14 +174,14 @@ class UncertaintyService:
                 if severity_filter:
                     cursor.execute(f"""
                         SELECT * FROM uncertainties
-                        WHERE state IN ('open', 'surfaced') AND severity = ?
+                        WHERE state = 'open' AND severity = ?
                         ORDER BY {severity_rank}, created_at DESC
                         LIMIT ?
                     """, (severity_filter, limit))
                 else:
                     cursor.execute(f"""
                         SELECT * FROM uncertainties
-                        WHERE state IN ('open', 'surfaced')
+                        WHERE state = 'open'
                         ORDER BY {severity_rank}, created_at DESC
                         LIMIT ?
                     """, (limit,))
@@ -195,7 +195,7 @@ class UncertaintyService:
 
     def get_uncertainties_for_memory(self, memory_type: str, memory_id: str) -> list:
         """
-        Return all open/surfaced uncertainties that reference this memory
+        Return all open uncertainties that reference this memory
         on either side of the pair.
         """
         try:
@@ -203,7 +203,7 @@ class UncertaintyService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT * FROM uncertainties
-                    WHERE state IN ('open', 'surfaced')
+                    WHERE state = 'open'
                       AND (
                           (memory_a_type = ? AND memory_a_id = ?)
                           OR (memory_b_type = ? AND memory_b_id = ?)
@@ -239,76 +239,6 @@ class UncertaintyService:
         except Exception as e:
             logger.error(f"[UNCERTAINTY] check_memory_reliability failed: {e}")
             return 'reliable'
-
-    def mark_surfaced(self, uncertainty_id: str, anti_nag_threshold: int = 3) -> None:
-        """
-        Move an open uncertainty to 'surfaced' and increment the surface counter.
-        After anti_nag_threshold surfacings, reduce severity (Phase 4 anti-nag).
-        """
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE uncertainties
-                    SET state = 'surfaced',
-                        surfaced_count = surfaced_count + 1,
-                        last_surfaced_at = datetime('now')
-                    WHERE id = ? AND state = 'open'
-                """, (uncertainty_id,))
-                cursor.close()
-            # Anti-nag: downgrade severity if over-exposed
-            self.downgrade_overexposed(uncertainty_id, threshold=anti_nag_threshold)
-        except Exception as e:
-            logger.error(f"[UNCERTAINTY] mark_surfaced failed: {e}")
-
-    def downgrade_overexposed(self, uncertainty_id: str, threshold: int = 2) -> bool:
-        """
-        Phase 4 — Anti-nag: if surfaced_count exceeds threshold, reduce severity.
-
-        critical → high → medium → low (stops at low).
-        Returns True if severity was reduced.
-        """
-        _downgrade = {'critical': 'high', 'high': 'medium', 'medium': 'low'}
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT severity, surfaced_count FROM uncertainties WHERE id = ?",
-                    (uncertainty_id,)
-                )
-                row = cursor.fetchone()
-                if row is None or row[1] <= threshold or row[0] == 'low':
-                    cursor.close()
-                    return False
-                new_severity = _downgrade.get(row[0], 'low')
-                cursor.execute(
-                    "UPDATE uncertainties SET severity = ? WHERE id = ?",
-                    (new_severity, uncertainty_id)
-                )
-                cursor.close()
-            logger.info(
-                f"[UNCERTAINTY] Anti-nag: downgraded {uncertainty_id} "
-                f"{row[0]} → {new_severity} after {row[1]} surfacings"
-            )
-            # Log to interaction_log for constraint learning
-            try:
-                from services.interaction_log_service import InteractionLogService
-                InteractionLogService(self.db).log_event(
-                    event_type='uncertainty_downgraded',
-                    payload={
-                        'uncertainty_id': uncertainty_id,
-                        'old_severity': row[0],
-                        'new_severity': new_severity,
-                        'surfaced_count': row[1],
-                    },
-                    source='uncertainty_service',
-                )
-            except Exception:
-                pass
-            return True
-        except Exception as e:
-            logger.error(f"[UNCERTAINTY] downgrade_overexposed failed: {e}")
-            return False
 
     def resolve_by_reinforcement(
         self,
@@ -368,7 +298,7 @@ class UncertaintyService:
 
     def resolve_decayed(self, memory_type: str, memory_id: str) -> int:
         """
-        Bulk-resolve all open/surfaced uncertainties linked to a memory that
+        Bulk-resolve all open uncertainties linked to a memory that
         has been deleted by the decay engine. Returns count resolved.
         """
         try:
@@ -379,7 +309,7 @@ class UncertaintyService:
                     SET state = 'resolved',
                         resolution_strategy = 'decayed',
                         resolved_at = datetime('now')
-                    WHERE state IN ('open', 'surfaced')
+                    WHERE state = 'open'
                       AND (
                           (memory_a_type = ? AND memory_a_id = ?)
                           OR (memory_b_type = ? AND memory_b_id = ?)

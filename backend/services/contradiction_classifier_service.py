@@ -783,7 +783,7 @@ class ContradictionClassifierService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT 1 FROM uncertainties
-                    WHERE state IN ('open', 'surfaced')
+                    WHERE state = 'open'
                       AND created_at > datetime('now', '-7 days')
                       AND (
                           (memory_a_id = ? AND memory_b_id = ?)
