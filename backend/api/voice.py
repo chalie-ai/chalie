@@ -11,6 +11,7 @@ the Flask server while large models download.
 
 import io
 import logging
+import re
 import struct
 import tempfile
 import threading
@@ -122,6 +123,50 @@ def _wav_duration_seconds(data: bytes) -> float:
         return 0.0
 
 
+def _clean_for_tts(text: str) -> str:
+    """Strip markdown / symbols that confuse the phonemizer."""
+    # Remove code blocks
+    text = re.sub(r"```[\s\S]*?```", " ", text)
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    # Remove markdown emphasis
+    text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
+    # Remove markdown headers
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Remove blockquotes
+    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
+    # Remove markdown links — keep the label
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Remove list bullets / numbered prefixes
+    text = re.sub(r"^[\s]*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[\s]*\d+\.\s+", "", text, flags=re.MULTILINE)
+    # Remove horizontal rules
+    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+    # Collapse whitespace (newlines → spaces, multi-space → single)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_MAX_CHUNK_CHARS = 400
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentence-sized chunks safe for the ONNX TTS model."""
+    sentences = _SENTENCE_SPLIT.split(text)
+    chunks: list[str] = []
+    buf = ""
+    for s in sentences:
+        if buf and len(buf) + len(s) + 1 > _MAX_CHUNK_CHARS:
+            chunks.append(buf.strip())
+            buf = s
+        else:
+            buf = f"{buf} {s}" if buf else s
+    if buf.strip():
+        chunks.append(buf.strip())
+    return chunks or [text]
+
+
 def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
     """Encode a numpy audio array as PCM WAV bytes."""
     import soundfile as sf
@@ -175,20 +220,38 @@ def voice_synthesize():
     if len(text) > MAX_TTS_CHARS:
         return jsonify({"error": f"Text exceeds {MAX_TTS_CHARS} character limit"}), 400
 
+    # Clean markdown / symbols and split into sentence chunks so the
+    # phonemizer + ONNX model don't choke on long or decorated input.
+    text = _clean_for_tts(text)
+    if not text:
+        return jsonify({"error": "Text is required"}), 400
+
+    chunks = _split_sentences(text)
+
     if not _tts_sem.acquire(blocking=False):
         return jsonify({"error": "TTS busy — try again shortly"}), 503
 
     try:
         import numpy as np
-        audio = _tts_model.generate(text, voice=KITTEN_VOICE)
-        # Pad with 300ms of silence so the last phoneme isn't clipped at the
-        # hardware buffer boundary — a common TTS tail-cutoff artefact.
-        silence = np.zeros(int(24000 * 0.3), dtype=audio.dtype)
-        audio = np.concatenate([audio, silence])
+        parts: list = []
+        silence = np.zeros(int(24000 * 0.3), dtype=np.float32)
+        for chunk in chunks:
+            try:
+                part = _tts_model.generate(chunk, voice=KITTEN_VOICE)
+                parts.append(part)
+                parts.append(silence)
+            except Exception as chunk_err:
+                logger.warning("[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
+                               len(chunk), chunk_err, chunk)
+                # Skip this chunk rather than failing the whole request
+                continue
+        if not parts:
+            return jsonify({"error": "TTS generation failed for all chunks"}), 500
+        audio = np.concatenate(parts)
         wav_bytes = _audio_to_wav_bytes(audio)
         return Response(wav_bytes, mimetype="audio/wav")
     except Exception as e:
-        logger.error("[Voice] TTS error: %s", e)
+        logger.error("[Voice] TTS error: %s — text: %.120s", e, text)
         return jsonify({"error": "TTS generation failed"}), 500
     finally:
         _tts_sem.release()

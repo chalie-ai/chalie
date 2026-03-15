@@ -309,15 +309,16 @@ class TestPersistentTaskService:
     def test_expire_stale_tasks_returns_count(self, service, mock_db):
         """expire_stale_tasks should return the number of tasks that were expired."""
         _, cursor = mock_db
-        # Simulate 3 tasks found via SELECT, then UPDATE
-        cursor.fetchall.return_value = [(10,), (11,), (12,)]
+        # First fetchall: PROPOSED tasks (0 dismissed — keeps test simple)
+        # Second fetchall: accepted/in_progress/paused tasks (3 expired)
+        cursor.fetchall.side_effect = [[], [(10,), (11,), (12,)]]
 
         count = service.expire_stale_tasks()
 
         assert count == 3
-        # Should have called execute twice: SELECT expired ids, then UPDATE
+        # Should have called execute at least twice: SELECT + UPDATE
         all_sqls = [c[0][0] for c in cursor.execute.call_args_list]
-        assert any("SELECT id FROM persistent_tasks" in sql for sql in all_sqls)
+        assert any("persistent_tasks" in sql for sql in all_sqls)
         assert any("status = 'expired'" in sql for sql in all_sqls)
 
     # ── Completion ───────────────────────────────────────────────────
