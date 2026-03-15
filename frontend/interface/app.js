@@ -44,6 +44,10 @@ class ChalieApp {
     // Attached images for current message
     this._attachedImages = [];  // [{id: string, element: HTMLElement}]
 
+    // Pending image analysis: image_id → {element: HTMLElement, timeout: number}
+    // Populated by _handleImageAttach; cleared by the 'image_ready' WS event or timeout.
+    this._pendingImageAnalysis = new Map();
+
     // Cards
     this._memoryCard = null;
     this._timelineCard = null;
@@ -1044,6 +1048,29 @@ class ChalieApp {
       return;
     }
 
+    // Step 4 / B4+B5 fix: image analysis completion pushed by _run_analysis via
+    // output:events.  Remove the spinner on success, or show an error badge so
+    // the user can decide whether to remove the failed image.
+    if (data.type === 'image_ready') {
+      const pending = this._pendingImageAnalysis.get(data.image_id);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this._pendingImageAnalysis.delete(data.image_id);
+        pending.element.classList.remove('analyzing');
+        pending.element.querySelector('.image-preview__spinner')?.remove();
+        if (data.status === 'failed') {
+          // Surface the failure with an error badge on the thumbnail.
+          const errBadge = document.createElement('span');
+          errBadge.className = 'image-preview__error';
+          errBadge.title = 'Image analysis failed — context unavailable';
+          errBadge.textContent = '✕';
+          pending.element.appendChild(errBadge);
+          this._showToast?.('Image analysis failed');
+        }
+      }
+      return;
+    }
+
     // Tool result card event
     if (data.type === 'card') {
       // B10 fix: deduplicate card events on SSE reconnect
@@ -1620,6 +1647,20 @@ class ChalieApp {
     } catch { /* silently hide on any error */ }
   }
 
+  /**
+   * Handle an image file selected by the user.
+   *
+   * Uploads the file via REST, then keeps the spinner and `analyzing` CSS class
+   * on the thumbnail until the server pushes an `image_ready` WebSocket event
+   * (Step 4 / B4 fix).  A 90-second safety-net timeout replaces the spinner
+   * with a warning badge if the event never arrives.
+   *
+   * The send button is enabled as soon as the server returns an `image_id` so
+   * the user is not blocked — the WebSocket handler (Step 5) will still attempt
+   * a short poll for the result when the message is dispatched.
+   *
+   * @param {File} file - The image file selected by the user.
+   */
   async _handleImageAttach(file) {
     if (this._attachedImages.length >= 3) {
       this._showToast?.('Maximum 3 images per message');
@@ -1638,9 +1679,29 @@ class ChalieApp {
       const data = await res.json();
       if (res.ok && data.image_id) {
         this._attachedImages.push({ id: data.image_id, element: thumbEl });
-        thumbEl.classList.remove('analyzing');
-        thumbEl.querySelector('.image-preview__spinner')?.remove();
+        // Step 4 / B4 fix: keep the spinner and 'analyzing' class — they are
+        // cleared when the server sends an 'image_ready' WebSocket event after
+        // background analysis completes (see _handleEvent).  Do NOT remove them
+        // here; the previous behaviour removed them immediately (before analysis
+        // even started), which caused the LLM to silently miss image context.
         document.getElementById('sendBtn').disabled = false;
+
+        // Safety net: if the 'image_ready' event does not arrive within 90 s,
+        // replace the spinner with a warning badge so the user knows analysis
+        // timed out.  The image remains attached — the WS handler will still do
+        // a short fallback poll when the message is sent (Step 5).
+        const timeoutId = setTimeout(() => {
+          this._pendingImageAnalysis.delete(data.image_id);
+          thumbEl.classList.remove('analyzing');
+          thumbEl.querySelector('.image-preview__spinner')?.remove();
+          const warn = document.createElement('span');
+          warn.className = 'image-preview__warn';
+          warn.title = 'Image analysis timed out — context may be unavailable';
+          warn.textContent = '⚠';
+          thumbEl.appendChild(warn);
+        }, 90_000);
+
+        this._pendingImageAnalysis.set(data.image_id, { element: thumbEl, timeout: timeoutId });
       } else {
         thumbEl.remove();
         this._updatePreviewVisibility();
@@ -1697,7 +1758,20 @@ class ChalieApp {
     if (strip && !strip.children.length) strip.classList.add('hidden');
   }
 
+  /**
+   * Remove all image thumbnails and cancel pending analysis timeouts.
+   *
+   * Called when a message is sent or the user navigates away.  Cancels any
+   * in-flight safety-net timers created by _handleImageAttach so they do not
+   * fire after the preview strip has been cleared.
+   */
   _clearImagePreview() {
+    // Cancel all pending 90 s safety-net timers before clearing the DOM.
+    for (const { timeout } of this._pendingImageAnalysis.values()) {
+      clearTimeout(timeout);
+    }
+    this._pendingImageAnalysis.clear();
+
     this._attachedImages = [];
     const strip = document.getElementById('imagePreview');
     if (strip) {
