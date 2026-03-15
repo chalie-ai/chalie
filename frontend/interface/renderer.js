@@ -40,11 +40,30 @@ export class Renderer {
    * @param {string} text
    * @param {string|null} [ts]
    * @param {{inWorkingMemory?: boolean}} [options]
+   * @param {string[]} [imageIds]
    */
-  appendUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
+  appendUserForm(text, ts = null, { inWorkingMemory = true } = {}, imageIds = []) {
     const el = this._createEl('div', 'speech-form speech-form--user');
     if (!inWorkingMemory) el.classList.add('message--faded');
+
+    // Render image thumbnails above the text when images are attached
+    if (imageIds.length > 0) {
+      const imagesEl = this._createEl('div', 'speech-form__images');
+      for (const id of imageIds) {
+        const img = document.createElement('img');
+        img.src = `/chat/image/${id}/file`;
+        img.className = 'speech-form__image-thumb';
+        img.alt = 'Attached image';
+        imagesEl.appendChild(img);
+      }
+      el.appendChild(imagesEl);
+    }
+
     const textEl = this._createEl('div', 'speech-form__text');
+    const isPlaceholder = text === '[Image attached]' || text === '[image attached]';
+    if (isPlaceholder && imageIds.length > 0) {
+      textEl.style.display = 'none';
+    }
     textEl.textContent = text;
     el.appendChild(textEl);
 

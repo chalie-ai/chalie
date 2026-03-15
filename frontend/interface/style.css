@@ -899,6 +899,23 @@ body {
   pointer-events: none;
 }
 
+/* Image thumbnails inside user messages */
+.speech-form__images {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.speech-form__image-thumb {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  cursor: pointer;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .speech-form__meta {
   display: flex;
   align-items: center;
