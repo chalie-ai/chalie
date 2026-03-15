@@ -35,7 +35,7 @@ TIMEOUT = 300  # seconds per request (LLM can be slow)
 TEST_MESSAGES = [
     {
         "message": "Hey, how's it going?",
-        "expect_modes": ["RESPOND", "CLARIFY", "ACT"],
+        "expect_modes": ["RESPOND", "ACT"],
         "description": "Greeting - should get a conversational response",
     },
     {

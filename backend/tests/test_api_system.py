@@ -199,7 +199,7 @@ class TestSystemAPI:
     def test_observability_routing_returns_distribution(self, client):
         """GET /system/observability/routing returns distribution, tiebreaker_rate, etc."""
         mock_svc = MagicMock()
-        mock_svc.get_mode_distribution.return_value = {'RESPOND': 60, 'ACT': 25, 'CLARIFY': 15}
+        mock_svc.get_mode_distribution.return_value = {'RESPOND': 75, 'ACT': 25}
         mock_svc.get_tiebreaker_rate.return_value = 0.1234
         mock_svc.get_recent_decisions.return_value = [
             {'selected_mode': 'RESPOND', 'router_confidence': 0.95, 'topic': 'chat', 'created_at': datetime(2026, 2, 26)},
@@ -211,7 +211,7 @@ class TestSystemAPI:
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['distribution'] == {'RESPOND': 60, 'ACT': 25, 'CLARIFY': 15}
+        assert data['distribution'] == {'RESPOND': 75, 'ACT': 25}
         assert data['tiebreaker_rate_24h'] == 0.1234
         assert data['total_decisions_24h'] == 2
         assert data['avg_confidence_24h'] == 0.875

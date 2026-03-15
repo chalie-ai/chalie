@@ -17,7 +17,7 @@ def _make_decision(**overrides):
     base = {
         'selected_mode': 'RESPOND',
         'router_confidence': 0.82,
-        'scores': {'RESPOND': 0.82, 'ACT': 0.54, 'CLARIFY': 0.30, 'IGNORE': -0.50},
+        'scores': {'RESPOND': 0.82, 'ACT': 0.54, 'IGNORE': -0.50},
         'tiebreaker_used': False,
         'tiebreaker_candidates': None,
         'margin': 0.28,
@@ -197,7 +197,7 @@ class TestGetRecentDecisionExplanations:
         decisions = [
             _make_decision(selected_mode='RESPOND'),
             _make_decision(selected_mode='ACT'),
-            _make_decision(selected_mode='CLARIFY'),
+            _make_decision(selected_mode='IGNORE'),
         ]
         mock_svc = self._mock_service(decisions)
         mock_db = MagicMock()
@@ -207,7 +207,7 @@ class TestGetRecentDecisionExplanations:
             result = _get_recent_decision_explanations(limit=3)
 
         assert len(result) == 3
-        assert [r['mode'] for r in result] == ['RESPOND', 'ACT', 'CLARIFY']
+        assert [r['mode'] for r in result] == ['RESPOND', 'ACT', 'IGNORE']
 
 
 @pytest.mark.unit
