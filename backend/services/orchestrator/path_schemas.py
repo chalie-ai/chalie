@@ -4,7 +4,7 @@ from typing import Callable, List, Dict, Any
 
 class PathType(Enum):
     """Types of execution paths."""
-    TERMINAL = "terminal"  # Ends conversation flow (RESPOND, CLARIFY, etc.)
+    TERMINAL = "terminal"  # Ends conversation flow (RESPOND, IGNORE, etc.)
     TACTICAL = "tactical"  # Continues processing (ACT)
 
 
@@ -74,11 +74,6 @@ def validate_act(ctx: Dict[str, Any]) -> bool:
     return isinstance(ctx.get('actions'), list) and len(ctx.get('actions', [])) > 0
 
 
-def validate_clarify(ctx: Dict[str, Any]) -> bool:
-    """Validate CLARIFY path context."""
-    return bool(ctx.get('clarification_question'))
-
-
 def validate_ignore(ctx: Dict[str, Any]) -> bool:
     """Validate IGNORE path context."""
     return True  # Only requires topic
@@ -103,15 +98,6 @@ ORCHESTRATOR_PATHS: Dict[str, PathDefinition] = {
         validator=validate_act,
         handler=None,  # Will be set to ActHandler
         description="Tactical path: Execute actions and continue processing"
-    ),
-
-    "CLARIFY": PathDefinition(
-        name="CLARIFY",
-        path_type=PathType.TERMINAL,
-        required_fields=["clarification_question", "topic", "destination"],
-        validator=validate_clarify,
-        handler=None,  # Will be set to ClarifyHandler
-        description="Terminal path: Request clarification from user"
     ),
 
     "IGNORE": PathDefinition(

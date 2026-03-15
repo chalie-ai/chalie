@@ -33,16 +33,6 @@ def _act_context(**overrides):
     return ctx
 
 
-def _clarify_context(**overrides):
-    ctx = {
-        'clarification_question': 'Could you clarify what you mean?',
-        'topic': 'test-topic',
-        'destination': 'user',
-    }
-    ctx.update(overrides)
-    return ctx
-
-
 def _ignore_context(**overrides):
     ctx = {
         'topic': 'test-topic',
@@ -68,13 +58,13 @@ def service():
 
 class TestAvailablePaths:
 
-    def test_returns_all_four_paths(self, service):
-        """get_available_paths returns exactly the 4 defined paths."""
+    def test_returns_all_three_paths(self, service):
+        """get_available_paths returns exactly the 3 defined paths."""
         paths = service.get_available_paths()
         names = [p['name'] for p in paths]
 
-        assert len(paths) == 4
-        assert set(names) == {'RESPOND', 'ACT', 'CLARIFY', 'IGNORE'}
+        assert len(paths) == 3
+        assert set(names) == {'RESPOND', 'ACT', 'IGNORE'}
 
     def test_each_path_has_required_keys(self, service):
         """Every path definition contains name, type, required_fields, and description."""
@@ -146,19 +136,6 @@ class TestActPath:
         result = service.route_path('ACT', {'topic': 'test-topic'})
 
         assert result['status'] == 'error'
-
-
-# ── CLARIFY Path ──────────────────────────────────────────────
-
-
-class TestClarifyPath:
-
-    def test_clarify_with_valid_context_succeeds(self, service):
-        """CLARIFY with a clarification question returns status=success."""
-        result = service.route_path('CLARIFY', _clarify_context())
-
-        assert result['status'] == 'success'
-        assert result['mode'] == 'CLARIFY'
 
 
 # ── IGNORE Path ───────────────────────────────────────────────
