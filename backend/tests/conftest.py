@@ -43,7 +43,6 @@ def mock_config():
         'mode-router': {
             'base_scores': {
                 'RESPOND': 0.40,
-                'CLARIFY': 0.30,
                 'ACT': 0.20,
                 'IGNORE': -0.50,
             },
@@ -53,11 +52,6 @@ def mock_config():
                 'respond.gist_density': 0.10,
                 'respond.question_warm': 0.15,
                 'respond.cold_penalty': 0.15,
-                'clarify.cold_boost': 0.25,
-                'clarify.question_no_facts': 0.20,
-                'clarify.new_topic_question': 0.10,
-                'clarify.cold_question': 0.05,
-                'clarify.warm_penalty': 0.20,
                 'act.question_moderate_context': 0.20,
                 'act.interrogative_gap': 0.15,
                 'act.implicit_reference': 0.15,

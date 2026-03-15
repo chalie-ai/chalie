@@ -389,6 +389,33 @@ class TestTriageFull:
         assert result.fast_filtered is False  # Went through LLM, not empty-input guard
 
     @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
+    def test_llm_clarify_remapped_to_act(self, mock_get_llm):
+        """LLM returns CLARIFY → must be remapped to ACT before leaving _cognitive_triage."""
+        import json
+        mock_llm = MagicMock()
+        mock_llm.send_message.return_value = MagicMock(text=json.dumps({
+            'mode': 'CLARIFY',
+            'tools': [],
+            'confidence_internal': 0.4,
+            'confidence_tool_need': 0.3,
+            'freshness_risk': 0.0,
+            'reasoning': 'Intent is ambiguous — need clarification',
+        }))
+        mock_get_llm.return_value = mock_llm
+
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        ctx = self._make_context()
+        result = svc.triage("do the thing", ctx)
+        assert result.mode == 'ACT', (
+            f"Expected mode=ACT after CLARIFY remap, got {result.mode!r}"
+        )
+        assert result.branch == 'act', (
+            f"Expected branch=act after CLARIFY remap, got {result.branch!r}"
+        )
+        assert result.fast_filtered is False  # Went through LLM, not empty-input guard
+
+    @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
     def test_triage_llm_timeout_fallback(self, mock_get_llm):
         """LLM raises exception → heuristic fallback is used."""
         mock_get_llm.return_value = MagicMock(
@@ -400,7 +427,7 @@ class TestTriageFull:
         ctx = self._make_context()
         result = svc.triage("search for Python tutorials", ctx)
         # Should fall back gracefully, not raise
-        assert result.branch in ('act', 'respond', 'clarify', 'ignore')
+        assert result.branch in ('act', 'respond', 'ignore')
         assert result.triage_time_ms >= 0
 
 

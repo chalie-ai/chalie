@@ -209,11 +209,10 @@ class ModeRouterService:
     When top-2 are within margin, invokes small LLM for disambiguation.
     """
 
-    MODES = ['RESPOND', 'CLARIFY', 'ACT', 'IGNORE']
+    MODES = ['RESPOND', 'ACT', 'IGNORE']
 
     MODE_DESCRIPTIONS = {
         'RESPOND': 'Answer the user with available context and knowledge',
-        'CLARIFY': 'Ask one clarifying question to build understanding',
         'ACT': 'Use tools and skills (web search, memory lookup, research) to gather information before responding',
         'IGNORE': 'No response needed (empty or irrelevant input)',
     }
@@ -230,7 +229,6 @@ class ModeRouterService:
         # Base scores per mode
         self.bases = config.get('base_scores', {
             'RESPOND': 0.50,
-            'CLARIFY': 0.30,
             'ACT': 0.20,
             'IGNORE': -0.50,
         })
@@ -386,25 +384,6 @@ class ModeRouterService:
             respond -= w.get('respond.cold_penalty', 0.15)
         # Tool-needed penalty removed — tool dispatch now handled by CognitiveTriageService
 
-        # ── CLARIFY ──────────────────────────────────────────────
-        clarify = self.bases['CLARIFY']
-        if is_cold:
-            clarify += (1.0 - warmth) * w.get('clarify.cold_boost', 0.12)
-        if is_question and is_cold:
-            clarify += w.get('clarify.cold_question', 0.05)
-        if is_question and is_cold:
-            # Reduced: cold context + question nudges toward clarification
-            clarify += w.get('clarify.question_no_facts', 0.08)
-        if is_new and is_question:
-            clarify += w.get('clarify.new_topic_question', 0.05)
-        if is_warm:
-            clarify -= w.get('clarify.warm_penalty', 0.20)
-        # Self-constraint: degraded state or capability gaps nudge toward CLARIFY
-        self_constraint = signals.get('self_constraint', 0.0)
-        if self_constraint > 0:
-            clarify += self_constraint * w.get('clarify.self_constraint', 0.10)
-            respond -= self_constraint * w.get('respond.self_constraint_penalty', 0.05)
-
         # ── ACT ──────────────────────────────────────────────────
         act = self.bases['ACT']
         if is_question and 0.3 <= warmth <= 0.7:
@@ -435,7 +414,6 @@ class ModeRouterService:
 
         scores = {
             'RESPOND': respond,
-            'CLARIFY': clarify,
             'ACT': act,
             'IGNORE': ignore,
         }
@@ -467,13 +445,6 @@ class ModeRouterService:
             suppressed_mode = 'ACT'
             penalty = -0.15
             logger.debug(f"{LOG_PREFIX} Anti-oscillation: ACT suppressed (previous was ACT)")
-        elif previous_mode == 'CLARIFY':
-            # User just answered a clarification — respond to it, don't re-clarify
-            adjusted['RESPOND'] += 0.15
-            adjusted['CLARIFY'] -= 0.20
-            suppressed_mode = 'CLARIFY'
-            penalty = -0.20
-            logger.debug(f"{LOG_PREFIX} Anti-oscillation: RESPOND boosted, CLARIFY suppressed (previous was CLARIFY)")
 
         if suppressed_mode:
             try:

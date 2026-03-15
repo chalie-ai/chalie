@@ -324,7 +324,6 @@ def load_configs():
     # Mode-specific prompts: soul → identity → mode prompt (instincts + context + contract)
     # Ordering: values first, then voice, then behavioral nudges closest to generation
     respond_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-respond")
-    clarify_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-clarify")
     # ACT does NOT get identity — reasoning stays pure
     act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
 
@@ -333,7 +332,6 @@ def load_configs():
             'config': cortex_config,
             'prompt_map': {
                 'RESPOND': respond_prompt,
-                'CLARIFY': clarify_prompt,
                 'ACT': act_prompt,
             }
         },
@@ -544,10 +542,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
 
     # Ensure non-empty response for terminal modes
     if mode != 'IGNORE' and not response_data.get('response', '').strip():
-        if mode == 'CLARIFY':
-            response_data['response'] = "Could you tell me more about what you mean?"
-        else:
-            response_data['response'] = "I understand. Let me think about that."
+        response_data['response'] = "I understand. Let me think about that."
 
     return response_data
 
@@ -3251,10 +3246,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _forced_signals['_prompt_text'] = text
             # Update adaptive signals now that explicit_feedback is known
             _store_adaptive_signals(thread_id, text, signals=_forced_signals)
-            if triage_result.branch == 'clarify':
-                _forced_mode = 'CLARIFY'
-            else:
-                _forced_mode = 'RESPOND'
+            _forced_mode = 'RESPOND'
             response_data, routing_result = route_and_generate(
                 topic, text, classification, thread_conv_service,
                 cortex_config, cortex_prompt_map, mode_router, _forced_signals,

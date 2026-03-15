@@ -97,8 +97,11 @@ class TriageResult:
     """Output of the cognitive triage pipeline.
 
     Attributes:
-        branch: High-level dispatch branch: 'ignore' | 'respond' | 'clarify' | 'act'.
-        mode: Routing mode: 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'.
+        branch: High-level dispatch branch: 'ignore' | 'respond' | 'act'.
+        mode: Routing mode: 'RESPOND' | 'ACT' | 'IGNORE' | 'CANCEL'.
+            CLARIFY is no longer a valid routing outcome — if the LLM or ONNX
+            returns CLARIFY it is remapped to ACT so the ACT loop can ask
+            clarifying questions naturally as part of its reasoning.
         tools: Tool names selected for ACT mode (empty for other modes).
         skills: Innate skill names selected for ACT mode.
         confidence_internal: Float 0-1 confidence that internal memory is sufficient.
@@ -110,8 +113,8 @@ class TriageResult:
         effort_estimate: Effort tier: 'trivial' | 'light' | 'moderate' | 'deep'.
     """
 
-    branch: str                   # 'ignore' | 'respond' | 'clarify' | 'act'
-    mode: str                     # 'RESPOND' | 'CLARIFY' | 'ACT' | 'IGNORE' | 'CANCEL'
+    branch: str                   # 'ignore' | 'respond' | 'act'
+    mode: str                     # 'RESPOND' | 'ACT' | 'IGNORE' | 'CANCEL'
     tools: List[str]              # tool names, only meaningful for ACT
     skills: List[str]             # innate skill names selected for ACT
     confidence_internal: float    # 0-1: confidence memory is sufficient
@@ -200,6 +203,10 @@ class CognitiveTriageService:
             # CANCEL is still valid (user explicitly stopped something) and is left untouched.
             if mode == 'IGNORE':
                 mode = 'RESPOND'
+            # CLARIFY is no longer a routing mode — the ACT loop asks clarifying questions
+            # naturally as part of its reasoning when intent is ambiguous.
+            if mode == 'CLARIFY':
+                mode = 'ACT'
 
             tools = data.get('tools', [])
             if isinstance(tools, str):
@@ -288,6 +295,9 @@ class CognitiveTriageService:
                     # IGNORE is not a valid routing outcome for user messages.
                     if mode == 'IGNORE':
                         mode = 'RESPOND'
+                    # CLARIFY is no longer a routing mode — remap to ACT.
+                    if mode == 'CLARIFY':
+                        mode = 'ACT'
                     reasoning = f'onnx_fallback_mode={mode}({confidence:.2f})'
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} ONNX fallback failed: {e}")

@@ -43,12 +43,6 @@
       "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none" }
     },
     {
-      "id": "frontal-cortex-clarify",
-      "name": "Clarify Mode",
-      "desc": "Asks clarifying questions when user intent is ambiguous.",
-      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none" }
-    },
-    {
       "id": "frontal-cortex-proactive",
       "name": "Proactive Mode",
       "desc": "Translates spontaneous thoughts into outreach messages.",
@@ -69,7 +63,7 @@
     {
       "id": "cognitive-triage",
       "name": "Cognitive Triage",
-      "desc": "Routes user input to optimal cognitive branch (RESPOND/CLARIFY/ACT).",
+      "desc": "Routes user input to optimal cognitive branch (RESPOND/ACT).",
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
     },
     {
