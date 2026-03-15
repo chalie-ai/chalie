@@ -341,6 +341,18 @@ class ReasoningLoopService:
             logger.info(f"{LOG_PREFIX} Unknown signal type '{signal.signal_type}', using reasoning path")
             self._handle_reasoning_signal(signal)
 
+        # Invalidate domain confidence cache for episode_created signals — episodes
+        # are cross-domain events that may improve confidence across all domains.
+        # Best-effort: never fail the signal processing loop.
+        if signal.signal_type == 'episode_created':
+            try:
+                from services.domain_confidence_service import DomainConfidenceService
+                from services.database_service import get_shared_db_service
+                svc = DomainConfidenceService(get_shared_db_service(), self.store)
+                svc.invalidate_all()
+            except Exception:
+                pass
+
         # Track signal topic for goal inference pattern detection
         if signal.topic and signal.signal_type != 'user_message':
             try:
@@ -411,6 +423,20 @@ class ReasoningLoopService:
             # Cap the list at 20 entries
             self.store.ltrim('reasoning_loop:identity_shifts', -20, -1)
             logger.debug(f"{LOG_PREFIX} Noted identity shift: {note[:80]}")
+
+            # Invalidate domain confidence cache — trait changes affect per-domain scores.
+            # Best-effort: never fail the signal handler.
+            try:
+                from services.domain_confidence_service import DomainConfidenceService
+                from services.database_service import get_shared_db_service
+                svc = DomainConfidenceService(get_shared_db_service(), self.store)
+                domain = signal.topic or ''
+                if domain:
+                    svc.invalidate_domain(domain)
+                else:
+                    svc.invalidate_all()
+            except Exception:
+                pass
 
             # High-energy trait changes (corrections, overwrites) deserve reasoning
             if signal.activation_energy >= 0.6:

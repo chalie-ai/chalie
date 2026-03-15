@@ -346,11 +346,31 @@ class PlanAction(AutonomousAction):
 
             cost_class = plan.get('cost_class', 'expensive')
 
-            # Auto-accept all drift tasks — the 7 gates are sufficient protection.
-            # The old cheap/expensive distinction left most tasks stranded in
-            # 'proposed' because the WebSocket confirmation was unreliable.
-            task_service.transition(task_id, 'accepted')
-            self._surface_auto_start(thought, plan)
+            # Tier 3 (COMMIT) check — irreversible goals must not be auto-accepted.
+            # All other tiers proceed with auto-accept; the 7 gates are sufficient.
+            is_commit_tier = False
+            try:
+                from services.consequence_classifier_service import get_consequence_classifier_service
+                classifier = get_consequence_classifier_service()
+                cls_result = classifier.classify(thought.thought_content)
+                if cls_result['tier'] == 3:  # COMMIT — never auto-execute
+                    is_commit_tier = True
+                    logger.info(
+                        f"{LOG_PREFIX} Goal classified as COMMIT (irreversible), "
+                        f"leaving as PROPOSED: {thought.thought_content!r:.80}"
+                    )
+            except Exception:
+                logger.debug(
+                    f"{LOG_PREFIX} Consequence classifier unavailable, proceeding with auto-accept",
+                    exc_info=True,
+                )
+
+            if not is_commit_tier:
+                # Auto-accept all non-COMMIT drift tasks — the 7 gates are sufficient protection.
+                # The old cheap/expensive distinction left most tasks stranded in
+                # 'proposed' because the WebSocket confirmation was unreliable.
+                task_service.transition(task_id, 'accepted')
+                self._surface_auto_start(thought, plan)
 
             # Set cooldown — store timestamp as value for backoff-extended checks
             self.store.setex(COOLDOWN_KEY, self.cooldown_seconds, str(time.time()))
