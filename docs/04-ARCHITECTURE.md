@@ -52,7 +52,7 @@ frontend/
 - **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker
 - **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
-- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
+- **`message_gate_service.py`** — Deterministic message gate (empty guard → CANCEL detection → ONNX mode gate); primary routing authority for user messages; routes to CANCEL, RESPOND fast-path, or ACT pipeline with ONNX skill pre-filter; no LLM call, no CLARIFY/IGNORE modes for user messages
 
 #### Response Generation
 - **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
@@ -90,7 +90,7 @@ frontend/
 - **`act_orchestrator_service.py`** — Unified, parameterized ACT loop runner. Single implementation replaces per-worker loop copies. Configurable: `critic_enabled`, `smart_repetition` (embedding-based), `escalation_hints` (budget warnings), `persistent_task_exit`, `deferred_card_context`. Caller-specific behavior via `on_iteration_complete` callback. Config flag `act_use_unified_orchestrator` for gradual rollout.
 - **`act_loop_service.py`** — Fatigue-based cognitive iteration manager with action execution, history tracking, and telemetry. Constructor-injected critic and dispatcher (no monkey-patching). Generic scalar output chaining between sequential actions.
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
-- **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
+- **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `tool-prefilter` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
 - **`act_completion_service.py`** — Detects when expected tools were not invoked; injects `[NO_ACTION_TAKEN]` signal
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
 - **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
@@ -177,7 +177,7 @@ frontend/
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
-- **Triage Calibration** — Triage correctness scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from clarification→tool resolution chains
+- **Tool Prefilter Calibration** — ONNX skill prefilter scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from tool resolution chains
 - **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
@@ -194,7 +194,7 @@ frontend/
   → [run.py] → [PromptQueue] → [Digest Worker]
     ├─ Classification (embedding-based, adaptive boundary detection)
     ├─ Context Assembly (retrieve from all 5 memory layers)
-    ├─ Mode Routing (deterministic ~5ms mathematical router)
+    ├─ Message Gate (deterministic ~5ms: empty guard, CANCEL, ONNX mode gate)
     ├─ Mode-Specific LLM Generation
     │  └─ If ACT: action loop → re-route → terminal response
     └─ Enqueue Episodic Memory Job
@@ -223,15 +223,12 @@ frontend/
 
 ## Key Architectural Decisions
 
-### Deterministic Mode Router
-- **Decoupled**: Mode selection (mathematical, ~5ms) separate from response generation (LLM, ~2-15s)
-- **Signals**: ~17 observable signals from context + NLP (context warmth, question marks, greeting patterns, etc.)
-- **Scores**: Each mode gets weighted composite score; highest wins
-- **Tie-breaker**: Small LLM (qwen3:4b) for ambiguous cases
-- **Self-leveling**: Router naturally shifts toward RESPOND as memory accumulates
+### Message Gate (User Messages) and Mode Router (Non-User Flows)
+- **MessageGateService** is the primary routing authority for user messages (~5ms, deterministic): empty guard → CANCEL detection → ONNX mode gate → RESPOND fast-path or ACT pipeline with ONNX skill pre-filter. No LLM call. No CLARIFY or IGNORE modes.
+- **ModeRouterService** handles non-user flows (drift, proactive, fallback): deterministic scoring (~5ms) from ~17 observable signals; LLM tie-breaker (qwen3:4b) for ambiguous cases; self-leveling toward RESPOND as memory accumulates.
 
 ### Mode-Specific Prompts
-- Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT) has its own focused prompt template
+- Each mode (RESPOND, ACKNOWLEDGE, ACT) has its own focused prompt template
 - Replaces old approach: single combined prompt with mode selection embedded
 - Focused scope prevents elaboration and improves consistency
 

@@ -6,11 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from workers.digest_worker import (
     calculate_context_warmth,
-    _handle_ignore_branch,
-    _is_innate_skill_only,
     _resolve_image_contexts,
 )
-from services.cognitive_triage_service import TriageResult
 from services.mode_router_service import (
     GREETING_PATTERNS,
     INTERROGATIVE_WORDS,
@@ -108,101 +105,6 @@ class TestNlpSignalPatterns:
         density = unique / max(len(tokens), 1)
         # 2 unique / 4 total = 0.5
         assert density == pytest.approx(0.5)
-
-
-def _make_triage(mode):
-    return TriageResult(
-        branch='ignore', mode=mode, tools=[], skills=[],
-        confidence_internal=1.0, confidence_tool_need=0.0,
-        triage_time_ms=0.0,
-        fast_filtered=False, self_eval_override=False, self_eval_reason=None,
-    )
-
-
-class TestHandleIgnoreBranch:
-    """
-    _handle_ignore_branch must only fast-exit for CANCEL/IGNORE.
-    Any other mode (e.g. RESPOND) must return None so callers route
-    through generate_for_mode — preventing the NoneType crash that
-    caused 'No response received' for ambiguous requests like 'Schedule it'.
-    """
-
-    def test_cancel_returns_empty_response(self):
-        result = _handle_ignore_branch(
-            _make_triage('CANCEL'), 'never mind', 'topic', None,
-            None, {}, None, None, None,
-        )
-        assert result is not None
-        assert result['mode'] == 'CANCEL'
-        assert result['response'] == ''
-
-    def test_ignore_falls_through_to_respond(self):
-        """IGNORE is no longer silently dropped — it returns None so callers fall through
-        to normal RESPOND processing.  In practice IGNORE never reaches here because
-        cognitive_triage_service remaps it to RESPOND upstream; this test guards the
-        defensive path that handles it gracefully if it somehow does arrive."""
-        result = _handle_ignore_branch(
-            _make_triage('IGNORE'), '', 'topic', None,
-            None, {}, None, None, None,
-        )
-        assert result is None, (
-            "IGNORE should return None (fall-through to RESPOND) rather than an empty response"
-        )
-
-    def test_respond_mode_returns_none(self):
-        """RESPOND must not be handled here — callers route to generate_for_mode."""
-        result = _handle_ignore_branch(
-            _make_triage('RESPOND'), 'Schedule it', 'topic', None,
-            None, {}, None, None, None,
-        )
-        assert result is None, (
-            "RESPOND mode in ignore branch should return None so the dispatch "
-            "condition (mode in CANCEL/IGNORE) prevents this path from being reached, "
-            "not silently produce an empty response."
-        )
-
-# ── _is_innate_skill_only / contextual_skills dispatch ───────────
-
-def _make_act_triage(skills):
-    return TriageResult(
-        branch='act', mode='ACT', tools=[], skills=skills,
-        confidence_internal=0.9, confidence_tool_need=0.1,
-        triage_time_ms=0.0,
-        fast_filtered=False, self_eval_override=False, self_eval_reason=None,
-    )
-
-
-class TestInnateSkillOnly:
-    """
-    _is_innate_skill_only gates _handle_innate_skill_dispatch.
-    Ensures only contextual skills (not primitives) trigger direct dispatch,
-    and that the dispatch path passes only contextual_skills to the LLM
-    (preventing introspect/recall from crowding out the intended skill).
-    """
-
-    def test_schedule_skill_is_innate_only(self):
-        """schedule in skills + no tools → direct dispatch path."""
-        triage = _make_act_triage(['recall', 'memorize', 'introspect', 'schedule'])
-        assert _is_innate_skill_only(triage) is True
-
-    def test_primitives_only_is_not_innate_only(self):
-        """Only recall/memorize/introspect → not an innate-only dispatch (no contextual skill)."""
-        triage = _make_act_triage(['recall', 'memorize', 'introspect'])
-        assert _is_innate_skill_only(triage) is False
-
-    def test_empty_skills_is_not_innate_only(self):
-        triage = _make_act_triage([])
-        assert _is_innate_skill_only(triage) is False
-
-    def test_external_tool_present_is_not_innate_only(self):
-        """External tools present → full ACT loop, not direct dispatch."""
-        triage = _make_act_triage(['schedule'])
-        triage.tools = ['duckduckgo_search']
-        assert _is_innate_skill_only(triage) is False
-
-    def test_list_skill_is_innate_only(self):
-        triage = _make_act_triage(['recall', 'list'])
-        assert _is_innate_skill_only(triage) is True
 
 
 # ── _resolve_image_contexts (WS4) ────────────────────────────────────

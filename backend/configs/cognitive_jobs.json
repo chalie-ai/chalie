@@ -61,9 +61,9 @@
       "caps": { "reasoning": "high", "structured": "high", "creativity": "none", "classification": "medium" }
     },
     {
-      "id": "cognitive-triage",
-      "name": "Cognitive Triage",
-      "desc": "Routes user input to optimal cognitive branch (RESPOND/ACT).",
+      "id": "tool-prefilter",
+      "name": "Tool Pre-filter",
+      "desc": "Selects relevant tools and skills when ONNX confidence is low. Lightweight, infrequent.",
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
     },
     {

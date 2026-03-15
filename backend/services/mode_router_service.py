@@ -128,7 +128,7 @@ def collect_routing_signals(
         classification_result: Dict from topic classifier
         session_service: SessionService instance
         intent: Optional intent classification dict from IntentClassifierService
-            (tool selection handled by CognitiveTriageService)
+            (tool selection handled by MessageGateService)
 
     Returns:
         Dict of routing signals
@@ -382,7 +382,7 @@ class ModeRouterService:
             respond += w.get('respond.question_cold', 0.10)
         if is_cold:
             respond -= w.get('respond.cold_penalty', 0.15)
-        # Tool-needed penalty removed — tool dispatch now handled by CognitiveTriageService
+        # Tool-needed penalty removed — tool dispatch now handled by MessageGateService
 
         # ── ACT ──────────────────────────────────────────────────
         act = self.bases['ACT']
@@ -392,7 +392,7 @@ class ModeRouterService:
             act += w.get('act.interrogative_gap', 0.15)
         if implicit_ref:
             act += w.get('act.implicit_reference', 0.15)
-        # Tool relevance weights removed — CognitiveTriageService handles tool dispatch
+        # Tool relevance weights removed — MessageGateService handles tool dispatch
         if warmth < 0.15:
             act -= w.get('act.very_cold_penalty', 0.10)
         # Action intent — user wants Chalie to DO something (set reminder, manage list, etc.)
