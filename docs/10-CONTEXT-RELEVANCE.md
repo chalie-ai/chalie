@@ -20,7 +20,6 @@ None of which the ACKNOWLEDGE template even uses.
 | Mode | I/O Skipped | Token Savings |
 |------|-------------|---------------|
 | ACKNOWLEDGE | 5 MemoryStore reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
-| CLARIFY (warm) | 1 PG vector search, skill queries | ~500-1500 |
 | RESPOND (greeting) | 1 PG vector search, focus queries | ~800-2000 |
 | ACT | Identity/trait lookups | ~300-800 |
 
@@ -238,7 +237,7 @@ def _inject_parameters(self, template, ..., inclusion_map=None):
 Every context relevance computation logs a structured entry:
 
 ```
-[CONTEXT RELEVANCE] mode=CLARIFY | excluded_hard=[focus, available_skills, available_tools, warm_return_hint] |
+[CONTEXT RELEVANCE] mode=RESPOND | excluded_hard=[focus, available_skills, available_tools, warm_return_hint] |
 excluded_soft=[episodic_memory] | recovered_soft=[] | deps_added=[] |
 overrides_applied=[urgency] | total_included=9 | est_tokens=2100
 ```

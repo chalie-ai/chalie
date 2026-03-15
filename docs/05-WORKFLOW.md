@@ -40,7 +40,7 @@ The application processes user prompts through a pipeline of workers, queues, an
    - Generates a response using a **mode-specific prompt** via `FrontalCortexService`:
      - ACT mode → action loop → re-route → terminal response
      - IGNORE → empty response (no LLM call)
-     - RESPOND/CLARIFY/ACKNOWLEDGE → single LLM call with mode-specific prompt
+     - RESPOND/ACKNOWLEDGE → single LLM call with mode-specific prompt
    - Enqueues a job to the `memory-chunker-queue`.
 4. **Memory Chunker Worker (`workers/memory_chunker_worker.py`)** – Enriches individual exchanges with *memory chunks*:
    - Loads the current world state from `WorldStateService`.
@@ -63,7 +63,7 @@ The application processes user prompts through a pipeline of workers, queues, an
 ### Key Decisions
 - **Shared State** – `WorkerBase._update_shared_state` merges per-worker updates into a shared dictionary managed by the `WorkerManager`. This avoids global locks and keeps the worker pool lightweight.
 - **Deterministic Routing** – Mode selection is decoupled from LLM generation. A mathematical router scores modes using observable signals (~5ms), eliminating the previous approach where the LLM did both mode selection and response generation in a single ~15s call.
-- **Mode-Specific Prompts** – Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT, IGNORE) has its own focused prompt template (~30-80 lines each), replacing the old combined 240-line prompt.
+- **Mode-Specific Prompts** – Each mode (RESPOND, ACKNOWLEDGE, ACT, IGNORE) has its own focused prompt template (~30-80 lines each), replacing the old combined 240-line prompt.
 - **Confidence Calculation** – `ThreadConversationService._calculate_new_confidence` uses a bounded reinforcement formula `new = current + (new_confidence - current) * 0.5`.
 - **Thread Context** – Conversation threads are managed in MemoryStore with expiry, not persistent files. Thread state includes active topic, confidence, and conversation history.
 - **Error Handling** – All workers catch JSON decoding errors from LLM responses and log meaningful messages instead of crashing.
@@ -97,7 +97,7 @@ When the mode router selects **ACT**, the digest worker enters an autonomous act
 1. **Dispatch** — `ActDispatcherService` routes each action to the registered innate skill handler (recall, memorize, schedule, etc.)
 2. **Execute** — Handler runs with a timeout (default 10s); result includes structured output + confidence estimate
 3. **Critic** — `CriticService` evaluates the result via a lightweight LLM call. Safe actions (recall, memorize) get silent correction. Consequential actions (schedule, persistent_task) pause for user confirmation if confidence is low
-4. **Re-plan** — If the critic suggests a different approach, the loop re-routes. Otherwise, the loop continues with the next action or exits to a terminal mode (RESPOND/CLARIFY)
+4. **Re-plan** — If the critic suggests a different approach, the loop re-routes. Otherwise, the loop continues with the next action or exits to a terminal mode (RESPOND)
 5. **Budget** — Each action costs fatigue points (recall=1.0, memorize=0.8, introspect=0.5). The loop exits when the budget is exhausted
 
 ### WebSocket Lifecycle

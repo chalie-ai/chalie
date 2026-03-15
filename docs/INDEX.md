@@ -146,9 +146,8 @@ docs/
 ## Key Concepts
 
 ### Mode Routing
-Chalie selects one of 5 engagement modes for each user message:
+Chalie selects one of 4 engagement modes for each user message:
 - **RESPOND** — Give a substantive answer
-- **CLARIFY** — Ask a clarifying question
 - **ACKNOWLEDGE** — Brief social response
 - **ACT** — Execute internal actions (memory, reasoning)
 - **IGNORE** — No response needed
