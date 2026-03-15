@@ -169,7 +169,7 @@ frontend/
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
 - **Decay Engine** — Periodic memory decay cycle; applies `contradicted`/`uncertain` reliability multipliers (×0.5/×0.75) so unreliable memories decay faster
 - **Uncertainty Engine** — Four-phase contradiction detection and resolution system:
-  - *UncertaintyService* — CRUD + state machine for `uncertainties` table; rank-guard on `reliability` columns; `mark_surfaced()` with anti-nag downgrade; `resolve_by_reinforcement()` for evidence-based auto-resolution
+  - *UncertaintyService* — CRUD + state machine for `uncertainties` table; rank-guard on `reliability` columns; `resolve_by_reinforcement()` for evidence-based auto-resolution
   - *ContradictionClassifierService* — LLM pair classifier (600ms ingestion time-box); vector pre-screen via `user_traits_vec`/`concepts_vec`; discriminates temporal change vs true contradiction vs context-dependent
   - *ReconcileAction* — Autonomous drift action (priority 4, 30min cooldown); samples traits+concepts, runs pairwise classification, creates uncertainty records or auto-supersedes temporal changes
 - **Routing Reflection** — Idle-time peer review of routing decisions
