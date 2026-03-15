@@ -143,6 +143,16 @@
     "installs_by_default": true
   },
   {
+    "name": "code_eval",
+    "title": "Code Eval",
+    "icon": "fa-solid fa-code",
+    "summary": "Execute Python snippets to verify formulas, test algorithms, or compute results precisely. Restricted sandbox with math, statistics, decimal, and more.",
+    "category": "productivity",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
     "name": "searxng",
     "title": "SearXNG",
     "icon": "https://www.vectorlogo.zone/logos/google/google-icon.svg",
