@@ -64,25 +64,28 @@ class MessageGateService:
             )
 
         # 3. ONNX mode gate
-        route = 'act'  # default: everything goes to ACT
+        #
+        # The existing mode-tiebreaker ONNX model is a binary A/B tiebreaker
+        # designed for the old mode router — it can't classify respond vs act
+        # independently.  Until a proper binary respond/act classifier is trained,
+        # all non-cancel messages go to ACT.  The RESPOND fast-path in the digest
+        # worker is wired and ready — it activates once a "mode-gate" model is
+        # deployed that outputs 'RESPOND'/'ACT' with calibrated confidence.
+        route = 'act'
         confidence = 0.5
 
         try:
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
 
-            if svc.is_available("mode-tiebreaker"):
-                label, conf = svc.predict("mode-tiebreaker", text)
+            if svc.is_available("mode-gate"):
+                label, conf = svc.predict("mode-gate", text)
                 if label is not None:
                     onnx_mode = label.upper()
                     if onnx_mode == 'RESPOND' and conf >= 0.85:
                         route = 'respond'
                         confidence = conf
-                    elif onnx_mode in ('ACT', 'CLARIFY'):
-                        route = 'act'
-                        confidence = conf
                     else:
-                        # IGNORE or unknown → act (Chalie always responds)
                         route = 'act'
                         confidence = conf
                     logger.info(f"{LOG_PREFIX} ONNX: {onnx_mode}({conf:.2f}) → route={route}")

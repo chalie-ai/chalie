@@ -101,10 +101,16 @@ class TestCancelDetection:
 
 
 class TestOnnxModeGate:
-    """Test ONNX mode gate routing."""
+    """Test ONNX mode gate routing.
+
+    Note: The gate looks for a 'mode-gate' model (binary respond/act classifier).
+    The old 'mode-tiebreaker' model outputs A/B labels and cannot drive the gate.
+    Until 'mode-gate' is trained and deployed, all messages default to act.
+    These tests verify the gate works correctly once the model is available.
+    """
 
     def test_onnx_respond_high_confidence_returns_respond(self):
-        """ONNX predicts RESPOND with conf >= 0.85 → respond route."""
+        """mode-gate predicts RESPOND with conf >= 0.85 → respond route."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -115,11 +121,12 @@ class TestOnnxModeGate:
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
             result = svc.gate("hello how are you?")
 
+        mock_onnx.is_available.assert_called_with("mode-gate")
         assert result.route == 'respond'
         assert result.confidence == pytest.approx(0.92)
 
     def test_onnx_respond_low_confidence_falls_to_act(self):
-        """ONNX predicts RESPOND but conf < 0.85 → act route (conservative)."""
+        """mode-gate predicts RESPOND but conf < 0.85 → act route (conservative)."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -133,7 +140,7 @@ class TestOnnxModeGate:
         assert result.route == 'act'
 
     def test_onnx_act_returns_act(self):
-        """ONNX predicts ACT → act route."""
+        """mode-gate predicts ACT → act route."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -147,28 +154,14 @@ class TestOnnxModeGate:
         assert result.route == 'act'
         assert result.confidence == pytest.approx(0.88)
 
-    def test_onnx_clarify_remapped_to_act(self):
-        """ONNX predicts CLARIFY → remapped to act."""
+    def test_onnx_unknown_label_defaults_to_act(self):
+        """Unknown label from mode-gate → act (safe default)."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        mock_onnx.predict.return_value = ('CLARIFY', 0.75)
-
-        with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
-            result = svc.gate("do the thing")
-
-        assert result.route == 'act'
-
-    def test_onnx_ignore_remapped_to_act(self):
-        """ONNX predicts IGNORE → remapped to act (Chalie always responds)."""
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-
-        mock_onnx = MagicMock()
-        mock_onnx.is_available.return_value = True
-        mock_onnx.predict.return_value = ('IGNORE', 0.80)
+        mock_onnx.predict.return_value = ('UNKNOWN', 0.80)
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
             result = svc.gate("hey")
@@ -176,7 +169,7 @@ class TestOnnxModeGate:
         assert result.route == 'act'
 
     def test_onnx_unavailable_defaults_to_act(self):
-        """When ONNX is unavailable, defaults to act route."""
+        """When mode-gate model is unavailable, defaults to act route."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -200,6 +193,20 @@ class TestOnnxModeGate:
 
         assert result.route == 'act'
         assert result.confidence == pytest.approx(0.5)
+
+    def test_no_mode_gate_model_means_all_act(self):
+        """Without mode-gate deployed, every non-cancel message → act."""
+        from services.message_gate_service import MessageGateService
+        svc = MessageGateService()
+
+        # Simulate: mode-gate not available (the current state)
+        mock_onnx = MagicMock()
+        mock_onnx.is_available.return_value = False
+
+        with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
+            for msg in ["hello", "what's the weather?", "remind me to call mom"]:
+                result = svc.gate(msg)
+                assert result.route == 'act', f"Expected act for {msg!r}, got {result.route}"
 
 
 class TestGateResultMetadata:
