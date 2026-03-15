@@ -32,43 +32,10 @@ let pollTimer = null;           // setInterval id for build polling
 let obsData = {};               // cached API responses keyed by subtab name
 let obsLoaded = {};             // whether a subtab has been fetched
 let activeSubtab = 'jobs';      // currently active cognition sub-tab
-let providerHealth = {};        // job_id → {health, tooltip}
-
 // ==========================================
-// LLM Jobs
+// LLM Jobs — fetched from backend config
 // ==========================================
-const JOBS = [
-    // ── Tier 1: ≥ 30B ──────────────────────────────────────
-    { id: 'autobiography',            name: 'Autobiography Synthesis',  desc: 'Synthesises personal narrative prose from all memory layers (6h cycle).',               badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~7.7K',    frequency: 'Every 6 hours',            strengths: ['Reasoning', 'Creative Writing', 'Synthesis'] },
-    { id: 'frontal-cortex',           name: 'Frontal Cortex',           desc: 'Core reasoning engine; orchestrates all response modes.',                                badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5K',      frequency: 'Once per message',          strengths: ['Reasoning', 'Structured Output', 'Context Following'] },
-    { id: 'frontal-cortex-act',       name: 'Act Mode',                 desc: 'Plans and executes multi-step tool actions. Up to 7 iterations per invocation.',          badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5.4K ×N', frequency: 'Per message (ACT mode)',    strengths: ['Strong Reasoning', 'Structured Output', 'Planning'] },
-    { id: 'plan-decomposition',       name: 'Plan Decomposition',       desc: 'Decomposes task goals into executable step DAGs for long-horizon planning.',               badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~3K',      frequency: 'Per persistent task',       strengths: ['Strong Reasoning', 'Structured Output', 'Planning'] },
-    { id: 'frontal-cortex-respond',   name: 'Respond Mode',             desc: 'Primary conversational voice of Chalie in normal conversation.',                          badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5.4K',    frequency: 'Once per message',          strengths: ['Reasoning', 'Structured Output', 'Natural Language'] },
-
-    // ── Tier 2: ≥ 14B ──────────────────────────────────────
-    { id: 'cognitive-drift',          name: 'Cognitive Drift (DMN)',     desc: 'Generates spontaneous thoughts during idle windows (Default Mode Network).',              badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~1.2K',    frequency: 'Idle (every 5–10 min)',    strengths: ['Reasoning', 'Creativity'] },
-    { id: 'episodic-memory',          name: 'Episodic Memory',           desc: 'Synthesises sessions into episodic narratives for long-term recall.',                     badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~6.8K',    frequency: 'Batch consolidation',      strengths: ['Reasoning', 'Structured Output', 'Narrative Synthesis'] },
-    { id: 'frontal-cortex-clarify',   name: 'Clarify Mode',             desc: 'Asks clarifying questions when user intent is ambiguous.',                                badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~2.8K',    frequency: 'Per message (CLARIFY)',     strengths: ['Reasoning', 'Structured Output'] },
-    { id: 'frontal-cortex-proactive', name: 'Proactive Mode',           desc: 'Translates spontaneous thoughts into outreach messages.',                                 badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~3K',      frequency: 'Idle triggered',           strengths: ['Reasoning', 'Natural Language', 'Structured Output'] },
-    { id: 'mode-reflection',          name: 'Mode Reflection',          desc: 'Peer-reviews routing decisions during idle time (nightly batch).',                         badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~1.5K',    frequency: 'Nightly batch',            strengths: ['Reasoning', 'Structured Output', 'Analysis'] },
-    { id: 'semantic-memory',          name: 'Semantic Memory',           desc: 'Extracts concepts and relationships to build the knowledge graph.',                       badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~5.6K',    frequency: 'Per exchange (async)',      strengths: ['Reasoning', 'Structured Output', 'Knowledge Extraction'] },
-
-    // ── Tier 3: 8B sufficient ───────────────────────────────
-    { id: 'cognitive-triage',           name: 'Cognitive Triage',          desc: 'Routes user input to optimal cognitive branch (RESPOND/CLARIFY/ACT). Lightweight preferred.', badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.6K', frequency: 'Once per message',      strengths: ['Structured Output', 'Classification'] },
-    { id: 'experience-assimilation',    name: 'Experience Assimilation',   desc: 'Evaluates tool outputs for novel knowledge worth storing.',                               badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.4K', frequency: 'Post-tool execution',   strengths: ['Structured Output', 'Classification'] },
-    { id: 'fact-store',                 name: 'Fact Store',                desc: 'Extracts and stores atomic facts from exchanges. Runs async.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
-    { id: 'autonomous-ambient-tool',     name: 'Ambient Tool Query',          desc: 'Generates search queries for proactive tool use triggered by cognitive drift.',              badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Drift triggered',         strengths: ['Structured Output', 'Query Generation'] },
-    { id: 'frontal-cortex-reflexive',   name: 'Reflexive Mode',            desc: 'Fast reflexive responses for simple, self-contained queries via cognitive reflex path.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per reflex activation',  strengths: ['Fast Inference', 'Structured Output'] },
-    { id: 'frontal-cortex-scheduled-tool', name: 'Scheduled Tool Mode',    desc: 'Generates responses after scheduled tool/reminder execution.',                             badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.5K', frequency: 'Per scheduled event',   strengths: ['Structured Output', 'Context Following'] },
-    { id: 'trait-extraction', name: 'Trait Extraction', desc: 'Extracts user traits from messages via lightweight LLM call. Async, non-blocking.', badge: '4B sufficient', badgeClass: 'badge-4b', tokens: '~0.5K', frequency: 'Per message (async)', strengths: ['Structured Output', 'Extraction'] },
-    { id: 'moment-enrichment',          name: 'Moment Enrichment',         desc: 'Generates titles and summaries for pinned moments. Runs in a 5-minute background poll.',   badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~300',  frequency: 'Per pinned moment',     strengths: ['Summarisation', 'Extraction'] },
-    { id: 'document-synthesis',          name: 'Document Synthesis',        desc: 'Generates summaries for uploaded documents during processing.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per document upload',   strengths: ['Summarisation', 'Extraction'] },
-    { id: 'document-classification',     name: 'Document Classification',   desc: 'Classifies documents into categories, projects, and dates for automatic organisation.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1K',   frequency: 'Per document upload',   strengths: ['Classification', 'Structured Output', 'JSON'] },
-
-    // ── Vision ────────────────────────────────────────────────
-    { id: 'document-ocr',    name: 'Document OCR',    desc: 'Extracts text from image-only PDFs and scanned documents via vision LLM.',  badge: 'Vision', badgeClass: 'badge-vision', tokens: '~1.5K', frequency: 'Per image-only document', strengths: ['Vision', 'OCR', 'Extraction'] },
-
-];
+let jobs = [];
 
 // ==========================================
 // Platform Config
@@ -222,23 +189,22 @@ async function loadData() {
         return;
     }
 
-    await loadAssignments();
+    await Promise.all([loadAssignments(), loadJobDefinitions()]);
     renderMain();
-    loadProviderHealth().then(() => renderCognition());
+    renderCognition();
 
     // Handle OAuth callback URL parameters
     handleOAuthCallback();
 }
 
-async function loadProviderHealth() {
+async function loadJobDefinitions() {
     try {
-        const res = await apiFetch('/system/observability/provider-health');
+        const res = await apiFetch('/providers/jobs/definitions');
         if (res.ok) {
             const data = await res.json();
-            providerHealth = {};
-            for (const j of (data.jobs || [])) providerHealth[j.job_id] = j;
+            jobs = data.jobs || [];
         }
-    } catch (e) { /* non-critical */ }
+    } catch (e) { /* non-critical — jobs will be empty */ }
 }
 
 // ==========================================
@@ -636,53 +602,37 @@ async function loadAssignments() {
     }
 }
 
+const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification' };
+const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
+
 function renderCognition() {
     const el = document.getElementById('cognitionList');
     if (providers.length === 0) {
         el.innerHTML = '<div class="empty-state"><h3>No providers configured</h3><p>Add a provider first.</p></div>';
         return;
     }
-
-    // Suggestion bar: show when 2+ providers and any job is yellow
-    const yellowCount = Object.values(providerHealth).filter(h => h.health === 'yellow').length;
-    const dismissed = localStorage.getItem('chalie_autoassign_dismissed') === String(providers.length);
-    let suggestionHtml = '';
-    if (providers.length >= 2 && yellowCount > 0 && !dismissed) {
-        suggestionHtml = `
-            <div class="auto-assign-bar">
-                <span class="auto-assign-bar__text">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i>
-                    ${yellowCount} job${yellowCount > 1 ? 's' : ''} could perform better with a different provider.
-                </span>
-                <button class="auto-assign-bar__btn" onclick="applyAutoAssign()">Optimize assignments</button>
-                <button class="auto-assign-bar__dismiss" onclick="dismissAutoAssign()" title="Dismiss">&times;</button>
-            </div>
-        `;
+    if (jobs.length === 0) {
+        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions…</h3></div>';
+        return;
     }
 
-    el.innerHTML = suggestionHtml + JOBS.map(job => {
+    const cardsHtml = jobs.map(job => {
         const currentAssignment = assignments[job.id];
         const options = providers.map(p =>
             `<option value="${p.id}" ${p.id === currentAssignment ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
         ).join('');
 
-        const strengthTags = (job.strengths || []).map(s =>
-            `<span class="job-strength">${escapeHtml(s)}</span>`
+        const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
+            `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
         ).join('');
-
-        const ph = providerHealth[job.id];
-        const healthDot = ph
-            ? `<span class="job-health-dot --${ph.health}" title="${escapeHtml(ph.tooltip || '')}"></span>`
-            : '';
 
         return `
             <div class="job-card">
                 <div class="job-card__top">
                     <div class="job-info">
-                        <div class="job-name">${escapeHtml(job.name)}${healthDot}</div>
+                        <div class="job-name">${escapeHtml(job.name)}</div>
                         <div class="job-desc">${escapeHtml(job.desc)}</div>
                     </div>
-                    <span class="job-badge ${job.badgeClass}">${escapeHtml(job.badge)}</span>
                     <div class="job-assign">
                         <select class="provider-select" data-job="${job.id}" onchange="assignJob('${job.id}', this)">
                             <option value="">-- Select provider --</option>
@@ -692,18 +642,23 @@ function renderCognition() {
                     </div>
                 </div>
                 <div class="job-card__meta">
-                    <span class="job-meta-item" title="Average tokens per invocation">
-                        <i class="fa-solid fa-bolt job-meta-icon"></i> ${escapeHtml(job.tokens)} tokens
-                    </span>
-                    <span class="job-meta-item" title="Usage frequency">
-                        <i class="fa-regular fa-clock job-meta-icon"></i> ${escapeHtml(job.frequency)}
-                    </span>
-                    <span class="job-meta-sep"></span>
-                    <div class="job-strengths">${strengthTags}</div>
+                    <div class="job-caps">${capsHtml}</div>
                 </div>
             </div>
         `;
     }).join('');
+
+    const legendHtml = `
+        <div class="cap-legend">
+            <span class="cap-legend__title">Capability requirements:</span>
+            <span class="job-cap cap--high">High</span>
+            <span class="job-cap cap--medium">Medium</span>
+            <span class="job-cap cap--low">Low</span>
+            <span class="job-cap cap--none">None</span>
+        </div>
+    `;
+
+    el.innerHTML = cardsHtml + legendHtml;
 }
 
 async function assignJob(jobName, selectEl) {
@@ -721,37 +676,12 @@ async function assignJob(jobName, selectEl) {
             const indicator = document.getElementById(`save-${jobName}`);
             indicator.classList.add('visible');
             setTimeout(() => indicator.classList.remove('visible'), 2000);
-            loadProviderHealth().then(() => renderCognition());
         } else {
             showToast('Failed to save assignment', 'error');
         }
     } catch (e) {
         showToast('Network error', 'error');
     }
-}
-
-async function applyAutoAssign() {
-    try {
-        const res = await apiFetch('/providers/jobs/auto-assign', {
-            method: 'POST', body: JSON.stringify({}),
-        });
-        if (res.ok) {
-            showToast('Assignments optimized', 'success');
-            localStorage.setItem('chalie_autoassign_dismissed', String(providers.length));
-            await loadAssignments();
-            await loadProviderHealth();
-            renderCognition();
-        } else {
-            showToast('Auto-assign failed', 'error');
-        }
-    } catch (e) {
-        showToast('Network error', 'error');
-    }
-}
-
-function dismissAutoAssign() {
-    localStorage.setItem('chalie_autoassign_dismissed', String(providers.length));
-    renderCognition();
 }
 
 // ==========================================
