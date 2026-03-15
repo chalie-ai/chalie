@@ -29,7 +29,7 @@ This separation eliminates:
 ### 2. Self-Leveling via Context Warmth
 
 The router naturally shifts behavior as memory accumulates:
-- Cold context (new topic, no facts) → favors CLARIFY
+- Cold context (new topic, no facts) → favors RESPOND (ACT loop handles clarification)
 - Warm context (established topic, facts present) → favors RESPOND
 - This happens through signal-weighted scoring, not explicit rules
 
@@ -50,12 +50,6 @@ The router naturally shifts behavior as memory accumulates:
 - **Type:** Terminal mode
 - **Purpose:** Provide substantive answer to user
 - **Prompt:** `frontal-cortex-respond.md` + `soul.md`
-- **LLM Model:** qwen3:8b
-
-#### CLARIFY (Ask Question)
-- **Type:** Terminal mode
-- **Purpose:** Ask clarifying question when information is insufficient
-- **Prompt:** `frontal-cortex-clarify.md` + `soul.md`
 - **LLM Model:** qwen3:8b
 
 #### ACKNOWLEDGE (Brief Acknowledgment)
@@ -167,7 +161,6 @@ Each mode gets a weighted composite score:
 | Mode | Base | Primary Boosters | Primary Penalties |
 |------|------|-----------------|-------------------|
 | RESPOND | 0.50 | context_warmth, memory_density, question+context | cold start |
-| CLARIFY | 0.30 | cold context, question+no_context, new_topic+question | warm context (>0.6) |
 | ACT | 0.20 | question+moderate_context, interrogative+context_gap, implicit_reference | very cold, very warm+context |
 | ACKNOWLEDGE | 0.10 | greeting_pattern (+0.60), positive_feedback (+0.40) | has_question (-0.30) |
 | IGNORE | -0.50 | empty_input only (+1.0) | everything else |
@@ -176,7 +169,6 @@ Each mode gets a weighted composite score:
 
 Per-request ephemeral adjustments (NOT weight mutations):
 - If `previous_mode == 'ACT'` and ACT was unproductive → `act_score -= 0.15`
-- If `previous_mode == 'CLARIFY'` → `respond_score += 0.05` (user just answered a question)
 
 ### Short-Term Hysteresis
 
@@ -213,13 +205,13 @@ The ACT loop executes internal actions with safety limits. No decision gate or n
 
 ### Triage-Driven Skill Injection
 
-The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder. The `CognitiveTriageService` decides which of the 9 innate skills to inject into each ACT prompt — only the relevant skill docs are included, reducing prompt size significantly.
+The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder. The ONNX skill-selector pre-filter decides which of the 14 innate skills to inject into each ACT prompt — only the relevant skill docs are included, reducing prompt size significantly.
 
 **Cognitive primitives** (`recall`, `memorize`, `introspect`) are always injected for ACT regardless of triage output. Up to 3 contextual skills are added based on triage reasoning.
 
 **Skill doc files** live in `backend/prompts/skills/{skill}.md` — one file per skill. `FrontalCortexService._get_injected_skills()` loads only the selected files at call time.
 
-**Triage output** (JSON field `"skills": [...]`) is validated through a whitelist (`_VALID_SKILLS`), deduplicated, primitives enforced, and contextual skills sorted and capped at `MAX_CONTEXTUAL_SKILLS = 3`. The result flows from `CognitiveTriageService` → `TriageResult.skills` → `context_snapshot['triage_selected_skills']` → `tool_worker` / `generate_with_act_loop` → `FrontalCortexService.generate_response(selected_skills=...)`.
+**Skill selection output** is validated through a whitelist (`_VALID_SKILLS`), deduplicated, primitives enforced, and contextual skills sorted and capped at `MAX_CONTEXTUAL_SKILLS = 3`. The result flows from `MessageGateService.prefilter_skills()` → `selected_skills` → `context_snapshot['triage_selected_skills']` → `tool_worker` / `generate_with_act_loop` → `FrontalCortexService.generate_response(selected_skills=...)`.
 
 **Token impact:** ACT static template ~300 tokens (was ~2,787). Typical ACT call injects ~300–550 tokens of skill docs (4 files) vs. ~1,200 tokens always before.
 
@@ -255,7 +247,6 @@ After generation, detect router misclassification using user behavior signals fr
 
 | Signal | Indicates | Logged As |
 |--------|-----------|-----------|
-| User immediately clarifies/repeats | RESPOND was wrong → should be CLARIFY | misroute (missed_clarify) |
 | User asks memory-related follow-up | RESPOND was wrong → should be ACT | misroute (missed_act) |
 | Negative reward after ACKNOWLEDGE | Should have been RESPOND | misroute (under_engagement) |
 | Positive reward after any mode | Routing was correct | correct_route |
@@ -286,7 +277,6 @@ Healthy mode distribution ranges:
 | Mode | Healthy Range | Red Flag |
 |------|--------------|----------|
 | RESPOND | 50-75% | >85% (overconfident) or <40% (under-committing) |
-| CLARIFY | 8-20% | >30% (over-questioning) or <3% (never clarifying) |
 | ACT | 5-15% | <2% (ACT death) or >25% (over-processing) |
 | ACKNOWLEDGE | 3-12% | <1% (ignoring social cues) or >20% (trivializing) |
 | IGNORE | <2% | >5% (dropping messages) |
@@ -329,7 +319,7 @@ ACT loop iterations continue to log to `cortex_iterations` table for backward co
 
 ```
 [ROUTER] Mode selected: RESPOND (confidence: 0.85, 2.3ms)
-[ROUTER] Tie-breaker invoked: RESPOND vs CLARIFY → RESPOND
+[ROUTER] Tie-breaker invoked: RESPOND vs ACT → RESPOND
 [MODE:ACT] [ACT LOOP] Iteration 0: executing 2 actions
 [MODE:RESPOND] Generating response via frontal-cortex-respond.md
 ```
@@ -398,7 +388,7 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 ## Adaptive Layer
 
-The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
+The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND and ACKNOWLEDGE prompts.
 
 ### Style Detection (5 dimensions)
 
@@ -446,7 +436,7 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 - **Effective Margin:** Dynamic threshold for tie-breaker invocation (narrows with context warmth)
 - **Router Confidence:** Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal:** Metric logged by monitors, consumed by the single regulator
-- **Terminal Mode:** Mode that produces a user-facing response (RESPOND, CLARIFY, ACKNOWLEDGE, IGNORE)
+- **Terminal Mode:** Mode that produces a user-facing response (RESPOND, ACKNOWLEDGE, IGNORE)
 - **Continuation Mode:** Mode that triggers internal actions before re-routing (ACT only)
 - **Context Warmth:** Signal (0.0-1.0) measuring how much context is available for the current topic
 - **Anti-Oscillation Guard:** Per-request ephemeral score adjustment to prevent mode flip-flopping

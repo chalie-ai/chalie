@@ -52,7 +52,7 @@ frontend/
 - **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker
 - **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
-- **`message_gate_service.py`** — Deterministic message gate (empty guard → CANCEL detection → ONNX mode gate); primary routing authority for user messages; routes to CANCEL, RESPOND fast-path, or ACT pipeline with ONNX skill pre-filter; no LLM call, no CLARIFY/IGNORE modes for user messages
+- **`message_gate_service.py`** — Deterministic message gate (empty guard → CANCEL detection → ONNX mode gate); primary routing authority for user messages; routes to CANCEL, RESPOND fast-path, or ACT pipeline with ONNX skill pre-filter; no LLM call; CLARIFY and IGNORE modes removed
 
 #### Response Generation
 - **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
@@ -224,7 +224,7 @@ frontend/
 ## Key Architectural Decisions
 
 ### Message Gate (User Messages) and Mode Router (Non-User Flows)
-- **MessageGateService** is the primary routing authority for user messages (~5ms, deterministic): empty guard → CANCEL detection → ONNX mode gate → RESPOND fast-path or ACT pipeline with ONNX skill pre-filter. No LLM call. No CLARIFY or IGNORE modes.
+- **MessageGateService** is the primary routing authority for user messages (~5ms, deterministic): empty guard → CANCEL detection → ONNX mode gate → RESPOND fast-path or ACT pipeline with ONNX skill pre-filter. No LLM call. CLARIFY and IGNORE modes removed.
 - **ModeRouterService** handles non-user flows (drift, proactive, fallback): deterministic scoring (~5ms) from ~17 observable signals; LLM tie-breaker (qwen3:4b) for ambiguous cases; self-leveling toward RESPOND as memory accumulates.
 
 ### Mode-Specific Prompts
