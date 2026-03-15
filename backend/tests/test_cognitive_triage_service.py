@@ -63,9 +63,6 @@ class TestSelfEvalRules:
         defaults = dict(
             confidence_internal=0.5,
             confidence_tool_need=0.5,
-            freshness_risk=0.3,
-            decision_entropy=0.0,
-            reasoning='test',
             triage_time_ms=0.0,
             fast_filtered=False,
             self_eval_override=False,
@@ -170,24 +167,6 @@ class TestSelfEvalRules:
         result = svc._self_evaluate(result, "read https://example.com", ctx)
         assert result.branch == 'act'
         assert result.self_eval_reason == ''  # No override needed
-
-    def test_rule2_act_failsafe_escalates_respond_to_act(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = self._make_result('respond', 'RESPOND', freshness_risk=0.8)
-        ctx = self._make_context(memory_confidence=0.1, tool_summaries='## Info\n- search: web search')
-        # "What is the current Bitcoin price?" — factual question
-        result = svc._self_evaluate(result, "What is the current Bitcoin price?", ctx)
-        assert result.branch == 'act'
-        assert result.self_eval_reason == 'act_failsafe'
-
-    def test_rule2_no_escalation_without_tools(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = self._make_result('respond', 'RESPOND', freshness_risk=0.8)
-        ctx = self._make_context(memory_confidence=0.1, tool_summaries='')  # No tools
-        result = svc._self_evaluate(result, "What is the current Bitcoin price?", ctx)
-        assert result.branch == 'respond'  # No tools available, can't escalate
 
     def test_rule3_ignore_with_question_becomes_respond(self):
         from services.cognitive_triage_service import CognitiveTriageService

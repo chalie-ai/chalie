@@ -33,21 +33,10 @@ _VALID_SKILLS = {
 _CONTEXTUAL_SKILLS = _VALID_SKILLS - set(_PRIMITIVES) - {'needs_external_tool'}
 MAX_CONTEXTUAL_SKILLS = 3   # caps contextual skills from LLM; ONNX predictions bypass this cap
 
-_FACTUAL_QUESTION = re.compile(
-    r'\b(what|where|when|who|how\s+much|how\s+many|is\s+it|are\s+they|did\s+they|does\s+it)\b.*\?',
-    re.IGNORECASE
-)
-
 _URL_PATTERN = re.compile(
     r'https?://[^\s<>"\'\)]+',
     re.IGNORECASE
 )
-
-_TOOL_INVOCATION_WORDS = frozenset([
-    'search', 'find', 'check', 'look up', 'look it up', 'get me', 'fetch',
-    'just look', 'pull up', 'google', 'browse', 'open', 'visit',
-    'go to', 'read this', 'check this', 'use',
-])
 
 
 _JSON_FENCE_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
@@ -69,21 +58,6 @@ def _extract_json(text: str) -> dict:
     if start != -1:
         return json.loads(text[start:])
     raise json.JSONDecodeError("No JSON object found in response", text, 0)
-
-
-def _is_factual_question(text: str) -> bool:
-    """Heuristic: does this look like a factual question needing real-world data?"""
-    return bool(_FACTUAL_QUESTION.search(text))
-
-
-def _is_tool_invocation_command(text: str) -> bool:
-    """Heuristic: does this look like an imperative tool-invocation command?
-
-    Catches patterns like 'Search arXiv for...', 'Find papers about...', 'Use X to...'
-    that don't end with '?' and therefore bypass the factual-question failsafe.
-    """
-    lower = text.lower()
-    return any(w in lower for w in _TOOL_INVOCATION_WORDS)
 
 
 def _contains_url(text: str) -> bool:
@@ -129,11 +103,8 @@ class TriageResult:
         skills: Innate skill names selected for ACT mode.
         confidence_internal: Float 0-1 confidence that internal memory is sufficient.
         confidence_tool_need: Float 0-1 confidence that external tools are required.
-        freshness_risk: Float 0-1 risk that the answer requires recent or real-time data.
-        decision_entropy: Absolute difference between confidence_internal and confidence_tool_need.
-        reasoning: Human-readable explanation of the routing decision.
         triage_time_ms: Wall-clock milliseconds taken for the full triage pipeline.
-        fast_filtered: True if the result came from the regex fast path (no LLM called).
+        fast_filtered: True if the result came from the empty-input fast path (no LLM called).
         self_eval_override: True if a self-eval rule overrode the LLM decision.
         self_eval_reason: Short label for which self-eval rule fired.
         effort_estimate: Effort tier: 'trivial' | 'light' | 'moderate' | 'deep'.
@@ -145,11 +116,8 @@ class TriageResult:
     skills: List[str]             # innate skill names selected for ACT
     confidence_internal: float    # 0-1: confidence memory is sufficient
     confidence_tool_need: float   # 0-1: confidence external tools required
-    freshness_risk: float         # 0-1: risk answer needs recent/real-time data
-    decision_entropy: float       # abs(confidence_internal - confidence_tool_need)
-    reasoning: str
     triage_time_ms: float
-    fast_filtered: bool           # True if regex path, no LLM
+    fast_filtered: bool           # True if empty-input path, no LLM
     self_eval_override: bool
     self_eval_reason: str
     effort_estimate: str = 'moderate'  # trivial | light | moderate | deep
@@ -167,8 +135,7 @@ class CognitiveTriageService:
             result = TriageResult(
                 branch='ignore', mode='IGNORE', tools=[], skills=[],
                 confidence_internal=1.0, confidence_tool_need=0.0,
-                freshness_risk=0.0, decision_entropy=0.0,
-                reasoning='empty_input', triage_time_ms=(time.time() - start) * 1000,
+                triage_time_ms=(time.time() - start) * 1000,
                 fast_filtered=True, self_eval_override=False, self_eval_reason='',
                 effort_estimate='trivial',
             )
@@ -234,7 +201,7 @@ class CognitiveTriageService:
 
             confidence_internal = float(data.get('confidence_internal', 0.5))
             confidence_tool_need = float(data.get('confidence_tool_need', 0.5))
-            freshness_risk = float(data.get('freshness_risk', 0.0))
+            # freshness_risk is parsed for prompt compliance but not stored in TriageResult
 
             branch = self._mode_to_branch(mode)
 
@@ -274,9 +241,6 @@ class CognitiveTriageService:
                 skills=skills,
                 confidence_internal=min(1.0, max(0.0, confidence_internal)),
                 confidence_tool_need=min(1.0, max(0.0, confidence_tool_need)),
-                freshness_risk=min(1.0, max(0.0, freshness_risk)),
-                decision_entropy=abs(confidence_internal - confidence_tool_need),
-                reasoning=data.get('reasoning', ''),
                 triage_time_ms=0.0,
                 fast_filtered=False,
                 self_eval_override=False,
@@ -329,9 +293,6 @@ class CognitiveTriageService:
             skills=skills,
             confidence_internal=0.5,
             confidence_tool_need=0.5 if mode == 'ACT' else 0.2,
-            freshness_risk=0.3,
-            decision_entropy=0.0,
-            reasoning=reasoning,
             triage_time_ms=0.0,
             fast_filtered=True,
             self_eval_override=False,
@@ -507,33 +468,7 @@ class CognitiveTriageService:
                     except Exception:
                         pass
 
-        # Rule 2: RESPOND on high-freshness question → escalate to ACT
-        # Only escalate for genuinely time-sensitive questions (≥0.7 freshness).
-        # General knowledge questions (recipes, definitions, how-to) stay in RESPOND.
-        if (result.branch == 'respond'
-                and result.freshness_risk >= 0.7
-                and _is_factual_question(text)
-                and ctx.tool_summaries):
-            result.branch = 'act'
-            result.mode = 'ACT'
-            if not result.skills:
-                result.skills = list(_PRIMITIVES)
-            result.self_eval_override = True
-            result.self_eval_reason = 'act_failsafe'
-
-        # Rule 2b: RESPOND on imperative tool-invocation command → escalate to ACT
-        # Commands like "Search arXiv for..." don't end with '?' so Rule 2 misses them.
-        if (result.branch == 'respond'
-                and _is_tool_invocation_command(text)
-                and ctx.tool_summaries):
-            result.branch = 'act'
-            result.mode = 'ACT'
-            if not result.skills:
-                result.skills = list(_PRIMITIVES)
-            result.self_eval_override = True
-            result.self_eval_reason = 'act_tool_command'
-
-        # Rule 5: URL in message → escalate to ACT (URL is an unambiguous external-action signal)
+        # Rule 5: URL in message → escalate to ACT
         if result.branch == 'respond' and _contains_url(text) and ctx.tool_summaries:
             result.branch = 'act'
             result.mode = 'ACT'
