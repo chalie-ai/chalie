@@ -21,9 +21,6 @@ class FakeTriageResult:
     skills: list = None
     confidence_internal: float = 0.3
     confidence_tool_need: float = 0.8
-    freshness_risk: float = 0.2
-    decision_entropy: float = 0.0
-    reasoning: str = 'test'
     triage_time_ms: float = 1.0
     fast_filtered: bool = False
     self_eval_override: bool = False

@@ -114,8 +114,7 @@ def _make_triage(mode):
     return TriageResult(
         branch='ignore', mode=mode, tools=[], skills=[],
         confidence_internal=1.0, confidence_tool_need=0.0,
-        freshness_risk=0.0, decision_entropy=0.0,
-        reasoning='test', triage_time_ms=0.0,
+        triage_time_ms=0.0,
         fast_filtered=False, self_eval_override=False, self_eval_reason=None,
     )
 
@@ -172,8 +171,7 @@ def _make_act_triage(skills):
     return TriageResult(
         branch='act', mode='ACT', tools=[], skills=skills,
         confidence_internal=0.9, confidence_tool_need=0.1,
-        freshness_risk=0.0, decision_entropy=0.0,
-        reasoning='test', triage_time_ms=0.0,
+        triage_time_ms=0.0,
         fast_filtered=False, self_eval_override=False, self_eval_reason=None,
     )
 
