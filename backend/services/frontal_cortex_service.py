@@ -821,8 +821,6 @@ class FrontalCortexService:
             user_traits = ''
         result = result.replace('{{user_traits}}', user_traits)
 
-        result = result.replace('{{communication_style}}', '')
-
         # Adaptive response directives (style-driven behavioral hints)
         if _include('adaptive_directives'):
             adaptive_directives = self._get_adaptive_directives(

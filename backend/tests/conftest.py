@@ -62,12 +62,6 @@ def mock_config():
             'tiebreaker_base_margin': 0.20,
             'tiebreaker_min_margin': 0.08,
         },
-        'fact-store': {
-            'model': 'test-model',
-            'ttl_minutes': 1440,
-            'max_facts_per_topic': 50,
-            'min_confidence': 0.5,
-        },
         'frontal-cortex': {
             'model': 'test-model',
             'cost_base': 1.0,
