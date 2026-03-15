@@ -136,14 +136,18 @@ class TestHandleIgnoreBranch:
         assert result['mode'] == 'CANCEL'
         assert result['response'] == ''
 
-    def test_ignore_returns_empty_response(self):
+    def test_ignore_falls_through_to_respond(self):
+        """IGNORE is no longer silently dropped — it returns None so callers fall through
+        to normal RESPOND processing.  In practice IGNORE never reaches here because
+        cognitive_triage_service remaps it to RESPOND upstream; this test guards the
+        defensive path that handles it gracefully if it somehow does arrive."""
         result = _handle_ignore_branch(
             _make_triage('IGNORE'), '', 'topic', None,
             None, {}, None, None, None,
         )
-        assert result is not None
-        assert result['mode'] == 'IGNORE'
-        assert result['response'] == ''
+        assert result is None, (
+            "IGNORE should return None (fall-through to RESPOND) rather than an empty response"
+        )
 
     def test_respond_mode_returns_none(self):
         """RESPOND must not be handled here — callers route to generate_for_mode."""

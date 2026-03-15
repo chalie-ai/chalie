@@ -195,6 +195,12 @@ class CognitiveTriageService:
             data = _extract_json(response_text)
 
             mode = data.get('mode', 'RESPOND').upper()
+
+            # IGNORE is not a valid routing outcome for user messages — treat as RESPOND.
+            # CANCEL is still valid (user explicitly stopped something) and is left untouched.
+            if mode == 'IGNORE':
+                mode = 'RESPOND'
+
             tools = data.get('tools', [])
             if isinstance(tools, str):
                 tools = [tools] if tools else []
@@ -278,6 +284,9 @@ class CognitiveTriageService:
                 if label is not None:
                     mode = label.upper()
                     if mode not in ('RESPOND', 'ACT', 'CLARIFY', 'IGNORE'):
+                        mode = 'RESPOND'
+                    # IGNORE is not a valid routing outcome for user messages.
+                    if mode == 'IGNORE':
                         mode = 'RESPOND'
                     reasoning = f'onnx_fallback_mode={mode}({confidence:.2f})'
         except Exception as e:
@@ -476,14 +485,6 @@ class CognitiveTriageService:
                 result.skills = list(_PRIMITIVES)
             result.self_eval_override = True
             result.self_eval_reason = 'act_url_detected'
-
-        # Rule 3: LLM classified as ignore but message has a substantive question
-        # CANCEL is protected (user explicitly cancelled); IGNORE with a real question gets upgraded
-        if result.branch == 'ignore' and result.mode != 'CANCEL' and '?' in text and len(text.split()) > 3:
-            result.branch = 'respond'
-            result.mode = 'RESPOND'
-            result.self_eval_override = True
-            result.self_eval_reason = 'ignore_with_question'
 
         # Rule 4: Anti-oscillation — only suppress if SAME TOOL re-selected
         if (result.branch == 'act'

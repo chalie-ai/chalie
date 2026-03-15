@@ -168,15 +168,6 @@ class TestSelfEvalRules:
         assert result.branch == 'act'
         assert result.self_eval_reason == ''  # No override needed
 
-    def test_rule3_ignore_with_question_becomes_respond(self):
-        from services.cognitive_triage_service import CognitiveTriageService
-        svc = CognitiveTriageService()
-        result = self._make_result('ignore', 'IGNORE')
-        ctx = self._make_context()
-        result = svc._self_evaluate(result, "hey what time is it?", ctx)
-        assert result.branch == 'respond'
-        assert result.self_eval_reason == 'ignore_with_question'
-
     def test_rule4_anti_oscillation_same_tool(self):
         from services.cognitive_triage_service import CognitiveTriageService
         svc = CognitiveTriageService()
@@ -369,6 +360,33 @@ class TestTriageFull:
         assert result.branch == 'act'
         assert result.self_eval_override is True
         assert result.self_eval_reason == 'act_innate_skill'
+
+    @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
+    def test_llm_ignore_remapped_to_respond(self, mock_get_llm):
+        """LLM returns IGNORE → must be remapped to RESPOND before leaving _cognitive_triage."""
+        import json
+        mock_llm = MagicMock()
+        mock_llm.send_message.return_value = MagicMock(text=json.dumps({
+            'mode': 'IGNORE',
+            'tools': [],
+            'confidence_internal': 0.9,
+            'confidence_tool_need': 0.0,
+            'freshness_risk': 0.0,
+            'reasoning': 'Looks like small talk — ignore',
+        }))
+        mock_get_llm.return_value = mock_llm
+
+        from services.cognitive_triage_service import CognitiveTriageService
+        svc = CognitiveTriageService()
+        ctx = self._make_context()
+        result = svc.triage("hey how are you doing", ctx)
+        assert result.mode == 'RESPOND', (
+            f"Expected mode=RESPOND after IGNORE remap, got {result.mode!r}"
+        )
+        assert result.branch == 'respond', (
+            f"Expected branch=respond after IGNORE remap, got {result.branch!r}"
+        )
+        assert result.fast_filtered is False  # Went through LLM, not empty-input guard
 
     @patch('services.cognitive_triage_service.CognitiveTriageService._get_llm')
     def test_triage_llm_timeout_fallback(self, mock_get_llm):
