@@ -142,18 +142,37 @@ def compute_hash(image_bytes: bytes) -> str:
 # ─── Preprocessing ───────────────────────────────────────────────────────────
 
 def _strip_exif(img) -> object:
-    """
-    Return a copy of the PIL Image with EXIF metadata removed.
+    """Return a copy of the PIL Image with EXIF metadata removed.
 
     Strips GPS coordinates, device identifiers, timestamps, and all other
     EXIF tags that phones embed automatically.
+
+    Implementation uses a BytesIO PNG round-trip: the image is saved to an
+    in-memory buffer as PNG (PIL's PNG encoder does not write EXIF by default)
+    and immediately re-opened.  This is dramatically more memory-efficient than
+    the previous ``list(img.getdata())`` approach, which materialised the
+    entire pixel array as a Python list — up to ~470 MB for a 2048×2048 RGBA
+    image.
+
+    Args:
+        img: PIL Image object whose EXIF/metadata should be stripped.
+
+    Returns:
+        A new PIL Image with identical pixel content and no embedded metadata.
+        Falls back to returning the original image unchanged on any error
+        (non-fatal — analysis can still proceed with residual metadata).
     """
     try:
         from PIL import Image
-        # Create a new image from the raw pixel data — no metadata carried over
-        data = list(img.getdata())
-        clean = Image.new(img.mode, img.size)
-        clean.putdata(data)
+        buf = io.BytesIO()
+        # PNG format never carries EXIF in PIL's default encoder, so a
+        # save+reload cycle produces a completely metadata-free image.
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        clean = Image.open(buf)
+        # Force pixel data to load now so the BytesIO buffer can be
+        # garbage-collected rather than kept alive by lazy loading.
+        clean.load()
         return clean
     except Exception as e:
         logger.debug(f'[IMAGE CTX] EXIF strip failed (non-fatal): {e}')
