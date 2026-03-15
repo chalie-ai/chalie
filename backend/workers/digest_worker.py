@@ -11,8 +11,9 @@ Digest Worker — Fast-path message processing pipeline for the assistant.
 
 This module implements the primary worker function (``digest_worker``) that
 consumes items from the ``prompt-queue`` and orchestrates the full LLM
-response cycle: topic classification, context assembly, mode routing, intent
-detection, LLM inference, memory chunking, and output delivery.
+response cycle: topic classification, context assembly, message gate (ONNX
+deterministic routing), skill pre-filtering, LLM inference, memory chunking,
+and output delivery.
 
 It also provides lightweight helpers used by cron-tool and other workers for
 interactive tool dialog (``process_tool_dialog``, ``store_tool_dialog_memory``)
@@ -1773,486 +1774,15 @@ def _log_cycle_event(event_type: str, payload: dict, topic: str):
         pass
 
 
-def _handle_ignore_branch(
-    triage_result, text, topic, thread_id, metadata,
-    intent, intent_classifier, working_memory, thread_conv_service,
-):
-    """Handle ignore branch — CANCEL/IGNORE fast exits only."""
-
-    if triage_result.mode == 'CANCEL':
-        return {
-            'response': '',
-            'mode': 'CANCEL',
-            'confidence': 1.0,
-            'generation_time': 0.0,
-        }
-
-    # IGNORE is no longer a valid routing outcome for user messages — it is remapped to
-    # RESPOND upstream in cognitive_triage_service.  If it somehow reaches here anyway
-    # (e.g. from the empty-input guard which returns IGNORE for whitespace), return None
-    # so the caller falls through to normal RESPOND processing rather than silently
-    # dropping the message with an empty string.
-    #
-    # Any other unexpected mode also falls through the same way.
-    import logging as _log
-    _log.warning(
-        f"[IGNORE BRANCH] mode={triage_result.mode!r} reached ignore handler — "
-        "falling through to normal processing."
-    )
-    return None
 
 
-from services.innate_skills.registry import (
-    CONTEXTUAL_SKILLS as _CONTEXTUAL_SKILLS,
-)
 
-
-def _is_innate_skill_only(triage_result) -> bool:
-    """True if triage selected only innate skills and no external tools."""
-    if triage_result.tools:
-        return False  # External tools needed → full ACT loop
-    contextual = [s for s in triage_result.skills if s in _CONTEXTUAL_SKILLS]
-    return len(contextual) > 0
-
-
-def _is_single_tool_trivial(triage_result) -> bool:
-    """True if triage selected exactly one external tool with trivial/light effort.
-
-    These requests don't need the full ACT orchestrator loop — triage already
-    identified the tool and the effort is minimal. Direct dispatch saves ~3s of
-    redundant LLM iterations (orchestrator iter 0 rubber-stamps triage, iter 1
-    just confirms "nothing left to do").
-    """
-    return (
-        len(triage_result.tools) == 1
-        and triage_result.effort_estimate in ('trivial', 'light')
-        and triage_result.confidence_tool_need >= 0.7
-    )
-
-
-def _handle_innate_skill_dispatch(
-    triage_result, text, topic, thread_id, metadata,
+def _handle_act_legacy(
+    selected_tools, selected_skills, text, topic, thread_id, metadata,
     intent, working_memory, thread_conv_service,
-    cortex_config, cortex_prompt_map,
     context_warmth, exchange_id,
 ):
-    """
-    Direct dispatch for innate-skill-only requests (schedule, list, focus, etc.).
-
-    Bypasses the full ACT loop: one LLM call → extract params → execute skill → done.
-    Prevents duplicates caused by multi-iteration ACT loop on fire-and-done skills.
-    """
-    import logging
-    from services import ConfigService, FrontalCortexService
-    from services.act_dispatcher_service import ActDispatcherService
-    from services.thread_conversation_service import ThreadConversationService
-
-    contextual_skills = [s for s in triage_result.skills if s in _CONTEXTUAL_SKILLS]
-    if not contextual_skills:
-        # Should not reach here — _is_innate_skill_only() gates this
-        return None
-
-    # Load ACT config and generate ONE action plan
-    try:
-        act_config = ConfigService.resolve_agent_config("frontal-cortex-act")
-    except Exception:
-        act_config = ConfigService.resolve_agent_config("frontal-cortex")
-
-    act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
-    cortex_service = FrontalCortexService(act_config)
-
-    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
-
-    response_data = cortex_service.generate_response(
-        system_prompt_template=act_prompt,
-        original_prompt=text,
-        classification={'topic': topic, 'confidence': 10},
-        chat_history=chat_history,
-        act_history='(none)',  # First and only iteration — no history
-        selected_skills=contextual_skills,  # primitives excluded — avoids introspect/recall noise
-    )
-
-    actions = response_data.get('actions', [])
-    if not actions:
-        cortex_text = response_data.get('response', '')
-        if cortex_text:
-            # LLM decided no action needed but provided a text answer —
-            # deliver it directly via OutputService → WebSocket.
-            if metadata:
-                thread_conv_service.add_response(
-                    thread_id, cortex_text,
-                    response_data.get('generation_time', 0.0),
-                )
-                try:
-                    orchestrator = get_orchestrator()
-                    orchestrator.route_path(mode='RESPOND', context={
-                        'topic': topic,
-                        'response': cortex_text,
-                        'confidence': response_data.get('confidence', 0.0),
-                        'generation_time': response_data.get('generation_time', 0.0),
-                        'destination': metadata.get('destination', 'web'),
-                        'metadata': metadata,
-                    })
-                except Exception as _oe:
-                    logging.error(f"[DIGEST] Innate skill (no-action) delivery failed: {_oe}")
-            return response_data
-        else:
-            # No text AND no actions — cortex ACT couldn't handle this.
-            # Return None to trigger fallback to standard RESPOND path.
-            logging.info("[DIGEST] Innate skill dispatch: cortex returned empty — falling back to RESPOND")
-            return None
-
-    # Execute actions directly via dispatcher (no loop)
-    # Use config timeout (default 10s) — document search needs headroom for embeddings
-    _skill_timeout = act_config.get('act_per_action_timeout', 30.0)
-    dispatcher = ActDispatcherService(timeout=_skill_timeout)
-
-    act_results = []
-    for action in actions:
-        result = dispatcher.dispatch_action(topic, action)
-        act_results.append(result)
-        logging.info(
-            f"[DIGEST] Direct skill dispatch: {result['action_type']} "
-            f"{result['status']} ({result['execution_time']:.2f}s)"
-        )
-
-    # Check if ALL results are card-only (schedule, list emit cards; document search returns text)
-    def _is_card_res(r):
-        rt = r.get('result')
-        return rt == '__CARD_ONLY__' or (isinstance(rt, str) and rt.startswith('__CARD_EMITTED__\n'))
-
-    all_card_only = (
-        bool(act_results)
-        and all(r.get('status') == 'success' for r in act_results)
-        and all(_is_card_res(r) for r in act_results)
-    )
-
-    ws_uuid = metadata.get('uuid')
-
-    if all_card_only:
-        # Card was already emitted by the skill — send empty text output so the
-        # frontend receives the message event (with exchange_id, mode, etc.) before
-        # the done event, rather than jumping straight to a close signal.
-        if ws_uuid:
-            try:
-                from services.output_service import OutputService
-                OutputService().enqueue_text(
-                    topic=topic,
-                    response='',
-                    mode='ACT',
-                    confidence=0.9,
-                    generation_time=response_data.get('generation_time', 0.0),
-                    original_metadata=metadata,
-                    reply_actions=next(
-                        (r.get('reply_actions') for r in reversed(act_results)
-                         if r.get('status') == 'success' and r.get('reply_actions')),
-                        None,
-                    ),
-                )
-            except Exception as _ce:
-                logging.warning(f"[DIGEST] Innate skill sending empty text output for card-only result failed: {_ce}")
-
-        return {
-            'response': '',
-            'mode': 'ACT',
-            'confidence': 0.9,
-            'generation_time': response_data.get('generation_time', 0.0),
-        }
-
-    # Substantive text results — generate terminal RESPOND so user sees them
-    from services.act_loop_service import ActLoopService
-    _tmp = ActLoopService.__new__(ActLoopService)
-    _tmp.act_history = act_results
-    act_history_context = _tmp.get_history_context()
-
-    terminal_response = generate_for_mode(
-        topic, text, 'RESPOND', {'topic': topic, 'confidence': 10},
-        thread_conv_service, cortex_config, cortex_prompt_map, metadata,
-        act_history_context=act_history_context,
-        thread_id=thread_id,
-    )
-
-    # Carry over action history
-    terminal_response['actions'] = [
-        {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
-        for r in act_results
-    ]
-
-    # Extract reply_actions from the last successful result
-    for entry in reversed(act_results):
-        if entry.get('status') == 'success' and entry.get('reply_actions'):
-            terminal_response['reply_actions'] = entry['reply_actions']
-            break
-
-    # Deliver via orchestrator → OutputService → WebSocket
-    thread_conv_service.add_response(
-        thread_id,
-        terminal_response['response'],
-        terminal_response['generation_time'],
-    )
-
-    if metadata:
-        try:
-            orchestrator = get_orchestrator()
-            context = {
-                'topic': topic,
-                'response': terminal_response.get('response', ''),
-                'confidence': terminal_response.get('confidence', 0.0),
-                'generation_time': terminal_response.get('generation_time', 0.0),
-                'destination': metadata.get('destination', 'web'),
-                'metadata': metadata,
-                'actions': terminal_response.get('actions', []),
-                'reply_actions': terminal_response.get('reply_actions'),
-            }
-            orchestrator.route_path(mode='RESPOND', context=context)
-        except Exception as _oe:
-            logging.error(f"[DIGEST] Innate skill delivery failed: {_oe}")
-
-    return terminal_response
-
-
-def _handle_direct_tool_dispatch(
-    triage_result, text, topic, thread_id, metadata,
-    intent, working_memory, thread_conv_service,
-    cortex_config, cortex_prompt_map, mode_router, signals,
-    context_warmth, exchange_id,
-):
-    """
-    Direct dispatch for single-tool trivial requests.
-
-    Bypasses the full ACT orchestrator loop: triage already selected exactly
-    one tool with high confidence and trivial/light effort. We execute the
-    tool directly, run critic verification, then generate a terminal RESPOND
-    with the tool results as context.
-
-    Saves ~3s of redundant LLM iterations that the orchestrator would spend
-    rubber-stamping triage's decision.
-
-    Returns:
-        tuple: (response_data dict, routing_result dict) — same contract as
-               route_and_generate() so the caller can handle it uniformly.
-    """
-    import time as _time
-    from services.act_dispatcher_service import ActDispatcherService
-    from services.critic_service import CriticService
-    from services.act_reflection_service import enqueue_tool_reflection
-
-    tool_name = triage_result.tools[0]
-    dispatch_start = _time.time()
-
-    logging.info(
-        f"[DIGEST] Direct tool dispatch: {tool_name} "
-        f"(effort={triage_result.effort_estimate}, "
-        f"confidence={triage_result.confidence_tool_need:.2f})"
-    )
-
-    # ── Execute the tool via dispatcher ───────────────────────────────
-    per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
-    dispatcher = ActDispatcherService(timeout=per_action_timeout)
-
-    # Build action dict matching the format the LLM produces in the ACT loop:
-    # flat params alongside 'type', NOT nested under a 'params' key.
-    # The registry lambda strips 'type' and passes the rest to invoke() as params.
-    #
-    # Direct dispatch can only map raw user text to a 'query' param safely.
-    # Tools with other param schemas (weather→location, etc.) need LLM extraction
-    # that only the ACT orchestrator provides. Check if this tool accepts 'query'
-    # as its primary param — if not, bail out and let the caller fall through
-    # to the full ACT orchestrator.
-    _can_direct = True
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        _tool = ToolRegistryService().tools.get(tool_name, {})
-        _params_schema = _tool.get('manifest', {}).get('parameters', {})
-        if _params_schema and 'query' not in _params_schema:
-            _can_direct = False
-            logging.info(
-                f"[DIGEST] Direct dispatch skipped for {tool_name}: "
-                f"tool params {list(_params_schema.keys())} need LLM extraction"
-            )
-    except Exception:
-        pass
-
-    if not _can_direct:
-        return None  # Caller falls through to ACT orchestrator
-
-    # ── Emit narration only after confirming we can dispatch ──────────
-    # Narration is emitted here (not earlier) to avoid "Using X…" messages
-    # appearing when the tool turns out to need LLM param extraction.
-    ws_uuid = metadata.get('uuid')
-    if ws_uuid:
-        try:
-            import json as _json
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            from uuid import uuid4
-            status_id = f"narr_{uuid4().hex[:12]}"
-            store.set(f"output:{status_id}", _json.dumps({
-                'type': 'act_narration',
-                'text': f"Using {tool_name}…",
-                'step': 0,
-            }), ex=300)
-            store.publish(f"sse:{ws_uuid}", status_id)
-        except Exception as _e:
-            logging.debug(f"[DIGEST] Direct dispatch narration failed: {_e}")
-
-    action_spec = {
-        'type': tool_name,
-        'query': text,
-    }
-    result = dispatcher.dispatch_action(topic, action_spec)
-
-    execution_time = _time.time() - dispatch_start
-    logging.info(
-        f"[DIGEST] Direct tool dispatch result: {result['action_type']} "
-        f"{result['status']} ({result['execution_time']:.2f}s)"
-    )
-
-    act_history = [result]
-
-    # ── Critic verification ───────────────────────────────────────────
-    try:
-        critic = CriticService()
-        if not critic.should_skip(tool_name, result):
-            verdict = critic.evaluate(
-                original_request=text,
-                action_type=tool_name,
-                action_intent=action_spec,
-                action_result=result,
-            )
-            if not verdict.get('verified', True):
-                logging.info(
-                    f"[DIGEST] Direct dispatch critic flag: "
-                    f"{verdict.get('issue', 'unknown')}"
-                )
-                result['critic_issue'] = verdict.get('issue', '')
-    except Exception as _ce:
-        logging.debug(f"[DIGEST] Direct dispatch critic skipped: {_ce}")
-
-    # ── Card-only detection ───────────────────────────────────────────
-    _rt = result.get('result')
-    is_card_only = (
-        result.get('status') == 'success'
-        and (_rt == '__CARD_ONLY__' or (isinstance(_rt, str) and _rt.startswith('__CARD_EMITTED__\n')))
-    )
-    # Card-emitted with text should still go through RESPOND for synthesis
-    _card_has_text = isinstance(_rt, str) and _rt.startswith('__CARD_EMITTED__\n')
-
-    if is_card_only and not _card_has_text:
-        logging.info(
-            "[DIGEST] Direct dispatch: card-only result — sending empty text output for card-only result"
-        )
-        if ws_uuid:
-            try:
-                from services.output_service import OutputService
-                OutputService().enqueue_text(
-                    topic=topic,
-                    response='',
-                    mode='ACT',
-                    confidence=0.9,
-                    generation_time=execution_time,
-                    original_metadata=metadata,
-                    reply_actions=result.get('reply_actions'),
-                )
-            except Exception as _ce:
-                logging.warning(f"[DIGEST] Direct dispatch sending empty text output for card-only result failed: {_ce}")
-
-        routing_result = {
-            'mode': 'ACT',
-            'router_confidence': triage_result.confidence_tool_need,
-            'routing_source': 'triage_direct',
-            'routing_time_ms': triage_result.triage_time_ms,
-            'effort_estimate': triage_result.effort_estimate,
-        }
-        return {
-            'response': '',
-            'mode': 'ACT',
-            'confidence': 0.9,
-            'generation_time': execution_time,
-        }, routing_result
-
-    # ── Substantive result → generate terminal RESPOND ────────────────
-    # Format act_history for the RESPOND prompt (same format as orchestrator)
-    from services.act_loop_service import ActLoopService
-    _tmp = ActLoopService.__new__(ActLoopService)
-    _tmp.act_history = act_history
-    act_history_context = _tmp.get_history_context()
-
-    terminal_response = generate_for_mode(
-        topic, text, 'RESPOND', {'topic': topic, 'confidence': 10},
-        thread_conv_service, cortex_config, cortex_prompt_map, metadata,
-        act_history_context=act_history_context,
-        thread_id=thread_id,
-        signals=signals,
-    )
-
-    # Carry over action history for downstream consumers
-    terminal_response['actions'] = [
-        {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
-        for r in act_history
-    ]
-
-    # Extract reply_actions if the tool produced any
-    if result.get('reply_actions'):
-        terminal_response['reply_actions'] = result['reply_actions']
-
-    # ── Store response + deliver via WebSocket ────────────────────────
-    # route_and_generate() normally handles this, but we bypassed it.
-    # The orchestrator.route_path() call is what triggers OutputService
-    # to publish to the sse:{uuid} channel the WS handler listens on.
-    thread_conv_service.add_response(
-        thread_id,
-        terminal_response['response'],
-        terminal_response['generation_time'],
-    )
-
-    if metadata:
-        try:
-            orchestrator = get_orchestrator()
-            context = {
-                'topic': topic,
-                'response': terminal_response.get('response', ''),
-                'confidence': terminal_response.get('confidence', 0.0),
-                'generation_time': terminal_response.get('generation_time', 0.0),
-                'destination': metadata.get('destination', 'web'),
-                'metadata': metadata,
-                'actions': terminal_response.get('actions', []),
-                'reply_actions': terminal_response.get('reply_actions'),
-            }
-            mode = terminal_response.get('mode', 'RESPOND')
-            orchestrator.route_path(mode=mode, context=context)
-            logging.info(f"[DIGEST] Direct dispatch delivered via orchestrator: {mode}")
-        except Exception as _oe:
-            logging.error(f"[DIGEST] Direct dispatch orchestrator delivery failed: {_oe}")
-
-    total_time = _time.time() - dispatch_start
-    logging.info(
-        f"[DIGEST] Direct tool dispatch complete: {tool_name} "
-        f"({total_time:.2f}s total, saved ~3s vs orchestrator)"
-    )
-
-    # Enqueue tool reflection (background)
-    try:
-        enqueue_tool_reflection(act_history, topic, text)
-    except Exception as _e:
-        logging.debug(f"[DIGEST] Direct dispatch reflection skipped: {_e}")
-
-    routing_result = {
-        'mode': 'ACT',
-        'router_confidence': triage_result.confidence_tool_need,
-        'routing_source': 'triage_direct',
-        'routing_time_ms': triage_result.triage_time_ms,
-        'effort_estimate': triage_result.effort_estimate,
-    }
-    return terminal_response, routing_result
-
-
-def _handle_act_triage(
-    triage_result, text, topic, thread_id, metadata,
-    intent, intent_classifier, working_memory, thread_conv_service,
-    context_warmth, exchange_id,
-):
-    """Handle ACT branch — spawn tool_worker; SSE connection stays open until result arrives."""
+    """Handle ACT branch via legacy async path — spawn tool_worker; SSE stays open until result."""
     import logging
     from services.prompt_queue import PromptQueue
 
@@ -2273,7 +1803,7 @@ def _handle_act_triage(
         # Build relevant_tools list in the format tool_worker expects
         _relevant_for_worker = [
             {'name': t, 'score': 1.0, 'type': 'tool'}
-            for t in (triage_result.tools or [])
+            for t in (selected_tools or [])
         ]
         tool_queue.enqueue({
             'cycle_id': user_cycle_id,
@@ -2285,10 +1815,10 @@ def _handle_act_triage(
             'metadata': {**metadata, 'thread_id': thread_id},
             'context_snapshot': {
                 'context_warmth': context_warmth,
-                'tool_hints': triage_result.tools,
+                'tool_hints': selected_tools,
                 'relevant_tools': _relevant_for_worker,
-                'triage_selected_tools': triage_result.tools,
-                'triage_selected_skills': triage_result.skills,
+                'triage_selected_tools': selected_tools,
+                'triage_selected_skills': selected_skills,
                 'exchange_id': exchange_id,
             },
         })
@@ -2304,8 +1834,8 @@ def _handle_act_triage(
                 logging.warning(f"[DIGEST] Could not set sse_pending flag: {_rf}")
 
         logging.info(
-            f"[DIGEST] ACT triage: tool work spawned, WS held open "
-            f"(tools={triage_result.tools}, user_cycle={user_cycle_id})"
+            f"[DIGEST] ACT legacy: tool work spawned, WS held open "
+            f"(tools={selected_tools}, user_cycle={user_cycle_id})"
         )
     except Exception as _spawn_err:
         logging.error(f"[DIGEST] ACT spawn failed: {_spawn_err}")
@@ -2912,7 +2442,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         except Exception as _wm_e:
             logging.debug(f"[DIGEST] WM topic-switch reset failed (non-fatal): {_wm_e}")
 
-    # Tool relevance scoring removed — handled by CognitiveTriageService
+    # Tool relevance scoring removed — handled by ACT loop
 
     # Step 9c: Compute memory_confidence before intent classifier
     # Use FOK + context warmth + working memory depth as density proxy
@@ -2950,58 +2480,18 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         f"complexity={intent['complexity']}, confidence={intent['confidence']:.2f}"
     )
 
-    # Step 10: Cognitive Triage — 4-step branching dispatch
+    # Step 10: Message Gate + Skill Pre-filter
     is_fast_path_ack = False
     routing_result = None
     try:
-        from services.cognitive_triage_service import CognitiveTriageService, TriageContext
+        from services.message_gate_service import MessageGateService
         from services.tool_profile_service import ToolProfileService
 
-        triage_service = CognitiveTriageService()
-        profile_service = ToolProfileService()
+        gate_service = MessageGateService()
 
-        # Condensed working memory summary for triage context
-        _wm_summary = ""
-        try:
-            if wm_turns:
-                _wm_parts = [
-                    f"{t.get('role', '?')[:1].upper()}: {t.get('content', '')[:100]}"
-                    for t in wm_turns[-2:]
-                ]
-                _wm_summary = " | ".join(_wm_parts)
-        except Exception:
-            pass
-
-        # Get previous mode from routing decisions
-        _previous_mode = None
-        _previous_tools = []
-        try:
-            from services.routing_decision_service import RoutingDecisionService
-            from services.database_service import get_shared_db_service
-            _db_svc = get_shared_db_service()
-            _rds = RoutingDecisionService(_db_svc)
-            _previous_mode = _rds.get_previous_mode(topic)
-        except Exception:
-            pass
-
-        triage_ctx = TriageContext(
-            context_warmth=context_warmth,
-            memory_confidence=memory_confidence,
-            working_memory_turns=working_memory_turns,
-            gist_count=0,
-            fact_count=0,
-            previous_mode=_previous_mode or 'RESPOND',
-            previous_tools=_previous_tools,
-            tool_summaries=profile_service.get_triage_summaries(),
-            working_memory_summary=_wm_summary,
-        )
-
-        # WS3a: Pass image summary to triage so it can route correctly.
-        # When the user sends only an image (text == '[Image attached]' or empty),
-        # replace the triage input with a short natural-language description of
-        # the visual content so triage can pick RESPOND vs ACT with document skill.
+        # WS3a: Image context for gate input
         _triage_image_contexts = (metadata or {}).get('image_contexts', [])
-        triage_text = text
+        gate_text = text
         if _triage_image_contexts and (not text or text == '[Image attached]'):
             _descs = [
                 ctx.get('description', '')
@@ -3009,38 +2499,92 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 if ctx.get('description')
             ]
             if _descs:
-                triage_text = f"[User sent image: {_descs[0][:200]}]"
+                gate_text = f"[User sent image: {_descs[0][:200]}]"
             else:
-                triage_text = "[User sent an image for analysis]"
+                gate_text = "[User sent an image for analysis]"
 
-        triage_result = triage_service.triage(triage_text, triage_ctx)
+        gate_result = gate_service.gate(gate_text)
 
         logging.info(
-            f"[DIGEST] Triage: branch={triage_result.branch}, mode={triage_result.mode}, "
-            f"tools={triage_result.tools}, conf_int={triage_result.confidence_internal:.2f}, "
-            f"conf_tool={triage_result.confidence_tool_need:.2f}, "
-            f"time={triage_result.triage_time_ms:.1f}ms"
-            + (" [SELF-EVAL OVERRIDE]" if triage_result.self_eval_override else "")
+            f"[DIGEST] Gate: route={gate_result.route}, "
+            f"confidence={gate_result.confidence:.2f}, "
+            f"time={gate_result.gate_time_ms:.1f}ms"
         )
 
-        # Performance-rank triage tools (tool order influences LLM selection)
-        if triage_result.tools and len(triage_result.tools) > 1:
-            try:
-                from services.tool_performance_service import ToolPerformanceService
-                ranked = ToolPerformanceService().rank_candidates(triage_result.tools)
-                if ranked:
-                    triage_result.tools = [r['name'] for r in ranked]
-            except Exception:
-                pass
-
-        # Handle cancel / self-resolved
-        if triage_result.mode == 'CANCEL':
+        # ── CANCEL fast-exit ──
+        if gate_result.route == 'cancel':
             _cancel_active_tool_work(topic)
-        elif triage_result.mode == 'IGNORE':
-            _cancel_active_tool_work(topic)
+            is_fast_path_ack = True
+            response_data = {
+                'response': '',
+                'mode': 'CANCEL',
+                'confidence': 1.0,
+                'generation_time': 0.0,
+            }
+            routing_result = {
+                'mode': 'CANCEL',
+                'router_confidence': 1.0,
+                'routing_source': 'gate',
+                'routing_time_ms': gate_result.gate_time_ms,
+            }
 
-        # ── Active tool work dedup (before branching, skip for CANCEL/IGNORE fast exits) ──
-        if triage_result.mode not in ('CANCEL', 'IGNORE'):
+        # ── RESPOND fast-path (high-confidence conversational) ──
+        elif gate_result.route == 'respond' and gate_result.confidence >= 0.85:
+            # Cost optimisation: skip tool context for clear conversational messages
+            _nlp = compute_nlp_signals(text, intent)
+            _respond_signals = {
+                'context_warmth': context_warmth,
+                'working_memory_turns': working_memory_turns,
+                'gist_count': 0,
+                'fact_count': 0,
+                'fact_keys': [],
+                'world_state_present': bool(world_state and world_state.strip()),
+                'topic_confidence': classification_result.get('confidence', 0.5),
+                'is_new_topic': classification_result.get('is_new_topic', False),
+                'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
+                'memory_confidence': memory_confidence,
+            }
+            _respond_signals.update(_nlp)
+            _respond_signals['_prompt_text'] = text
+            _store_adaptive_signals(thread_id, text, signals=_respond_signals)
+            response_data, routing_result = route_and_generate(
+                topic, text, classification, thread_conv_service,
+                cortex_config, cortex_prompt_map, mode_router, _respond_signals,
+                metadata=metadata, context_warmth=context_warmth,
+                pre_routing_result={
+                    'mode': 'RESPOND',
+                    'router_confidence': gate_result.confidence,
+                    'routing_source': 'gate',
+                    'routing_time_ms': gate_result.gate_time_ms,
+                },
+                thread_id=thread_id,
+                returning_from_silence=returning_from_silence,
+                message_embedding=msg_embedding,
+            )
+
+        # ── ACT pipeline (everything else) ──
+        else:
+            # Pre-filter skills via ONNX
+            selected_skills, needs_external_tool = gate_service.prefilter_skills(gate_text)
+
+            # Ensure cognitive primitives for ACT
+            _PRIMITIVES = ['recall', 'memorize', 'introspect']
+            for p in _PRIMITIVES:
+                if p not in selected_skills:
+                    selected_skills.insert(0, p)
+
+            # Get tool hints if external tools needed
+            selected_tools = []
+            if needs_external_tool:
+                try:
+                    from services.tool_profile_service import ToolProfileService
+                    from services.tool_performance_service import ToolPerformanceService
+                    # Don't pre-select specific tools — let ACT loop decide
+                    # Just signal that external tools are available
+                except Exception:
+                    pass
+
+            # Active tool work dedup
             if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
                 dedup_response = _check_active_tool_work(text, topic)
                 if dedup_response:
@@ -3056,76 +2600,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
                     return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
-        # ── Branch dispatch ──
-        if triage_result.branch == 'ignore' and triage_result.mode in ('CANCEL', 'IGNORE'):
-            # Ignore branch — CANCEL/IGNORE fast exits only
-            response_data = _handle_ignore_branch(
-                triage_result, text, topic, thread_id, metadata,
-                intent, intent_classifier, working_memory, thread_conv_service,
-            )
-            is_fast_path_ack = True
-            routing_result = {'mode': triage_result.mode, 'router_confidence': 1.0, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
-
-        elif triage_result.branch == 'act' and _is_innate_skill_only(triage_result):
-            # Direct dispatch: fire-and-done skills bypass the full ACT loop
-            response_data = _handle_innate_skill_dispatch(
-                triage_result, text, topic, thread_id, metadata,
-                intent, working_memory, thread_conv_service,
-                cortex_config, cortex_prompt_map,
-                context_warmth, exchange_id,
-            )
-            if response_data is None:
-                # Fallback: use unified ACT path or legacy async path
-                _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
-                if _use_unified:
-                    _act_nlp = compute_nlp_signals(text, intent)
-                    _act_signals = {
-                        'context_warmth': context_warmth,
-                        'working_memory_turns': working_memory_turns,
-                        'gist_count': 0,
-                        'fact_count': 0,
-                        'fact_keys': [],
-                        'world_state_present': bool(world_state and world_state.strip()),
-                        'topic_confidence': classification_result.get('confidence', 0.5),
-                        'is_new_topic': classification_result.get('is_new_topic', False),
-                        'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
-                        'memory_confidence': memory_confidence,
-                    }
-                    _act_signals.update(_act_nlp)
-                    _act_signals['_prompt_text'] = text
-                    response_data, routing_result = route_and_generate(
-                        topic, text, classification, thread_conv_service,
-                        cortex_config, cortex_prompt_map, mode_router, _act_signals,
-                        metadata=metadata, context_warmth=context_warmth,
-                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
-                        selected_tools=triage_result.tools if triage_result.tools else None,
-                        selected_skills=triage_result.skills if triage_result.skills else None,
-                        thread_id=thread_id,
-                    )
-                else:
-                    response_data = _handle_act_triage(
-                        triage_result, text, topic, thread_id, metadata,
-                        intent, intent_classifier, working_memory, thread_conv_service,
-                        context_warmth, exchange_id,
-                    )
-            else:
-                # Direct dispatch succeeded. All paths with truthy response
-                # (substantive results, no-action cortex text) deliver inside
-                # the function. Only card-only (response='') needs add_response here.
-                if not response_data.get('response'):
-                    thread_conv_service.add_response(
-                        thread_id,
-                        response_data.get('response', ''),
-                        response_data.get('generation_time', 0.0),
-                    )
-            is_fast_path_ack = True
-            if routing_result is None:
-                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
-
-        elif triage_result.branch == 'act' and _is_single_tool_trivial(triage_result):
-            # Direct tool dispatch: single tool, trivial/light effort — skip ACT orchestrator
-            _dt_nlp = compute_nlp_signals(text, intent)
-            _dt_signals = {
+            # Route through ACT
+            _act_nlp = compute_nlp_signals(text, intent)
+            _act_signals = {
                 'context_warmth': context_warmth,
                 'working_memory_turns': working_memory_turns,
                 'gist_count': 0,
@@ -3137,135 +2614,43 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
                 'memory_confidence': memory_confidence,
             }
-            _dt_signals.update(_dt_nlp)
-            _dt_signals['_prompt_text'] = text
-            _direct_result = _handle_direct_tool_dispatch(
-                triage_result, text, topic, thread_id, metadata,
-                intent, working_memory, thread_conv_service,
-                cortex_config, cortex_prompt_map, mode_router, _dt_signals,
-                context_warmth, exchange_id,
-            )
-            if _direct_result is not None:
-                response_data, routing_result = _direct_result
-                is_fast_path_ack = True
-            else:
-                # Tool needs LLM param extraction — route through full ACT loop
-                logging.info("[DIGEST] Direct dispatch declined — routing to ACT orchestrator")
-                _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
-                if _use_unified:
-                    _act_nlp = compute_nlp_signals(text, intent)
-                    _act_signals = {
-                        'context_warmth': context_warmth,
-                        'working_memory_turns': working_memory_turns,
-                        'gist_count': 0,
-                        'fact_count': 0,
-                        'fact_keys': [],
-                        'world_state_present': bool(world_state and world_state.strip()),
-                        'topic_confidence': classification_result.get('confidence', 0.5),
-                        'is_new_topic': classification_result.get('is_new_topic', False),
-                        'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
-                        'memory_confidence': memory_confidence,
-                    }
-                    _act_signals.update(_act_nlp)
-                    _act_signals['_prompt_text'] = text
-                    response_data, routing_result = route_and_generate(
-                        topic, text, classification, thread_conv_service,
-                        cortex_config, cortex_prompt_map, mode_router, _act_signals,
-                        metadata=metadata, context_warmth=context_warmth,
-                        pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
-                        selected_tools=triage_result.tools if triage_result.tools else None,
-                        selected_skills=triage_result.skills if triage_result.skills else None,
-                        thread_id=thread_id,
-                    )
-                else:
-                    response_data = _handle_act_triage(
-                        triage_result, text, topic, thread_id, metadata,
-                        intent, intent_classifier, working_memory, thread_conv_service,
-                        context_warmth, exchange_id,
-                    )
-                    routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
-                is_fast_path_ack = True
+            _act_signals.update(_act_nlp)
+            _act_signals['_prompt_text'] = text
 
-        elif triage_result.branch == 'act':
-            # Full ACT loop — complex multi-step tasks with external tools
             _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
             if _use_unified:
-                # Unified path: route through ACT loop inline (no async RQ spawn)
-                _act_nlp = compute_nlp_signals(text, intent)
-                _act_signals = {
-                    'context_warmth': context_warmth,
-                    'working_memory_turns': working_memory_turns,
-                    'gist_count': 0,
-                    'fact_count': 0,
-                    'fact_keys': [],
-                    'world_state_present': bool(world_state and world_state.strip()),
-                    'topic_confidence': classification_result.get('confidence', 0.5),
-                    'is_new_topic': classification_result.get('is_new_topic', False),
-                    'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
-                    'memory_confidence': memory_confidence,
-                }
-                _act_signals.update(_act_nlp)
-                _act_signals['_prompt_text'] = text
                 response_data, routing_result = route_and_generate(
                     topic, text, classification, thread_conv_service,
                     cortex_config, cortex_prompt_map, mode_router, _act_signals,
                     metadata=metadata, context_warmth=context_warmth,
-                    pre_routing_result={'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
-                    selected_tools=triage_result.tools if triage_result.tools else None,
-                    selected_skills=triage_result.skills if triage_result.skills else None,
+                    pre_routing_result={
+                        'mode': 'ACT',
+                        'router_confidence': gate_result.confidence,
+                        'routing_source': 'gate',
+                        'routing_time_ms': gate_result.gate_time_ms,
+                    },
+                    selected_tools=selected_tools if selected_tools else None,
+                    selected_skills=selected_skills if selected_skills else None,
                     thread_id=thread_id,
                 )
             else:
-                # Legacy path: async RQ spawn for external tools
-                response_data = _handle_act_triage(
-                    triage_result, text, topic, thread_id, metadata,
-                    intent, intent_classifier, working_memory, thread_conv_service,
+                # Legacy async path
+                response_data = _handle_act_legacy(
+                    selected_tools, selected_skills, text, topic, thread_id, metadata,
+                    intent, working_memory, thread_conv_service,
                     context_warmth, exchange_id,
                 )
-                routing_result = {'mode': 'ACT', 'router_confidence': triage_result.confidence_tool_need, 'routing_source': 'triage', 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate}
+                routing_result = {
+                    'mode': 'ACT',
+                    'router_confidence': gate_result.confidence,
+                    'routing_source': 'gate',
+                    'routing_time_ms': gate_result.gate_time_ms,
+                }
             is_fast_path_ack = True
 
-        else:
-            # RESPOND or CLARIFY branch — route_and_generate with forced mode
-            # Build signals from context_snapshot + NLP (avoids redundant MemoryStore reads)
-            _nlp = compute_nlp_signals(text, intent)
-            _forced_signals = {
-                # Context signals already available from Phase A/B
-                'context_warmth': context_warmth,
-                'working_memory_turns': working_memory_turns,
-                'gist_count': 0,
-                'fact_count': 0,
-                'fact_keys': [],
-                'world_state_present': bool(world_state and world_state.strip()),
-                'topic_confidence': classification_result.get('confidence', 0.5),
-                'is_new_topic': classification_result.get('is_new_topic', False),
-                'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
-                'memory_confidence': memory_confidence,
-            }
-            _forced_signals.update(_nlp)
-            _forced_signals['_prompt_text'] = text
-            # Update adaptive signals now that explicit_feedback is known
-            _store_adaptive_signals(thread_id, text, signals=_forced_signals)
-            _forced_mode = 'RESPOND'
-            response_data, routing_result = route_and_generate(
-                topic, text, classification, thread_conv_service,
-                cortex_config, cortex_prompt_map, mode_router, _forced_signals,
-                metadata=metadata, context_warmth=context_warmth,
-                pre_routing_result={'mode': _forced_mode, 'router_confidence': triage_result.confidence_internal, 'routing_time_ms': triage_result.triage_time_ms, 'effort_estimate': triage_result.effort_estimate},
-                selected_tools=triage_result.tools if triage_result.tools else None,
-                selected_skills=triage_result.skills if triage_result.skills else None,
-                thread_id=thread_id,
-                returning_from_silence=returning_from_silence,
-                message_embedding=msg_embedding,
-            )
-
-            # Ignore fast path — skip encoding (trivial content)
-            if triage_result.branch == 'ignore' and triage_result.mode == 'IGNORE':
-                is_fast_path_ack = True
-
-    except Exception as _triage_ex:
-        logging.error(f"[DIGEST] Triage dispatch failed: {_triage_ex}", exc_info=True)
-        # Fallback: build signals from context_snapshot + NLP (avoids redundant MemoryStore reads)
+    except Exception as _gate_ex:
+        logging.error(f"[DIGEST] Gate dispatch failed: {_gate_ex}", exc_info=True)
+        # Fallback: route through RESPOND
         _fb_nlp = compute_nlp_signals(text, intent)
         _fallback_signals = {
             'context_warmth': context_warmth,
