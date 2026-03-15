@@ -39,7 +39,7 @@ def tool_worker(job_data: dict) -> str:
             - intent: Classified intent metadata
             - context_snapshot: Context state at time of spawn
             - metadata: Original request metadata
-            - tool_hints: Suggested tools (from CognitiveTriageService)
+            - tool_hints: Suggested tools (from MessageGateService)
 
     Returns:
         str: Status message
@@ -195,6 +195,26 @@ def _tool_worker_orchestrator(
     heartbeat_state = {'last': _last_heartbeat}
 
     def on_iteration_complete(act_loop, iteration_start, actions_executed, termination_reason):
+        """
+        Callback invoked by ACTOrchestrator after each iteration completes.
+
+        Checks whether the current cycle has been cancelled by the user and,
+        if so, marks it ``cancelled`` in CycleService and signals the
+        orchestrator to stop. Also emits a heartbeat key to MemoryStore every
+        10 seconds so external health monitors can detect stalled workers.
+
+        Args:
+            act_loop: The ACTOrchestrator loop instance invoking the callback.
+            iteration_start: Unix timestamp when the current iteration began.
+            actions_executed: List of action dicts executed during this
+                iteration.
+            termination_reason: Non-None reason string when the orchestrator
+                is already terminating; None during a normal mid-loop callback.
+
+        Returns:
+            str or None: ``'cancelled'`` if the cycle was cancelled by the
+                user, ``None`` otherwise (loop continues normally).
+        """
         # Cancellation check
         if _is_cancelled(cycle_id):
             logger.info(f"[TOOL WORKER] Cycle {cycle_id[:8]} cancelled by user")
@@ -233,6 +253,7 @@ def _tool_worker_orchestrator(
         on_iteration_complete=on_iteration_complete,
         context_extras={
             'triage_tools': context_snapshot.get('triage_selected_tools', []),
+            'exchange_id': exchange_id,
         },
         session_id='tool_worker',
         exchange_id=exchange_id,
@@ -259,7 +280,7 @@ def _tool_worker_orchestrator(
     _enqueue_tool_reflection(result.act_history, topic, text)
 
     # Render and deliver cards
-    card_replaces = _enqueue_tool_cards(result.act_history, topic, metadata, cycle_id=cycle_id)
+    card_replaces = _enqueue_tool_cards(result.act_history, topic, metadata, cycle_id=cycle_id, exchange_id=exchange_id)
 
     # Suppress follow-up when emit_card was called
     if not card_replaces:
@@ -280,10 +301,10 @@ def _tool_worker_orchestrator(
             original_created_at=job_data.get('created_at', time.time()),
         )
 
-    total_time = time.time() - (time.time() - result.fatigue_telemetry.get('elapsed_seconds', 0))
     logger.info(
         f"[TOOL WORKER] ACT loop complete (orchestrator): {result.iterations_used} iterations, "
-        f"{len(result.act_history)} actions, termination={result.termination_reason}"
+        f"{len(result.act_history)} actions, termination={result.termination_reason}, "
+        f"elapsed={result.loop_telemetry.get('elapsed_seconds', 0):.1f}s"
     )
 
     # Record performance metrics
@@ -347,7 +368,7 @@ def _notify_sse_error(metadata: dict, error_message: str):
         logger.warning(f"[TOOL WORKER] Failed to notify WebSocket of error: {e}")
 
 
-def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None) -> bool:
+def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None, exchange_id: str = '') -> bool:
     """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
     tool was found (suppresses the text follow-up since the card was already rendered inline).
 
@@ -364,8 +385,9 @@ def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id:
         from services.output_service import OutputService
 
         store = MemoryClientService.create_connection()
-        raw_items = store.lrange(f"tool_raw_cache:{topic}", 0, -1)
-        store.delete(f"tool_raw_cache:{topic}")
+        from services import act_memory_keys as _amk
+        raw_items = store.lrange(_amk.tool_raw_cache(topic, exchange_id), 0, -1)
+        store.delete(_amk.tool_raw_cache(topic, exchange_id))
 
         # Build {tool_name: raw_result} map (last result per tool wins)
         raw_map = {}

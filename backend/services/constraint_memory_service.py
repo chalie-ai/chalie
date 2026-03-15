@@ -28,7 +28,6 @@ ALL_REJECTION_TYPES = (
     'triage_override',
     'routing_anti_oscillation',
     'reliability_warning',
-    'uncertainty_downgraded',
 )
 
 # MemoryStore cache keys
@@ -206,8 +205,6 @@ class ConstraintMemoryService:
                 reason_counts[f"anti_oscillation_{payload.get('suppressed_mode', '?')}"] += 1
             elif event_type == 'reliability_warning':
                 reason_counts[f"unreliable_{payload.get('memory_type', '?')}"] += 1
-            elif event_type == 'uncertainty_downgraded':
-                reason_counts['uncertainty_anti_nag'] += 1
             elif event_type == 'assimilation_rejected':
                 reason_counts[payload.get('rejection_type', 'unknown')] += 1
 

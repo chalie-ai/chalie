@@ -90,12 +90,25 @@ class SelfModelService:
         return len(snapshot.get("noteworthy", [])) > 0
 
     def get_memory_richness(self) -> float:
-        """0.0 (empty system) to 1.0 (rich memory), from cached snapshot.
+        """0.0 (no activity) to 1.0 (rich memory), from cached snapshot.
 
-        Composite score from episode count, concept count, trait count,
-        and epistemic warmth. Workers use this to self-regulate: skip
-        expensive cycles when memory is too thin to produce useful results.
+        Logarithmic composite — models cognitive development where early
+        experiences carry disproportionate weight. A toddler's first trip
+        to the park is intensely rich; by adulthood it barely registers.
+
+        Early on, even 1-2 episodes push richness well above zero because
+        they represent 100% of accumulated experience. As memories grow,
+        each additional one contributes less (diminishing returns). Hard
+        cap at 1.0 ensures stabilisation once the system has a solid
+        foundation.
+
+        Workers use this to self-regulate: skip expensive cycles when
+        memory is too thin to produce useful results. The logarithmic
+        curve ensures fresh installations are never starved — the gate
+        only blocks when there is genuinely zero activity.
         """
+        import math
+
         snapshot = self.get_snapshot()
 
         # Extract counts from operational.memory_pressure
@@ -107,11 +120,19 @@ class SelfModelService:
         # Epistemic warmth (current conversation context)
         context_warmth = snapshot.get("epistemic", {}).get("context_warmth", 0.0)
 
-        # Weighted composite — saturate at reasonable ceilings
+        # Logarithmic scaling — early items contribute disproportionately,
+        # diminishing returns as counts grow, hard cap at 1.0.
+        # log(1+1)/log(1+50) ≈ 0.18, log(1+5)/log(1+50) ≈ 0.46,
+        # log(1+50)/log(1+50) = 1.0
+        def _log_saturate(count: int, ceiling: int) -> float:
+            if count <= 0:
+                return 0.0
+            return min(1.0, math.log(1 + count) / math.log(1 + ceiling))
+
         score = (
-            0.35 * min(1.0, episode_count / 50)
-            + 0.25 * min(1.0, concept_count / 30)
-            + 0.20 * min(1.0, trait_count / 10)
+            0.35 * _log_saturate(episode_count, 50)
+            + 0.25 * _log_saturate(concept_count, 30)
+            + 0.20 * _log_saturate(trait_count, 10)
             + 0.20 * context_warmth
         )
         return round(score, 3)
@@ -194,24 +215,20 @@ class SelfModelService:
         """Memory warmth, recall reliability, topic depth signals."""
         topic = self._get_active_topic()
 
-        gist_count = self._get_gist_count(topic)
-        fact_count = self._get_fact_count(topic)
         wm_depth = self._get_working_memory_depth(topic)
 
-        # Context warmth: weighted combo of memory density
-        gist_score = min(1.0, gist_count / 5.0)
-        fact_score = min(1.0, fact_count / 10.0)
+        # Context warmth: driven by working memory depth and FOK
         wm_score = min(1.0, wm_depth / 4.0)
+        fok_signal = self._get_fok_signal(topic)
+        fok_score = min(1.0, fok_signal / 5.0)
         context_warmth = round(
-            (gist_score * 0.4) + (fact_score * 0.3) + (wm_score * 0.3), 3
+            (wm_score * 0.6) + (fok_score * 0.4), 3
         )
 
         return {
             "context_warmth": context_warmth,
-            "gist_count": gist_count,
-            "fact_count": fact_count,
             "working_memory_depth": wm_depth,
-            "partial_match_signal": self._get_fok_signal(topic),
+            "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
             "topic_age": self._get_topic_age(),
             "recent_modes": self._get_recent_modes(),
@@ -226,20 +243,6 @@ class SelfModelService:
             return topic if topic else "general"
         except Exception:
             return "general"
-
-    def _get_gist_count(self, topic: str) -> int:
-        try:
-            from services.gist_storage_service import GistStorageService
-            return len(GistStorageService().get_latest_gists(topic))
-        except Exception:
-            return 0
-
-    def _get_fact_count(self, topic: str) -> int:
-        try:
-            from services.fact_store_service import FactStoreService
-            return len(FactStoreService().get_all_facts(topic))
-        except Exception:
-            return 0
 
     def _get_working_memory_depth(self, topic: str) -> int:
         try:

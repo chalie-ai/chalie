@@ -6,7 +6,6 @@ const fs = require('fs');
 // Get today's date in UTC
 const TODAY = new Date().toISOString().slice(0, 10);
 const BUILD_LOG_DIR = './chalie-web/src/build-log';
-const BUILD_LOG_FILE = `${BUILD_LOG_DIR}/${TODAY}.md`;
 
 function getLastProcessedDate() {
   try {
@@ -33,22 +32,19 @@ function getLastProcessedDate() {
   }
 }
 
-async function getCommitsForToday() {
+function getCommitsForDate(date) {
   try {
-    const lastProcessed = getLastProcessedDate();
-    // Add 1 second to the last processed date to avoid duplicates
-    const sinceDate = new Date(lastProcessed + ' 00:00:01');
-    const sinceDateStr = sinceDate.toISOString().slice(0, 19).replace('T', ' ');
-    const untilDateStr = TODAY + ' 23:59:59';
+    const sinceDateStr = date + ' 00:00:00';
+    const untilDateStr = date + ' 23:59:59';
 
-    // Get all commits since last processed build log
+    // Get commits for this specific date
     const output = execSync(
-      `git log --since="${sinceDateStr}" --until="${untilDateStr}" --date=iso --pretty=format:"%h|%s|%b" --name-only`,
+      `git log --all --since="${sinceDateStr}" --until="${untilDateStr}" --date=iso --pretty=format:"%h|%s|%b" --name-only`,
       { encoding: 'utf8' }
     );
 
     if (!output.trim()) {
-      console.log(`No commits found since ${lastProcessed}`);
+      console.log(`No commits found for ${date}`);
       return null;
     }
 
@@ -319,40 +315,53 @@ layout: build-log-post.njk
 ${entry.body}`;
 }
 
+function getDatesToProcess() {
+  const lastProcessed = getLastProcessedDate();
+  const dates = [];
+  // Start from the day after last processed, up to and including today
+  const current = new Date(lastProcessed + 'T00:00:00Z');
+  current.setUTCDate(current.getUTCDate() + 1);
+  const end = new Date(TODAY + 'T00:00:00Z');
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return { lastProcessed, dates };
+}
+
 async function main() {
   try {
-    const lastProcessed = getLastProcessedDate();
-    console.log(`Processing commits since ${lastProcessed} up to ${TODAY}`);
+    const { lastProcessed, dates } = getDatesToProcess();
+    console.log(`Last build log: ${lastProcessed}. Days to process: ${dates.length} (${dates[0] || 'none'} → ${dates[dates.length - 1] || 'none'})`);
 
-    // Get commits since last processed build log
-    const commits = await getCommitsForToday();
-
-    if (!commits || commits.length === 0) {
-      console.log('No commits to process');
-      process.exit(0);
-    }
-
-    console.log(`Found ${commits.length} commits`);
-
-    // Compute stats
-    const stats = computeStats(commits);
-    console.log(`Stats: ${stats.totalCommits} commits, ${stats.totalFilesChanged} files changed`);
-
-    // Generate build log entry using Claude
-    console.log('Calling Claude API to generate build log entry...');
-    const entry = await generateBuildLogEntry(commits, stats);
-
-    // Format the file content
-    const fileContent = formatFrontmatter(entry, TODAY);
-
-    // Ensure directory exists
     if (!fs.existsSync(BUILD_LOG_DIR)) {
       fs.mkdirSync(BUILD_LOG_DIR, { recursive: true });
     }
 
-    // Write the file
-    fs.writeFileSync(BUILD_LOG_FILE, fileContent);
-    console.log(`Build log entry written to ${BUILD_LOG_FILE}`);
+    let totalWritten = 0;
+    for (const date of dates) {
+      const commits = getCommitsForDate(date);
+      if (!commits || commits.length === 0) {
+        console.log(`  ${date}: no commits, skipping`);
+        continue;
+      }
+
+      const stats = computeStats(commits);
+      console.log(`  ${date}: ${stats.totalCommits} commits, ${stats.totalFilesChanged} files changed`);
+
+      const entry = await generateBuildLogEntry(commits, stats);
+      const fileContent = formatFrontmatter(entry, date);
+      const filePath = `${BUILD_LOG_DIR}/${date}.md`;
+      fs.writeFileSync(filePath, fileContent);
+      console.log(`  ${date}: written to ${filePath}`);
+      totalWritten++;
+    }
+
+    if (totalWritten === 0) {
+      console.log('No build log entries to write');
+    } else {
+      console.log(`Done: ${totalWritten} build log entries written`);
+    }
 
   } catch (error) {
     console.error('Error updating build log:', error.message);

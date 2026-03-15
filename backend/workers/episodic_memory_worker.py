@@ -19,7 +19,7 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     Check if topic is ready for episodic memory consolidation.
 
     Conditions:
-    - 3+ exchanges with memory_chunk OR
+    - 3+ raw conversation exchanges OR
     - 10+ minutes since earliest exchange
 
     Args:
@@ -34,17 +34,13 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     if not thread_id:
         return False, "No thread_id provided", []
     conversation_service = ThreadConversationService()
-    exchanges = conversation_service.get_conversation_history(thread_id)
+    exchanges = [e for e in conversation_service.get_conversation_history(thread_id) if e]
 
-    # Filter only enriched exchanges (guard against None entries from storage)
-    enriched = [e for e in exchanges if e and e.get('memory_chunk')]
+    # Condition 1: enough raw turns
+    if len(exchanges) >= min_exchanges:
+        return True, f"{len(exchanges)} exchanges ready", exchanges
 
-    # Condition 1: 3+ enriched exchanges
-    if len(enriched) >= min_exchanges:
-        return True, f"{len(enriched)} enriched exchanges ready", enriched
-
-    # Condition 2: 10+ minutes since earliest exchange — check ALL exchanges, not just enriched,
-    # so a topic with 0 enriched exchanges can still time out rather than retrying forever.
+    # Condition 2: 10+ minutes since earliest exchange
     earliest_time = None
     for exchange in exchanges:
         resp = exchange.get('response')
@@ -61,12 +57,12 @@ def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, t
     if earliest_time:
         elapsed = utc_now() - earliest_time
         if elapsed.total_seconds() >= timeout_minutes * 60:
-            return True, f"timeout reached, {len(enriched)} enriched", enriched
+            return True, f"timeout reached, {len(exchanges)} exchanges", exchanges
 
-    if not enriched:
-        return False, "No enriched exchanges", []
+    if not exchanges:
+        return False, "No exchanges", []
 
-    return False, f"Not ready: {len(enriched)} exchanges, waiting for more or timeout", []
+    return False, f"Not ready: {len(exchanges)} exchanges, waiting for more or timeout", []
 
 
 def _extract_json(text: str) -> str:
@@ -140,8 +136,8 @@ def episodic_memory_worker(job_data: dict) -> str:
         logging.info(f"Topic '{topic}' ready for consolidation: {reason}, {len(exchanges)} exchanges")
 
         if not exchanges:
-            logging.warning(f"[EPISODIC] Topic '{topic}' timeout reached with 0 enriched exchanges — skipping episode creation")
-            return "Skipped — timeout reached with 0 enriched exchanges"
+            logging.warning(f"[EPISODIC] Topic '{topic}' timeout reached with 0 exchanges — skipping episode creation")
+            return "Skipped — timeout reached with 0 exchanges"
 
         # Load configs
         from services.database_service import get_lightweight_db_service
@@ -157,8 +153,8 @@ def episodic_memory_worker(job_data: dict) -> str:
         conversation_service = ThreadConversationService()
 
         # Build session data from exchanges
-        start_time = (exchanges[0].get('prompt') or {}).get('time', datetime.now().isoformat())
-        end_time = (exchanges[-1].get('response') or {}).get('time', datetime.now().isoformat())
+        start_time = (exchanges[0].get('prompt') or {}).get('time', utc_now().isoformat())
+        end_time = (exchanges[-1].get('response') or {}).get('time', utc_now().isoformat())
 
         session_data = {
             'topic': topic,
@@ -234,6 +230,18 @@ def episodic_memory_worker(job_data: dict) -> str:
 
         logging.info(f"Generated and stored episode {episode_id} for topic '{topic}'")
 
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='episode_created',
+                source='episodic_memory_worker',
+                topic=topic,
+                content=episode_data.get('gist', '')[:200],
+                activation_energy=0.5,
+            ))
+        except Exception:
+            pass
+
         # Feed the semantic consolidation tracker so concepts get created
         try:
             from services.semantic_consolidation_tracker import SemanticConsolidationTracker
@@ -295,50 +303,36 @@ def episodic_memory_worker(job_data: dict) -> str:
 
 def _format_session_for_llm(session_data: dict) -> str:
     """
-    Format session data for LLM prompt using memory_chunk enrichments only.
+    Format session data for LLM prompt using raw conversation turns.
 
     Args:
-        session_data: Dict with topic, exchanges (with memory_chunk enrichments), start_time, end_time
+        session_data: Dict with topic, exchanges, start_time, end_time
 
     Returns:
-        Formatted string for LLM prompt with memory chunk data
+        Formatted string for LLM prompt with user/assistant conversation turns
     """
     lines = []
     lines.append(f"Session Duration: {session_data['start_time']} to {session_data.get('end_time', 'now')}")
-    lines.append("\nMemory Chunks:")
+    lines.append("\n## Conversation from Session")
 
     for i, exchange in enumerate(session_data['exchanges'], 1):
-        memory_chunk = exchange.get('memory_chunk', {})
+        prompt = exchange.get('prompt', {})
+        response = exchange.get('response', {})
 
-        if not memory_chunk:
-            logging.warning(f"Exchange {i} missing memory_chunk - should have been checked earlier")
+        user_msg = prompt.get('message', '') if isinstance(prompt, dict) else str(prompt)
+        assistant_msg = response.get('message', '') if isinstance(response, dict) else str(response)
+
+        if not user_msg and not assistant_msg:
             continue
 
-        lines.append(f"\n--- Exchange {i} Memory Chunk ---")
+        lines.append(f"\n--- Exchange {i} ---")
+        if user_msg:
+            lines.append(f"User: {user_msg}")
+        if assistant_msg:
+            lines.append(f"Assistant: {assistant_msg}")
 
-        # Include scope
-        scope = memory_chunk.get('scope', 'N/A')
-        lines.append(f"Scope: {scope}")
-
-        # Include emotion
-        emotion = memory_chunk.get('emotion', {})
-        if emotion:
-            emotion_type = emotion.get('type', 'N/A')
-            emotion_intensity = emotion.get('intensity', 'N/A')
-            lines.append(f"Emotion: {emotion_type} (intensity: {emotion_intensity})")
-
-        # Include gists
-        gists = memory_chunk.get('gists', [])
-        if gists:
-            lines.append("Gists:")
-            for gist in gists:
-                gist_type = gist.get('type', 'unknown')
-                content = gist.get('content', '')
-                confidence = gist.get('confidence', 0)
-                lines.append(f"  - [{gist_type}] {content} (confidence: {confidence})")
-
-        # Include steps if present
-        if 'steps' in exchange:
+        # Include tool steps if present
+        if exchange.get('steps'):
             lines.append(f"Actions: {exchange['steps']}")
 
     return "\n".join(lines)

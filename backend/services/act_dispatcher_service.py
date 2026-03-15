@@ -17,7 +17,18 @@ from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINIST
 
 
 def _estimate_confidence(action_type: str, raw_result: Any) -> float:
-    """Estimate confidence based on action type and result richness."""
+    """Estimate confidence based on action type and result richness.
+
+    Deterministic actions always return 0.92.  Read actions are scored by the
+    length of the result string.  All other action types default to 0.50.
+
+    Args:
+        action_type: The action category string (e.g. ``"recall"``, ``"memorize"``).
+        raw_result: Raw result value returned by the action handler.
+
+    Returns:
+        Confidence score in the range [0.0, 1.0].
+    """
     if action_type in _DETERMINISTIC_ACTIONS:
         return 0.92
     if action_type in _READ_ACTIONS:
@@ -31,7 +42,19 @@ def _estimate_confidence(action_type: str, raw_result: Any) -> float:
 
 
 def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) -> str:
-    """Extract contextual notes from an action result for critic review."""
+    """Extract contextual notes from an action result for critic review.
+
+    Currently produces notes for ``schedule`` (parsed date, recurrence) and
+    ``recall`` (query string) action types.
+
+    Args:
+        action_type: The action category string.
+        action: Full action specification dict.
+        raw_result: Raw result value returned by the action handler.
+
+    Returns:
+        Semicolon-delimited notes string, or empty string if none apply.
+    """
     notes_parts = []
     if action_type == 'schedule':
         if isinstance(raw_result, dict):
@@ -72,7 +95,7 @@ class ActDispatcherService:
         Phase 3 — Pre-action reliability check: if the action references a
         memory marked as 'uncertain' or 'contradicted', log a warning and
         annotate the result so the ACT loop / critic can decide whether to
-        proceed or route to CLARIFY.
+        proceed or ask for clarification.
 
         Args:
             topic: Current conversation topic
@@ -85,6 +108,27 @@ class ActDispatcherService:
         start_time = time.time()
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
+
+        # Pre-action consequence check — lightweight tier classification.
+        # Tier 3 (COMMIT) actions are flagged but not blocked; the warning
+        # is surfaced to the ACT loop prompt via the result's notes field.
+        _commit_warning = ''
+        try:
+            from services.consequence_classifier_service import get_consequence_classifier_service
+            classifier = get_consequence_classifier_service()
+            action_description = action.get('description', action.get('params', {}).get('query', action_type))
+            cls_result = classifier.classify(str(action_description))
+            if cls_result['tier'] == 3:  # COMMIT — flag but don't block
+                _commit_warning = (
+                    "This action was classified as potentially irreversible (tier: COMMIT). "
+                    "Proceed with caution."
+                )
+                logging.warning(
+                    f"[ACT DISPATCH] ACT action classified as COMMIT (irreversible): "
+                    f"{action_description!r:.100}"
+                )
+        except Exception:
+            pass  # Non-critical, never block execution
 
         # Pre-action reliability check — non-blocking: only logs/annotates
         _reliability_warning = self._check_source_reliability(action)
@@ -117,6 +161,7 @@ class ActDispatcherService:
             result_container = {'result': None, 'error': None}
 
             def target():
+                """Thread target: invoke the action handler and capture the result."""
                 try:
                     result_container['result'] = handler(topic, action)
                 except Exception as e:
@@ -160,6 +205,9 @@ class ActDispatcherService:
 
             confidence = _estimate_confidence(action_type, raw_result)
             notes = _extract_notes(action_type, action, raw_result)
+            # Append COMMIT-tier warning to notes so the ACT loop prompt sees it
+            if _commit_warning:
+                notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
 
             dispatch_result = {
                 'action_type': action_type,

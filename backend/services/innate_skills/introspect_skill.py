@@ -242,8 +242,6 @@ def _format_snapshot(snapshot: dict, extra: dict, topic: str) -> str:
 
     # Epistemic
     lines.append(f"  context_warmth: {ep.get('context_warmth', 0)}")
-    lines.append(f"  gist_count: {ep.get('gist_count', 0)}")
-    lines.append(f"  fact_count: {ep.get('fact_count', 0)}")
     lines.append(f"  working_memory_depth: {ep.get('working_memory_depth', 0)}")
     lines.append(f"  topic_age: {ep.get('topic_age', 'unknown')}")
     lines.append(f"  partial_match_signal: {ep.get('partial_match_signal', 0)}")
@@ -339,26 +337,10 @@ def _legacy_handle_introspect(topic: str, params: dict) -> str:
     store = MemoryClientService.create_connection()
 
     state = {}
-    try:
-        from services.gist_storage_service import GistStorageService
-        state["gist_count"] = len(GistStorageService().get_latest_gists(topic))
-    except Exception:
-        state["gist_count"] = 0
-
-    try:
-        from services.fact_store_service import FactStoreService
-        state["fact_count"] = len(FactStoreService().get_all_facts(topic))
-    except Exception:
-        state["fact_count"] = 0
-
     state["working_memory_depth"] = store.llen(f"working_memory:{topic}")
 
-    gist_score = min(1.0, state["gist_count"] / 5.0)
-    fact_score = min(1.0, state["fact_count"] / 10.0)
     wm_score = min(1.0, state["working_memory_depth"] / 4.0)
-    state["context_warmth"] = round(
-        (gist_score * 0.4) + (fact_score * 0.3) + (wm_score * 0.3), 3
-    )
+    state["context_warmth"] = round(wm_score, 3)
     state["partial_match_signal"] = _get_fok_signal(topic)
     state["recall_failure_rate"] = _get_recall_failure_rate(topic)
     state["world_state"] = _get_world_state(topic)
@@ -380,9 +362,8 @@ def _legacy_handle_introspect(topic: str, params: dict) -> str:
 def _legacy_format(state: Dict, topic: str) -> str:
     """Format state dict in legacy format."""
     lines = [f"[INTROSPECT] Internal state for topic '{topic}':"]
-    for key in ['context_warmth', 'gist_count', 'fact_count',
-                'working_memory_depth', 'topic_age', 'partial_match_signal',
-                'recall_failure_rate']:
+    for key in ['context_warmth', 'working_memory_depth', 'topic_age',
+                'partial_match_signal', 'recall_failure_rate']:
         lines.append(f"  {key}: {state.get(key, 'N/A')}")
     lines.append(f"  focus_active: {state.get('focus_active', False)}")
     return "\n".join(lines)

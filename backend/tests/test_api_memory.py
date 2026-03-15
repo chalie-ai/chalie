@@ -34,10 +34,9 @@ class TestMemoryAPI:
     # ------------------------------------------------------------------
 
     def test_context_returns_expected_keys(self, client):
-        """GET /memory/context returns traits/facts/significant_episodes/concepts keys."""
+        """GET /memory/context returns traits/significant_episodes/concepts keys."""
         with patch('services.database_service.get_shared_db_service') as mock_db_fn, \
              patch('services.user_trait_service.UserTraitService') as mock_trait_cls, \
-             patch('services.thread_service.get_thread_service') as mock_ts_fn, \
              patch('services.episodic_retrieval_service.EpisodicRetrievalService') as mock_er_cls, \
              patch('services.semantic_retrieval_service.SemanticRetrievalService') as mock_sr_cls, \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
@@ -46,10 +45,6 @@ class TestMemoryAPI:
             mock_trait = MagicMock()
             mock_trait.get_traits_for_prompt.return_value = ""
             mock_trait_cls.return_value = mock_trait
-
-            mock_ts = MagicMock()
-            mock_ts.get_active_thread_id.return_value = None
-            mock_ts_fn.return_value = mock_ts
 
             mock_er = MagicMock()
             mock_er.retrieve_episodes.return_value = []
@@ -64,7 +59,6 @@ class TestMemoryAPI:
             assert response.status_code == 200
             data = response.get_json()
             assert "traits" in data
-            assert "facts" in data
             assert "significant_episodes" in data
             assert "concepts" in data
 
@@ -85,17 +79,9 @@ class TestMemoryAPI:
         assert "error" in data
         assert "topic" in data["error"].lower()
 
-    def test_forget_topic_clears_memory_stores(self, client):
-        """POST /memory/forget scope=topic clears gists, facts, and working memory."""
-        with patch('services.gist_storage_service.GistStorageService') as mock_gist_cls, \
-             patch('services.fact_store_service.FactStoreService') as mock_fact_cls, \
-             patch('services.working_memory_service.WorkingMemoryService') as mock_wm_cls:
-            mock_gist = MagicMock()
-            mock_gist_cls.return_value = mock_gist
-
-            mock_fact = MagicMock()
-            mock_fact_cls.return_value = mock_fact
-
+    def test_forget_topic_clears_working_memory(self, client):
+        """POST /memory/forget scope=topic clears working memory."""
+        with patch('services.working_memory_service.WorkingMemoryService') as mock_wm_cls:
             mock_wm = MagicMock()
             mock_wm_cls.return_value = mock_wm
 
@@ -111,38 +97,7 @@ class TestMemoryAPI:
             assert data["scope"] == "topic"
             assert data["topic"] == "test-topic"
 
-            mock_gist.clear_gists.assert_called_once_with("test-topic")
-            mock_fact.clear_facts.assert_called_once_with("test-topic")
             mock_wm.clear.assert_called_once_with("test-topic")
-
-    # ------------------------------------------------------------------
-    # POST /memory/forget — scope=fact
-    # ------------------------------------------------------------------
-
-    def test_forget_fact_missing_fact_key_returns_400(self, client):
-        """POST /memory/forget scope=fact without fact_key returns 400."""
-        response = client.post(
-            '/memory/forget',
-            json={"scope": "fact", "topic": "some-topic"},
-            content_type='application/json',
-        )
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
-        assert "fact_key" in data["error"].lower()
-
-    def test_forget_fact_missing_topic_returns_400(self, client):
-        """POST /memory/forget scope=fact without topic returns 400."""
-        response = client.post(
-            '/memory/forget',
-            json={"scope": "fact", "fact_key": "some-key"},
-            content_type='application/json',
-        )
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
 
     # ------------------------------------------------------------------
     # POST /memory/forget — scope=all

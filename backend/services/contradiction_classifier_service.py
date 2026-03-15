@@ -193,12 +193,12 @@ class ContradictionClassifierService:
             if embedding is None:
                 return None
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Embedding failed for ingestion check: {e}")
+            logger.info(f"{LOG_PREFIX} Embedding failed for ingestion check: {e}")
             return None
 
         elapsed_ms = (time.time() - start) * 1000
         if elapsed_ms > _INGESTION_TIMEOUT_MS:
-            logger.debug(f"{LOG_PREFIX} Ingestion timeout after embedding ({elapsed_ms:.0f}ms)")
+            logger.info(f"{LOG_PREFIX} Ingestion timeout after embedding ({elapsed_ms:.0f}ms)")
             return None
 
         pairs = self._find_candidate_pairs_ingestion(embedding, text, start)
@@ -208,7 +208,7 @@ class ContradictionClassifierService:
         for mem_a, mem_b in pairs[:_MAX_PAIRS_PER_INGESTION]:
             elapsed_ms = (time.time() - start) * 1000
             if elapsed_ms > _INGESTION_TIMEOUT_MS:
-                logger.debug(f"{LOG_PREFIX} Ingestion timeout before classification")
+                logger.info(f"{LOG_PREFIX} Ingestion timeout before classification")
                 return None
 
             result = self._classify_pair_llm(
@@ -429,7 +429,7 @@ class ContradictionClassifierService:
                 return None
 
             if confidence < self._ONNX_CONFIDENCE_THRESHOLD:
-                logger.debug(
+                logger.info(
                     f"{LOG_PREFIX} ONNX confidence {confidence:.3f} below "
                     f"threshold {self._ONNX_CONFIDENCE_THRESHOLD} — using LLM"
                 )
@@ -446,6 +446,11 @@ class ContradictionClassifierService:
             else:
                 resolution = 'ignore'
 
+            logger.info(
+                f"{LOG_PREFIX} ONNX classification: {classification} "
+                f"(confidence={confidence:.3f}, resolution={resolution})"
+            )
+
             return {
                 'classification': classification,
                 'confidence': confidence,
@@ -455,7 +460,7 @@ class ContradictionClassifierService:
                 'recommended_resolution': resolution,
             }
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} ONNX classification failed: {e}")
+            logger.info(f"{LOG_PREFIX} ONNX classification failed: {e}")
             return None
 
     def _build_onnx_input(
@@ -585,7 +590,7 @@ class ContradictionClassifierService:
             response = llm.send_message(_CLASSIFIER_SYSTEM_PROMPT, user_message)
             return _extract_json(response.text)
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} LLM classification failed: {e}")
+            logger.info(f"{LOG_PREFIX} LLM classification failed: {e}")
             return None
 
     def _find_candidate_pairs_ingestion(
@@ -778,7 +783,7 @@ class ContradictionClassifierService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT 1 FROM uncertainties
-                    WHERE state IN ('open', 'surfaced')
+                    WHERE state = 'open'
                       AND created_at > datetime('now', '-7 days')
                       AND (
                           (memory_a_id = ? AND memory_b_id = ?)

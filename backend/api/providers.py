@@ -3,6 +3,7 @@ Providers blueprint — manage LLM provider configuration via REST API.
 """
 
 import logging
+import os
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
@@ -57,18 +58,11 @@ def create_provider():
 
         # Auto-assign all cognitive jobs if this is the first provider
         if is_first_provider:
-            all_jobs = [
-                'autobiography', 'frontal-cortex', 'frontal-cortex-act',
-                'plan-decomposition', 'frontal-cortex-respond',
-                'cognitive-drift', 'episodic-memory', 'frontal-cortex-clarify',
-                'frontal-cortex-proactive',
-                'frontal-cortex-scheduled-tool', 'mode-reflection',
-                'semantic-memory', 'cognitive-triage', 'experience-assimilation',
-                'fact-store', 'memory-chunker',
-                'moment-enrichment', 'document-synthesis',
-                'document-classification',
-            ]
             try:
+                import json
+                config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+                with open(config_path, 'r') as f:
+                    all_jobs = [j['id'] for j in json.load(f).get('jobs', [])]
                 for job in all_jobs:
                     service.set_job_assignment(job, provider["id"])
             except Exception as e:
@@ -309,6 +303,24 @@ def test_provider():
     except Exception as e:
         logger.error(f"[REST API] Provider test failed unexpectedly: {e}")
         return jsonify({"success": False, "error": "Test failed unexpectedly"}), 500
+
+
+@providers_bp.route('/jobs/definitions', methods=['GET'])
+@require_session
+def list_job_definitions():
+    """Return cognitive job definitions (id, name, desc, capability requirements).
+
+    Source of truth: backend/configs/cognitive_jobs.json
+    """
+    import json
+    try:
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+        with open(config_path, 'r') as f:
+            data = json.load(f)
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"[REST API] Failed to load job definitions: {e}")
+        return jsonify({"error": "Failed to load job definitions"}), 500
 
 
 @providers_bp.route('/jobs', methods=['GET'])

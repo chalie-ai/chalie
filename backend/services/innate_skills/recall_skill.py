@@ -1,7 +1,7 @@
 """
 Recall Skill — Unified memory retrieval across all layers.
 
-Searches working memory, gists, facts, episodes, concepts, and user traits in one call.
+Searches working memory, episodes, concepts, and user traits in one call.
 Stores partial_match_count in MemoryStore for the introspect skill's FOK signal.
 """
 
@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-ALL_LAYERS = ["working_memory", "gists", "facts", "episodes", "concepts", "user_traits"]
+ALL_LAYERS = ["working_memory", "episodes", "concepts", "user_traits"]
 
 # Broad self-knowledge queries — return all traits, not keyword-filtered
 BROAD_QUERIES = {
@@ -46,10 +46,6 @@ def handle_recall(topic: str, params: dict) -> str:
     for layer in layers:
         if layer == "working_memory":
             hits, status = _search_working_memory(topic, query, limit)
-        elif layer == "gists":
-            hits, status = _search_gists(topic, query, limit)
-        elif layer == "facts":
-            hits, status = _search_facts(topic, query, limit)
         elif layer == "episodes":
             hits, status = _search_episodes(topic, query, limit)
         elif layer == "concepts":
@@ -105,76 +101,6 @@ def _search_working_memory(topic: str, query: str, limit: int) -> tuple:
 
     except Exception as e:
         logger.warning(f"[RECALL] working_memory search failed: {e}")
-        return [], f"error: {e}"
-
-
-def _search_gists(topic: str, query: str, limit: int) -> tuple:
-    """Search gists for query keywords."""
-    try:
-        from services.gist_storage_service import GistStorageService
-
-        service = GistStorageService()
-        gists = service.get_latest_gists(topic)
-
-        if not gists:
-            return [], "empty"
-
-        query_lower = query.lower()
-        hits = []
-        for gist in gists:
-            content = gist.get("content", "")
-            if query_lower in content.lower():
-                hits.append({
-                    "layer": "gists",
-                    "content": content[:200],
-                    "confidence": gist.get("confidence", 5) / 10.0,
-                    "freshness": "recent",
-                    "type": gist.get("type", "unknown"),
-                })
-                if len(hits) >= limit:
-                    break
-
-        if hits:
-            return hits, f"{len(hits)} matches"
-        return [], f"0 matches ({len(gists)} gists searched)"
-
-    except Exception as e:
-        logger.warning(f"[RECALL] gist search failed: {e}")
-        return [], f"error: {e}"
-
-
-def _search_facts(topic: str, query: str, limit: int) -> tuple:
-    """Search facts for query keywords."""
-    try:
-        from services.fact_store_service import FactStoreService
-
-        service = FactStoreService()
-        facts = service.get_all_facts(topic)
-
-        if not facts:
-            return [], "empty"
-
-        query_lower = query.lower()
-        hits = []
-        for fact in facts:
-            key = fact.get("key", "")
-            value = fact.get("value", "")
-            if query_lower in key.lower() or query_lower in str(value).lower():
-                hits.append({
-                    "layer": "facts",
-                    "content": f"{key}: {value}",
-                    "confidence": fact.get("confidence", 0.5),
-                    "freshness": "medium-term",
-                })
-                if len(hits) >= limit:
-                    break
-
-        if hits:
-            return hits, f"{len(hits)} matches"
-        return [], f"0 matches ({len(facts)} facts searched)"
-
-    except Exception as e:
-        logger.warning(f"[RECALL] fact search failed: {e}")
         return [], f"error: {e}"
 
 
@@ -320,14 +246,13 @@ def _search_user_traits(topic: str, query: str, limit: int) -> tuple:
             value = t.get('trait_value', '')
             category = t.get('category', 'general')
             confidence = t.get('confidence', 0.0)
-            source = t.get('source', 'inferred')
 
             if is_broad:
                 if confidence >= 0.3:
-                    matched.append(_format_trait_hit(key, value, category, confidence, source))
+                    matched.append(_format_trait_hit(key, value, category, confidence))
             else:
                 if query_lower in key.lower() or query_lower in str(value).lower():
-                    matched.append(_format_trait_hit(key, value, category, confidence, source))
+                    matched.append(_format_trait_hit(key, value, category, confidence))
 
         matched.sort(key=lambda h: h['confidence'], reverse=True)
 
@@ -348,14 +273,14 @@ def _search_user_traits(topic: str, query: str, limit: int) -> tuple:
         return [], f"error: {e}"
 
 
-def _format_trait_hit(key: str, value: str, category: str, confidence: float, source: str = 'inferred') -> dict:
+def _format_trait_hit(key: str, value: str, category: str, confidence: float) -> dict:
     """
     Format a user trait as a standard recall hit dict.
 
-    Includes meta fields so the LLM can modulate tone based on source/confidence:
-    - explicit + high confidence  → "Your name is Dylan."
-    - inferred + medium           → "You seem to prefer dark themes."
-    - inferred + low              → "I think you might enjoy cooking, but I'm not certain."
+    Includes meta fields so the LLM can modulate tone based on confidence:
+    - high confidence  → "Your name is Dylan."
+    - medium           → "You seem to prefer dark themes."
+    - low              → "I think you might enjoy cooking, but I'm not certain."
     """
     conf_label = "well established" if confidence >= 0.7 else "likely" if confidence >= 0.4 else "uncertain"
     return {
@@ -366,7 +291,6 @@ def _format_trait_hit(key: str, value: str, category: str, confidence: float, so
         "meta": {
             "category": category,
             "confidence_label": conf_label,
-            "source": source,
         },
     }
 
@@ -405,7 +329,7 @@ def _format_results(results: List[Dict], query: str) -> str:
                 extra = f", strength={hit['strength']:.2f}"
             if "meta" in hit:
                 m = hit["meta"]
-                extra = f", source={m.get('source','inferred')}, certainty={m.get('confidence_label','')}"
+                extra = f", certainty={m.get('confidence_label','')}"
             lines.append(f"    - {content} (confidence={conf:.2f}{extra})")
 
     return "\n".join(lines)

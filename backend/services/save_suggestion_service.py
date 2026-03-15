@@ -11,6 +11,10 @@ Architecture:
      emits a save suggestion card.
 
 V1 scope: Plans/guides, recipes, structured lists. Expand via telemetry.
+
+NOTE: This service may be redundant if the memory → document pipeline becomes
+more autonomous (i.e. the system learns to persist structured deliverables
+without explicit user prompting).
 """
 
 import hashlib

@@ -109,8 +109,6 @@ def collect_routing_signals(
     topic: str,
     context_warmth: float,
     working_memory,
-    gist_storage,
-    fact_store,
     world_state_service,
     classification_result: dict,
     session_service,
@@ -126,13 +124,11 @@ def collect_routing_signals(
         topic: Resolved topic name
         context_warmth: Pre-computed warmth (0.0-1.0)
         working_memory: WorkingMemoryService instance
-        gist_storage: GistStorageService instance
-        fact_store: FactStoreService instance
         world_state_service: WorldStateService instance
         classification_result: Dict from topic classifier
         session_service: SessionService instance
         intent: Optional intent classification dict from IntentClassifierService
-            (tool selection handled by CognitiveTriageService)
+            (tool selection handled by MessageGateService)
 
     Returns:
         Dict of routing signals
@@ -140,13 +136,6 @@ def collect_routing_signals(
     # Context signals (from existing services, all MemoryStore reads)
     wm_turns = working_memory.get_recent_turns(topic) if topic else []
     working_memory_turns = len(wm_turns)
-
-    gists = gist_storage.get_latest_gists(topic) if topic else []
-    gist_count = sum(1 for g in gists if g.get('type') != 'cold_start')
-
-    facts = fact_store.get_all_facts(topic) if topic else []
-    fact_count = len(facts)
-    fact_keys = [f.get('key', '') for f in facts]
 
     world_state = world_state_service.get_world_state(topic) if topic else ""
     world_state_present = bool(world_state and world_state.strip())
@@ -166,12 +155,12 @@ def collect_routing_signals(
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)
 
-    density_score = min(1.0, (gist_count + fact_count) / 6.0)
+    wm_depth_score = min(1.0, working_memory_turns / 6.0)
 
     memory_confidence = (
         0.4 * fok_score
         + 0.4 * context_warmth
-        + 0.2 * density_score
+        + 0.2 * wm_depth_score
     )
     if is_new_topic:
         memory_confidence *= 0.7
@@ -184,9 +173,9 @@ def collect_routing_signals(
         # Context signals
         'context_warmth': context_warmth,
         'working_memory_turns': working_memory_turns,
-        'gist_count': gist_count,
-        'fact_count': fact_count,
-        'fact_keys': fact_keys,
+        'gist_count': 0,
+        'fact_count': 0,
+        'fact_keys': [],
         'world_state_present': world_state_present,
         'topic_confidence': topic_confidence,
         'is_new_topic': is_new_topic,
@@ -220,11 +209,10 @@ class ModeRouterService:
     When top-2 are within margin, invokes small LLM for disambiguation.
     """
 
-    MODES = ['RESPOND', 'CLARIFY', 'ACT', 'IGNORE']
+    MODES = ['RESPOND', 'ACT', 'IGNORE']
 
     MODE_DESCRIPTIONS = {
         'RESPOND': 'Answer the user with available context and knowledge',
-        'CLARIFY': 'Ask one clarifying question to build understanding',
         'ACT': 'Use tools and skills (web search, memory lookup, research) to gather information before responding',
         'IGNORE': 'No response needed (empty or irrelevant input)',
     }
@@ -241,7 +229,6 @@ class ModeRouterService:
         # Base scores per mode
         self.bases = config.get('base_scores', {
             'RESPOND': 0.50,
-            'CLARIFY': 0.30,
             'ACT': 0.20,
             'IGNORE': -0.50,
         })
@@ -367,8 +354,6 @@ class ModeRouterService:
     ) -> Dict[str, float]:
         """Score each mode based on signal composites."""
         warmth = signals['context_warmth']
-        fact_count = signals['fact_count']
-        gist_count = signals['gist_count']
         has_q = signals['has_question_mark']
         interrog = signals['interrogative_words']
         greeting = signals['greeting_pattern']
@@ -380,8 +365,6 @@ class ModeRouterService:
         token_count = signals['prompt_token_count']
 
         # Derived signals
-        fact_density = min(fact_count / 10.0, 1.0)
-        gist_density = min(gist_count / 5.0, 1.0)
         is_question = has_q or interrog
         is_cold = warmth < 0.3
         is_warm = warmth > 0.6
@@ -392,8 +375,6 @@ class ModeRouterService:
         # ── RESPOND ──────────────────────────────────────────────
         respond = self.bases['RESPOND']
         respond += warmth * w.get('respond.warmth_boost', 0.20)
-        respond += fact_density * w.get('respond.fact_density', 0.15)
-        respond += gist_density * w.get('respond.gist_density', 0.10)
         if is_question and warmth > 0.4:
             respond += w.get('respond.question_warm', 0.15)
         if is_question and is_cold:
@@ -401,40 +382,19 @@ class ModeRouterService:
             respond += w.get('respond.question_cold', 0.10)
         if is_cold:
             respond -= w.get('respond.cold_penalty', 0.15)
-        # Tool-needed penalty removed — tool dispatch now handled by CognitiveTriageService
-
-        # ── CLARIFY ──────────────────────────────────────────────
-        clarify = self.bases['CLARIFY']
-        if is_cold:
-            clarify += (1.0 - warmth) * w.get('clarify.cold_boost', 0.12)
-        if is_question and is_cold:
-            clarify += w.get('clarify.cold_question', 0.05)
-        if is_question and fact_count == 0:
-            # Reduced: no facts ≠ ambiguous question — just means new topic
-            clarify += w.get('clarify.question_no_facts', 0.08)
-        if is_new and is_question:
-            clarify += w.get('clarify.new_topic_question', 0.05)
-        if is_warm:
-            clarify -= w.get('clarify.warm_penalty', 0.20)
-        # Self-constraint: degraded state or capability gaps nudge toward CLARIFY
-        self_constraint = signals.get('self_constraint', 0.0)
-        if self_constraint > 0:
-            clarify += self_constraint * w.get('clarify.self_constraint', 0.10)
-            respond -= self_constraint * w.get('respond.self_constraint_penalty', 0.05)
+        # Tool-needed penalty removed — tool dispatch now handled by MessageGateService
 
         # ── ACT ──────────────────────────────────────────────────
         act = self.bases['ACT']
         if is_question and 0.3 <= warmth <= 0.7:
             act += w.get('act.question_moderate_context', 0.20)
-        if interrog and fact_count < 3:
+        if interrog and is_cold:
             act += w.get('act.interrogative_gap', 0.15)
         if implicit_ref:
             act += w.get('act.implicit_reference', 0.15)
-        # Tool relevance weights removed — CognitiveTriageService handles tool dispatch
+        # Tool relevance weights removed — MessageGateService handles tool dispatch
         if warmth < 0.15:
             act -= w.get('act.very_cold_penalty', 0.10)
-        if is_warm and fact_density > 0.5:
-            act -= w.get('act.warm_facts_penalty', 0.10)
         # Action intent — user wants Chalie to DO something (set reminder, manage list, etc.)
         if signals.get('intent_type') == 'action':
             act += w.get('act.action_intent', 0.40)
@@ -454,7 +414,6 @@ class ModeRouterService:
 
         scores = {
             'RESPOND': respond,
-            'CLARIFY': clarify,
             'ACT': act,
             'IGNORE': ignore,
         }
@@ -486,13 +445,6 @@ class ModeRouterService:
             suppressed_mode = 'ACT'
             penalty = -0.15
             logger.debug(f"{LOG_PREFIX} Anti-oscillation: ACT suppressed (previous was ACT)")
-        elif previous_mode == 'CLARIFY':
-            # User just answered a clarification — respond to it, don't re-clarify
-            adjusted['RESPOND'] += 0.15
-            adjusted['CLARIFY'] -= 0.20
-            suppressed_mode = 'CLARIFY'
-            penalty = -0.20
-            logger.debug(f"{LOG_PREFIX} Anti-oscillation: RESPOND boosted, CLARIFY suppressed (previous was CLARIFY)")
 
         if suppressed_mode:
             try:

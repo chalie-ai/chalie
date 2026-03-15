@@ -40,19 +40,9 @@ def mock_store():
 def mock_config():
     """Test config — no file I/O."""
     agent_configs = {
-        'memory-chunker': {
-            'model': 'test-model',
-            'attention_span_minutes': 30,
-            'min_gist_confidence': 7,
-            'max_gists': 8,
-            'gist_similarity_threshold': 0.7,
-            'max_gists_per_type': 2,
-            'timeout': 120,
-        },
         'mode-router': {
             'base_scores': {
                 'RESPOND': 0.40,
-                'CLARIFY': 0.30,
                 'ACT': 0.20,
                 'IGNORE': -0.50,
             },
@@ -62,11 +52,6 @@ def mock_config():
                 'respond.gist_density': 0.10,
                 'respond.question_warm': 0.15,
                 'respond.cold_penalty': 0.15,
-                'clarify.cold_boost': 0.25,
-                'clarify.question_no_facts': 0.20,
-                'clarify.new_topic_question': 0.10,
-                'clarify.cold_question': 0.05,
-                'clarify.warm_penalty': 0.20,
                 'act.question_moderate_context': 0.20,
                 'act.interrogative_gap': 0.15,
                 'act.implicit_reference': 0.15,
@@ -77,12 +62,6 @@ def mock_config():
             'tiebreaker_base_margin': 0.20,
             'tiebreaker_min_margin': 0.08,
         },
-        'fact-store': {
-            'model': 'test-model',
-            'ttl_minutes': 1440,
-            'max_facts_per_topic': 50,
-            'min_confidence': 0.5,
-        },
         'frontal-cortex': {
             'model': 'test-model',
             'cost_base': 1.0,
@@ -90,8 +69,7 @@ def mock_config():
         },
     }
     agent_prompts = {
-        'memory-chunker': 'Test chunker prompt {{world_state}}',
-        'fact-extraction': 'Test fact extraction prompt {{user_message}} {{system_response}}',
+        'trait-extraction': 'Test trait extraction prompt {{message}}',
     }
     connections = {
         'memory': {},

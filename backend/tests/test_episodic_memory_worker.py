@@ -75,15 +75,12 @@ class TestSafeJsonLoad:
 # ── _format_session_for_llm ──────────────────────────────────
 
 
-def _make_exchange(*, gists=None, scope="personal", emotion_type="neutral",
-                   emotion_intensity="low", steps=None, include_chunk=True):
+def _make_exchange(*, user_msg="Hello", assistant_msg="Hi there", steps=None, include_msgs=True):
     """Helper to build a minimal exchange dict for formatting tests."""
     exchange = {}
-    if include_chunk:
-        chunk = {"scope": scope, "emotion": {"type": emotion_type, "intensity": emotion_intensity}}
-        if gists is not None:
-            chunk["gists"] = gists
-        exchange["memory_chunk"] = chunk
+    if include_msgs:
+        exchange["prompt"] = {"message": user_msg}
+        exchange["response"] = {"message": assistant_msg}
     if steps is not None:
         exchange["steps"] = steps
     return exchange
@@ -103,11 +100,9 @@ class TestFormatSessionForLlm:
 
         assert "Session Duration: 2026-01-15 10:00 to 2026-01-15 10:30" in result
 
-    def test_includes_gists_when_memory_chunk_has_gists(self):
-        """Gist entries from memory_chunk appear with type, content, and confidence."""
-        exchange = _make_exchange(
-            gists=[{"type": "observation", "content": "User likes coffee", "confidence": 0.9}]
-        )
+    def test_includes_user_and_assistant_messages(self):
+        """User and assistant messages appear in the formatted output."""
+        exchange = _make_exchange(user_msg="What's the weather?", assistant_msg="Sunny today.")
         session = {
             "start_time": "t0", "end_time": "t1",
             "exchanges": [exchange],
@@ -115,11 +110,12 @@ class TestFormatSessionForLlm:
 
         result = _format_session_for_llm(session)
 
-        assert "[observation] User likes coffee (confidence: 0.9)" in result
+        assert "User: What's the weather?" in result
+        assert "Assistant: Sunny today." in result
 
-    def test_includes_scope_from_memory_chunk(self):
-        """The scope field from memory_chunk appears in the formatted output."""
-        exchange = _make_exchange(scope="work")
+    def test_includes_exchange_header(self):
+        """Each exchange gets a numbered header."""
+        exchange = _make_exchange()
         session = {
             "start_time": "t0", "end_time": "t1",
             "exchanges": [exchange],
@@ -127,39 +123,24 @@ class TestFormatSessionForLlm:
 
         result = _format_session_for_llm(session)
 
-        assert "Scope: work" in result
+        assert "--- Exchange 1 ---" in result
 
-    def test_includes_emotion_type_and_intensity(self):
-        """Emotion type and intensity from memory_chunk appear in the formatted output."""
-        exchange = _make_exchange(emotion_type="excitement", emotion_intensity="high")
-        session = {
-            "start_time": "t0", "end_time": "t1",
-            "exchanges": [exchange],
-        }
-
-        result = _format_session_for_llm(session)
-
-        assert "Emotion: excitement (intensity: high)" in result
-
-    def test_skips_exchange_when_memory_chunk_missing(self, caplog):
-        """Exchanges without a memory_chunk are skipped and a warning is logged."""
-        exchange_with = _make_exchange(scope="personal")
-        exchange_without = _make_exchange(include_chunk=False)
+    def test_skips_exchange_when_both_messages_empty(self):
+        """Exchanges with no user or assistant message are silently skipped."""
+        exchange_with = _make_exchange()
+        exchange_without = _make_exchange(include_msgs=False)
         session = {
             "start_time": "t0", "end_time": "t1",
             "exchanges": [exchange_with, exchange_without],
         }
 
-        with caplog.at_level(logging.WARNING):
-            result = _format_session_for_llm(session)
+        result = _format_session_for_llm(session)
 
-        # Only one exchange header should appear (the one with a chunk)
+        # Only one exchange header (empty exchange skipped)
         assert result.count("--- Exchange") == 1
-        assert "Exchange 1 Memory Chunk" in result
-        assert any("missing memory_chunk" in msg for msg in caplog.messages)
 
     def test_returns_header_only_when_exchanges_empty(self):
-        """An empty exchanges list produces just the session duration and memory chunks header."""
+        """An empty exchanges list produces just the session duration and conversation header."""
         session = {
             "start_time": "2026-02-01 08:00",
             "end_time": "2026-02-01 09:00",
@@ -169,9 +150,21 @@ class TestFormatSessionForLlm:
         result = _format_session_for_llm(session)
 
         assert "Session Duration:" in result
-        assert "Memory Chunks:" in result
+        assert "Conversation from Session" in result
         # No exchange headers
         assert "--- Exchange" not in result
+
+    def test_includes_steps_when_present(self):
+        """Tool steps are included in the exchange output when present."""
+        exchange = _make_exchange(steps=["searched web", "found result"])
+        session = {
+            "start_time": "t0", "end_time": "t1",
+            "exchanges": [exchange],
+        }
+
+        result = _format_session_for_llm(session)
+
+        assert "Actions:" in result
 
 
 # ── Salience Normalization (inline logic) ─────────────────────

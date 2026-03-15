@@ -22,9 +22,26 @@ class ActionDecisionRouter:
     """Routes drift thoughts to the highest-scoring eligible action."""
 
     def __init__(self, actions: Optional[List[AutonomousAction]] = None):
+        """
+        Initialize the router with an optional pre-populated list of actions.
+
+        Args:
+            actions: Initial list of AutonomousAction instances to register.
+                Additional actions can be added later via :meth:`register`.
+                Defaults to an empty list when not provided.
+        """
         self.actions: List[AutonomousAction] = actions or []
 
     def register(self, action: AutonomousAction):
+        """
+        Register an AutonomousAction with the router.
+
+        Appends the action to the internal list so it will be evaluated on
+        subsequent calls to :meth:`decide_and_execute` and :meth:`get_scores`.
+
+        Args:
+            action: The AutonomousAction instance to register.
+        """
         self.actions.append(action)
         logger.info(f"{LOG_PREFIX} Registered action: {action.name} (priority={action.priority})")
 

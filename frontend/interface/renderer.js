@@ -35,10 +35,35 @@ export class Renderer {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /** Append a user speech form. */
-  appendUserForm(text, ts = null) {
+  /**
+   * Append a user speech form.
+   * @param {string} text
+   * @param {string|null} [ts]
+   * @param {{inWorkingMemory?: boolean}} [options]
+   * @param {string[]} [imageIds]
+   */
+  appendUserForm(text, ts = null, { inWorkingMemory = true } = {}, imageIds = []) {
     const el = this._createEl('div', 'speech-form speech-form--user');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+
+    // Render image thumbnails above the text when images are attached
+    if (imageIds.length > 0) {
+      const imagesEl = this._createEl('div', 'speech-form__images');
+      for (const id of imageIds) {
+        const img = document.createElement('img');
+        img.src = `/chat/image/${id}/file`;
+        img.className = 'speech-form__image-thumb';
+        img.alt = 'Attached image';
+        imagesEl.appendChild(img);
+      }
+      el.appendChild(imagesEl);
+    }
+
     const textEl = this._createEl('div', 'speech-form__text');
+    const isPlaceholder = text === '[Image attached]' || text === '[image attached]';
+    if (isPlaceholder && imageIds.length > 0) {
+      textEl.style.display = 'none';
+    }
     textEl.textContent = text;
     el.appendChild(textEl);
 
@@ -55,12 +80,37 @@ export class Renderer {
   }
 
   /**
+   * Prepend a user speech form (for scroll-up pagination).
+   * @param {string} text
+   * @param {string|null} [ts]
+   * @param {{inWorkingMemory?: boolean}} [options]
+   */
+  prependUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
+    const el = this._createEl('div', 'speech-form speech-form--user');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+    const textEl = this._createEl('div', 'speech-form__text');
+    textEl.textContent = text;
+    el.appendChild(textEl);
+
+    const metaRow = this._createEl('div', 'speech-form__meta');
+    const timestampEl = this._createEl('span', 'speech-form__timestamp');
+    timestampEl.textContent = this._formatTimestamp(ts);
+    metaRow.appendChild(timestampEl);
+    el.appendChild(metaRow);
+
+    this._spine.prepend(el);
+    return el;
+  }
+
+  /**
    * Append a Chalie speech form.
    * @param {string} text
    * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
+   * @param {{inWorkingMemory?: boolean}} [options]
    */
-  appendChalieForm(text, meta = {}) {
+  appendChalieForm(text, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
+    if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
     textEl.innerHTML = parseMarkdown(text);
     el.appendChild(textEl);
@@ -78,6 +128,30 @@ export class Renderer {
     this._spine.appendChild(el);
     this._setActiveForm(el);
     this._scrollToBottom();
+    return el;
+  }
+
+  /**
+   * Prepend a Chalie speech form (for scroll-up pagination).
+   * @param {string} text
+   * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
+   * @param {{inWorkingMemory?: boolean}} [options]
+   */
+  prependChalieForm(text, meta = {}, { inWorkingMemory = true } = {}) {
+    const el = this._createEl('div', 'speech-form speech-form--chalie');
+    if (!inWorkingMemory) el.classList.add('message--faded');
+    const textEl = this._createEl('div', 'speech-form__text');
+    textEl.innerHTML = parseMarkdown(text);
+    el.appendChild(textEl);
+
+    if (meta.actions?.length) {
+      el.appendChild(this._buildActionButtons(meta.actions));
+    }
+
+    const metaRow = this._buildMetaRow(text, meta);
+    el.appendChild(metaRow);
+
+    this._spine.prepend(el);
     return el;
   }
 
@@ -292,6 +366,17 @@ export class Renderer {
       speakBtn.setAttribute('aria-label', 'Read aloud');
       speakBtn.innerHTML = SPEAK_ICON;
       speakBtn.addEventListener('click', () => {
+        if (speakBtn.disabled) return;
+        speakBtn.disabled = true;
+        speakBtn.classList.add('speaking--loading');
+        const onDone = () => {
+          speakBtn.disabled = false;
+          speakBtn.classList.remove('speaking--loading');
+          document.removeEventListener('chalie:speak:done', onDone);
+          document.removeEventListener('chalie:speak:error', onDone);
+        };
+        document.addEventListener('chalie:speak:done', onDone);
+        document.addEventListener('chalie:speak:error', onDone);
         document.dispatchEvent(new CustomEvent('chalie:speak', { detail: { text } }));
       });
       metaRow.appendChild(speakBtn);

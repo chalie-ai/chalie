@@ -82,7 +82,26 @@ def _ensure_docker_running(max_wait: int = 30) -> bool:
 
 
 class ToolContainerService:
+    """Manages Docker image builds and sandboxed container execution for tools.
+
+    Provides lifecycle management for tool Docker images (build, existence checks,
+    source-hash staleness detection) and two execution modes:
+
+    - ``run``: Single-shot execution — payload in, JSON result out.
+    - ``run_interactive``: Bidirectional stdin/stdout dialog for multi-turn
+      tool↔Chalie exchanges following the JSON-line protocol.
+
+    All containers are run with a hardened security profile (``--cap-drop=ALL``,
+    ``--read-only``, ``--no-new-privileges``, ``--pids-limit``).
+    """
+
     def __init__(self):
+        """Initialise the service and verify Docker daemon availability.
+
+        Raises:
+            docker.errors.DockerException: If Docker is unavailable after the
+                startup wait defined by ``_ensure_docker_running``.
+        """
         import docker
         _ensure_docker_running()
         self.client = docker.from_env()
@@ -128,6 +147,30 @@ class ToolContainerService:
             return img.labels.get("chalie.source_hash")
         except Exception:
             return None
+
+    def remove_image(self, image_tag: str) -> bool:
+        """Remove a Docker image by tag.
+
+        Attempts a forced removal of the image from the local Docker daemon.
+        Silently returns ``False`` when the image does not exist (idempotent).
+        All other errors are logged at WARNING level and also return ``False``.
+
+        Args:
+            image_tag: The full image tag to remove (e.g. ``"chalie-tool-foo:1.0"``).
+
+        Returns:
+            True if the image was successfully removed, False otherwise.
+        """
+        import docker
+        try:
+            self.client.images.remove(image_tag, force=True)
+            logger.info(f"[CONTAINER] Removed image: {image_tag}")
+            return True
+        except docker.errors.ImageNotFound:
+            return False
+        except Exception as e:
+            logger.warning(f"[CONTAINER] Failed to remove image {image_tag}: {e}")
+            return False
 
     def run(self, image_tag: str, payload: dict, sandbox_config: dict, timeout: int = 9) -> dict:
         """

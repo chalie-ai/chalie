@@ -3,7 +3,7 @@
  */
 
 // Cache version: use deploy date for easy debugging (bump on each release)
-const CACHE_VERSION = '2026.02.23';
+const CACHE_VERSION = '2026.03.12';
 const SHELL_CACHE = `chalie-shell-${CACHE_VERSION}`;
 const CDN_CACHE = `chalie-cdn-${CACHE_VERSION}`;
 
@@ -19,11 +19,13 @@ const SHELL_ASSETS = [
 ];
 
 const NETWORK_ONLY_PATHS = [
+  '/brain', '/on-boarding',
   '/conversation', '/memory', '/proactive',
   '/health', '/system', '/privacy', '/push',
   '/tools/', '/events', '/metrics', '/ws',
 ];
 // Note: '/tools/' (with slash) avoids matching '/tools.js'
+// Note: '/brain' and '/on-boarding' are separate SPAs — never serve cached interface files for them
 
 const NETWORK_ONLY_HOSTS = [];
 

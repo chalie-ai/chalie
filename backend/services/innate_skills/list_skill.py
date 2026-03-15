@@ -64,7 +64,7 @@ def _dispatch(service, action: str, params: dict, topic: str) -> str:
         return _handle_uncheck(service, params, topic)
     elif action == 'view':
         return _handle_view(service, params, topic)
-    elif action == 'list_all':
+    elif action in ('list_all', 'list'):
         return _handle_list_all(service, topic)
     elif action == 'clear':
         return _handle_clear(service, params, topic)

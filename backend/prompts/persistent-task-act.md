@@ -4,6 +4,25 @@ Unlike regular ACT mode, this task spans multiple sessions. You are resuming wor
 
 ────────────────────────────────
 
+## Cognitive Context
+
+Working Memory:
+{{working_memory}}
+
+Relevant Memories:
+{{episodic_memory}}
+
+Knowledge:
+{{semantic_concepts}}
+
+User Traits:
+{{user_traits}}
+
+────────────────────────────────
+
+## Task ID
+{{task_id}}
+
 ## Task Goal
 {{task_goal}}
 
@@ -72,8 +91,20 @@ Respond ONLY with valid JSON. Two formats allowed:
 }
 ```
 
+**Action: Mark task as complete**
+```json
+{"type": "persistent_task", "action": "complete", "task_id": "{{task_id}}", "result": "Final summary of findings"}
+```
+
+**Action: Update progress coverage**
+```json
+{"type": "persistent_task", "action": "progress", "task_id": "{{task_id}}", "coverage": 0.5, "summary": "What was accomplished so far"}
+```
+
 Rules:
 - `response` MUST always be empty string
 - `progress_update` should reflect cumulative progress, not just this cycle
 - Set `task_complete: true` only when the goal is fully met
 - `coverage_estimate`: 0.0 to 1.0, your best guess at how much of the goal is covered
+- Use the `persistent_task` complete action to mark tasks done from within the loop
+- Use the `persistent_task` progress action to update coverage mid-loop

@@ -20,22 +20,27 @@ Coverage:
   - Challenge tolerance tier mapping + directive selection
   - Cognitive load estimation (LOW/NORMAL/HIGH/OVERLOAD)
   - Energy mirror directives (baseline mismatch)
-  - Growth reflection (cooldown + consecutive_cycles gate)
   - Fork directive (mid-range ambiguity + cooldown)
   - Micro-preferences (label lookup)
   - generate_directives integration (happy path, empty-state path)
 """
 
 import json
+import sys
 import pytest
 from unittest.mock import MagicMock, patch
+
+# Stub out StyleMetricsService so generate_directives() can import it
+# without needing external dependencies. The method returns a dummy style dict.
+_mock_sms_module = MagicMock()
+_mock_sms_module.StyleMetricsService.return_value.measure.return_value = {}
+sys.modules.setdefault('services.style_metrics_service', _mock_sms_module)
 
 from services.adaptive_layer_service import (
     AdaptiveLayerService,
     DIRECTIVE_RULES,
     CHALLENGE_STYLE_TIERS,
     LOAD_DIRECTIVES,
-    GROWTH_REFLECTIONS,
     PREF_LABELS,
     _MIN_OBSERVATION_COUNT,
 )
@@ -46,17 +51,13 @@ from services.adaptive_layer_service import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_style(**kwargs) -> dict:
-    """Build a minimal valid communication style dict."""
+    """Build a minimal valid communication style dict (5 dimensions)."""
     defaults = {
         '_observation_count': 5,
         'verbosity': 5,
         'directness': 5,
         'formality': 5,
-        'abstraction_level': 5,
-        'emotional_valence': 5,
-        'certainty_level': 5,
-        'challenge_appetite': 5,
-        'depth_preference': 5,
+        'certainty': 5,
         'pacing': 5,
     }
     defaults.update(kwargs)
@@ -80,14 +81,15 @@ class TestColdStartGate:
 
     def test_no_style_returns_empty(self):
         svc = _service()
-        with patch.object(svc, '_get_communication_style', return_value={}):
+        with patch.object(svc, '_blend_with_baseline', return_value={}), \
+             patch.object(svc, '_get_observation_count', return_value=0):
             result = svc.generate_directives()
         assert result == ""
 
     def test_observation_count_zero_returns_empty(self):
         svc = _service()
         style = _make_style(_observation_count=0)
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None):
             result = svc.generate_directives()
@@ -96,7 +98,7 @@ class TestColdStartGate:
     def test_observation_count_one_returns_empty(self):
         svc = _service()
         style = _make_style(_observation_count=1)
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None):
             result = svc.generate_directives()
@@ -105,11 +107,10 @@ class TestColdStartGate:
     def test_observation_count_at_threshold_passes(self):
         svc = _service()
         style = _make_style(_observation_count=_MIN_OBSERVATION_COUNT, pacing=2)
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=""):
+             patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
         assert result != ""
 
@@ -127,16 +128,12 @@ class TestResolveDirective:
         ('directness',        3,   'low'),
         ('directness',        9,   'high'),
         ('directness',        5.5, 'none'),
+        ('formality',         3,   'low'),
+        ('formality',         8,   'high'),
+        ('certainty',         4,   'low'),
+        ('certainty',         7,   'high'),
         ('pacing',            1,   'low'),
         ('pacing',            10,  'high'),
-        ('depth_preference',  4,   'low'),
-        ('depth_preference',  7,   'high'),
-        ('emotional_valence', 4,   'low'),
-        ('emotional_valence', 7,   'high'),
-        ('certainty_level',   4,   'low'),
-        ('certainty_level',   7,   'high'),
-        ('challenge_appetite',4,   'low'),
-        ('challenge_appetite',7,   'high'),
     ])
     def test_resolve_directive_thresholds(self, dim, value, expect_side):
         svc = _service()
@@ -160,39 +157,6 @@ class TestResolveDirective:
         svc = _service()
         assert svc._resolve_directive('nonexistent_dim', {'nonexistent_dim': 5}) == ""
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Emotional slot
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestEmotionalSlot:
-
-    def test_emotional_valence_high_salience_fires(self):
-        svc = _service()
-        # val=8, midpoint=5.5, salience=2.5 > 1.5 threshold
-        style = _make_style(emotional_valence=8, certainty_level=5)
-        result = svc._resolve_emotional_slot(style)
-        assert result == DIRECTIVE_RULES['emotional_valence'][3]  # high_text
-
-    def test_certainty_level_low_salience_fires(self):
-        svc = _service()
-        style = _make_style(certainty_level=2, emotional_valence=5)
-        result = svc._resolve_emotional_slot(style)
-        assert result == DIRECTIVE_RULES['certainty_level'][2]  # low_text
-
-    def test_neutral_emotional_slot_returns_empty(self):
-        svc = _service()
-        style = _make_style(emotional_valence=5, certainty_level=5)
-        result = svc._resolve_emotional_slot(style)
-        assert result == ""
-
-    def test_picks_higher_salience_when_both_extreme(self):
-        svc = _service()
-        # emotional_valence=9 (salience 3.5) vs certainty_level=2 (salience 3.5)
-        style = _make_style(emotional_valence=9, certainty_level=2)
-        result = svc._resolve_emotional_slot(style)
-        # Both have same salience — either is valid; should not be empty
-        assert result != ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,7 +317,7 @@ class TestForkDirective:
 
     def test_no_thread_id_returns_empty(self):
         svc = _service()
-        style = _make_style(depth_preference=5)
+        style = _make_style(verbosity=5)
         result = svc._get_fork_directive(style, None)
         assert result == ""
 
@@ -361,7 +325,7 @@ class TestForkDirective:
         """When ALL fork-trigger dimensions are outside 4-7, no fork fires."""
         svc = _service()
         # Set all three FORK_TRIGGERS dims to extreme values
-        style = _make_style(depth_preference=2, challenge_appetite=2, abstraction_level=1)
+        style = _make_style(verbosity=2, directness=2)
 
         mock_store = MagicMock()
         mock_store.exists.return_value = False
@@ -375,7 +339,7 @@ class TestForkDirective:
     def test_ambiguous_dimension_triggers_fork(self):
         """A dimension at exactly 5.5 (closest to mid) should fire."""
         svc = _service()
-        style = _make_style(depth_preference=5.5)  # dead center, most ambiguous
+        style = _make_style(verbosity=5.5)  # dead center, most ambiguous
 
         mock_store = MagicMock()
         mock_store.exists.return_value = False
@@ -391,7 +355,7 @@ class TestForkDirective:
 
     def test_cooldown_blocks_fork(self):
         svc = _service()
-        style = _make_style(depth_preference=5.5)
+        style = _make_style(verbosity=5.5)
 
         mock_store = MagicMock()
         mock_store.exists.return_value = True  # cooldown active
@@ -399,128 +363,6 @@ class TestForkDirective:
         with patch('services.memory_client.MemoryClientService') as mock_cls:
             mock_cls.create_connection.return_value = mock_store
             result = svc._get_fork_directive(style, 'thread-123')
-
-        assert result == ""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Growth reflection
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestGrowthReflection:
-
-    def _mock_db_with_signals(self, signals: list):
-        """signals: list of (trait_key, json_value_dict)"""
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        rows = [(k, json.dumps(v)) for k, v in signals]
-        mock_cursor.fetchall.return_value = rows
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value = mock_conn
-        return mock_db
-
-    # Patch paths for lazy imports inside the methods:
-    # _get_growth_reflection imports from services.memory_client and services.database_service
-    _STORE_PATCH = 'services.memory_client.MemoryClientService'
-    _DB_PATCH = 'services.database_service.get_shared_db_service'
-
-    def test_cooldown_active_returns_empty(self):
-        svc = _service()
-        mock_store = MagicMock()
-        mock_store.exists.return_value = True
-
-        with patch(self._STORE_PATCH) as mock_cls, \
-             patch(self._DB_PATCH):
-            mock_cls.create_connection.return_value = mock_store
-            result = svc._get_growth_reflection()
-
-        assert result == ""
-
-    def test_no_signals_returns_empty(self):
-        svc = _service()
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
-
-        with patch(self._STORE_PATCH) as mock_cls, \
-             patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_store
-            mock_db_fn.return_value = self._mock_db_with_signals([])
-            result = svc._get_growth_reflection()
-
-        assert result == ""
-
-    def test_signal_below_threshold_returns_empty(self):
-        svc = _service()
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
-
-        signals = [
-            ('growth_signal:certainty_level', {'consecutive_cycles': 3, 'direction': 'increasing'}),
-        ]
-
-        with patch(self._STORE_PATCH) as mock_cls, \
-             patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_store
-            mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection()
-
-        assert result == ""
-
-    def test_signal_at_threshold_returns_reflection(self):
-        svc = _service()
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
-        mock_store.set = MagicMock()
-
-        signals = [
-            ('growth_signal:certainty_level', {'consecutive_cycles': 6, 'direction': 'increasing'}),
-        ]
-
-        with patch(self._STORE_PATCH) as mock_cls, \
-             patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_store
-            mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection()
-
-        assert result in GROWTH_REFLECTIONS['certainty_level']
-        mock_store.set.assert_called_once()
-
-    def test_picks_strongest_signal(self):
-        svc = _service()
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
-        mock_store.set = MagicMock()
-
-        signals = [
-            ('growth_signal:certainty_level', {'consecutive_cycles': 7}),
-            ('growth_signal:depth_preference', {'consecutive_cycles': 10}),  # stronger
-        ]
-
-        with patch(self._STORE_PATCH) as mock_cls, \
-             patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_store
-            mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection()
-
-        assert result in GROWTH_REFLECTIONS['depth_preference']
-
-    def test_unknown_dimension_returns_empty(self):
-        svc = _service()
-        mock_store = MagicMock()
-        mock_store.exists.return_value = False
-
-        signals = [
-            ('growth_signal:unknown_dim', {'consecutive_cycles': 99}),
-        ]
-
-        with patch(self._STORE_PATCH) as mock_cls, \
-             patch(self._DB_PATCH) as mock_db_fn:
-            mock_cls.create_connection.return_value = mock_store
-            mock_db_fn.return_value = self._mock_db_with_signals(signals)
-            result = svc._get_growth_reflection()
 
         assert result == ""
 
@@ -566,35 +408,32 @@ class TestMicroPreferences:
 class TestGenerateDirectivesIntegration:
 
     def _patch_svc(self, svc, style=None, micro_prefs=None, challenge_tol=None,
-                   fork="", growth=""):
+                   fork=""):
         style = style or _make_style()
         return {
-            '_get_communication_style': style,
+            '_blend_with_baseline': style,
             '_get_micro_preferences': micro_prefs or [],
             '_get_challenge_tolerance': challenge_tol,
             '_get_fork_directive': fork,
-            '_get_growth_reflection': growth,
         }
 
     def test_output_starts_with_header(self):
         svc = _service()
         style = _make_style(pacing=2)  # extreme pacing → pacing directive fires
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=""):
+             patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
         assert result.startswith("## Adaptive Response Style")
 
     def test_priority_note_always_appended(self):
         svc = _service()
         style = _make_style(pacing=2)
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=""):
+             patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
         assert "identity voice" in result
 
@@ -608,30 +447,14 @@ class TestGenerateDirectivesIntegration:
         )
         style = _make_style(_observation_count=5, pacing=5)  # neutral pacing so load wins first slot
 
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=""):
+             patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives(working_memory_turns=turns)
 
         # HIGH load directive should appear
         assert any(kw in result for kw in ('summary', 'bullet', 'Compress', 'essentials'))
-
-    def test_growth_reflection_appears_in_output(self):
-        svc = _service()
-        style = _make_style(pacing=2)
-        reflection = "Your thinking is going deeper — exploring more layers."
-
-        with patch.object(svc, '_get_communication_style', return_value=style), \
-             patch.object(svc, '_get_micro_preferences', return_value=[]), \
-             patch.object(svc, '_get_challenge_tolerance', return_value=None), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=reflection):
-            result = svc.generate_directives()
-
-        assert reflection in result
-        assert "If natural, weave in" in result
 
     def test_micro_prefs_capped_at_two(self):
         svc = _service()
@@ -642,11 +465,10 @@ class TestGenerateDirectivesIntegration:
             PREF_LABELS['prefers_depth'],
         ]
 
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=prefs), \
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=""):
+             patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
 
         # Only first 2 prefs should appear
@@ -654,25 +476,21 @@ class TestGenerateDirectivesIntegration:
         assert PREF_LABELS['prefers_concise'] in result
         assert PREF_LABELS['prefers_depth'] not in result
 
-    def test_challenge_tolerance_supersedes_appetite(self):
+    def test_challenge_tolerance_low_tier_present(self):
         svc = _service()
-        # challenge_appetite=9 (extreme high) + tolerance=2 (low tier)
-        # → low tier directive should win
-        style = _make_style(challenge_appetite=9)
+        style = _make_style(pacing=2)  # trigger at least one directive
 
-        with patch.object(svc, '_get_communication_style', return_value=style), \
+        with patch.object(svc, '_blend_with_baseline', return_value=style), \
              patch.object(svc, '_get_micro_preferences', return_value=[]), \
              patch.object(svc, '_get_challenge_tolerance', return_value=2.0), \
-             patch.object(svc, '_get_fork_directive', return_value=""), \
-             patch.object(svc, '_get_growth_reflection', return_value=""):
+             patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
 
-        # Low tier text should be present; raw high-appetite text should not
+        # Low tier text should be present
         assert CHALLENGE_STYLE_TIERS['low'] in result
-        assert DIRECTIVE_RULES['challenge_appetite'][3] not in result  # high_text absent
 
     def test_exception_in_sub_method_returns_empty_gracefully(self):
         svc = _service()
-        with patch.object(svc, '_get_communication_style', side_effect=RuntimeError("db down")):
+        with patch.object(svc, '_blend_with_baseline', side_effect=RuntimeError("db down")):
             result = svc.generate_directives()
         assert result == ""

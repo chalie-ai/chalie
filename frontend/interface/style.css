@@ -159,6 +159,194 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   4b. Update Banner & Dialog
+   -------------------------------------------------------------------------- */
+.update-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  color: var(--accent-tertiary);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+}
+
+.update-banner.hidden {
+  display: none;
+}
+
+.update-banner__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent-tertiary);
+}
+
+.update-banner__text {
+  color: var(--text-primary);
+}
+
+.update-banner__text strong {
+  color: var(--accent-tertiary);
+}
+
+.update-banner__action {
+  background: var(--accent-tertiary);
+  color: #06080e;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 2px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.update-banner__action:hover {
+  opacity: 0.85;
+}
+
+.update-banner__dismiss {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.update-banner__dismiss:hover {
+  color: var(--text-primary);
+}
+
+.update-dialog {
+  background: transparent;
+  border: none;
+  padding: 0;
+  max-width: 480px;
+  width: 90vw;
+}
+
+.update-dialog::backdrop {
+  background: rgba(6, 8, 14, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+.update-dialog__content {
+  position: relative;
+  background: rgba(16, 20, 32, 0.98);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  color: var(--text-primary);
+}
+
+.update-dialog__close {
+  position: absolute;
+  top: var(--space-md);
+  right: var(--space-md);
+}
+
+.update-dialog__title {
+  font-size: var(--font-size-lg);
+  font-weight: 500;
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--accent-tertiary);
+}
+
+.update-dialog__version {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-md) 0;
+}
+
+.update-dialog__version strong {
+  color: var(--accent-tertiary);
+}
+
+.update-dialog__notes {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: var(--space-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: var(--line-height);
+  margin-bottom: var(--space-md);
+  white-space: pre-wrap;
+}
+
+.update-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.update-dialog__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) 0;
+}
+
+.update-dialog__progress.hidden {
+  display: none;
+}
+
+.update-dialog__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(0, 240, 255, 0.2);
+  border-top-color: var(--accent-tertiary);
+  border-radius: 50%;
+  animation: updateSpin 0.8s linear infinite;
+}
+
+@keyframes updateSpin {
+  to { transform: rotate(360deg); }
+}
+
+.update-dialog__status {
+  font-size: var(--font-size-sm);
+  color: var(--accent-tertiary);
+  margin: 0;
+}
+
+.update-dialog__instructions {
+  padding: var(--space-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: var(--line-height);
+}
+
+.update-dialog__instructions.hidden {
+  display: none;
+}
+
+.update-dialog__instructions code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+/* --------------------------------------------------------------------------
    5. Presence Bar
    -------------------------------------------------------------------------- */
 .presence-bar {
@@ -711,6 +899,23 @@ body {
   pointer-events: none;
 }
 
+/* Image thumbnails inside user messages */
+.speech-form__images {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.speech-form__image-thumb {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  cursor: pointer;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .speech-form__meta {
   display: flex;
   align-items: center;
@@ -765,6 +970,17 @@ body {
 
 .speech-form__speak-btn:hover {
   color: var(--text-primary);
+}
+
+.speech-form__speak-btn.speaking--loading {
+  color: var(--accent-cyan, #00F0FF);
+  animation: speak-pulse 1s ease-in-out infinite;
+  cursor: wait;
+}
+
+@keyframes speak-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 /* Remember (pin) button */
@@ -883,6 +1099,48 @@ body {
 
 .speech-form--error .speech-form__text {
   color: var(--error);
+}
+
+/* Faded messages (outside working memory) */
+.message--faded {
+  opacity: 0.75;
+}
+
+/* Top loading spinner shown while fetching older history */
+.history-loader {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.history-loader__spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(138, 92, 255, 0.2);
+  border-top-color: #8A5CFF;
+  border-radius: 50%;
+  animation: history-spin 0.7s linear infinite;
+}
+
+@keyframes history-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* "End of working history" pill */
+.history-end-pill {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 8px;
+}
+
+.history-end-pill__label {
+  font-size: 11px;
+  color: rgba(234, 230, 242, 0.3);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 20px;
+  padding: 4px 14px;
+  letter-spacing: 0.04em;
 }
 
 /* --------------------------------------------------------------------------
@@ -2450,10 +2708,10 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Spark Overlay — First-contact "Waking up Chalie..." screen
+   Loading Overlay — "Waking up Chalie..." screen shown during backend readiness
    -------------------------------------------------------------------------- */
 
-.spark-overlay {
+.loading-overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -2464,23 +2722,23 @@ body {
   transition: opacity 220ms ease;
 }
 
-.spark-overlay.hidden {
+.loading-overlay.hidden {
   display: none;
 }
 
-.spark-overlay.spark-overlay--fading {
+.loading-overlay.loading-overlay--fading {
   opacity: 0;
   pointer-events: none;
 }
 
-.spark-overlay__content {
+.loading-overlay__content {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 20px;
 }
 
-.spark-overlay__dot {
+.loading-overlay__dot {
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -2489,15 +2747,15 @@ body {
   box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(138, 92, 255, 0.2);
 }
 
-.spark-overlay__text {
+.loading-overlay__text {
   color: var(--text-secondary);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: 0.02em;
-  animation: sparkTextFadeIn 400ms ease 400ms both;
+  animation: loadingTextFadeIn 400ms ease 400ms both;
 }
 
-.spark-overlay__skip {
+.loading-overlay__skip {
   background: none;
   border: none;
   color: var(--text-tertiary);
@@ -2506,26 +2764,26 @@ body {
   cursor: pointer;
   padding: 4px 8px;
   opacity: 0;
-  animation: sparkTextFadeIn 400ms ease 4s both;
+  animation: loadingTextFadeIn 400ms ease 4s both;
   transition: color 220ms ease;
 }
 
-.spark-overlay__skip:hover {
+.loading-overlay__skip:hover {
   color: var(--text-secondary);
 }
 
-.spark-overlay__skip:focus-visible {
+.loading-overlay__skip:focus-visible {
   outline: 1.5px solid rgba(138, 92, 255, 0.45);
   outline-offset: 2px;
 }
 
-@keyframes sparkTextFadeIn {
+@keyframes loadingTextFadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 /* --------------------------------------------------------------------------
-   Ambient Messages — Spark nurture/welcome: softer presence, not a prompt
+   Ambient Messages — softer presence, not a prompt
    -------------------------------------------------------------------------- */
 
 .speech-form--ambient {

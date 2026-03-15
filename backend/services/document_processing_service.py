@@ -51,6 +51,12 @@ class DocumentProcessingService:
     """Processes uploaded documents: extract, analyze, chunk, embed."""
 
     def __init__(self, db_service=None):
+        """Initialize the document processing service.
+
+        Args:
+            db_service: Optional :class:`~services.database_service.DatabaseService`
+                instance. Falls back to the shared singleton when ``None``.
+        """
         self.db = db_service
 
     def process_document(self, doc_id: str) -> bool:
@@ -260,7 +266,18 @@ class DocumentProcessingService:
     # ─────────────────────────────────────────────
 
     def _extract_metadata(self, text: str, language: str = 'en') -> dict:
-        """Extract structured metadata using regex patterns."""
+        """Extract structured metadata from document text using regex patterns.
+
+        Args:
+            text: Raw extracted text from the document.
+            language: Detected language code (default ``'en'``).
+
+        Returns:
+            Metadata dict with keys ``dates``, ``expiration_dates``, ``companies``,
+            ``monetary_values``, ``people``, ``reference_numbers``,
+            ``document_type``, ``key_terms``, ``language``, and
+            ``extraction_warnings``.
+        """
         metadata = {
             'dates': [],
             'expiration_dates': [],
@@ -289,7 +306,15 @@ class DocumentProcessingService:
         return metadata
 
     def _extract_dates(self, text: str) -> List[Dict]:
-        """Extract dates from text using multiple format patterns."""
+        """Extract dates from text using multiple format patterns.
+
+        Args:
+            text: Document text to scan.
+
+        Returns:
+            List of date dicts (up to 20), each with ``value``, ``label``,
+            ``context``, and ``confidence`` keys.
+        """
         results = []
         seen = set()
 
@@ -336,7 +361,15 @@ class DocumentProcessingService:
         return results[:20]  # Cap to avoid noise
 
     def _extract_expiration_dates(self, text: str) -> List[Dict]:
-        """Extract expiration/validity dates from text."""
+        """Extract expiration and validity dates from document text.
+
+        Args:
+            text: Document text to scan for expiration patterns.
+
+        Returns:
+            List of date dicts (up to 10), each with ``value``, ``label``,
+            ``context``, and ``confidence`` keys.
+        """
         results = []
         patterns = [
             r'(?:valid\s+until|expires?\s+(?:on)?|coverage\s+ends?|expir(?:ation|y)\s+date|'
@@ -360,7 +393,15 @@ class DocumentProcessingService:
         return results[:10]
 
     def _extract_companies(self, text: str) -> List[Dict]:
-        """Extract company/organization names from text."""
+        """Extract company and organization names from document text.
+
+        Args:
+            text: Document text to scan for company name patterns.
+
+        Returns:
+            List of company dicts (up to 10), each with ``name`` and
+            ``confidence`` keys.
+        """
         results = []
         seen = set()
 
@@ -390,7 +431,15 @@ class DocumentProcessingService:
         return results[:10]
 
     def _extract_monetary_values(self, text: str) -> List[Dict]:
-        """Extract monetary values with currency detection."""
+        """Extract monetary values with currency detection from document text.
+
+        Args:
+            text: Document text to scan for currency patterns.
+
+        Returns:
+            List of monetary value dicts (up to 15), each with ``amount``,
+            ``currency``, ``context``, and ``confidence`` keys.
+        """
         results = []
         seen = set()
 
@@ -438,7 +487,15 @@ class DocumentProcessingService:
         return results[:15]
 
     def _extract_reference_numbers(self, text: str) -> List[Dict]:
-        """Extract policy numbers, serial numbers, order IDs, etc."""
+        """Extract reference identifiers such as policy numbers, serial numbers, and order IDs.
+
+        Args:
+            text: Document text to scan for reference number patterns.
+
+        Returns:
+            List of reference dicts (up to 10), each with ``type``,
+            ``value``, and ``confidence`` keys.
+        """
         results = []
         patterns = [
             (r'(?:policy|serial|order|ref(?:erence)?|invoice|account|claim|case|ticket|contract)'
@@ -461,7 +518,15 @@ class DocumentProcessingService:
         return results[:10]
 
     def _classify_document_type(self, text: str) -> Dict:
-        """Classify document type based on keyword density."""
+        """Classify document type based on keyword density scoring.
+
+        Args:
+            text: Document text to analyse.
+
+        Returns:
+            Dict with ``value`` (detected type string) and ``confidence`` (float
+            in [0.30, 0.95]).
+        """
         text_lower = text.lower()
         scores = {}
 
@@ -481,7 +546,14 @@ class DocumentProcessingService:
         return {'value': best_type, 'confidence': round(confidence, 2)}
 
     def _extract_key_terms(self, text: str) -> List[str]:
-        """Extract significant phrases via simple term frequency."""
+        """Extract significant terms from document text via word frequency analysis.
+
+        Args:
+            text: Document text to analyse.
+
+        Returns:
+            List of up to 10 high-frequency term strings, filtered for stopwords.
+        """
         # Tokenize into words, filter stopwords and short terms
         stopwords = {
             'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -601,7 +673,16 @@ class DocumentProcessingService:
         return chunks
 
     def _generate_chunk_embeddings(self, embedding_service, texts: List[str]) -> list:
-        """Generate embeddings with adaptive batch sizing."""
+        """Generate embeddings for a list of text chunks using adaptive batch sizing.
+
+        Args:
+            embedding_service: :class:`~services.embedding_service.EmbeddingService`
+                instance used for batch embedding.
+            texts: List of text strings to embed.
+
+        Returns:
+            List of numpy arrays (one per input text), L2-normalized.
+        """
         if not texts:
             return []
 
@@ -686,7 +767,17 @@ class DocumentProcessingService:
             return None
 
     def _generate_summary(self, text: str) -> str:
-        """Generate a deterministic summary (first ~500 chars of cleaned text)."""
+        """Generate a deterministic summary from the first chars of cleaned text.
+
+        Truncates to ``SUMMARY_MAX_CHARS`` at the last sentence boundary if one
+        falls in the second half of the window; otherwise trims to the char limit.
+
+        Args:
+            text: Cleaned document text.
+
+        Returns:
+            Summary string of up to ``SUMMARY_MAX_CHARS`` characters.
+        """
         if not text:
             return ''
         # Take first 500 chars, ending at a sentence boundary if possible
@@ -697,7 +788,15 @@ class DocumentProcessingService:
         return truncated.strip()
 
     def _try_ocr(self, file_path: str, mime_type: str) -> str:
-        """Attempt OCR for image-only PDFs and image files."""
+        """Attempt OCR text extraction for image-only PDFs and image files.
+
+        Args:
+            file_path: Absolute path to the file on disk.
+            mime_type: MIME type of the file (``'application/pdf'`` or ``'image/*'``).
+
+        Returns:
+            Extracted text string, or empty string if OCR is unavailable or fails.
+        """
         try:
             from services.ocr_service import ocr_pdf, ocr_image
 
@@ -711,7 +810,15 @@ class DocumentProcessingService:
             return ''
 
     def _detect_language(self, text: str) -> str:
-        """Detect document language from first 1000 chars."""
+        """Detect the primary language of a document from its first 1000 characters.
+
+        Args:
+            text: Document text to sample for language detection.
+
+        Returns:
+            BCP-47 language code string (e.g. ``'en'``).  Falls back to ``'en'``
+            if langdetect is unavailable or detection fails.
+        """
         try:
             from langdetect import detect
             sample = text[:1000]
@@ -750,7 +857,15 @@ class DocumentProcessingService:
         return format(fingerprint, f'0{hash_bits // 4}x')
 
     def _count_pages(self, file_path: str, mime_type: str) -> Optional[int]:
-        """Count pages for paginated document types."""
+        """Count pages for paginated document types (PDF, PPTX).
+
+        Args:
+            file_path: Absolute path to the file on disk.
+            mime_type: MIME type of the file.
+
+        Returns:
+            Integer page count, or ``None`` for unsupported MIME types or on error.
+        """
         if mime_type == 'application/pdf':
             try:
                 import pdfplumber

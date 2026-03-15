@@ -89,6 +89,12 @@ class DecayEngineService:
         """Run one full decay cycle across all memory types.
 
         When richness < 0.3, only essential sub-cycles run (episodic + traits).
+        Non-essential sub-cycles (semantic, identity, external knowledge, thread
+        dormancy) are skipped to conserve resources on sparse memory systems.
+
+        Args:
+            richness: Current memory richness score in [0.0, 1.0].  Values below
+                0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
         trait_stats = self._decay_user_traits()
@@ -257,6 +263,32 @@ class DecayEngineService:
                     """, (self.semantic_decay_rate,))
 
                     updated = cursor.rowcount
+
+                    # Emit memory_pressure signals for concepts approaching forgetting threshold
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        cursor.execute("""
+                            SELECT id, concept_name, definition, strength, domain
+                            FROM semantic_concepts
+                            WHERE deleted_at IS NULL
+                              AND strength > 0.2 AND strength < 0.5
+                              AND last_accessed_at < datetime('now', '-24 hours')
+                            ORDER BY strength ASC
+                            LIMIT 3
+                        """)
+                        for row in cursor.fetchall():
+                            emit_reasoning_signal(ReasoningSignal(
+                                signal_type='memory_pressure',
+                                source='decay_engine',
+                                concept_id=row[0],
+                                concept_name=row[1],
+                                topic=row[4] or 'general',
+                                content=f"Fading concept '{row[1]}' (strength={row[3]:.2f}): {(row[2] or '')[:100]}",
+                                activation_energy=0.5,
+                            ))
+                    except Exception as e:
+                        logger.debug(f"[DECAY ENGINE] Reasoning signal emission failed: {e}")
+
                     cursor.close()
 
                     if updated > 0:
@@ -381,7 +413,11 @@ class DecayEngineService:
             return 0
 
     def _apply_identity_inertia(self) -> int:
-        """Apply inertia: pull identity activations toward baselines."""
+        """Pull identity activations toward their baselines via the inertia mechanism.
+
+        Returns:
+            Number of identity vectors whose activation was adjusted.
+        """
         try:
             from .database_service import get_lightweight_db_service
             db_service = get_lightweight_db_service()

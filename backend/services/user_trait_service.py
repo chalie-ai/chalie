@@ -10,11 +10,114 @@ Traits decay unless reinforced, and uncertain knowledge fades naturally.
 
 import logging
 import math
+import re
 import struct
 import uuid
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Trait validation (deterministic, zero LLM) ────────────────────
+# Catches garbage traits from weak models and noisy temporal patterns.
+
+_STOP_WORDS = frozenset({
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'shall', 'can', 'to', 'of', 'in', 'for',
+    'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'like',
+    'through', 'after', 'over', 'between', 'out', 'up', 'down', 'off',
+    'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either',
+    'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most',
+    'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than',
+    'too', 'very', 'just', 'because', 'if', 'when', 'while', 'this',
+    'that', 'these', 'those', 'it', 'its', 'i', 'me', 'my', 'we',
+    'our', 'you', 'your', 'he', 'she', 'they', 'them', 'their',
+    'what', 'which', 'who', 'whom', 'how', 'where', 'there', 'here',
+    'often', 'discusses', 'yes', 'no', 'ok', 'okay', 'true', 'false',
+})
+
+# Placeholder values that indicate no real trait was extracted
+_PLACEHOLDER_RE = re.compile(
+    r'^(?:unknown|n/?a|none|null|undefined|not specified|unspecified|empty|default)$',
+    re.IGNORECASE,
+)
+
+# Maximum segments in a topic_time key slug before it's likely a sentence fragment.
+# Real topics: "machine_learning" (2), "natural_language_processing" (3).
+# Garbage: "bloody_tired_trying_finalise" (4), "yeah_look_skill_itself" (4).
+_MAX_TOPIC_SLUG_SEGMENTS = 3
+
+
+def _extract_content_words(text: str) -> list:
+    """Extract meaningful content words from text (not stop words, len > 1)."""
+    words = re.findall(r'[a-zA-Z]{2,}', text.lower())
+    return [w for w in words if w not in _STOP_WORDS and len(w) > 1]
+
+
+def _information_density(text: str) -> float:
+    """Ratio of content words to total words. Higher = more meaningful."""
+    all_words = re.findall(r'[a-zA-Z]{2,}', text.lower())
+    if not all_words:
+        return 0.0
+    content = [w for w in all_words if w not in _STOP_WORDS and len(w) > 1]
+    return len(content) / len(all_words)
+
+
+def _validate_trait(key: str, value: str, category: str) -> Optional[str]:
+    """Validate a trait before storage. Returns rejection reason or None if valid.
+
+    Uses information density and structural heuristics rather than hardcoded
+    template matching. Catches garbage from weak LLMs and noisy temporal patterns.
+    """
+    # Key validation
+    if not key or len(key) < 2:
+        return 'key_too_short'
+
+    # Reject keys that are pure stop words
+    key_segments = [w for w in re.split(r'[_\-\s]+', key.lower()) if w]
+    content_key = [w for w in key_segments if w not in _STOP_WORDS and len(w) > 1]
+    if not content_key:
+        return 'key_is_stop_words'
+
+    # Value validation
+    if not value or len(value.strip()) < 3:
+        return 'value_too_short'
+    if len(value) > 500:
+        return 'value_too_long'
+
+    # Placeholder detection
+    if _PLACEHOLDER_RE.match(value.strip()):
+        return 'placeholder_value'
+
+    # Information density: value must carry enough meaning
+    # Low density = mostly stop/template words, little actual content
+    density = _information_density(value)
+    content_words_value = _extract_content_words(value)
+    if len(content_words_value) < 1:
+        return 'no_content_words'
+
+    # Combined content: key + value must have ≥ 2 unique content words
+    content_all = set(content_key + content_words_value)
+    if len(content_all) < 2:
+        return 'insufficient_content'
+
+    # Topic-time trait validation: the topic slug must be a real concept, not a
+    # slugified sentence fragment. Real topics have ≤ 3-4 slug segments
+    # ("machine_learning", "system_design"). Sentence fragments have more
+    # ("bloody_tired_trying_finalise", "yeah_look_skill_itself").
+    if key.startswith('topic_time_'):
+        topic_slug = key[len('topic_time_'):]
+        slug_segments = [s for s in topic_slug.split('_') if s]
+
+        if len(slug_segments) > _MAX_TOPIC_SLUG_SEGMENTS:
+            return 'topic_slug_too_long'
+
+        # Topic slug must have at least one content word (not a stop word)
+        topic_content = [s for s in slug_segments if s not in _STOP_WORDS and len(s) > 1]
+        if not topic_content:
+            return 'topic_slug_no_content'
+
+    return None
 
 # Confidence levels for natural language injection
 CONFIDENCE_LABELS = {
@@ -26,14 +129,9 @@ CONFIDENCE_LABELS = {
 # Category-specific decay configuration
 # base_decay: per decay cycle (30min), floor: minimum confidence before deletion eligibility
 CATEGORY_DECAY = {
-    'core':               {'base_decay': 0.01, 'floor': 0.3},
-    'relationship':       {'base_decay': 0.01, 'floor': 0.25},
-    'physical':           {'base_decay': 0.015, 'floor': 0.2},
-    'preference':         {'base_decay': 0.02, 'floor': 0.1},
-    'general':            {'base_decay': 0.02, 'floor': 0.1},
-    'communication_style': {'base_decay': 0.005, 'floor': 0.2},  # very slow — behavioral patterns are stable
-    'micro_preference': {'base_decay': 0.015, 'floor': 0.15},   # faster — preferences are more volatile than patterns
-    'behavioral_pattern': {'base_decay': 0.005, 'floor': 0.2},  # slow — activity time patterns are stable
+    'core':       {'base_decay': 0.01, 'floor': 0.25},
+    'preference': {'base_decay': 0.02, 'floor': 0.10},
+    'behavioral': {'base_decay': 0.005, 'floor': 0.20},
 }
 
 MAX_TRAITS_IN_PROMPT = 8
@@ -115,10 +213,7 @@ class UserTraitService:
         trait_key: str,
         trait_value: str,
         confidence: float,
-        category: str = 'general',
-        source: str = 'inferred',
-        is_literal: bool = True,
-        speaker_confidence: float = 1.0,
+        category: str = 'preference',
     ) -> bool:
         """
         Store or update a user trait with conflict resolution.
@@ -132,26 +227,19 @@ class UserTraitService:
             trait_key: Trait identifier (e.g., 'name', 'favourite_food')
             trait_value: Trait value (e.g., 'Dylan', 'ramen')
             confidence: Confidence score (0.0-1.0)
-            category: One of: core, preference, physical, relationship, general
-            source: 'explicit' or 'inferred'
-            is_literal: False for humor/figurative statements
-            speaker_confidence: How confident we are this is the known user (0.0-1.0)
+            category: One of: core, preference, behavioral
 
         Returns:
             bool: True if stored/updated, False if rejected
         """
-        # Reject traits from untrusted sources
-        if speaker_confidence < 0.3:
-            logger.debug(f"[USER_TRAITS] Rejecting trait '{trait_key}' from untrusted speaker")
+        # Validate trait quality before any DB operations
+        rejection = _validate_trait(trait_key, trait_value, category)
+        if rejection:
+            logger.info(
+                f"[USER_TRAITS] Rejected '{trait_key}': {rejection} "
+                f"(value='{trait_value[:60]}', category={category})"
+            )
             return False
-
-        # Apply speaker confidence penalty
-        if speaker_confidence < 0.5:
-            confidence *= 0.5
-
-        # Apply inferred source penalty
-        if source == 'inferred':
-            confidence *= 0.7
 
         # Clamp confidence
         confidence = max(0.0, min(1.0, confidence))
@@ -193,6 +281,19 @@ class UserTraitService:
                             f"(count: {new_count})"
                         )
 
+                        # Point A — Reinforcement signal
+                        try:
+                            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                            emit_reasoning_signal(ReasoningSignal(
+                                signal_type='trait_changed',
+                                source='user_trait_service',
+                                topic=category or 'general',
+                                content=f"Reinforced '{trait_key}' = '{trait_value}' (confidence={new_confidence:.2f})",
+                                activation_energy=0.3,
+                            ))
+                        except Exception:
+                            pass
+
                         # Phase 4 — evidence-based resolution: reinforcement resolves uncertainties
                         # on this trait if the other side is significantly weaker
                         cursor.execute("SELECT id FROM user_traits WHERE trait_key = ?", (trait_key,))
@@ -218,14 +319,13 @@ class UserTraitService:
                         cursor.execute("""
                             UPDATE user_traits
                             SET trait_value = ?, confidence = ?,
-                                category = ?, source = ?, is_literal = ?,
+                                category = ?,
                                 reinforcement_count = 1,
                                 last_reinforced_at = datetime('now'),
                                 last_conflict_at = datetime('now'),
                                 updated_at = datetime('now')
                             WHERE trait_key = ?
-                        """, (trait_value, confidence, category, source,
-                              1 if is_literal else 0, trait_key))
+                        """, (trait_value, confidence, category, trait_key))
 
                         # Update embedding in companion vec table
                         trait_rowid = self._get_rowid(conn, trait_key)
@@ -237,6 +337,19 @@ class UserTraitService:
                             f"'{old_value}' → '{trait_value}' "
                             f"(confidence {old_confidence:.2f} → {confidence:.2f})"
                         )
+
+                        # Point B — Overwrite signal
+                        try:
+                            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                            emit_reasoning_signal(ReasoningSignal(
+                                signal_type='trait_changed',
+                                source='user_trait_service',
+                                topic=category or 'general',
+                                content=f"Changed '{trait_key}': '{old_value}' → '{trait_value}' (confidence={confidence:.2f})",
+                                activation_energy=0.6,
+                            ))
+                        except Exception:
+                            pass
 
                         # Create uncertainty for the conflict (confidence dominance path)
                         if old_trait_id:
@@ -286,7 +399,7 @@ class UserTraitService:
                                 open_contradictions = [
                                     u for u in existing
                                     if u.get('uncertainty_type') == 'contradiction'
-                                    and u.get('state') in ('open', 'surfaced')
+                                    and u.get('state') == 'open'
                                 ]
                                 if not open_contradictions:
                                     unc_svc.create_uncertainty(
@@ -310,11 +423,9 @@ class UserTraitService:
                     embedding_blob = self._generate_embedding_blob(trait_key, trait_value)
                     cursor.execute("""
                         INSERT INTO user_traits
-                            (id, trait_key, trait_value, category, confidence,
-                             source, is_literal)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (trait_id, trait_key, trait_value, category, confidence,
-                          source, 1 if is_literal else 0))
+                            (id, trait_key, trait_value, category, confidence)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (trait_id, trait_key, trait_value, category, confidence))
 
                     # Store embedding in companion vec table
                     trait_rowid = self._get_rowid(conn, trait_key)
@@ -324,8 +435,21 @@ class UserTraitService:
                     logger.info(
                         f"[USER_TRAITS] Stored new trait '{trait_key}': "
                         f"'{trait_value}' (confidence: {confidence:.2f}, "
-                        f"category: {category}, source: {source})"
+                        f"category: {category})"
                     )
+
+                    # Point C — New trait signal
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='trait_changed',
+                            source='user_trait_service',
+                            topic=category or 'general',
+                            content=f"New trait '{trait_key}' = '{trait_value}' (confidence={confidence:.2f})",
+                            activation_energy=0.5,
+                        ))
+                    except Exception:
+                        pass
 
                 cursor.close()
                 return True
@@ -337,7 +461,6 @@ class UserTraitService:
     def get_traits_for_prompt(
         self,
         prompt: str = "",
-        speaker_confidence: float = 1.0,
         injection_threshold: float = INJECTION_THRESHOLD,
     ) -> str:
         """
@@ -359,7 +482,6 @@ class UserTraitService:
 
         Args:
             prompt: Current user message for contextual retrieval
-            speaker_confidence: Confidence this is the known user
             injection_threshold: Minimum confidence for inclusion
 
         Returns:
@@ -375,7 +497,6 @@ class UserTraitService:
                     FROM user_traits
                     WHERE category = 'core'
                       AND confidence > ?
-                      AND is_literal = 1
                     ORDER BY confidence DESC
                 """, (injection_threshold,))
                 core_traits = cursor.fetchall()
@@ -418,7 +539,6 @@ class UserTraitService:
                         FROM user_traits
                         WHERE category != 'core'
                           AND confidence >= ?
-                          AND is_literal = 1
                         ORDER BY confidence DESC, reinforcement_count DESC
                         LIMIT ?
                     """, (WILDCARD_CONFIDENCE, WILDCARD_SLOTS + len(semantic_keys) + len(core_keys)))
@@ -440,7 +560,6 @@ class UserTraitService:
                         FROM user_traits
                         WHERE category != 'core'
                           AND confidence > ?
-                          AND is_literal = 1
                         ORDER BY confidence DESC
                         LIMIT ?
                     """, (injection_threshold, remaining_slots))
@@ -452,13 +571,11 @@ class UserTraitService:
                 if not all_traits:
                     return ""
 
-                # Scale confidence by speaker_confidence for unknown speakers
                 lines = ["## Known About User"]
                 for trait_key, trait_value, confidence, category in all_traits:
-                    effective_confidence = confidence * speaker_confidence
-                    if effective_confidence <= injection_threshold:
+                    if confidence <= injection_threshold:
                         continue
-                    label = self._confidence_label(effective_confidence)
+                    label = self._confidence_label(confidence)
                     display_key = trait_key.replace('_', ' ').title()
                     lines.append(f"- {display_key}: {trait_value} {label}")
 
@@ -538,7 +655,7 @@ class UserTraitService:
 
                 # Load all traits
                 cursor.execute("""
-                    SELECT id, trait_key, confidence, category, source,
+                    SELECT id, trait_key, confidence, category,
                            reinforcement_count, updated_at,
                            COALESCE(reliability, 'reliable') AS reliability
                     FROM user_traits
@@ -546,19 +663,15 @@ class UserTraitService:
                 rows = cursor.fetchall()
 
                 for row in rows:
-                    trait_id, trait_key, confidence, category, source, reinf_count, updated_at, reliability = row
+                    trait_id, trait_key, confidence, category, reinf_count, updated_at, reliability = row
 
-                    decay_cfg = CATEGORY_DECAY.get(category, CATEGORY_DECAY['general'])
+                    decay_cfg = CATEGORY_DECAY.get(category, CATEGORY_DECAY['preference'])
                     base_decay = decay_cfg['base_decay']
                     floor = decay_cfg['floor']
 
                     # Reinforcement resistance
                     resistance = 1.0 / math.log2(max(reinf_count, 1) + 1)
                     effective_decay = base_decay * resistance
-
-                    # Inferred traits decay 1.5x faster
-                    if source == 'inferred':
-                        effective_decay *= 1.5
 
                     # Reliability multiplier: contradicted/uncertain traits decay faster
                     from services.decay_engine_service import RELIABILITY_DECAY_MULTIPLIER
@@ -633,8 +746,8 @@ class UserTraitService:
                     update_category = category or existing[1]
                     cursor.execute(
                         "UPDATE user_traits SET trait_value = ?, confidence = ?, "
-                        "source = 'explicit_correction', reinforcement_count = 1, "
-                        "category = ?, is_literal = 1, "
+                        "reinforcement_count = 1, "
+                        "category = ?, "
                         "last_conflict_at = datetime('now'), updated_at = datetime('now') "
                         "WHERE trait_key = ?",
                         (new_value, 0.95, update_category, trait_key)
@@ -646,6 +759,19 @@ class UserTraitService:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
                     logger.info(f"[USER_TRAITS] Corrected trait '{trait_key}' → '{new_value}' (explicit_correction)")
+
+                    # Point D — Existing trait corrected signal
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='trait_changed',
+                            source='user_trait_service',
+                            topic=update_category or 'general',
+                            content=f"User corrected '{trait_key}' → '{new_value}'",
+                            activation_energy=0.7,
+                        ))
+                    except Exception:
+                        pass
 
                     # Phase 3 — Resolution feedback loop: resolve linked uncertainties
                     # and Phase 4 — lower uncertainty tolerance (user correcting us)
@@ -672,9 +798,9 @@ class UserTraitService:
                     trait_id = str(uuid.uuid4())
                     cursor.execute(
                         "INSERT INTO user_traits (id, trait_key, trait_value, confidence, "
-                        "category, source, is_literal, reinforcement_count) "
-                        "VALUES (?, ?, ?, ?, ?, 'explicit_correction', 1, 1)",
-                        (trait_id, trait_key, new_value, 0.95, category or 'general')
+                        "category, reinforcement_count) "
+                        "VALUES (?, ?, ?, ?, ?, 1)",
+                        (trait_id, trait_key, new_value, 0.95, category or 'preference')
                     )
 
                     # Store embedding in companion vec table
@@ -683,6 +809,19 @@ class UserTraitService:
                         self._store_embedding(conn, trait_rowid, embedding_blob)
 
                     logger.info(f"[USER_TRAITS] Inserted corrected trait '{trait_key}' = '{new_value}'")
+
+                    # Point E — New trait from correction signal
+                    try:
+                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                        emit_reasoning_signal(ReasoningSignal(
+                            signal_type='trait_changed',
+                            source='user_trait_service',
+                            topic=category if category else 'general',
+                            content=f"User set new trait '{trait_key}' = '{new_value}'",
+                            activation_energy=0.7,
+                        ))
+                    except Exception:
+                        pass
             return True
         except Exception as e:
             logger.error(f"[TRAITS] Correction failed for {trait_key}: {e}")
@@ -693,14 +832,44 @@ class UserTraitService:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
+                # Fetch id before deleting (needed for uncertainty resolution)
+                cursor.execute(
+                    "SELECT id, category FROM user_traits WHERE trait_key = ?",
+                    (trait_key,)
+                )
+                existing = cursor.fetchone()
+                if not existing:
+                    return False
+
+                trait_id, category = existing[0], existing[1]
+
                 cursor.execute(
                     "DELETE FROM user_traits WHERE trait_key = ?",
                     (trait_key,)
                 )
-                deleted = cursor.rowcount
-            if deleted > 0:
-                logger.info(f"[USER_TRAITS] Deleted trait '{trait_key}' (user negation)")
-            return deleted > 0
+
+            logger.info(f"[USER_TRAITS] Deleted trait '{trait_key}' (user negation)")
+
+            # Emit reasoning signal — deletion is a correction event
+            try:
+                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                emit_reasoning_signal(ReasoningSignal(
+                    signal_type='trait_changed',
+                    source='user_trait_service',
+                    topic=category or 'general',
+                    content=f"User deleted trait '{trait_key}'",
+                    activation_energy=0.7,
+                ))
+            except Exception:
+                pass
+
+            # Phase 4 — lower uncertainty tolerance (user deleting = wants accuracy)
+            try:
+                _nudge_uncertainty_tolerance(self.db, direction=-0.03)
+            except Exception as ue:
+                logger.debug(f"[USER_TRAITS] Post-delete tolerance nudge skipped: {ue}")
+
+            return True
         except Exception as e:
             logger.error(f"[TRAITS] Delete failed for {trait_key}: {e}")
             return False
@@ -741,15 +910,6 @@ class UserTraitService:
         except Exception as e:
             logger.debug(f"[USER_TRAITS] get_traits_by_category failed: {e}")
             return []
-
-    def get_speaker_confidence(self, metadata: dict) -> float:
-        """
-        Single-user app — all authenticated requests are the primary user.
-
-        Returns:
-            float: Always 1.0
-        """
-        return 1.0
 
     def _confidence_label(self, confidence: float) -> str:
         """Convert numeric confidence to natural language label."""

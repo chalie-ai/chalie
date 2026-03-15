@@ -20,13 +20,20 @@ _ACTIVITY_EVENT_TYPES = (
     'proactive_sent',
     'act_loop_telemetry', 'cron_tool_executed',
     'plan_proposed', 'curiosity_thread_seeded',
-    'spark_nurture_sent', 'spark_suggestion_sent',
-    'spark_phase_change', 'place_transition',
+    'place_transition',
 )
 
 
 def _summarize_event(event_type: str, payload: dict) -> str:
-    """One-line human-readable summary of an autonomous event."""
+    """One-line human-readable summary of an autonomous event.
+
+    Args:
+        event_type: The event type string (e.g. ``'proactive_sent'``).
+        payload: Event payload dict; may be ``None`` or empty.
+
+    Returns:
+        A concise human-readable string describing the event.
+    """
     p = payload or {}
     summaries = {
         'proactive_sent': lambda: f"Shared a thought: {p.get('response', '')[:80]}",
@@ -34,9 +41,6 @@ def _summarize_event(event_type: str, payload: dict) -> str:
         'cron_tool_executed': lambda: f"Ran {p.get('tool_name', 'tool')} in background",
         'plan_proposed': lambda: f"Proposed background task: {p.get('topic', 'unknown')}",
         'curiosity_thread_seeded': lambda: "Started exploring a new curiosity thread",
-        'spark_nurture_sent': lambda: "Sent a relationship check-in",
-        'spark_suggestion_sent': lambda: f"Suggested: {p.get('skill_name', 'something')}",
-        'spark_phase_change': lambda: "Relationship phase updated",
         'place_transition': lambda: "Noticed a location change",
     }
     fn = summaries.get(event_type, lambda: event_type.replace('_', ' ').title())
@@ -384,7 +388,18 @@ class InteractionLogService:
             return []
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
-        """Convert a database row to a dict."""
+        """Convert an interaction_log table row to an event dict.
+
+        Args:
+            row: sqlite3 row (sequence) with positional columns matching the
+                SELECT column order used in this service's queries.
+
+        Returns:
+            Event dict with keys ``id``, ``event_type``, ``topic``,
+            ``exchange_id``, ``session_id``, ``source``, ``payload``
+            (parsed from JSON), ``metadata`` (parsed from JSON), and
+            ``created_at``.
+        """
         return {
             'id': str(row[0]),
             'event_type': row[1],

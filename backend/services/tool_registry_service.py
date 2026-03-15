@@ -43,6 +43,19 @@ class _CronToolWorker:
     MAX_OUTPUT_CHARS = 3000
 
     def __init__(self, tool_config: dict):
+        """Initialise a cron worker from a resolved tool configuration dict.
+
+        Unpacks all fields required for scheduled execution: scheduling interval,
+        prompt template, Docker image or runner path, sandbox policy, OAuth auth
+        config, card output settings, and per-invocation timeout.
+
+        Args:
+            tool_config: Resolved tool config dict produced by
+                ``ToolRegistryService.get_cron_tools()``.  Required keys are
+                ``name``, ``schedule``, ``prompt``, ``image``, and ``dir``.
+                Optional keys include ``sandbox``, ``trust``, ``runner_path``,
+                and ``manifest``.
+        """
         self.tool_name = tool_config["name"]
         self.schedule = tool_config["schedule"]
         self.prompt_template = tool_config["prompt"]
@@ -59,6 +72,27 @@ class _CronToolWorker:
         self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 
     def __call__(self, shared_state=None):
+        """Run the cron loop for this tool in a long-lived worker process.
+
+        Sleeps for the interval parsed from ``self.schedule``, then:
+
+        1. Backs off if the prompt-queue depth exceeds 5.
+        2. Loads per-tool settings from the DB via ``ToolConfigService``.
+        3. Refreshes OAuth tokens when required.
+        4. Collects client telemetry and persisted tool state from MemoryStore.
+        5. Dispatches the tool via subprocess (trusted) or Docker container (sandboxed).
+        6. Persists any returned ``_state`` back to MemoryStore with a 7-day TTL.
+        7. Routes output according to the formalized output-type contract
+           (``card``, ``prompt``, or ``tool``); falls back to legacy routing
+           when no ``output`` field is present.
+
+        The loop runs until a ``KeyboardInterrupt`` is received.  Any other
+        exception is logged and the loop retries after a 60-second cooldown.
+
+        Args:
+            shared_state: Unused placeholder kept for multiprocessing API
+                compatibility.  Defaults to ``None``.
+        """
         _log = logging.getLogger(__name__)
         _log.info(f"[TOOL CRON] {self.tool_name} worker started (schedule: {self.schedule})")
         interval = self._parse_cron_interval(self.schedule)
@@ -364,6 +398,15 @@ class ToolRegistryService:
     from services.tool_output_utils import MAX_OUTPUT_CHARS
 
     def __new__(cls, *args, **kwargs):
+        """Return the existing singleton instance, creating it on first call.
+
+        Stores the sole instance in the module-level ``_instance`` variable and
+        sets ``_initialized = False`` so that ``__init__`` can gate its one-time
+        setup logic.
+
+        Returns:
+            The singleton ``ToolRegistryService`` instance.
+        """
         global _instance
         if _instance is None:
             _instance = super().__new__(cls)
@@ -371,6 +414,21 @@ class ToolRegistryService:
         return _instance
 
     def __init__(self, tools_dir: str = None):
+        """Initialise the singleton registry and kick off tool discovery.
+
+        Idempotent — subsequent calls on the already-initialised singleton are
+        no-ops (guarded by ``_initialized``).
+
+        Reads ``configs/frontal-cortex.json`` to check the ``tools_enabled``
+        kill-switch.  When disabled, discovery is skipped entirely.  Otherwise,
+        ``_discover_and_load()`` scans ``tools_dir`` for tool sub-directories,
+        validates manifests, builds Docker images in parallel (up to 4
+        concurrent workers), and registers each tool.
+
+        Args:
+            tools_dir: Optional path to the tools root directory.  Defaults to
+                ``<repo_root>/tools`` when ``None``.
+        """
         if self._initialized:
             return
         self._initialized = True
@@ -794,7 +852,7 @@ class ToolRegistryService:
         from services.tool_output_utils import build_tool_telemetry
         return build_tool_telemetry(raw_telemetry)
 
-    def invoke(self, tool_name: str, topic: str, params: dict) -> str:
+    def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
         """
         Invoke a tool by name via Docker container.
 
@@ -894,18 +952,20 @@ class ToolRegistryService:
             try:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()
+                from services import act_memory_keys
                 # Per-invocation cache entry
                 store.set(
-                    f"tool_card_cache:{topic}:{invocation_id}",
+                    act_memory_keys.tool_card_cache(topic, invocation_id, exchange_id),
                     json.dumps({"tool": tool_name, "data": result, "invocation_id": invocation_id}),
                     ex=300,
                 )
                 # Legacy flat list — kept for backwards compatibility with _enqueue_tool_cards
+                _raw_key = act_memory_keys.tool_raw_cache(topic, exchange_id)
                 store.rpush(
-                    f"tool_raw_cache:{topic}",
+                    _raw_key,
                     json.dumps({"tool": tool_name, "data": result})
                 )
-                store.expire(f"tool_raw_cache:{topic}", 300)
+                store.expire(_raw_key, 300)
             except Exception as e:
                 logger.debug(f"[TOOL REGISTRY] Raw result cache failed for {tool_name}: {e}")
 
@@ -971,8 +1031,9 @@ class ToolRegistryService:
                     "source_count": meta.get("source_count", result.get("count", 0)),
                     "unique_domains": meta.get("unique_domains", 0),
                 }
-                _r.rpush(f"deferred_cards:{topic}", json.dumps(deferred_info))
-                _r.expire(f"deferred_cards:{topic}", 300)
+                _deferred_key = act_memory_keys.deferred_cards(topic, exchange_id)
+                _r.rpush(_deferred_key, json.dumps(deferred_info))
+                _r.expire(_deferred_key, 300)
             except Exception as _de:
                 logger.debug(f"[TOOL REGISTRY] Deferred card metadata cache failed: {_de}")
             # Fall through to normal text output — no hint injection into result_text
@@ -1277,10 +1338,24 @@ class ToolRegistryService:
             return name in self._deps_ready
 
     def get_tool_names(self) -> List[str]:
+        """Return the names of all successfully registered tools.
+
+        Returns:
+            List of tool name strings drawn from the loaded manifest ``name``
+            fields.  Order reflects insertion order (Python 3.7+ dict).
+        """
         return [name for name, tool in self.tools.items()
                 if self._is_ready(name, tool)]
 
     def get_on_demand_tools(self) -> List[str]:
+        """Return names of registered tools whose trigger type is ``on_demand``.
+
+        On-demand tools are invoked explicitly by the LLM during a conversation
+        turn, as opposed to cron tools (scheduled) or webhook tools (HTTP-push).
+
+        Returns:
+            List of tool name strings filtered to ``trigger.type == "on_demand"``.
+        """
         return [
             name for name, tool in self.tools.items()
             if tool["manifest"].get("trigger", {}).get("type") == "on_demand"

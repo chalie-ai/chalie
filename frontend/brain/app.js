@@ -32,45 +32,10 @@ let pollTimer = null;           // setInterval id for build polling
 let obsData = {};               // cached API responses keyed by subtab name
 let obsLoaded = {};             // whether a subtab has been fetched
 let activeSubtab = 'jobs';      // currently active cognition sub-tab
-
 // ==========================================
-// LLM Jobs
+// LLM Jobs — fetched from backend config
 // ==========================================
-const JOBS = [
-    // ── Tier 1: ≥ 30B ──────────────────────────────────────
-    { id: 'autobiography',            name: 'Autobiography Synthesis',  desc: 'Synthesises personal narrative prose from all memory layers (6h cycle).',               badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~7.7K',    frequency: 'Every 6 hours',            strengths: ['Reasoning', 'Creative Writing', 'Synthesis'] },
-    { id: 'frontal-cortex',           name: 'Frontal Cortex',           desc: 'Core reasoning engine; orchestrates all response modes.',                                badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5K',      frequency: 'Once per message',          strengths: ['Reasoning', 'Structured Output', 'Context Following'] },
-    { id: 'frontal-cortex-act',       name: 'Act Mode',                 desc: 'Plans and executes multi-step tool actions. Up to 7 iterations per invocation.',          badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5.4K ×N', frequency: 'Per message (ACT mode)',    strengths: ['Strong Reasoning', 'Structured Output', 'Planning'] },
-    { id: 'plan-decomposition',       name: 'Plan Decomposition',       desc: 'Decomposes task goals into executable step DAGs for long-horizon planning.',               badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~3K',      frequency: 'Per persistent task',       strengths: ['Strong Reasoning', 'Structured Output', 'Planning'] },
-    { id: 'frontal-cortex-respond',   name: 'Respond Mode',             desc: 'Primary conversational voice of Chalie in normal conversation.',                          badge: '≥ 30B', badgeClass: 'badge-30b', tokens: '~5.4K',    frequency: 'Once per message',          strengths: ['Reasoning', 'Structured Output', 'Natural Language'] },
-
-    // ── Tier 2: ≥ 14B ──────────────────────────────────────
-    { id: 'cognitive-drift',          name: 'Cognitive Drift (DMN)',     desc: 'Generates spontaneous thoughts during idle windows (Default Mode Network).',              badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~1.2K',    frequency: 'Idle (every 5–10 min)',    strengths: ['Reasoning', 'Creativity'] },
-    { id: 'episodic-memory',          name: 'Episodic Memory',           desc: 'Synthesises sessions into episodic narratives for long-term recall.',                     badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~6.8K',    frequency: 'Batch consolidation',      strengths: ['Reasoning', 'Structured Output', 'Narrative Synthesis'] },
-    { id: 'frontal-cortex-clarify',   name: 'Clarify Mode',             desc: 'Asks clarifying questions when user intent is ambiguous.',                                badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~2.8K',    frequency: 'Per message (CLARIFY)',     strengths: ['Reasoning', 'Structured Output'] },
-    { id: 'frontal-cortex-proactive', name: 'Proactive Mode',           desc: 'Translates spontaneous thoughts into outreach messages.',                                 badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~3K',      frequency: 'Idle triggered',           strengths: ['Reasoning', 'Natural Language', 'Structured Output'] },
-    { id: 'mode-reflection',          name: 'Mode Reflection',          desc: 'Peer-reviews routing decisions during idle time (nightly batch).',                         badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~1.5K',    frequency: 'Nightly batch',            strengths: ['Reasoning', 'Structured Output', 'Analysis'] },
-    { id: 'semantic-memory',          name: 'Semantic Memory',           desc: 'Extracts concepts and relationships to build the knowledge graph.',                       badge: '≥ 14B', badgeClass: 'badge-14b', tokens: '~5.6K',    frequency: 'Per exchange (async)',      strengths: ['Reasoning', 'Structured Output', 'Knowledge Extraction'] },
-
-    // ── Tier 3: 8B sufficient ───────────────────────────────
-    { id: 'cognitive-triage',           name: 'Cognitive Triage',          desc: 'Routes user input to optimal cognitive branch (RESPOND/CLARIFY/ACT). Lightweight preferred.', badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.6K', frequency: 'Once per message',      strengths: ['Structured Output', 'Classification'] },
-    { id: 'experience-assimilation',    name: 'Experience Assimilation',   desc: 'Evaluates tool outputs for novel knowledge worth storing.',                               badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.4K', frequency: 'Post-tool execution',   strengths: ['Structured Output', 'Classification'] },
-    { id: 'fact-store',                 name: 'Fact Store',                desc: 'Extracts and stores atomic facts from exchanges. Runs async.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1.5K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
-    { id: 'frontal-cortex-acknowledge', name: 'Acknowledge Mode',          desc: 'Brief acknowledgments for greetings and simple inputs.',                                  badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.1K', frequency: 'Per message (ACK mode)', strengths: ['Structured Output'] },
-    { id: 'frontal-cortex-reflexive',   name: 'Reflexive Mode',            desc: 'Fast reflexive responses for simple, self-contained queries via cognitive reflex path.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per reflex activation',  strengths: ['Fast Inference', 'Structured Output'] },
-    { id: 'frontal-cortex-scheduled-tool', name: 'Scheduled Tool Mode',    desc: 'Generates responses after scheduled tool/reminder execution.',                             badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2.5K', frequency: 'Per scheduled event',   strengths: ['Structured Output', 'Context Following'] },
-    { id: 'memory-chunker',             name: 'Memory Chunker',            desc: 'Extracts gists, facts, and traits from exchanges. Runs async.',                           badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~4.1K', frequency: 'Per exchange (async)',   strengths: ['Structured Output', 'Extraction'] },
-    { id: 'moment-enrichment',          name: 'Moment Enrichment',         desc: 'Generates titles and summaries for pinned moments. Runs in a 5-minute background poll.',   badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~300',  frequency: 'Per pinned moment',     strengths: ['Summarisation', 'Extraction'] },
-    { id: 'document-synthesis',          name: 'Document Synthesis',        desc: 'Generates summaries for uploaded documents during processing.',                            badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~2K',   frequency: 'Per document upload',   strengths: ['Summarisation', 'Extraction'] },
-    { id: 'document-classification',     name: 'Document Classification',   desc: 'Classifies documents into categories, projects, and dates for automatic organisation.',    badge: '8B sufficient', badgeClass: 'badge-8b', tokens: '~1K',   frequency: 'Per document upload',   strengths: ['Classification', 'Structured Output', 'JSON'] },
-
-    // ── ONNX classifiers ──────────────────────────────────────
-    { id: 'mode-tiebreaker', name: 'Mode Tiebreaker', desc: 'Trained classifier that breaks ties between top-2 routing modes. Sub-millisecond inference.', badge: 'ONNX', badgeClass: 'badge-4b', tokens: '0',  frequency: 'Per ambiguous routing',    strengths: ['Fast Inference', 'Classification'] },
-
-    // ── Vision ────────────────────────────────────────────────
-    { id: 'document-ocr',    name: 'Document OCR',    desc: 'Extracts text from image-only PDFs and scanned documents via vision LLM.',  badge: 'Vision', badgeClass: 'badge-vision', tokens: '~1.5K', frequency: 'Per image-only document', strengths: ['Vision', 'OCR', 'Extraction'] },
-
-];
+let jobs = [];
 
 // ==========================================
 // Platform Config
@@ -224,11 +189,22 @@ async function loadData() {
         return;
     }
 
-    await loadAssignments();
+    await Promise.all([loadAssignments(), loadJobDefinitions()]);
     renderMain();
+    renderCognition();
 
     // Handle OAuth callback URL parameters
     handleOAuthCallback();
+}
+
+async function loadJobDefinitions() {
+    try {
+        const res = await apiFetch('/providers/jobs/definitions');
+        if (res.ok) {
+            const data = await res.json();
+            jobs = data.jobs || [];
+        }
+    } catch (e) { /* non-critical — jobs will be empty */ }
 }
 
 // ==========================================
@@ -626,21 +602,28 @@ async function loadAssignments() {
     }
 }
 
+const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification' };
+const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
+
 function renderCognition() {
     const el = document.getElementById('cognitionList');
     if (providers.length === 0) {
         el.innerHTML = '<div class="empty-state"><h3>No providers configured</h3><p>Add a provider first.</p></div>';
         return;
     }
+    if (jobs.length === 0) {
+        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions…</h3></div>';
+        return;
+    }
 
-    el.innerHTML = JOBS.map(job => {
+    const cardsHtml = jobs.map(job => {
         const currentAssignment = assignments[job.id];
         const options = providers.map(p =>
             `<option value="${p.id}" ${p.id === currentAssignment ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
         ).join('');
 
-        const strengthTags = (job.strengths || []).map(s =>
-            `<span class="job-strength">${escapeHtml(s)}</span>`
+        const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
+            `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
         ).join('');
 
         return `
@@ -650,7 +633,6 @@ function renderCognition() {
                         <div class="job-name">${escapeHtml(job.name)}</div>
                         <div class="job-desc">${escapeHtml(job.desc)}</div>
                     </div>
-                    <span class="job-badge ${job.badgeClass}">${escapeHtml(job.badge)}</span>
                     <div class="job-assign">
                         <select class="provider-select" data-job="${job.id}" onchange="assignJob('${job.id}', this)">
                             <option value="">-- Select provider --</option>
@@ -660,18 +642,23 @@ function renderCognition() {
                     </div>
                 </div>
                 <div class="job-card__meta">
-                    <span class="job-meta-item" title="Average tokens per invocation">
-                        <i class="fa-solid fa-bolt job-meta-icon"></i> ${escapeHtml(job.tokens)} tokens
-                    </span>
-                    <span class="job-meta-item" title="Usage frequency">
-                        <i class="fa-regular fa-clock job-meta-icon"></i> ${escapeHtml(job.frequency)}
-                    </span>
-                    <span class="job-meta-sep"></span>
-                    <div class="job-strengths">${strengthTags}</div>
+                    <div class="job-caps">${capsHtml}</div>
                 </div>
             </div>
         `;
     }).join('');
+
+    const legendHtml = `
+        <div class="cap-legend">
+            <span class="cap-legend__title">Capability requirements:</span>
+            <span class="job-cap cap--high">High</span>
+            <span class="job-cap cap--medium">Medium</span>
+            <span class="job-cap cap--low">Low</span>
+            <span class="job-cap cap--none">None</span>
+        </div>
+    `;
+
+    el.innerHTML = cardsHtml + legendHtml;
 }
 
 async function assignJob(jobName, selectEl) {
@@ -782,8 +769,11 @@ function renderToolCard(tool) {
         if (hasConfig || hasOAuth) {
             actionsHtml += `<button class="tool-card__btn" onclick="openToolSettings('${name}')" title="Settings">⚙ Settings</button>`;
         }
-        if (isDisabled) {
-            actionsHtml += `<button class="tool-card__btn --primary" onclick="enableTool('${name}')">Enable</button>`;
+        if (isDisabled || hasError) {
+            if (isDisabled) {
+                actionsHtml += `<button class="tool-card__btn --primary" onclick="enableTool('${name}')">Enable</button>`;
+            }
+            actionsHtml += `<button class="tool-card__btn --danger" onclick="if(confirm('Permanently uninstall ${escapeHtml(name)}? This cannot be undone.')) deleteTool('${escapeHtml(name)}')">Uninstall</button>`;
         } else {
             actionsHtml += `<button class="tool-card__btn --danger" onclick="disableTool('${name}')">Disable</button>`;
         }
@@ -957,6 +947,32 @@ async function enableTool(name) {
             startBuildPoll();
         } else {
             showToast(data.error || 'Failed to enable tool', 'error');
+        }
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Permanently uninstalls a tool by calling the DELETE /tools/:name endpoint.
+ *
+ * On success, shows a success toast and refreshes the embodiment tool grid.
+ * On failure (non-OK HTTP response or network error), shows an error toast
+ * with the server-provided message when available.
+ *
+ * @async
+ * @param {string} name - The tool directory name to uninstall.
+ * @returns {Promise<void>}
+ */
+async function deleteTool(name) {
+    try {
+        const res = await apiFetch(`/tools/${name}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Tool uninstalled', 'success');
+            await loadEmbodiment();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.error || 'Failed to delete tool', 'error');
         }
     } catch (e) {
         showToast('Error: ' + e.message, 'error');
@@ -2342,7 +2358,6 @@ async function loadMemoryObs() {
         html += '<div class="obs-section-title">Short-Term Memory</div>';
         html += '<div class="obs-stats">';
         html += obsStatCard('Working Memory', data.working_memory || 0, 'Active conversation turns');
-        html += obsStatCard('Gists', data.gists || 0, 'Compressed summaries');
         html += obsStatCard('Facts', data.facts || 0, 'Atomic assertions');
         html += '</div>';
 
@@ -2485,22 +2500,8 @@ async function loadTasksObs() {
 
         const tasks = data.persistent_tasks || [];
         const threads = data.curiosity_threads || [];
-        const cal = data.calibration || {};
 
         let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'} and exploring ${threads.length} curiosity thread${threads.length === 1 ? '' : 's'}.</p>`;
-
-        // Triage calibration (framed as "Decision accuracy")
-        if (cal.correct_rate !== undefined || cal.act_success_rate !== undefined) {
-            html += '<div class="obs-section-title">Decision Accuracy</div>';
-            html += '<div class="obs-stats">';
-            if (cal.correct_rate !== undefined) {
-                html += obsStatCard('Correct Rate', obsPct(cal.correct_rate) + '%', 'Routing decisions');
-            }
-            if (cal.act_success_rate !== undefined) {
-                html += obsStatCard('Action Success', obsPct(cal.act_success_rate) + '%', 'Completed actions');
-            }
-            html += '</div>';
-        }
 
         // Persistent tasks
         if (tasks.length > 0) {
@@ -2781,7 +2782,12 @@ function renderDocumentRow(doc) {
                    <button class="tool-card__btn" onclick="window.open('${API_BASE}/documents/${doc.id}/preview', '_blank')">Preview</button>`;
     }
 
+    const imageThumbnail = doc.mime_type?.startsWith('image/')
+        ? `<div class="doc-row__image-preview"><img src="${API_BASE}/documents/${doc.id}/preview" alt="${escapeHtml(doc.original_name)}" class="doc-row__image-thumb" loading="lazy"></div>`
+        : '';
+
     return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+        ${imageThumbnail}
         <div class="doc-row__info">
             <div class="doc-row__name">
                 <span class="doc-icon">${getDocIcon(doc.mime_type)}</span>
@@ -2804,9 +2810,11 @@ function renderDocuments() {
     let docs = allDocuments;
 
     if (docFilter === 'active') {
-        docs = docs.filter(d => !d.deleted_at && d.status === 'ready');
+        docs = docs.filter(d => !d.deleted_at && d.status === 'ready' && d.source_type !== 'chat_image');
     } else if (docFilter === 'processing') {
         docs = docs.filter(d => !d.deleted_at && ['pending', 'processing', 'awaiting_confirmation'].includes(d.status));
+    } else if (docFilter === 'uploads') {
+        docs = docs.filter(d => !d.deleted_at && d.source_type === 'chat_image');
     } else if (docFilter === 'deleted') {
         docs = docs.filter(d => d.deleted_at);
     }

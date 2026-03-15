@@ -51,34 +51,30 @@ frontend/
 #### Routing & Decision Making
 - **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker
 - **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
-- **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
-- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
-- **`cognitive_reflex_service.py`** — Learned fast path via semantic abstraction; heuristic pre-screen (~1ms) + sqlite-vec cosine search (~5-20ms) bypasses full pipeline for self-contained queries; rolling-average centroids generalize from observed examples; self-correcting per cluster via user corrections and shadow validation
+- **`message_gate_service.py`** — Deterministic message gate (empty guard → CANCEL detection → ONNX mode gate); primary routing authority for user messages; routes to CANCEL, RESPOND fast-path, or ACT pipeline with ONNX skill pre-filter; no LLM call; CLARIFY and IGNORE modes removed
 
 #### Response Generation
 - **`frontal_cortex_service.py`** — LLM response generation using mode-specific prompts
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from 6 memory layers (working memory, moments, facts, gists, episodes, procedural, concepts) with weighted budget allocation; procedural hints surface learned action reliability (≥8 attempts, top 3, confidence labels)
+- **`context_assembly_service.py`** — Unified retrieval from memory layers (working memory, moments, episodes, procedural, concepts, user traits) with weighted budget allocation; procedural hints surface learned action reliability (≥8 attempts, top 3, confidence labels)
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
-- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, relationship, physical, preference, communication_style, micro_preference, behavioral_pattern)
+- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, preference, behavioral); traits extracted via dedicated lightweight async LLM call, not chunker
 - **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as `behavioral_pattern` user traits with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — SQLite CRUD for episodic memories
 - **`semantic_storage_service.py`** — SQLite CRUD for semantic concepts
-- **`gist_storage_service.py`** — MemoryStore-backed short-term memory with deduplication
+- **`style_metrics_service.py`** — Deterministic communication style measurement (~1ms, zero LLM); 5 dimensions: verbosity, directness, formality, certainty, pacing; pure regex/heuristic, feeds adaptive layer
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
 - **`moment_service.py`** — Pinned message bookmarks with LLM-enriched context, sqlite-vec semantic search, and salience boosting; stores user-pinned Chalie responses as permanent, searchable moments via `moments` table
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs; boosts related episode salience on seal
 - **`moment_card_service.py`** — Inline HTML card emission for moment display in the conversation spine
 
 #### Autonomous Behavior
-- **`cognitive_drift_engine.py`** — Default Mode Network (DMN) for spontaneous thoughts during idle; attention-gated (skips when user in deep focus)
-- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, SuggestAction (skill-matched proactive suggestions), NurtureAction (gentle phase-appropriate presence), PlanAction (proactive plan proposals from recurring topics, 7-gate eligibility with signal persistence), ReflectAction, SeedThreadAction
-- **`spark_state_service.py`** — Tracks relationship phase progression (first_contact → surface → exploratory → connected → graduated)
-- **`spark_welcome_service.py`** — First-contact welcome message triggered on first WebSocket connection; runs once per lifecycle
+- **`cognitive_drift_engine.py`** — Signal-driven reasoning engine; processes signals from decay engine, semantic consolidation, experience assimilation, and event bridge via `reasoning:signals` queue (blpop); falls back to salient/insight discovery on idle timeout (10min); attention-gated (skips when user in deep focus)
+- **`autonomous_actions/`** — Decision routing (priority 10→6): CommunicateAction, PlanAction (proactive plan proposals from recurring topics, 7-gate eligibility with signal persistence), ReflectAction, SeedThreadAction, AmbientToolAction
 - **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
 - **`curiosity_pursuit_service.py`** — Background worker exploring active threads via ACT loop
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
@@ -94,7 +90,7 @@ frontend/
 - **`act_orchestrator_service.py`** — Unified, parameterized ACT loop runner. Single implementation replaces per-worker loop copies. Configurable: `critic_enabled`, `smart_repetition` (embedding-based), `escalation_hints` (budget warnings), `persistent_task_exit`, `deferred_card_context`. Caller-specific behavior via `on_iteration_complete` callback. Config flag `act_use_unified_orchestrator` for gradual rollout.
 - **`act_loop_service.py`** — Fatigue-based cognitive iteration manager with action execution, history tracking, and telemetry. Constructor-injected critic and dispatcher (no monkey-patching). Generic scalar output chaining between sequential actions.
 - **`act_dispatcher_service.py`** — Routes actions to skill handlers with timeout enforcement; returns structured results with confidence and contextual notes
-- **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
+- **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `tool-prefilter` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
 - **`act_completion_service.py`** — Detects when expected tools were not invoked; injects `[NO_ACTION_TAKEN]` signal
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
 - **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
@@ -130,8 +126,6 @@ frontend/
 #### Topic Classification
 - **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
 - **`adaptive_boundary_detector.py`** — 3-layer self-calibrating topic boundary detector (NEWMA + Transient Surprise + Leaky Accumulator); persists per-thread state in MemoryStore; degrades gracefully to static threshold when < 5 messages
-- **`topic_stability_regulator_service.py`** — 24h adaptive tuning of topic classification and boundary detector parameters
-
 #### Session & Conversation
 - **`thread_conversation_service.py`** — MemoryStore-backed conversation thread persistence
 - **`thread_service.py`** — Manages conversation threads with expiry
@@ -147,7 +141,7 @@ frontend/
 
 14 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
-- **`memorize_skill.py`** — Store gists and facts (<50ms)
+- **`memorize_skill.py`** — Explicit memory encoding (<50ms)
 - **`introspect_skill.py`** — Raw state snapshot: context warmth, FOK signal, stats, decision explanations, recent autonomous actions (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
 - **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
@@ -158,35 +152,32 @@ frontend/
 - **`persistent_task_skill.py`** — Multi-session background task management: create (with plan decomposition), pause, resume, cancel, check status, show plan, set priority (<100ms; create ~2-5s with LLM decomposition)
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
-- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
+- **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed)
 - **`emit_card_skill.py`** — Render deferred tool cards into conversation stream (internal trigger)
 
 ## Worker Processes (`backend/workers/`)
 
 ### Queue Workers (Daemon Threads)
-- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue memory job
-- **Memory Chunker Worker** — Enriches exchanges with memory chunks via LLM
-- **Episodic Memory Worker** — Builds episodes from sequences of exchanges
+- **Digest Worker** — Core pipeline: classify → route → generate response → enqueue episodic memory job
+- **Episodic Memory Worker** — Reads raw conversation turns; builds episodes when turn count >=5 or idle timeout triggers
 - **Semantic Consolidation Worker** — Extracts concepts + relationships from episodes
 
 ### Services/Daemons (Daemon Threads)
 - **REST API + WebSocket** — Flask app with flask-sock on port 8081
-- **Cognitive Drift Engine** — Generates spontaneous thoughts during worker idle (attention-gated: skips when user in deep focus)
+- **Cognitive Drift Engine** — Signal-driven reasoning; blocks on `reasoning:signals` queue, processes memory_pressure/new_knowledge/novel_observation/ambient_context signals; idle timeout (10min) triggers salient/insight discovery (attention-gated)
 - **Ambient Inference Service** — Deterministic inference of place, attention, energy, mobility, tempo from browser telemetry (<1ms, zero LLM)
 - **Place Learning Service** — Accumulates place fingerprints in SQLite; learned patterns override heuristics after 20+ observations
 - **Decay Engine** — Periodic memory decay cycle; applies `contradicted`/`uncertain` reliability multipliers (×0.5/×0.75) so unreliable memories decay faster
 - **Uncertainty Engine** — Four-phase contradiction detection and resolution system:
-  - *UncertaintyService* — CRUD + state machine for `uncertainties` table; rank-guard on `reliability` columns; `mark_surfaced()` with anti-nag downgrade; `resolve_by_reinforcement()` for evidence-based auto-resolution
+  - *UncertaintyService* — CRUD + state machine for `uncertainties` table; rank-guard on `reliability` columns; `resolve_by_reinforcement()` for evidence-based auto-resolution
   - *ContradictionClassifierService* — LLM pair classifier (600ms ingestion time-box); vector pre-screen via `user_traits_vec`/`concepts_vec`; discriminates temporal change vs true contradiction vs context-dependent
   - *ReconcileAction* — Autonomous drift action (priority 4, 30min cooldown); samples traits+concepts, runs pairwise classification, creates uncertainty records or auto-supersedes temporal changes
-- **Routing Stability Regulator** — Single authority for router weight mutation
 - **Routing Reflection** — Idle-time peer review of routing decisions
-- **Topic Stability Regulator** — Adaptive tuning of topic classification parameters
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
 - **Autobiography Synthesis** — Synthesizes user narrative (6h cycle)
-- **Triage Calibration** — Triage correctness scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from clarification→tool resolution chains
+- **Tool Prefilter Calibration** — ONNX skill prefilter scoring (24h cycle); wires user corrections to tool preferences; learns usage scenarios from tool resolution chains
 - **Profile Enrichment** — Tool profile enrichment (6h cycle, 3 tools/cycle); preference decay; usage-triggered full profile rebuilds (15 successes or reliability < 50%)
 - **Curiosity Pursuit** — Explores curiosity threads via ACT loop (6h cycle)
 - **Moment Enrichment** — Enriches pinned moments with gists + LLM summary, seals after 4hrs (5min poll)
@@ -203,12 +194,10 @@ frontend/
   → [run.py] → [PromptQueue] → [Digest Worker]
     ├─ Classification (embedding-based, adaptive boundary detection)
     ├─ Context Assembly (retrieve from all 5 memory layers)
-    ├─ Mode Routing (deterministic ~5ms mathematical router)
+    ├─ Message Gate (deterministic ~5ms: empty guard, CANCEL, ONNX mode gate)
     ├─ Mode-Specific LLM Generation
     │  └─ If ACT: action loop → re-route → terminal response
-    └─ Enqueue Memory Chunking Job
-      → [Memory Chunker Queue] → [Memory Chunker Worker]
-        → [Conversation JSON] (enriched)
+    └─ Enqueue Episodic Memory Job
       → [Episodic Memory Queue] → [Episodic Memory Worker]
         → SQLite Episodes Table
         → [Semantic Consolidation Queue] → [Semantic Consolidation Worker]
@@ -217,51 +206,38 @@ frontend/
 
 ### Background Processes
 ```
-[Routing Stability Regulator] ← reads routing_decisions (24h cycle)
-    → adjusts configs/generated/mode_router_config.json
-
 [Routing Reflection Service] ← reads reflection-queue (idle-time)
-    → writes routing_decisions.reflection → feeds pressure to regulator
+    → writes routing_decisions.reflection
 
 [Decay Engine] → runs every 1800s (30min)
     ├─ Episodic decay (salience-weighted)
     ├─ Semantic decay (strength-weighted)
     └─ User trait decay (category-specific)
 
-[Cognitive Drift Engine] → during worker idle
-    ├─ Seed selection (weighted random)
-    ├─ Spreading activation (depth 2, decay 0.7/level)
-    └─ LLM synthesis → stores as drift gist
+[Cognitive Drift Engine] → signal-driven (blpop on reasoning:signals)
+    ├─ Signal sources: decay_engine, semantic_consolidation, experience_assimilation, event_bridge
+    ├─ Idle timeout (10min) → salient/insight discovery fallback
+    ├─ Signal → seed → spreading activation (depth 2, decay 0.7/level)
+    └─ LLM synthesis → stores as drift thought → action routing
 ```
 
 ## Key Architectural Decisions
 
-### Deterministic Mode Router
-- **Decoupled**: Mode selection (mathematical, ~5ms) separate from response generation (LLM, ~2-15s)
-- **Signals**: ~17 observable signals from context + NLP (context warmth, question marks, greeting patterns, etc.)
-- **Scores**: Each mode gets weighted composite score; highest wins
-- **Tie-breaker**: Small LLM (qwen3:4b) for ambiguous cases
-- **Self-leveling**: Router naturally shifts toward RESPOND as memory accumulates
-
-### Single Authority for Weight Mutation
-- **Routing Stability Regulator** is the only service that modifies router weights
-- Other services log "pressure signals" but don't mutate state
-- Updates bounded: max ±0.02/day, 48h cooldown per parameter
-- **Closed-loop control**: Verifies adjustments work before persisting
+### Message Gate (User Messages) and Mode Router (Non-User Flows)
+- **MessageGateService** is the primary routing authority for user messages (~5ms, deterministic): empty guard → CANCEL detection → ONNX mode gate → RESPOND fast-path or ACT pipeline with ONNX skill pre-filter. No LLM call. CLARIFY and IGNORE modes removed.
+- **ModeRouterService** handles non-user flows (drift, proactive, fallback): deterministic scoring (~5ms) from ~17 observable signals; LLM tie-breaker (qwen3:4b) for ambiguous cases; self-leveling toward RESPOND as memory accumulates.
 
 ### Mode-Specific Prompts
-- Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT) has its own focused prompt template
+- Each mode (RESPOND, ACKNOWLEDGE, ACT) has its own focused prompt template
 - Replaces old approach: single combined prompt with mode selection embedded
 - Focused scope prevents elaboration and improves consistency
 
 ### Memory Hierarchy
-- **Working Memory** (MemoryStore, 4 turns, 24h TTL) — Current conversation
-- **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries
-- **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
-- **Episodes** (SQLite + sqlite-vec) — Narrative units with decay
+- **Working Memory** (MemoryStore, 12 turns, 24h TTL) — Current conversation
+- **Episodes** (SQLite + sqlite-vec) — Narrative units with decay; consolidated from raw turns (>=5 turns or idle timeout trigger)
 - **Concepts** (SQLite + sqlite-vec) — Knowledge nodes and relationships
 - **Procedural Memory** (SQLite) — Learned action reliability; surfaced in context assembly as reliability hints (≥8 attempts, top 3 skills)
-- **User Traits** (SQLite) — Personal facts with category-specific decay (includes behavioral patterns from temporal mining)
+- **User Traits** (SQLite) — Personal facts with category-specific decay (categories: core, preference, behavioral); extracted via dedicated lightweight async LLM call
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
 Each layer optimized for its timescale; all integrated via context assembly. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
@@ -285,8 +261,6 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 - **Leaky Accumulator** provides hysteresis — single-message outliers don't create false topics
 - All thresholds derived from running conversation statistics; no manual tuning
 - State persisted in MemoryStore (`adaptive_boundary:{thread_id}`, 24h TTL); cold-start fallback (0.55 threshold) when < 5 messages
-- Base parameters (`accumulator_boundary_base`, `accumulator_leak_rate`, NEWMA windows) are the slow outer loop controlled by Topic Stability Regulator
-
 ### Topic Confidence Reinforcement
 - Topic confidence updated via bounded reinforcement formula
 - `new = current + (new_confidence - current) * 0.5`
@@ -323,8 +297,6 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 ### Primary Configuration
 - **`configs/connections.json`** — SQLite path and MemoryStore settings
 - **`configs/agents/*.json`** — LLM settings (model, temperature, timeout)
-- **`configs/generated/mode_router_config.json`** — Learned router weights (generated)
-
 ### Provider Configuration
 - Stored in SQLite `providers` table (not JSON files)
 - Runtime configurable via REST API (`/api/providers`)
@@ -353,7 +325,7 @@ See `docs/02-PROVIDERS-SETUP.md` for detailed setup instructions.
 - **`memory`** — Memory layer counts and health indicators
 - **`tools`** — Tool performance stats
 - **`identity`** — Identity vector states
-- **`tasks`** — Active persistent tasks, curiosity threads, triage calibration
+- **`tasks`** — Active persistent tasks and curiosity threads
 - **`autobiography`** — Current autobiography narrative with delta (changed/unchanged sections)
 - **`traits`** (GET) — User traits grouped by category with confidence scores
 - **`traits/<key>`** (DELETE) — Remove a specific learned trait (user correction)
@@ -428,7 +400,7 @@ No external services required. SQLite and MemoryStore are embedded — everythin
 - **Router Confidence**: Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal**: Metric logged by monitors, consumed by the single regulator
 - **Context Warmth**: Signal (0.0-1.0) measuring how much context is available for current topic
-- **Drift Gist**: Spontaneous thought stored during idle periods (DMN)
+- **Drift Thought**: Spontaneous thought from signal-driven reasoning (formerly DMN)
 - **Episode**: Narrative memory unit with intent, context, action, emotion, outcome, salience
 - **Concept**: Knowledge node with strength decay and spreading activation
 - **Salience**: Computed importance metric (0.1-1.0) based on novelty, emotion, commitment

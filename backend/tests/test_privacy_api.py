@@ -86,8 +86,9 @@ class TestDeleteAll:
         src = inspect.getsource(delete_all)
 
         # Critical namespaces that must appear
+        # Note: gist:* and fact:* removed in Stream 1 (memory chunker killed)
         for pattern in [
-            'working_memory:*', 'gist:*', 'fact:*',
+            'working_memory:*',
             'auth_session:*', 'proactive:*',
             'identity_state:*', 'cognitive_drift_state',
             'tool_state:*', 'metrics:timing:*',
@@ -104,7 +105,7 @@ class TestDeleteAll:
             'episodes', 'semantic_concepts', 'semantic_relationships',
             'user_traits', 'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
-            'cognitive_reflexes', 'interaction_log', 'cortex_iterations',
+            'interaction_log', 'cortex_iterations',
             'routing_decisions', 'procedural_memory', 'curiosity_threads',
         ]
         for table in required_tables:
@@ -135,7 +136,7 @@ class TestDataSummary:
         required_tables = [
             'episodes', 'semantic_concepts', 'user_traits', 'threads',
             'autobiography', 'scheduled_items', 'persistent_tasks',
-            'lists', 'place_fingerprints', 'cognitive_reflexes',
+            'lists', 'place_fingerprints',
             'interaction_log', 'curiosity_threads',
         ]
         for table in required_tables:
@@ -155,7 +156,7 @@ class TestExportData:
             'episodes', 'semantic_concepts', 'semantic_relationships',
             'user_traits', 'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'list_items', 'place_fingerprints',
-            'cognitive_reflexes', 'curiosity_threads',
+            'curiosity_threads',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in export_data table list"
@@ -172,12 +173,13 @@ class TestExportData:
             )
 
     def test_export_store_patterns_are_meaningful(self):
-        """export_data() should export working_memory, facts, gists, identity."""
+        """export_data() should export working_memory and identity state."""
         import inspect
         from api.privacy import export_data
         src = inspect.getsource(export_data)
 
-        for pattern in ['working_memory:*', 'gist:*', 'fact:*', 'identity_state:*']:
+        # gist:* and fact:* removed in Stream 1 (memory chunker killed)
+        for pattern in ['working_memory:*', 'identity_state:*']:
             assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in export_data"
 
     def test_content_disposition_header_set(self):

@@ -16,6 +16,15 @@ gaps. This unification was done to prevent that class of bug.
 
 If you believe you need a separate ACT loop, discuss with the team
 first. The cost of duplication is always higher than parameterization.
+
+Termination model (fatigue-free):
+  - Hard iteration cap: max_iterations (default 30)
+  - Cumulative timeout: safety net for runaway loops
+  - Semantic repetition: embedding-based (>0.85 cosine similarity)
+  - Type-based repetition: same action 3x in a row
+  - No actions returned by LLM: natural completion signal
+  - Soft nudge: at iteration 10, inject a prompt hint encouraging
+    the LLM to conclude if it has enough information.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -26,8 +35,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 from services.act_loop_service import ActLoopService
-from services.act_action_categories import ACTION_FATIGUE_COSTS
-from services.innate_skills.registry import COGNITIVE_PRIMITIVES
+from services.innate_skills.registry import COGNITIVE_PRIMITIVES, CONTEXTUAL_SKILLS
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -40,10 +48,10 @@ class ACTResult:
     iteration_logs: list = field(default_factory=list)
     termination_reason: str = ''
     loop_id: Optional[str] = None
-    fatigue: float = 0.0
     iterations_used: int = 0
     critic_telemetry: dict = field(default_factory=dict)
-    fatigue_telemetry: dict = field(default_factory=dict)
+    loop_telemetry: dict = field(default_factory=dict)
+    reflection: Optional[dict] = None
 
 
 class ACTOrchestrator:
@@ -58,7 +66,7 @@ class ACTOrchestrator:
     def __init__(
         self,
         config: dict,
-        max_iterations: int = 7,
+        max_iterations: int = 30,
         cumulative_timeout: float = 60.0,
         per_action_timeout: float = 10.0,
         critic_enabled: bool = False,
@@ -69,13 +77,14 @@ class ACTOrchestrator:
     ):
         """
         Args:
-            config: Cortex configuration dict (fatigue budget, model, etc.)
-            max_iterations: Hard iteration cap
+            config: Cortex configuration dict (model, timeouts, etc.)
+            max_iterations: Hard iteration cap (default 30)
             cumulative_timeout: Maximum total loop time (seconds)
             per_action_timeout: Maximum time per individual action (seconds)
-            critic_enabled: Post-action verification via CriticService
+            critic_enabled: Deprecated — accepted for backward compatibility but
+                ignored. Post-loop reflection always runs via _post_loop_reflection().
             smart_repetition: Embedding-based semantic repetition detection
-            escalation_hints: Budget safety net warnings for the LLM
+            escalation_hints: Inject pivot hints on type-based repetition
             persistent_task_exit: Exit loop when a persistent_task is dispatched
             deferred_card_context: Inject deferred card offers into act_history
         """
@@ -145,17 +154,11 @@ class ACTOrchestrator:
             ACTResult with full loop outcome
         """
         # ── Build the ACT loop service ──────────────────────────────────
-        critic = None
-        if self.critic_enabled:
-            from services.critic_service import CriticService
-            critic = CriticService()
-
         act_loop = ActLoopService(
             config=self.config,
             cumulative_timeout=self.cumulative_timeout,
             per_action_timeout=self.per_action_timeout,
             max_iterations=self.max_iterations,
-            critic=critic,
         )
 
         if context_extras:
@@ -171,6 +174,7 @@ class ACTOrchestrator:
             iteration_service = CortexIterationService(db_service)
             loop_id = iteration_service.create_loop_id()
             act_loop.loop_id = loop_id
+            act_loop.context_extras['loop_id'] = loop_id
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Iteration logging init failed (will retry at write): {e}")
 
@@ -178,11 +182,47 @@ class ACTOrchestrator:
         self._narrated = False  # Set on iteration 0 by LLM decision
         self._request_id = request_id
 
+        # ── Append mode: build system prompt once, grow message array ────
+        append_mode = self.config.get('append_mode', False)
+        _system_prompt = None   # Set below when append_mode is True
+        _messages = None        # Growing message array for append mode
+
+        if append_mode:
+            _system_prompt = cortex_service.build_system_prompt(
+                system_prompt_template=act_prompt,
+                original_prompt=text,
+                classification=classification,
+                chat_history=chat_history,
+                assembled_context=assembled_context,
+                relevant_tools=relevant_tools,
+                selected_tools=selected_tools,
+                selected_skills=selected_skills,
+                thread_id=session_id,
+                returning_from_silence=False,
+                inclusion_map=inclusion_map,
+            )
+            _messages = [{"role": "user", "content": text}]
+            logger.debug(f"{LOG_PREFIX} Append mode: system prompt built once ({len(_system_prompt)} chars)")
+
         # ── Repetition detection state ──────────────────────────────────
         consecutive_same_action = 0
         last_action_type = None
         pivot_hint_injected = False
         recent_action_entries = []  # (fingerprint, types_set) for smart repetition
+
+        # ── Skill escalation state ───────────────────────────────────────
+        # Track whether any contextual skill (non-primitive) succeeded.
+        # After _ESCALATION_AFTER iterations of only primitives, inject
+        # the full skill catalog so the LLM can self-correct.
+        _ESCALATION_AFTER = 2
+        _skill_escalated = False
+        _contextual_skill_used = False
+
+        # ── Tool health tracking (cross-loop via MemoryStore) ─────────
+        from services.tool_health_service import (
+            get_potential, record_outcome as _record_health,
+            classify_result as _classify_health, format_health_hint,
+        )
 
         termination_reason = None
 
@@ -190,30 +230,108 @@ class ACTOrchestrator:
         while True:
             iteration_start = time.time()
 
-            # Build act_history string (with optional deferred card context)
-            act_history_str = act_loop.get_history_context()
-            if self.deferred_card_context:
-                act_history_str = self._inject_deferred_card_context(
-                    act_history_str, topic
+            # ── Collect tool names for health hints ───────────────────
+            _tool_names = set()
+            if selected_tools:
+                _tool_names.update(selected_tools)
+            if relevant_tools:
+                _tool_names.update(
+                    item['name'] for item in relevant_tools
+                    if isinstance(item, dict) and item.get('type') == 'tool'
                 )
 
-            # ── Inject user steering input (if any) ──────────────────────
-            if self._request_id:
-                act_history_str = self._inject_steering(act_history_str)
+            if append_mode:
+                # ── Append mode: grow message array ──────────────────────
+                # Collect per-iteration context updates into a single user message
+                # so the system prompt (and its cache) stay untouched each iteration.
+                context_updates = []
 
-            # Generate action plan via LLM
-            response_data = cortex_service.generate_response(
-                system_prompt_template=act_prompt,
-                original_prompt=text,
-                classification=classification,
-                chat_history=chat_history,
-                act_history=act_history_str,
-                relevant_tools=relevant_tools,
-                selected_skills=selected_skills,
-                selected_tools=selected_tools,
-                assembled_context=assembled_context,
-                inclusion_map=inclusion_map,
-            )
+                # Steering from the user mid-loop
+                if self._request_id:
+                    steer_text = self._get_steering_text()
+                    if steer_text:
+                        context_updates.append(steer_text)
+
+                # Tool health signals (degraded tools only)
+                if _tool_names:
+                    _potentials = {t: get_potential(t) for t in _tool_names}
+                    _health_hint = format_health_hint(_potentials)
+                    if _health_hint:
+                        context_updates.append(f"[Tool Health]\n{_health_hint}")
+
+                # Cautionary lessons from procedural memory (after first iteration)
+                if act_loop.act_history:
+                    _lessons_hint = self._get_cautionary_lessons(act_loop.act_history)
+                    if _lessons_hint:
+                        context_updates.append(f"[Cautionary Lessons]\n{_lessons_hint}")
+
+                # ACT history delta (results from the last iteration's actions)
+                act_history_str = act_loop.get_history_context()
+                if self.deferred_card_context:
+                    act_history_str = self._inject_deferred_card_context(
+                        act_history_str, topic, exchange_id
+                    )
+                if act_history_str and act_history_str != "(none)":
+                    context_updates.append(act_history_str)
+
+                if context_updates:
+                    _messages.append({
+                        "role": "user",
+                        "content": "\n\n".join(context_updates),
+                    })
+
+                # Token budget guard — prune oldest message pairs when approaching limit
+                context_budget = self.config.get('context_budget_tokens', 32000)
+                _messages = self._prune_messages(_messages, context_budget)
+
+                response_data = cortex_service.generate_response_appended(
+                    system_prompt=_system_prompt,
+                    messages=_messages,
+                    cache_prefix=True,
+                )
+
+                # Append assistant turn for the next iteration
+                raw_response = response_data.get('raw_response', response_data.get('response', ''))
+                if raw_response:
+                    _messages.append({"role": "assistant", "content": raw_response})
+
+            else:
+                # ── Legacy mode: rebuild full prompt each iteration ────────
+                act_history_str = act_loop.get_history_context()
+                if self.deferred_card_context:
+                    act_history_str = self._inject_deferred_card_context(
+                        act_history_str, topic, exchange_id
+                    )
+
+                # Inject user steering input (if any)
+                if self._request_id:
+                    act_history_str = self._inject_steering(act_history_str)
+
+                # Inject tool health signals (degraded tools only)
+                if _tool_names:
+                    _potentials = {t: get_potential(t) for t in _tool_names}
+                    _health_hint = format_health_hint(_potentials)
+                    if _health_hint:
+                        act_history_str += f"\n\n[Tool Health]\n{_health_hint}"
+
+                # Inject cautionary lessons (after first iteration)
+                if act_loop.act_history:
+                    _lessons_hint = self._get_cautionary_lessons(act_loop.act_history)
+                    if _lessons_hint:
+                        act_history_str += f"\n\n[Cautionary Lessons]\n{_lessons_hint}"
+
+                response_data = cortex_service.generate_response(
+                    system_prompt_template=act_prompt,
+                    original_prompt=text,
+                    classification=classification,
+                    chat_history=chat_history,
+                    act_history=act_history_str,
+                    relevant_tools=relevant_tools,
+                    selected_skills=selected_skills,
+                    selected_tools=selected_tools,
+                    assembled_context=assembled_context,
+                    inclusion_map=inclusion_map,
+                )
 
             actions = response_data.get('actions', [])
 
@@ -279,14 +397,28 @@ class ACTOrchestrator:
             else:
                 can_continue, termination_reason = act_loop.can_continue()
 
-            # ── Budget safety net (escalation hints) ────────────────────
+            # ── Soft nudge at iteration 10 ───────────────────────────────
             if (
-                self.escalation_hints
-                and can_continue
+                can_continue
                 and actions
-                and not act_loop._escalation_hint_injected
+                and act_loop.iteration_number >= 10
+                and not act_loop.soft_nudge_injected
             ):
-                self._maybe_inject_budget_warning(act_loop, actions)
+                logger.info(
+                    f"{LOG_PREFIX} Soft nudge at iteration {act_loop.iteration_number} "
+                    f"— hinting LLM to conclude if sufficient information gathered"
+                )
+                act_loop.append_results([{
+                    'action_type': 'system',
+                    'status': 'info',
+                    'execution_time': 0.0,
+                    'result': (
+                        "SYSTEM: You've been working on this for a while. "
+                        "If you have enough information to respond, do so now by returning "
+                        "empty actions. If not, continue exploring."
+                    ),
+                }])
+                act_loop.soft_nudge_injected = True
 
             # ── No actions → exit ───────────────────────────────────────
             if not actions:
@@ -300,11 +432,7 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
-                    decision_data={
-                        'net_value': 0.0,
-                        'total_cost': act_loop.fatigue,
-                        'iteration_cost': 0.0,
-                    },
+                    decision_data={'net_value': 0.0},
                 )
                 act_loop.iteration_number += 1
                 break
@@ -319,11 +447,7 @@ class ACTOrchestrator:
                     actions_executed=[],
                     frontal_cortex_response=response_data,
                     termination_reason=termination_reason,
-                    decision_data={
-                        'net_value': 0.0,
-                        'total_cost': act_loop.fatigue,
-                        'iteration_cost': 0.0,
-                    },
+                    decision_data={'net_value': 0.0},
                 )
                 act_loop.iteration_number += 1
                 break
@@ -334,11 +458,19 @@ class ACTOrchestrator:
                 actions=actions,
             )
 
-            # ── Critic verification (if enabled) ────────────────────────
-            if self.critic_enabled and critic:
-                actions_executed = self._run_critic(
-                    act_loop, critic, text, actions, actions_executed, exchange_id
-                )
+            # ── Tool health: record outcomes + check exhaustion ────────
+            for _exec_r in actions_executed:
+                _atype = _exec_r.get('action_type', '')
+                if _atype in COGNITIVE_PRIMITIVES or _atype == 'system':
+                    continue  # Only track external tools
+                _outcome = _classify_health(_exec_r)
+                _new_potential = _record_health(_atype, _outcome)
+                if _new_potential < 0.15 and not termination_reason:
+                    logger.warning(
+                        f"{LOG_PREFIX} Tool '{_atype}' exhausted "
+                        f"(potential={_new_potential:.2f}) — forcing exit"
+                    )
+                    termination_reason = 'tool_exhausted'
 
             act_loop.append_results(actions_executed)
 
@@ -354,14 +486,6 @@ class ACTOrchestrator:
                     )
                     if smart_reason:
                         termination_reason = smart_reason
-
-            # ── Fatigue + net value ─────────────────────────────────────
-            fatigue_added = act_loop.accumulate_fatigue(
-                actions_executed, act_loop.iteration_number
-            )
-            iteration_net_value = ActLoopService.estimate_net_value(
-                actions_executed, act_loop.iteration_number
-            )
 
             # ── Persistent task exit ────────────────────────────────────
             if self.persistent_task_exit and not termination_reason:
@@ -382,11 +506,54 @@ class ACTOrchestrator:
             except Exception:
                 pass
 
-            # ── Check fatigue/timeout/max_iterations if no reason yet ───
+            # ── Skill escalation: unlock full catalog when stuck ──────
+            if not _skill_escalated and not _contextual_skill_used:
+                # Check if any contextual skill succeeded this iteration
+                for r in actions_executed:
+                    atype = r.get('action_type', '')
+                    if atype in CONTEXTUAL_SKILLS and r.get('status') == 'success':
+                        _contextual_skill_used = True
+                        break
+
+                if (
+                    not _contextual_skill_used
+                    and act_loop.iteration_number >= _ESCALATION_AFTER
+                ):
+                    # Build the missing skill docs and inject them
+                    current_skills = set(selected_skills or [])
+                    missing_skills = sorted(CONTEXTUAL_SKILLS - current_skills)
+                    if missing_skills:
+                        extra_docs = cortex_service.get_skill_docs(missing_skills)
+                        if extra_docs:
+                            escalation_msg = (
+                                "[Skill Escalation] The skills you've tried so far "
+                                "haven't resolved the request. Additional skills are "
+                                "now available:\n\n" + extra_docs
+                            )
+                            if append_mode and _messages is not None:
+                                _messages.append({
+                                    "role": "user",
+                                    "content": escalation_msg,
+                                })
+                            else:
+                                act_loop.append_results([{
+                                    'action_type': 'system',
+                                    'status': 'info',
+                                    'execution_time': 0.0,
+                                    'result': escalation_msg,
+                                }])
+                            logger.info(
+                                f"{LOG_PREFIX} Skill escalation triggered at iteration "
+                                f"{act_loop.iteration_number} — injected {len(missing_skills)} "
+                                f"skills: {missing_skills}"
+                            )
+                    _skill_escalated = True
+
+            # ── Check timeout/max_iterations if no reason yet ───────────
             if not termination_reason:
-                can_continue, fatigue_reason = act_loop.can_continue()
+                can_continue, exit_reason = act_loop.can_continue()
                 if not can_continue:
-                    termination_reason = fatigue_reason
+                    termination_reason = exit_reason
 
             # ── Log iteration ───────────────────────────────────────────
             iteration_end = time.time()
@@ -398,11 +565,7 @@ class ACTOrchestrator:
                 actions_executed=actions_executed,
                 frontal_cortex_response=response_data,
                 termination_reason=termination_reason if termination_reason else None,
-                decision_data={
-                    'net_value': iteration_net_value,
-                    'total_cost': act_loop.fatigue,
-                    'iteration_cost': fatigue_added,
-                },
+                decision_data={'net_value': 0.0},
             )
 
             act_loop.iteration_number += 1
@@ -448,12 +611,10 @@ class ACTOrchestrator:
                 except Exception as e:
                     logger.error(f"{LOG_PREFIX} Failed to log iterations: {e}")
 
-        # ── Post-loop: fatigue telemetry ────────────────────────────────
-        fatigue_telemetry = act_loop.get_fatigue_telemetry()
-        fatigue_telemetry['termination_reason'] = termination_reason
-        if self.critic_enabled:
-            fatigue_telemetry.update(act_loop.get_critic_telemetry())
-        logger.info(f"{LOG_PREFIX} Fatigue telemetry: {fatigue_telemetry}")
+        # ── Post-loop: loop telemetry ────────────────────────────────────
+        loop_telemetry = act_loop.get_loop_telemetry()
+        loop_telemetry['termination_reason'] = termination_reason
+        logger.info(f"{LOG_PREFIX} Loop telemetry: {loop_telemetry}")
 
         try:
             from services.database_service import get_shared_db_service
@@ -462,7 +623,7 @@ class ACTOrchestrator:
             _tel_log = InteractionLogService(_tel_db)
             _tel_log.log_event(
                 event_type='act_loop_telemetry',
-                payload=fatigue_telemetry,
+                payload=loop_telemetry,
                 topic=topic,
                 source='act_loop',
             )
@@ -477,21 +638,35 @@ class ACTOrchestrator:
             iterations_used=act_loop.iteration_number,
         )
 
+        # ── Post-loop: critic reflection → procedural memory ─────────
+        reflection = self._post_loop_reflection(
+            act_history=act_loop.act_history,
+            original_goal=text,
+            iterations_used=act_loop.iteration_number,
+            termination_reason=termination_reason or '',
+            topic=topic,
+        )
+
         return ACTResult(
             act_history=act_loop.act_history,
             iteration_logs=act_loop.iteration_logs,
             termination_reason=termination_reason or '',
             loop_id=loop_id,
-            fatigue=act_loop.fatigue,
             iterations_used=act_loop.iteration_number,
-            critic_telemetry=act_loop.get_critic_telemetry(),
-            fatigue_telemetry=fatigue_telemetry,
+            critic_telemetry={},
+            loop_telemetry=loop_telemetry,
+            reflection=reflection,
         )
 
     # ── Private helpers ─────────────────────────────────────────────────
 
     def _inject_steering(self, act_history_str: str) -> str:
-        """Check MemoryStore for user steering input and inject into act_history."""
+        """Check MemoryStore for user steering input and inject into act_history.
+
+        Used by legacy (non-append) mode only.  Append mode uses
+        :meth:`_get_steering_text` to obtain the steering text as a plain
+        string that is appended to the context-update message instead.
+        """
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
@@ -506,6 +681,236 @@ class ACTOrchestrator:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Steering check failed: {e}")
         return act_history_str
+
+    def _get_steering_text(self) -> str:
+        """Drain the MemoryStore steering queue and return formatted text.
+
+        Used by append mode so that steering content can be included in a
+        discrete user message rather than appended to the act_history string.
+
+        Returns:
+            Formatted steering lines joined by newlines, or an empty string
+            when there is no pending steering input or the store is unavailable.
+        """
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            steer_key = f"steer:{self._request_id}"
+            steers = store.lrange(steer_key, 0, -1)
+            if steers:
+                store.delete(steer_key)
+                parts = []
+                for steer in steers:
+                    steer_text = steer if isinstance(steer, str) else steer.decode()
+                    parts.append(f"⚡ [User interrupted]: {steer_text}")
+                    logger.info(f"{LOG_PREFIX} Injected user steer: {steer_text[:80]}")
+                return '\n'.join(parts)
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Steering check failed: {e}")
+        return ''
+
+    def _prune_messages(self, messages: list, budget_tokens: int) -> list:
+        """Prune the oldest user/assistant pairs when the message array nears the token budget.
+
+        The first message (the original user prompt) is always kept.  When the
+        estimated token count exceeds ``budget_tokens``, the oldest non-first
+        messages are dropped in pairs until the array fits the budget or only
+        the minimum tail (first message + 2 most-recent messages) remains.
+
+        Token count is estimated as ``word_count * 1.3`` — the same heuristic
+        used elsewhere in the ACT loop.
+
+        Args:
+            messages: Current message array (mutated copy is returned; original
+                is not modified)
+            budget_tokens: Token budget threshold.  No pruning occurs when the
+                estimated count is at or below this value.
+
+        Returns:
+            Pruned (or unchanged) message list.
+        """
+        if not messages:
+            return messages
+
+        total_text = ' '.join(m.get('content', '') for m in messages)
+        estimated_tokens = int(len(total_text.split()) * 1.3)
+
+        if estimated_tokens <= budget_tokens or len(messages) <= 3:
+            return messages
+
+        # Keep the first message (original user prompt) plus the most-recent
+        # tail.  Start with the last 4 messages and expand backward; if that
+        # still exceeds the budget, remove pairs from position 1 onward.
+        keep_tail = min(4, len(messages) - 1)
+        pruned = [messages[0]] + messages[-keep_tail:]
+
+        while len(pruned) > 3:
+            total = ' '.join(m.get('content', '') for m in pruned)
+            if int(len(total.split()) * 1.3) <= budget_tokens:
+                break
+            # Remove the oldest non-first message
+            pruned.pop(1)
+
+        logger.debug(
+            f"{LOG_PREFIX} _prune_messages: {len(messages)} → {len(pruned)} messages "
+            f"(est. {estimated_tokens} tokens > budget {budget_tokens})"
+        )
+        return pruned
+
+    def _post_loop_reflection(
+        self,
+        act_history: list,
+        original_goal: str,
+        iterations_used: int,
+        termination_reason: str,
+        topic: str,
+    ) -> Optional[dict]:
+        """Run post-loop critic reflection and store the lesson in procedural memory.
+
+        This is the only critic call in the ACT loop. It runs once, after the loop
+        exits, and feeds the result into procedural memory. It never blocks the
+        response — failures are caught and logged.
+
+        Returns:
+            Reflection dict {outcome_quality, what_worked, what_failed, lesson,
+            confidence} or None if reflection failed or was skipped.
+        """
+        # Skip trivial single-action loops — not enough signal
+        if iterations_used < 2:
+            return None
+
+        try:
+            from services.critic_service import CriticService
+
+            # Extract actions and results from act_history
+            actions_taken = []
+            results = []
+            for entry in act_history:
+                if isinstance(entry, dict):
+                    atype = entry.get('action_type', '')
+                    if atype and atype != 'system':
+                        actions_taken.append({'type': atype})
+                        results.append(entry)
+
+            if not results:
+                return None
+
+            critic = CriticService()
+            reflection = critic.reflect_on_execution(
+                actions_taken=actions_taken,
+                results=results,
+                original_goal=original_goal,
+                iterations=iterations_used,
+                termination_reason=termination_reason,
+            )
+
+            if reflection is None:
+                return None
+
+            # Store lesson in procedural memory for each unique action type used
+            lesson = reflection.get('lesson')
+            outcome_quality = reflection.get('outcome_quality', 0.5)
+            if lesson:
+                try:
+                    from services.database_service import get_shared_db_service
+                    from services.procedural_memory_service import ProceduralMemoryService
+                    db = get_shared_db_service()
+                    proc_mem = ProceduralMemoryService(db)
+
+                    # Record outcome for each action type used in the loop
+                    seen_types = set()
+                    for entry in results:
+                        atype = entry.get('action_type', '')
+                        if not atype or atype in ('system', 'critic_escalation') or atype in seen_types:
+                            continue
+                        seen_types.add(atype)
+                        success = outcome_quality >= 0.5
+                        reward = (outcome_quality - 0.5) * 2.0  # map [0,1] → [-1,1]
+                        proc_mem.record_action_outcome(
+                            action_name=atype,
+                            success=success,
+                            reward=reward,
+                            topic=topic,
+                        )
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Procedural memory write failed (non-fatal): {e}")
+
+            # Record failure lessons when outcome is poor
+            if outcome_quality < 0.4 and reflection.get('what_failed'):
+                for atype in seen_types:
+                    self._record_failure_lesson(
+                        action_type=atype,
+                        failure_context={
+                            'original_request': original_goal,
+                            'action_type': atype,
+                            'action_intent': {},
+                            'action_result': {'status': 'poor_outcome', 'quality': outcome_quality},
+                            'error_signals': {
+                                'what_failed': reflection['what_failed'],
+                                'termination_reason': termination_reason,
+                            },
+                        },
+                        severity='minor',
+                    )
+
+            return reflection
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _post_loop_reflection failed (non-fatal): {e}")
+            return None
+
+    def _get_cautionary_lessons(self, recent_history: list) -> str:
+        """Retrieve failure lessons relevant to recently executed action types."""
+        try:
+            from services.failure_analysis_service import FailureAnalysisService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            fas = FailureAnalysisService(db)
+            action_types = {
+                r.get('action_type', '')
+                for r in recent_history
+                if r.get('action_type')
+            }
+            all_lessons = []
+            for at in action_types:
+                all_lessons.extend(fas.get_relevant_lessons(at))
+            if not all_lessons:
+                return ''
+            all_lessons.sort(key=lambda l: l.get('times_seen', 1), reverse=True)
+            lines = [
+                f"- [{l['blame']}] {l['lesson']} (seen {l.get('times_seen', 1)}x)"
+                for l in all_lessons[:3]
+            ]
+            return '\n'.join(lines)
+        except Exception:
+            return ''
+
+    def _record_failure_lesson(
+        self, action_type: str, failure_context: dict, severity: str = 'minor'
+    ) -> None:
+        """Analyse a failed action and store a lesson. Major = sync, minor = async."""
+        def _do_record():
+            try:
+                from services.failure_analysis_service import FailureAnalysisService
+                from services.database_service import get_shared_db_service
+                db = get_shared_db_service()
+                fas = FailureAnalysisService(db)
+                analysis = fas.analyze(failure_context)
+                if analysis:
+                    fas.store_lesson(analysis, action_type)
+            except Exception as exc:
+                logger.warning(f"{LOG_PREFIX} Failure lesson recording failed: {exc}")
+
+        if severity == 'major':
+            _do_record()
+        else:
+            import threading
+            t = threading.Thread(
+                target=_do_record,
+                daemon=True,
+                name=f"failure-lesson-{action_type[:20]}",
+            )
+            t.start()
 
     def _escalate_and_wait(
         self,
@@ -551,173 +956,18 @@ class ACTOrchestrator:
         logger.info(f"{LOG_PREFIX} Escalation timed out after {max_wait}s")
         return None
 
-    def _run_critic(
-        self,
-        act_loop: ActLoopService,
-        critic,
-        original_text: str,
-        actions: list,
-        actions_executed: list,
-        exchange_id: str,
-    ) -> list:
-        """Post-action critic verification with retry for safe actions."""
-        from services.critic_service import MAX_CRITIC_RETRIES, CRITIC_FATIGUE_COST
-
-        critic_corrected = []
-        for idx, result in enumerate(actions_executed):
-            action_spec = actions[idx] if idx < len(actions) else {}
-            action_type = result.get('action_type', 'unknown')
-
-            if critic.should_skip(action_type, result):
-                critic_corrected.append(result)
-                continue
-
-            retries = 0
-            current_result = result
-            while retries < MAX_CRITIC_RETRIES:
-                verdict = critic.evaluate(
-                    original_request=original_text,
-                    action_type=action_type,
-                    action_intent=action_spec,
-                    action_result=current_result,
-                )
-                act_loop.charge_critic_fatigue(CRITIC_FATIGUE_COST)
-
-                if verdict.get('verified', True):
-                    break
-
-                correction = verdict.get('correction')
-                if not correction:
-                    if not critic.is_safe_action(action_type):
-                        logger.info(
-                            f"{LOG_PREFIX} Critic escalation for {action_type}: "
-                            f"{verdict.get('issue', 'unknown')}"
-                        )
-                        issue = verdict.get('issue', 'something unexpected')
-                        action_desc = action_spec.get('description', action_type)
-                        escalation_text = (
-                            f"I was about to {action_desc}, but I paused — "
-                            f"{issue}. Should I go ahead?"
-                        )
-                        user_response = self._escalate_and_wait(
-                            act_loop, escalation_text, exchange_id
-                        )
-                        if user_response:
-                            act_loop.append_results([{
-                                'action_type': 'critic_escalation',
-                                'status': 'user_responded',
-                                'result': f"Critic paused {action_type}: {issue}\nUser response: {user_response}",
-                                'execution_time': 0.0,
-                            }])
-                        else:
-                            current_result = {
-                                **current_result,
-                                'critic_blocked': True,
-                                'critic_issue': issue,
-                            }
-                            act_loop.append_results([{
-                                'action_type': 'critic_escalation',
-                                'status': 'timeout',
-                                'result': f"Critic paused {action_type}: {issue}\nNo user response within timeout — skipping action.",
-                                'execution_time': 0.0,
-                            }])
-                    break
-
-                # Log correction entry
-                correction_entry = {
-                    'action_type': action_type,
-                    'status': 'critic_correction',
-                    'result': critic.format_correction_entry(
-                        action_type=action_type,
-                        original_result=str(current_result.get('result', '')),
-                        correction=correction,
-                        final_result=correction,
-                    ),
-                    'execution_time': 0.0,
-                    'confidence': 0.0,
-                    'notes': f"critic correction attempt {retries + 1}",
-                }
-                act_loop.append_results([correction_entry])
-
-                if critic.is_safe_action(action_type):
-                    from services.act_dispatcher_service import ActDispatcherService
-                    retry_dispatcher = ActDispatcherService(
-                        timeout=act_loop.per_action_timeout
-                    )
-                    corrected_action = {
-                        **action_spec,
-                        '_critic_correction': correction,
-                    }
-                    current_result = retry_dispatcher.dispatch_action(
-                        act_loop.context_extras.get('topic', ''),
-                        corrected_action,
-                    )
-                else:
-                    logger.info(
-                        f"{LOG_PREFIX} Critic correction for consequential "
-                        f"{action_type}, not retrying"
-                    )
-                    break
-
-                retries += 1
-                if retries >= MAX_CRITIC_RETRIES:
-                    critic.oscillation_events += 1
-                    logger.warning(
-                        f"{LOG_PREFIX} Critic MAX_RETRIES reached for {action_type}"
-                    )
-
-            critic_corrected.append(current_result)
-
-        return critic_corrected
-
-    def _maybe_inject_budget_warning(
-        self, act_loop: ActLoopService, actions: list
-    ) -> None:
-        """Inject budget exhaustion warning when utilization approaches 85%."""
-        _tool_action_count = sum(
-            1 for r in act_loop.act_history
-            if (
-                r.get('action_type') not in COGNITIVE_PRIMITIVES
-                and r.get('action_type') not in ('system', None)
-            )
-        )
-        if _tool_action_count < 4 or act_loop.fatigue_budget <= 0:
-            return
-
-        _predicted_cost = sum(
-            ACTION_FATIGUE_COSTS.get(a.get('type', ''), 1.0)
-            * (1.0 + act_loop.fatigue_growth_rate * act_loop.iteration_number)
-            for a in actions
-        )
-        _predicted_fatigue = act_loop.fatigue + _predicted_cost
-        _predicted_util = _predicted_fatigue / act_loop.fatigue_budget
-
-        if _predicted_util >= 0.85:
-            logger.info(
-                f"{LOG_PREFIX} Budget safety net: predicted "
-                f"{_predicted_util:.0%} after this iteration "
-                f"({_tool_action_count} tool actions)"
-            )
-            act_loop.append_results([{
-                'action_type': 'system',
-                'status': 'info',
-                'execution_time': 0.0,
-                'result': (
-                    f"SYSTEM: Action budget nearly exhausted "
-                    f"(~{_predicted_util:.0%}). This is your last iteration. "
-                    "If significant work remains, create a persistent_task now. "
-                    "Otherwise return empty actions to finish."
-                ),
-            }])
-            act_loop._escalation_hint_injected = True
-
     def _check_smart_repetition(
         self,
         current_fingerprint: str,
         current_types: set,
         recent_entries: list,
     ) -> Optional[str]:
-        """Embedding-based semantic repetition check (same-type only)."""
+        """Embedding-based semantic repetition check (same-type only).
+
+        Requires 2+ consecutive similar iterations to trigger — a single
+        similar search is "exploring a topic from different angles", not
+        being stuck.
+        """
         try:
             from services.embedding_service import get_embedding_service
             import numpy as np
@@ -725,31 +975,40 @@ class ACTOrchestrator:
             emb_service = get_embedding_service()
             current_vec = emb_service.generate_embedding_np(current_fingerprint)
 
-            for prev_fingerprint, prev_types in recent_entries[-4:-1]:
+            consecutive_hits = 0
+            # Check most recent entries (newest first)
+            for prev_fingerprint, prev_types in reversed(recent_entries[:-1]):
                 if not current_types & prev_types:
-                    continue
+                    break  # Type mismatch breaks the consecutive streak
                 prev_vec = emb_service.generate_embedding_np(prev_fingerprint)
                 sim = float(np.dot(current_vec, prev_vec))
                 if sim > self.repetition_sim_threshold:
-                    logger.warning(
-                        f"{LOG_PREFIX} Smart repetition (same-type): "
-                        f"sim={sim:.3f} > {self.repetition_sim_threshold}"
-                    )
-                    return 'smart_repetition'
+                    consecutive_hits += 1
+                else:
+                    break  # Below threshold breaks the streak
+
+            if consecutive_hits >= 2:
+                logger.warning(
+                    f"{LOG_PREFIX} Smart repetition (same-type): "
+                    f"{consecutive_hits} consecutive similar iterations "
+                    f"(threshold={self.repetition_sim_threshold})"
+                )
+                return 'smart_repetition'
         except Exception:
             pass
         return None
 
     @staticmethod
     def _inject_deferred_card_context(
-        act_history_str: str, topic: str
+        act_history_str: str, topic: str, exchange_id: str = ''
     ) -> str:
         """Append deferred card offers to act_history context string."""
         try:
             from services.memory_client import MemoryClientService as _RCS
-            _store_dc = _MCS.create_connection()
+            from services import act_memory_keys
+            _store_dc = _RCS.create_connection()
             _deferred_items = _store_dc.lrange(
-                f"deferred_cards:{topic}", 0, -1
+                act_memory_keys.deferred_cards(topic, exchange_id), 0, -1
             )
             if _deferred_items:
                 _cards = [json.loads(i) for i in _deferred_items]
@@ -791,7 +1050,7 @@ _AUTO_REFLECT_MIN_ITERATIONS = 2  # Skip trivial 1-iteration loops
 
 # Termination reasons that indicate degraded exits worth reflecting on
 _DEGRADED_EXITS = frozenset({
-    'fatigue_exhausted', 'repetition_detected', 'smart_repetition',
+    'repetition_detected', 'smart_repetition', 'tool_exhausted',
 })
 
 

@@ -12,7 +12,6 @@ def _make_config():
     return {
         'base_scores': {
             'RESPOND': 0.40,
-            'CLARIFY': 0.30,
             'ACT': 0.20,
             'IGNORE': -0.50,
         },
@@ -22,11 +21,6 @@ def _make_config():
             'respond.gist_density': 0.10,
             'respond.question_warm': 0.15,
             'respond.cold_penalty': 0.15,
-            'clarify.cold_boost': 0.25,
-            'clarify.question_no_facts': 0.20,
-            'clarify.new_topic_question': 0.10,
-            'clarify.cold_question': 0.05,
-            'clarify.warm_penalty': 0.20,
             'act.question_moderate_context': 0.20,
             'act.interrogative_gap': 0.15,
             'act.implicit_reference': 0.15,
@@ -72,20 +66,6 @@ class TestModeRouter:
         result = router.route(signals, "Tell me about X")
         assert result['mode'] == 'RESPOND'
 
-    def test_cold_context_selects_clarify(self):
-        """Cold context (<0.3) with a question should favour CLARIFY."""
-        router = ModeRouterService(_make_config())
-        signals = _make_signals(
-            context_warmth=0.1,
-            has_question_mark=True,
-            interrogative_words=True,
-            fact_count=0,
-            gist_count=0,
-            is_new_topic=True,
-        )
-        result = router.route(signals, "What is this?")
-        assert result['mode'] == 'CLARIFY'
-
     def test_greeting_selects_respond(self):
         """Greeting pattern should flow to RESPOND (ACKNOWLEDGE removed)."""
         router = ModeRouterService(_make_config())
@@ -100,7 +80,7 @@ class TestModeRouter:
 
         # Mock the full tiebreaker pipeline (ONNX → LLM) to return RESPOND
         with patch.object(router, '_invoke_tiebreaker', return_value='RESPOND') as mock_tb:
-            # Craft signals where RESPOND and CLARIFY are very close
+            # Craft signals where RESPOND and ACT are very close
             signals = _make_signals(
                 context_warmth=0.35,
                 has_question_mark=True,
@@ -168,8 +148,6 @@ class TestModeRouter:
             topic="test-topic",
             context_warmth=0.5,
             working_memory=wm,
-            gist_storage=gs,
-            fact_store=fs,
             world_state_service=ws,
             classification_result={'confidence': 0.8, 'is_new_topic': False},
             session_service=ss,
@@ -208,7 +186,7 @@ class TestComputeNlpSignals:
 
         full_signals = collect_routing_signals(
             text=text, topic="test", context_warmth=0.5,
-            working_memory=wm, gist_storage=gs, fact_store=fs,
+            working_memory=wm,
             world_state_service=ws, classification_result={'confidence': 0.5, 'is_new_topic': False},
             session_service=ss, intent=intent,
         )

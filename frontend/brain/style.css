@@ -329,44 +329,13 @@ body::before {
     font-size: 14px;
 }
 
+
 .job-desc {
     color: var(--text-muted);
     font-size: 12px;
     margin-top: 2px;
 }
 
-.job-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 4px;
-    flex-shrink: 0;
-    white-space: nowrap;
-}
-
-.badge-30b {
-    background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
-}
-
-.badge-14b {
-    background: rgba(245, 158, 11, 0.12);
-    color: #fbbf24;
-}
-
-.badge-8b {
-    background: rgba(138, 92, 255, 0.12);
-    color: #9E74FF;
-}
-
-.badge-4b {
-    background: rgba(34, 197, 94, 0.12);
-    color: #4ade80;
-}
-.badge-vision {
-    background: rgba(0, 240, 255, 0.10);
-    color: #00F0FF;
-}
 
 .job-assign {
     display: flex;
@@ -407,43 +376,58 @@ body::before {
 .job-card__meta {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     padding: 8px 20px;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.job-meta-item {
-    font-size: 11px;
-    color: rgba(234, 230, 242, 0.45);
-    white-space: nowrap;
-}
-
-.job-meta-icon {
-    font-size: 10px;
-    opacity: 0.6;
-    margin-right: 3px;
-}
-
-.job-meta-sep {
-    width: 1px;
-    height: 12px;
-    background: rgba(255, 255, 255, 0.06);
-    flex-shrink: 0;
-}
-
-.job-strengths {
+.job-caps {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 5px;
 }
 
-.job-strength {
+.job-cap {
     font-size: 10px;
-    padding: 1px 6px;
+    font-weight: 500;
+    padding: 2px 8px;
     border-radius: 3px;
-    background: rgba(138, 92, 255, 0.06);
-    color: rgba(234, 230, 242, 0.50);
     white-space: nowrap;
+}
+
+/* Capability level colours */
+.cap--high {
+    background: rgba(255, 68, 68, 0.12);
+    color: #FF4444;
+}
+.cap--medium {
+    background: rgba(255, 184, 0, 0.12);
+    color: #FFB800;
+}
+.cap--low {
+    background: rgba(96, 165, 250, 0.12);
+    color: #60A5FA;
+}
+.cap--none {
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(234, 230, 242, 0.25);
+}
+
+/* Legend at bottom of jobs list */
+.cap-legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    margin-top: 8px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+}
+.cap-legend__title {
+    font-size: 11px;
+    color: rgba(234, 230, 242, 0.45);
+    margin-right: 4px;
 }
 
 /* Modals */
@@ -2471,6 +2455,21 @@ body::before {
     gap: 6px;
     flex-shrink: 0;
 }
+
+/* Image preview thumbnail in doc rows (chat_image source type) */
+.doc-row__image-preview {
+    flex-shrink: 0;
+    margin-right: 12px;
+}
+.doc-row__image-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: block;
+}
+
 .btn-danger-sm {
     color: #f87171 !important;
     border-color: rgba(248,113,113,0.2) !important;

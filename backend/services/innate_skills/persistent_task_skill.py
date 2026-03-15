@@ -10,6 +10,8 @@ Provides natural language commands:
   - cancel: Cancel a task
   - expand: Update task scope
   - priority: Change task priority
+  - complete: Mark a task as done with a final result
+  - progress: Update coverage estimate and optional summary
 
 All DB access via get_shared_db_service() (lazy import inside function).
 """
@@ -53,6 +55,10 @@ def handle_persistent_task(topic: str, params: dict) -> str:
         return _show_plan(topic, params)
     elif action == "list":
         return _list_tasks(topic, params)
+    elif action == "complete":
+        return _complete(topic, params)
+    elif action == "progress":
+        return _progress_update(topic, params)
     else:
         return f"Unknown persistent task action: {action}"
 
@@ -173,24 +179,12 @@ def _confirm(topic: str, params: dict) -> str:
     if not ok:
         return f"Cannot start task: {msg}"
 
-    mode = params.get("mode", "now").lower()
-    if mode not in ("now", "later"):
-        logger.info(f"{LOG_PREFIX} Unknown mode '{mode}' for task {task_id}, defaulting to 'now'")
-        mode = "now"
-
-    if mode == "now":
-        _enqueue_immediate_task(task_id)
-        return (
-            f"On it — executing \"{task['goal'][:60]}\" now. "
-            f"I'll let you know when I have results."
-        )
-    else:
-        # Periodic — background worker picks it up on next 30-min cycle
-        service.set_next_run(task_id, delay_seconds=0)
-        return (
-            f"Deep dive started for \"{task['goal'][:60]}\". "
-            f"I'll work on this thoroughly in the background and update you as I go."
-        )
+    # The transition to 'accepted' pushes a signal to `persistent_task:execute`,
+    # waking the worker immediately — no separate enqueue needed.
+    return (
+        f"On it — starting \"{task['goal'][:60]}\" now. "
+        f"I'll let you know when I have results."
+    )
 
 
 def _status(topic: str, params: dict) -> str:
@@ -249,13 +243,21 @@ def _resume(topic: str, params: dict) -> str:
 
 
 def _cancel(topic: str, params: dict) -> str:
-    """Cancel a task."""
+    """Cancel a task. If system-originated, notifies PlanAction for backoff learning."""
     service = _get_service()
     task_id = _resolve_task_id(params)
     if not task_id:
         return "Could not identify which task to cancel."
 
+    # Check if system-originated before transitioning (priority 7 = PlanAction)
+    task = service.get_task(task_id)
+    is_system = task and task.get('priority') == 7
+
     ok, msg = service.transition(task_id, 'cancelled')
+
+    if ok and is_system:
+        _notify_plan_action_outcome('cancelled', task_id)
+
     return msg if ok else f"Cannot cancel: {msg}"
 
 
@@ -353,17 +355,99 @@ def _show_plan(topic: str, params: dict) -> str:
     return '\n'.join(lines)
 
 
-def _enqueue_immediate_task(task_id: int):
-    """Enqueue immediate full execution for a task via RQ."""
+
+
+def _complete(topic: str, params: dict) -> str:
+    """Mark a task as completed with a final result."""
+    task_id = _resolve_task_id(params)
+    if not task_id:
+        # Fallback: check if persistent_task_id was injected via context_extras
+        task_id = params.get('persistent_task_id')
+    if not task_id:
+        return "Could not identify which task to complete."
+
+    service = _get_service()
+    task = service.get_task(int(task_id))
+    if not task:
+        return f"Task {task_id} not found."
+
+    result = params.get("result", params.get("text", "Task completed."))
+    artifact = params.get("artifact")
+
+    is_system = task.get('priority') == 7
+
+    service.complete_task(int(task_id), result, artifact)
+    _surface_completion_from_skill(task, result)
+
+    if is_system:
+        _notify_plan_action_outcome('completed', int(task_id))
+
+    return f"Task #{task_id} \"{task['goal'][:60]}\" marked as completed."
+
+
+def _progress_update(topic: str, params: dict) -> str:
+    """Update coverage estimate and optional summary for a task."""
+    task_id = _resolve_task_id(params)
+    if not task_id:
+        # Fallback: check if persistent_task_id was injected via context_extras
+        task_id = params.get('persistent_task_id')
+    if not task_id:
+        return "Could not identify which task to update progress for."
+
+    service = _get_service()
+    task = service.get_task(int(task_id))
+    if not task:
+        return f"Task {task_id} not found."
+
+    coverage = params.get("coverage", params.get("value"))
+    if coverage is not None:
+        coverage = max(0.0, min(1.0, float(coverage)))
+
+    summary = params.get("summary", params.get("text"))
+
+    # Merge into existing progress
+    progress = dict(task.get('progress', {}) or {})
+    if coverage is not None:
+        progress['coverage_estimate'] = coverage
+    if summary:
+        progress['last_summary'] = summary
+
+    service.checkpoint(int(task_id), progress=progress)
+
+    parts = [f"Task #{task_id} progress updated"]
+    if coverage is not None:
+        parts.append(f"coverage: {coverage:.0%}")
+    if summary:
+        parts.append(f"summary: {summary[:80]}")
+    return " — ".join(parts) + "."
+
+
+def _surface_completion_from_skill(task: dict, result: str):
+    """Surface task completion to user when completed via skill."""
     try:
-        from services.prompt_queue import PromptQueue
-        from workers.persistent_task_worker import run_immediate_task
-        queue = PromptQueue(queue_name="persistent-task-immediate", worker_func=run_immediate_task)
-        queue.enqueue(task_id)
-        logger.info(f"{LOG_PREFIX} Enqueued immediate execution for task {task_id}")
+        from services.output_service import OutputService
+        output = OutputService()
+        message = (
+            f"I've finished working on \"{task['goal'][:60]}\". "
+            f"Here's what I found:\n\n{result}"
+        )
+        output.enqueue_proactive(task.get('thread_id'), message, source='persistent_task')
     except Exception as e:
-        # Non-fatal: periodic worker will pick it up on next cycle
-        logger.warning(f"{LOG_PREFIX} Could not enqueue immediate task {task_id}: {e}")
+        logger.debug(f"{LOG_PREFIX} Completion surfacing failed: {e}")
+
+
+def _notify_plan_action_outcome(outcome: str, task_id: int) -> None:
+    """Notify PlanAction of a task outcome for backoff learning.
+
+    Only called for system-originated tasks (priority 7 = PlanAction).
+    Non-fatal: swallows all exceptions.
+    """
+    try:
+        from services.autonomous_actions.plan_action import PlanAction
+        action = PlanAction()
+        action.on_outcome(outcome, task_id=task_id)
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} PlanAction outcome notification failed: {e}")
 
 
 def _resolve_task_id(params: dict) -> int | None:

@@ -150,6 +150,17 @@ class ThreadExpiryService:
             f"(exchanges={exchange_count}, "
             f"topic={thread_data.get('current_topic', '?')})"
         )
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='thread_expired',
+                source='thread_expiry_service',
+                topic=thread_data.get('current_topic', 'general'),
+                content=f"Thread {thread_id} expired ({exchange_count} exchanges)",
+                activation_energy=0.3,
+            ))
+        except Exception:
+            pass
 
     def _check_idle_save_suggestions(self, store, now: float):
         """Emit save suggestion cards for threads idle 5+ minutes with saveable flags."""

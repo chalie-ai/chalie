@@ -56,7 +56,7 @@ def data_summary():
                 "episodes", "semantic_concepts", "user_traits", "threads",
                 "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
-                "cognitive_reflexes", "interaction_log", "cortex_iterations",
+                "interaction_log", "cortex_iterations",
                 "curiosity_threads", "documents", "document_chunks",
             ]:
                 try:
@@ -78,12 +78,6 @@ def data_summary():
             except Exception:
                 pass
 
-        # MemoryStore fact count
-        try:
-            result["facts"] = sum(1 for _ in store.scan_iter(match="fact_index:*", count=100))
-        except Exception:
-            result["facts"] = 0
-
         return jsonify(result), 200
 
     except Exception as e:
@@ -101,21 +95,34 @@ def export_data():
         "user_traits", "threads", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
-        "place_fingerprints", "cognitive_reflexes", "curiosity_threads",
+        "place_fingerprints", "curiosity_threads",
         "interaction_log", "cortex_iterations", "routing_decisions",
         "procedural_memory", "topics", "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
     ]
 
     store_patterns = [
-        "working_memory:*", "gist:*", "fact:*",
-        "identity_state:*", "spark_state:*", "focus_session:*",
+        "working_memory:*",
+        "identity_state:*", "focus_session:*",
     ]
 
     MAX_EXPORT_ROWS = 10000
     FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
 
     def generate():
+        """Stream all user data as a single JSON object to the HTTP response.
+
+        Yields successive chunks of JSON text covering every SQLite table listed
+        in ``user_data_tables`` and every MemoryStore key prefix listed in
+        ``store_patterns``.  Rows are fetched in batches of ``FETCH_BATCH`` to
+        keep memory usage bounded, and tables that exceed ``MAX_EXPORT_ROWS``
+        rows are truncated with a ``"truncated": true`` marker in the output.
+
+        Yields:
+            str: Raw JSON text fragments that, when concatenated, form a valid
+            JSON object with ``"exported_at"``, ``"tables"``, and
+            ``"memory_store"`` top-level keys.
+        """
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 
@@ -216,8 +223,7 @@ def delete_all():
         store = MemoryClientService.create_connection()
         for pattern in [
             # Memory layer
-            "working_memory:*", "gist:*", "gist_index:*",
-            "fact:*", "fact_index:*", "world_state:*",
+            "working_memory:*", "world_state:*",
 
             # Threads
             "thread:*", "active_thread:*",
@@ -225,22 +231,33 @@ def delete_all():
 
             # Identity & context
             "identity_state:*",
-            "spark_state:*",
             "focus_session:*",
             "client_context:*",
             "ambient:*",
 
             # Autonomous action state
             "proactive:*",
-            "spark_nurture:*",
-            "spark_suggest:*",
             "reflection:*",
             "plan:*",
 
-            # Cognitive systems
+            # Cognitive systems (legacy + current keys)
             "cognitive_drift_state",
             "cognitive_drift_concept_cooldowns",
             "cognitive_drift_activations",
+            "cognitive_drift:*",
+            "reasoning_loop:state",
+            "reasoning_loop:cooldowns",
+            "reasoning_loop:activations",
+            "reasoning_loop:active_topics",
+            "reasoning_loop:identity_shifts",
+            "reasoning_loop:expired_threads",
+            "reasoning_loop:last_task_event",
+            "reasoning:priority",
+            "reasoning:signals",
+            "reasoning:last_processed",
+            "goal_inference:signal_topics",
+            "goal_inference:last_run",
+            "world_model:items",
             "drift:*",
             "experience_assimilation_state",
             "experience_assimilation_cooldowns",
@@ -304,7 +321,6 @@ def delete_all():
                 "identity_vectors",
                 "identity_events",
                 "place_fingerprints",
-                "cognitive_reflexes",
 
                 # Documents (includes moments, watched-folder docs)
                 "document_chunks",
@@ -318,8 +334,6 @@ def delete_all():
                 "routing_decisions",
                 "procedural_memory",
                 "topics",
-                "semantic_schemas",
-                "triage_calibration_events",
                 "tool_performance_metrics",
                 "user_tool_preferences",
                 "curiosity_threads",

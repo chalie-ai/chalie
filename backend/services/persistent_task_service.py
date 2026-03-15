@@ -190,6 +190,31 @@ class PersistentTaskService:
             """, (new_status, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id}: {current} -> {new_status}")
+
+        # Wake the persistent task worker immediately when a task becomes eligible
+        if new_status in ('accepted', 'in_progress'):
+            try:
+                from services.memory_client import MemoryClientService
+                store = MemoryClientService.create_connection()
+                store.rpush(
+                    'persistent_task:execute',
+                    json.dumps({'task_id': task_id, 'reason': new_status}),
+                )
+                logger.debug(f"{LOG_PREFIX} Pushed execute signal for task {task_id} ({new_status})")
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Failed to push execute signal: {e}")
+
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='task_state_changed',
+                source='persistent_task_service',
+                topic=task.get('scope', 'general') if isinstance(task, dict) else 'general',
+                content=f"Task {task_id} transitioned: {current} → {new_status}",
+                activation_energy=0.5,
+            ))
+        except Exception:
+            pass
         return True, f"Task transitioned to {new_status}"
 
     def accept_task(self, task_id: int, scope: Optional[str] = None) -> Tuple[bool, str]:
@@ -300,6 +325,12 @@ class PersistentTaskService:
 
     def complete_task(self, task_id: int, result: str, artifact: Optional[Dict] = None) -> bool:
         """Mark a task as completed with final result."""
+        # Read task before update (for priority check — non-fatal)
+        try:
+            task = self.get_task(task_id)
+        except Exception:
+            task = None
+
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -310,6 +341,27 @@ class PersistentTaskService:
             """, (result, json.dumps(artifact) if artifact else None, task_id))
 
         logger.info(f"{LOG_PREFIX} Task {task_id} completed")
+
+        # Notify PlanAction for system-originated tasks (priority 7)
+        if task and task.get('priority') == 7:
+            try:
+                from services.autonomous_actions.plan_action import PlanAction
+                action = PlanAction()
+                action.on_outcome('completed', task_id=task_id)
+            except Exception:
+                pass
+
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='task_state_changed',
+                source='persistent_task_service',
+                topic='general',
+                content=f"Task {task_id} completed",
+                activation_energy=0.6,
+            ))
+        except Exception:
+            pass
         return True
 
     def set_next_run(self, task_id: int, delay_seconds: int):
@@ -380,25 +432,79 @@ class PersistentTaskService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             # SQLite does not support RETURNING; select first, then update.
+
+            # PROPOSED tasks that expire are treated as dismissed goals —
+            # the user never accepted them.  Fetch full rows so we can log
+            # the goal text for the goal_dismissed feedback event.
+            cursor.execute("""
+                SELECT id, goal, created_at FROM persistent_tasks
+                WHERE status = 'proposed'
+                  AND expires_at <= ?
+            """, (now,))
+            dismissed_rows = cursor.fetchall()
+            dismissed_ids = [r[0] for r in dismissed_rows]
+
+            # Other expirable states (accepted, in_progress, paused)
             cursor.execute("""
                 SELECT id FROM persistent_tasks
                 WHERE status IN ('accepted', 'in_progress', 'paused')
                   AND expires_at <= ?
             """, (now,))
-            expired_ids = [r[0] for r in cursor.fetchall()]
+            other_expired_ids = [r[0] for r in cursor.fetchall()]
 
-            if expired_ids:
-                placeholders = ','.join(['?'] * len(expired_ids))
+            all_expired_ids = dismissed_ids + other_expired_ids
+
+            if all_expired_ids:
+                placeholders = ','.join(['?'] * len(all_expired_ids))
                 cursor.execute(f"""
                     UPDATE persistent_tasks
                     SET status = 'expired', updated_at = datetime('now')
                     WHERE id IN ({placeholders})
-                """, expired_ids)
+                """, all_expired_ids)
 
-        if expired_ids:
-            logger.info(f"{LOG_PREFIX} Expired {len(expired_ids)} tasks: {expired_ids}")
+        if all_expired_ids:
+            logger.info(f"{LOG_PREFIX} Expired {len(all_expired_ids)} tasks: {all_expired_ids}")
 
-        return len(expired_ids)
+        # Log goal_dismissed for each proposed task that was never accepted.
+        # This feeds the domain confidence feedback loop (Stage 6a Component 4):
+        # _episodic_success() will see the dismissal and reduce confidence.
+        if dismissed_rows:
+            self._log_dismissed_goals(dismissed_rows)
+
+        return len(all_expired_ids)
+
+    def _log_dismissed_goals(self, dismissed_rows: list) -> None:
+        """
+        Log goal_dismissed events to interaction_log for each PROPOSED task
+        that expired without user acceptance.
+
+        These events are consumed by DomainConfidenceService._episodic_success()
+        as a signal that the user did not engage with the proposed goal,
+        which reduces future autonomous goal proposals in that domain.
+
+        Args:
+            dismissed_rows: List of (id, goal, created_at) tuples from
+                            persistent_tasks for tasks that just expired.
+        """
+        try:
+            from services.interaction_log_service import InteractionLogService
+            log_service = InteractionLogService(self.db)
+            for task_id, goal, created_at in dismissed_rows:
+                log_service.log_event(
+                    event_type='goal_dismissed',
+                    payload={
+                        'task_id': task_id,
+                        'goal': goal,
+                        'proposed_at': str(created_at) if created_at else None,
+                    },
+                    topic='persistent_task',
+                    source='persistent_task_service',
+                )
+                logger.info(
+                    f"{LOG_PREFIX} Logged goal_dismissed for task {task_id}: {goal[:80]}"
+                )
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to log goal_dismissed events: {e}")
 
     # -- Progress Summary ----------------------------------------------------
 

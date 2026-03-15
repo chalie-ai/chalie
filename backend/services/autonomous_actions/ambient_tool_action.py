@@ -10,7 +10,7 @@ Low priority because ambient lookups are speculative — they should not
 compete with direct user-facing actions.
 
 Gates:
-  1. Phase gate: Spark must be in connected or graduated
+  1. Phase gate: Always passes
   2. Tool gate: At least one ambient tool must exist
   3. Relevance gate: Thought embedding similarity to tool docs > threshold
   4. Rate limit: Max 1 invocation per cooldown per tool
@@ -35,9 +35,43 @@ def _key(suffix: str) -> str:
 
 
 class AmbientToolAction(AutonomousAction):
+    """Proactive ambient tool invocation driven by cognitive drift thoughts.
+
+    Evaluates each drift thought against available ambient-capable tools
+    (e.g., Reddit, News, Wikipedia) using embedding similarity.  When a
+    thought is sufficiently relevant and all gate conditions are met, the
+    matching tool is invoked and its findings are persisted as gists for
+    future drift or recall cycles.
+
+    Priority: 6 (same as SEED_THREAD — ties broken by score).  Lower than
+    direct user-facing actions because ambient lookups are speculative.
+    """
 
     def __init__(self, config: dict = None):
-        super().__init__(name='AMBIENT_TOOL', enabled=True, priority=6)
+        """Initialize the ambient tool action with configurable thresholds.
+
+        Args:
+            config: Optional configuration dict.  Recognised keys:
+
+                - ``relevance_threshold`` (float, default 0.35): Minimum
+                  cosine similarity between a drift thought embedding and a
+                  tool's documentation to pass the relevance gate.
+                - ``min_activation`` (float, default 0.5): Minimum activation
+                  energy on the ``ThoughtContext`` required to proceed.
+                - ``per_tool_cooldown`` (int, default 43200): Seconds between
+                  consecutive invocations of the same tool (12 h).
+                - ``signal_threshold`` (float, default 0.4): Minimum signal
+                  score to store a finding gist.
+                - ``llm_timeout`` (float, default 8.0): Seconds to wait for
+                  the query-generation LLM call.
+                - ``surface_high_signal`` (bool, default False): When True,
+                  high-signal findings are surfaced to the user in addition
+                  to being stored as gists.
+        """
+        # Disabled: ambient tool invocation from drift produced low-quality content
+        # (world events, places) on weak similarity matching. Re-enable when
+        # signal-driven reasoning provides better context.
+        super().__init__(name='AMBIENT_TOOL', enabled=False, priority=6)
         config = config or {}
         self.store = MemoryClientService.create_connection()
 
@@ -56,6 +90,15 @@ class AmbientToolAction(AutonomousAction):
 
     @property
     def embedding_service(self):
+        """Lazily-initialised shared :class:`EmbeddingService` instance.
+
+        The service is imported and constructed on first access so that the
+        heavy sentence-transformer model is not loaded until actually needed.
+
+        Returns:
+            The singleton embedding service obtained via
+            :func:`~services.embedding_service.get_embedding_service`.
+        """
         if self._embedding_service is None:
             from services.embedding_service import get_embedding_service
             self._embedding_service = get_embedding_service()
@@ -76,13 +119,8 @@ class AmbientToolAction(AutonomousAction):
     # ── Gates ──────────────────────────────────────────────────
 
     def _phase_gate(self) -> bool:
-        """Same as SuggestAction — connected or graduated."""
-        try:
-            from services.spark_state_service import SparkStateService
-            phase = SparkStateService().get_phase()
-            return phase in ('connected', 'graduated')
-        except Exception:
-            return False
+        """Always allowed."""
+        return True
 
     def _tool_gate(self) -> Tuple[bool, List[dict]]:
         """At least one ambient tool must exist."""
@@ -127,6 +165,23 @@ class AmbientToolAction(AutonomousAction):
     # ── Main interface ─────────────────────────────────────────
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
+        """Evaluate whether an ambient tool invocation should be scheduled.
+
+        Runs five sequential gates (phase, tool availability, embedding
+        relevance, per-tool rate limit, and activation energy).  If all
+        gates pass, the best matching tool and its relevance score are cached
+        on the instance for the subsequent :meth:`execute` call.
+
+        Args:
+            thought: The current drift thought context, including its
+                embedding, activation energy, and seed topic.
+
+        Returns:
+            A ``(score, eligible)`` tuple.  ``score`` is a float in [0, 1]
+            representing action priority (``relevance * 0.5``).  ``eligible``
+            is ``True`` only when every gate passes.  Returns ``(0.0, False)``
+            whenever any gate fails.
+        """
         self.last_gate_result = None
 
         # Gate 1: Phase
@@ -165,6 +220,26 @@ class AmbientToolAction(AutonomousAction):
         return (score, True)
 
     def execute(self, thought: ThoughtContext) -> ActionResult:
+        """Invoke the pending ambient tool and persist findings as a gist.
+
+        Expects :meth:`should_execute` to have been called first so that
+        ``_pending_tool`` is populated.  The method:
+
+        1. Generates a focused search query from the drift thought via a
+           short-timeout LLM call.
+        2. Invokes the tool through :class:`~services.tool_registry_service.ToolRegistryService`.
+        3. Updates the per-tool rate-limit timestamp in the memory store.
+        4. Stores the raw finding as a gist for future drift/recall.
+
+        Args:
+            thought: The drift thought context that triggered this action.
+
+        Returns:
+            An :class:`~services.autonomous_actions.base.ActionResult` with
+            ``action_name='AMBIENT_TOOL'``.  ``success`` is ``True`` when the
+            tool was invoked without error; ``details`` always contains at
+            minimum a ``'reason'`` key on failure.
+        """
         tool = self._pending_tool
         if not tool:
             return ActionResult(action_name='AMBIENT_TOOL', success=False,
@@ -192,8 +267,8 @@ class AmbientToolAction(AutonomousAction):
         # 3. Update rate limit
         self.store.set(_key(f'last_invoke:{tool_name}'), str(time.time()))
 
-        # 4. Store finding as gist for future drift/recall
-        gist_stored = self._store_finding_gist(thought, tool_name, query, result_text)
+        # 4. Store finding in working memory for context continuity
+        self._store_finding_in_wm(thought, tool_name, query, result_text)
 
         logger.info(f"{LOG_PREFIX} Invoked {tool_name} for '{query}' (relevance={self._pending_relevance:.2f})")
 
@@ -204,7 +279,6 @@ class AmbientToolAction(AutonomousAction):
                 'tool': tool_name,
                 'query': query,
                 'relevance': self._pending_relevance,
-                'gist_stored': gist_stored,
             },
         )
 
@@ -223,7 +297,7 @@ class AmbientToolAction(AutonomousAction):
                 from services.llm_service import create_llm_service
 
                 try:
-                    config = ConfigService.resolve_agent_config("frontal-cortex-acknowledge")
+                    config = ConfigService.resolve_agent_config("autonomous-ambient-tool")
                 except Exception:
                     config = ConfigService.resolve_agent_config("frontal-cortex")
 
@@ -252,26 +326,15 @@ class AmbientToolAction(AutonomousAction):
         done.wait(timeout=self.llm_timeout)
         return result_holder[0]
 
-    def _store_finding_gist(self, thought: ThoughtContext, tool_name: str, query: str, result_text: str) -> bool:
-        """Store ambient tool finding as a gist for future use."""
+    def _store_finding_in_wm(self, thought: ThoughtContext, tool_name: str, query: str, result_text: str) -> None:
+        """Store ambient tool finding in working memory for context continuity."""
         try:
-            from services.gist_storage_service import GistStorageService
-            gist_service = GistStorageService(attention_span_minutes=120)
+            from services.working_memory_service import WorkingMemoryService
             topic = thought.seed_topic or 'ambient_discovery'
-            stored = gist_service.store_gists(
-                topic=topic,
-                gists=[{
-                    'content': f"[Ambient {tool_name}] Query: {query}\n{result_text[:1000]}",
-                    'type': 'ambient_discovery',
-                    'confidence': 8,
-                }],
-                prompt=query,
-                response=result_text[:500],
-            )
-            return stored > 0
+            wm = WorkingMemoryService()
+            wm.append_turn(topic, 'system', f"[ambient/{tool_name}] {query}: {result_text[:500]}")
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Gist storage failed: {e}")
-            return False
+            logger.debug(f"{LOG_PREFIX} WM storage failed: {e}")
 
     @staticmethod
     def _cosine_similarity(a: list, b: list) -> float:

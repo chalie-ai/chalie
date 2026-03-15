@@ -22,7 +22,6 @@ from typing import Optional, Dict, Any, List, Tuple
 from services.memory_client import MemoryClientService
 from services.embedding_service import EmbeddingService
 from services.working_memory_service import WorkingMemoryService
-from services.gist_storage_service import GistStorageService
 
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
@@ -32,6 +31,15 @@ LOG_PREFIX = "[COMMUNICATE]"
 
 # MemoryStore key namespace — single-user system
 _NS = "proactive"
+
+
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Return Jaccard similarity (word-set intersection/union) between two strings."""
+    set_a = set(a.lower().split())
+    set_b = set(b.lower().split())
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
 
 
 def _key(suffix: str) -> str:
@@ -47,6 +55,36 @@ class CommunicateAction(AutonomousAction):
     """
 
     def __init__(self, config: dict = None):
+        """Initialize CommunicateAction with four-gate configuration.
+
+        Args:
+            config: Optional configuration overrides. Supported keys:
+
+                *Quality gate* — ``type_bonuses`` (dict, maps thought type to a
+                score multiplier), ``bootstrap_threshold`` (float, default 0.6),
+                ``bootstrap_cycles`` (int, default 20), ``relevance_threshold``
+                (float, default 0.4), ``novelty_threshold`` (float, default 0.7),
+                ``lookback_hours_active`` (int, default 24),
+                ``lookback_hours_infrequent`` (int, default 72).
+
+                *Timing gate* — ``min_idle_seconds`` (int, default 1800),
+                ``max_idle_seconds`` (int, default 86400),
+                ``quiet_hours_start`` (int, default 23),
+                ``quiet_hours_end`` (int, default 8).
+
+                *Engagement gate* — ``pending_timeout_seconds`` (int, default
+                14400), ``auto_pause_threshold`` (float, default 0.3),
+                ``max_backoff_multiplier`` (int, default 16),
+                ``suppression_recovery_days`` (int, default 7).
+
+                *Candidate queue* — ``max_candidates`` (int, default 3),
+                ``max_deferred`` (int, default 3), ``deferred_ttl`` (int,
+                default 172800).
+
+                *Circuit breaker* — ``circuit_breaker_window`` (int, default
+                14400), ``circuit_breaker_threshold`` (int, default 2),
+                ``circuit_breaker_pause`` (int, default 28800).
+        """
         super().__init__(name='COMMUNICATE', enabled=True, priority=10)
 
         config = config or {}
@@ -92,6 +130,14 @@ class CommunicateAction(AutonomousAction):
 
     @property
     def embedding_service(self):
+        """Lazily initialized EmbeddingService instance.
+
+        The service is created on first access so the embedding model is not
+        loaded at startup for every drift cycle.
+
+        Returns:
+            EmbeddingService: The shared embedding service instance.
+        """
         if self._embedding_service is None:
             self._embedding_service = EmbeddingService()
         return self._embedding_service
@@ -231,9 +277,7 @@ class CommunicateAction(AutonomousAction):
         max_sim = 0.0
         for turn in turns:
             content = turn.get('content', '')
-            sim = GistStorageService._calculate_jaccard_similarity(
-                thought.thought_content, content
-            )
+            sim = _jaccard_similarity(thought.thought_content, content)
             if sim > max_sim:
                 max_sim = sim
 
@@ -629,6 +673,60 @@ class CommunicateAction(AutonomousAction):
             pass
         return (True, {'load_state': 'NORMAL'})
 
+    # ── Idle fallback ─────────────────────────────────────────────
+
+    def _try_idle_fallback(self) -> Optional[Dict]:
+        """
+        After 50+ consecutive quality rejections and 24h+ idle, produce a
+        simple check-in from the most recent episode gist.  Rate-limited
+        to one per 48 hours.
+        """
+        now = time.time()
+
+        last_ts = self.store.get(_key('last_interaction_ts'))
+        if not last_ts or (now - float(last_ts)) < 86400:
+            return None
+
+        if self.store.get(_key('paused')) == '1':
+            return None
+
+        if self._is_quiet_hours(self._get_user_hour()):
+            return None
+
+        last_fb = self.store.get(_key('last_fallback_ts'))
+        if last_fb and (now - float(last_fb)) < 172800:
+            return None
+
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT gist FROM episodes ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+            if not row:
+                return None
+            gist = row[0] if not isinstance(row, dict) else row['gist']
+            if not gist or len(gist.strip()) < 10:
+                return None
+        except Exception:
+            return None
+
+        logger.info(f"{LOG_PREFIX} Idle fallback triggered after 50+ quality rejections")
+        return {
+            'id': str(uuid.uuid4()),
+            'type': 'reflection',
+            'content': gist,
+            'topic': 'check_in',
+            'seed_concept': 'idle_fallback',
+            'activation_energy': 0.5,
+            'score': 0.5,
+            'created_at': now,
+            'gist_ttl': 1800,
+            'embedding': None,
+            'is_fallback': True,
+        }
+
     # ── Main interface ────────────────────────────────────────────
 
     def should_execute(self, thought: ThoughtContext) -> tuple:
@@ -637,6 +735,9 @@ class CommunicateAction(AutonomousAction):
 
         Always records activation energy for self-calibration.
         If quality passes but timing/engagement don't, adds to candidate queue.
+
+        Idle fallback: after 50+ consecutive quality rejections AND 24h+ idle,
+        bypasses quality gate with a check-in from the last episode gist.
         """
         self.last_gate_result = None
 
@@ -645,7 +746,35 @@ class CommunicateAction(AutonomousAction):
 
         # Gate 1: Quality
         quality_score, quality_passes, quality_details = self._quality_score(thought)
-        if not quality_passes:
+
+        if quality_passes:
+            self.store.set(_key('consecutive_quality_rejections'), '0')
+        else:
+            self.store.incr(_key('consecutive_quality_rejections'))
+            rejection_count = int(self.store.get(_key('consecutive_quality_rejections')) or 0)
+
+            if rejection_count >= 50:
+                fallback = self._try_idle_fallback()
+                if fallback:
+                    timing_ok, timing_d = self._timing_passes(thought)
+                    if not timing_ok:
+                        self.last_gate_result = {'gate': 'timing', 'reason': timing_d.get('rejected', 'timing'), 'fallback': True}
+                        return (0.0, False)
+                    eng_ok, eng_d = self._engagement_passes(thought)
+                    if not eng_ok:
+                        self.last_gate_result = {'gate': 'engagement', 'reason': eng_d.get('rejected', 'engagement'), 'fallback': True}
+                        return (0.0, False)
+                    load_ok, _ = self._cognitive_load_gate(thought)
+                    if not load_ok:
+                        self.last_gate_result = {'gate': 'cognitive_load', 'reason': 'user_disengaging', 'fallback': True}
+                        return (0.0, False)
+
+                    self.store.zadd(_key('candidates'), {json.dumps(fallback): fallback['score']})
+                    self.store.set(_key('last_fallback_ts'), str(time.time()))
+                    self.store.set(_key('consecutive_quality_rejections'), '0')
+                    logger.info(f"{LOG_PREFIX} Idle fallback passed all gates — delivering check-in")
+                    return (fallback['score'], True)
+
             reason = quality_details.get('rejected', 'unknown')
             self.last_gate_result = {'gate': 'quality', 'reason': reason, 'details': quality_details}
             return (0.0, False)
@@ -895,6 +1024,7 @@ class CommunicateAction(AutonomousAction):
             'drift_count': int(self.store.get(_key('drift_count')) or 0),
             'candidate_count': self.store.zcard(_key('candidates')),
             'deferred_count': self.store.zcard(_key('deferred')),
+            'consecutive_quality_rejections': int(self.store.get(_key('consecutive_quality_rejections')) or 0),
         }
 
     def get_weekly_engagement(self) -> List[float]:

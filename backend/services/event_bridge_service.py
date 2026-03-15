@@ -5,7 +5,6 @@ Event sources:
   - Ambient Inference → place_transition, attention_shift, energy_change
   - Scheduler Service → item_approaching, item_due
   - Client Context → session_start, session_resume, long_idle_end
-  - Spark State → phase_transition
 
 Pipeline:
   1. State stabilization (90s window for jitter-prone events)
@@ -61,7 +60,11 @@ class BridgeEvent:
 
 
 def _load_config() -> dict:
-    """Load event bridge configuration."""
+    """Load event bridge configuration from the agents JSON config file.
+
+    Returns:
+        Configuration dict, or an empty dict if the file is missing or invalid.
+    """
     import os
     config_path = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
@@ -79,6 +82,7 @@ class EventBridgeService:
     """Connects ambient context changes to autonomous actions."""
 
     def __init__(self):
+        """Initialize the event bridge, loading config and opening the MemoryStore connection."""
         self._config = _load_config()
         self._store = MemoryClientService.create_connection()
 
@@ -183,7 +187,15 @@ class EventBridgeService:
     # ── Cooldowns ────────────────────────────────────────────────────
 
     def _check_cooldown(self, event_type: str) -> bool:
-        """Check if event type is past its cooldown period."""
+        """Check whether the cooldown window for an event type has elapsed.
+
+        Args:
+            event_type: Event type string to check.
+
+        Returns:
+            ``True`` if the cooldown has expired (or no cooldown is configured),
+            ``False`` if the event type is still within its cooldown window.
+        """
         cooldowns = self._config.get('cooldowns', {})
         cooldown = cooldowns.get(event_type, 0)
         if cooldown <= 0:
@@ -196,7 +208,12 @@ class EventBridgeService:
             return True
 
     def _set_cooldown(self, event_type: str):
-        """Set cooldown for an event type."""
+        """Set a cooldown key in the MemoryStore for an event type.
+
+        Args:
+            event_type: Event type string to place on cooldown.  The TTL is
+                sourced from the ``cooldowns`` section of the event bridge config.
+        """
         cooldowns = self._config.get('cooldowns', {})
         cooldown = cooldowns.get(event_type, 0)
         if cooldown <= 0:
@@ -346,9 +363,10 @@ class EventBridgeService:
         try:
             from services.autonomous_actions.base import ThoughtContext
 
+            composed_message = self._compose_message(events)
             thought = ThoughtContext(
                 thought_type='event',
-                thought_content=self._compose_message(events),
+                thought_content=composed_message,
                 activation_energy=primary.confidence,
                 seed_concept=primary.event_type,
                 seed_topic=primary.to_state or primary.event_type,
@@ -373,6 +391,18 @@ class EventBridgeService:
             router = ActionDecisionRouter()
             router.evaluate_and_execute(thought)
 
+            try:
+                from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+                emit_reasoning_signal(ReasoningSignal(
+                    signal_type='ambient_context',
+                    source='event_bridge',
+                    topic=primary.to_state or primary.event_type,
+                    content=composed_message,
+                    activation_energy=primary.confidence,
+                ))
+            except Exception:
+                pass
+
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Event routing failed: {e}")
 
@@ -393,7 +423,15 @@ class EventBridgeService:
         return ' '.join(parts) if parts else ''
 
     def _get_phrasing(self, confidence: float) -> str:
-        """Map confidence to phrasing register."""
+        """Map a confidence score to a natural-language phrasing register.
+
+        Args:
+            confidence: Confidence float in [0.0, 1.0].
+
+        Returns:
+            ``'high'`` for confidence ≥ 0.8, ``'medium'`` for ≥ 0.6,
+            otherwise ``'low'`` (suppressed).
+        """
         if confidence >= 0.8:
             return 'high'
         elif confidence >= 0.6:
@@ -401,7 +439,17 @@ class EventBridgeService:
         return 'low'
 
     def _event_to_text(self, event: BridgeEvent, phrasing: str) -> str:
-        """Convert a single event to natural text with confidence-appropriate phrasing."""
+        """Convert a single bridge event to a natural-language sentence.
+
+        Args:
+            event: :class:`BridgeEvent` instance to render.
+            phrasing: Register string (``'high'``, ``'medium'``, or ``'low'``).
+                ``'low'`` always returns an empty string (suppressed).
+
+        Returns:
+            Rendered text string, or empty string for unsupported events or
+            ``'low'`` phrasing.
+        """
         if phrasing == 'low':
             return ''  # Suppressed
 

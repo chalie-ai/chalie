@@ -194,6 +194,20 @@ def _install_default_tools():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    """Parse CLI arguments, bootstrap the application, and start all services.
+
+    Performs the following startup sequence in order:
+    1. Parses ``--host`` / ``--port`` arguments and stores them in
+       ``runtime_config``.
+    2. Ensures the encryption key file exists.
+    3. Pre-loads the sentence-transformer embedding model in a daemon thread
+       so the UI is not blocked during a first-run model download.
+    4. Initialises the SQLite database schema and runs pending migrations.
+    5. Generates or retrieves the REST API key.
+    6. Registers all background worker services with the ``WorkerManager``.
+    7. Registers any cron-triggered tools from the tool registry.
+    8. Starts the Flask HTTP server and blocks until the process exits.
+    """
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
@@ -249,8 +263,14 @@ def main():
                 logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
             else:
                 logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+            svc._ready = True
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
+            # Mark ready even on failure — system degrades gracefully to LLM fallback
+            try:
+                svc._ready = True
+            except Exception:
+                pass
 
     _threading.Thread(target=_preload_onnx_models, name="onnx-preload", daemon=True).start()
 
@@ -297,10 +317,7 @@ def main():
     # Import worker functions
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
-    from services.growth_pattern_service import growth_pattern_worker
-    from services.topic_stability_regulator_service import topic_stability_regulator_worker
-    from services.cognitive_drift_engine import cognitive_drift_worker
-    from services.routing_stability_regulator_service import routing_stability_regulator_worker
+    from services.reasoning_loop_service import reasoning_loop_worker
     from services.routing_reflection_service import routing_reflection_worker
     from services.experience_assimilation_service import experience_assimilation_worker
     from services.thread_expiry_service import thread_expiry_worker
@@ -317,10 +334,7 @@ def main():
     # Register service workers
     manager.register_service("idle-consolidation-service", idle_consolidation_process)
     manager.register_service("decay-engine-service", decay_engine_worker)
-    manager.register_service("growth-pattern-service", growth_pattern_worker)
-    manager.register_service("topic-stability-regulator-service", topic_stability_regulator_worker)
-    manager.register_service("cognitive-drift-engine", cognitive_drift_worker)
-    manager.register_service("routing-stability-regulator-service", routing_stability_regulator_worker)
+    manager.register_service("reasoning-loop", reasoning_loop_worker)
     manager.register_service("routing-reflection-service", routing_reflection_worker)
     manager.register_service("experience-assimilation-service", experience_assimilation_worker)
     manager.register_service("thread-expiry-service", thread_expiry_worker)
@@ -347,14 +361,14 @@ def main():
     manager.register_service("background-llm-worker", background_llm_worker)
 
     # Optional services (fail gracefully)
-    _try_register(manager, "triage-calibration-service",
-                  "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
     _try_register(manager, "temporal-pattern-service",
                   "services.temporal_pattern_service", "temporal_pattern_worker")
     _try_register(manager, "tool-update-checker",
                   "services.tool_update_service", "tool_update_worker")
+    _try_register(manager, "app-update-checker",
+                  "workers.app_update_worker", "app_update_worker")
 
     # Auto-install any missing default tools (synchronous, blocks until complete)
     _install_default_tools()

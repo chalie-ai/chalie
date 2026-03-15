@@ -149,7 +149,7 @@ Before the ACT loop executes an action based on a memory:
 ACT loop selects action based on memory X
   -> Check: is X.reliability in ('uncertain', 'contradicted')?
   -> If yes:
-     Route through CLARIFY before executing.
+     Ask for clarification before executing.
      "I was going to [action], but I'm not certain about [memory].
       Should I proceed?"
   -> If no: execute normally
@@ -234,7 +234,7 @@ Uncertainties are surfaced when conversational context is relevant, not eagerly:
 1. **At detection time:** The contradiction classifier generates a `surface_context` description (e.g., "user discusses cars or purchasing decisions")
 2. **At surfacing time:** When context assembly retrieves a memory marked `contradicted`, check the linked uncertainty record's `surface_context` against the current topic
 3. **Weave, don't interrupt:** Contradictions are woven into the response naturally, not presented as system alerts
-4. **Anti-nagging:** `surfaced_count` tracks attempts. After 2-3 unsuccessful surfacings (user doesn't engage), reduce severity and let decay handle it
+4. **No re-surfacing:** If the user doesn't engage with a contradiction, it remains uncertain and decays naturally. Contradictions are only surfaced once — at detection time — woven into the current response
 5. **Real-time generation:** The actual clarification phrasing is generated fresh at surfacing time (not pre-generated) to match current conversational tone and context
 
 ---
@@ -278,15 +278,11 @@ CREATE TABLE IF NOT EXISTS uncertainties (
     surface_context TEXT,               -- what conversational context should trigger surfacing
 
     -- Resolution
-    state TEXT NOT NULL DEFAULT 'open', -- 'open', 'surfaced', 'resolved', 'decayed'
+    state TEXT NOT NULL DEFAULT 'open', -- 'open' | 'resolved'
     resolution_strategy TEXT,           -- 'temporal_supersede', 'user_clarified',
                                         -- 'evidence_resolved', 'confidence_dominance', 'decayed'
     resolution_detail TEXT,             -- what was decided and why
     resolved_at DATETIME,
-
-    -- Surfacing tracking
-    surfaced_count INTEGER DEFAULT 0,
-    last_surfaced_at DATETIME,
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -358,10 +354,10 @@ LLM-based classification of detected conflicts.
 - When contradiction flag is present in assembled context:
   - Include both conflicting memories in prompt
   - Instruct LLM to weave the contradiction naturally into the response
-  - Not a separate CLARIFY mode — it's woven into whatever mode was selected (usually RESPOND)
+  - Uncertainty surfacing is woven into whatever mode was selected (usually RESPOND)
 
 #### `ACTDispatcherService`
-- Pre-action reliability check: if action depends on unreliable memory, route through CLARIFY first
+- Pre-action reliability check: if action depends on unreliable memory, ask for clarification first
 
 ### New Worker
 
@@ -416,7 +412,7 @@ Episode -> Concept extraction
 Action selected
   |
   +---> Check: is source memory reliable?
-        -> if unreliable: CLARIFY before executing
+        -> if unreliable: ask for clarification before executing
         -> if reliable: proceed
 
 
@@ -465,6 +461,5 @@ All four phases are **complete and live**.
 
 ### Phase 4: Self-Tuning ✅
 13. Uncertainty tolerance identity vector: seeded in `schema.sql` (`baseline=0.5, min=0.2, max=0.8`)
-14. Surfacing anti-nag: `UncertaintyService.downgrade_overexposed()` called from `mark_surfaced()` after 3+ surfacings
-15. Evidence-based resolution: `UncertaintyService.resolve_by_reinforcement()` — auto-resolves when reinforced confidence > 2× opposing
-16. Tolerance nudge: `_nudge_uncertainty_tolerance()` called on `correct_trait()` (−0.03) and trait reinforcement (+0.01)
+14. Evidence-based resolution: `UncertaintyService.resolve_by_reinforcement()` — auto-resolves when reinforced confidence > 2× opposing
+15. Tolerance nudge: `_nudge_uncertainty_tolerance()` called on `correct_trait()` (−0.03) and trait reinforcement (+0.01)

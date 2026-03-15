@@ -43,20 +43,20 @@ This document is the single authoritative visual map of how a user message trave
                             ┌──────────▼───────────┐
                             │   PHASE B            │
                             │   Signal Collection  │
-                            │   & Triage           │
+                            │   & Message Gate     │
                             │   (see §3)           │
                             └──────────┬───────────┘
                                        │
                            ┌───────────┴────────────────────┐
-                           │         Triage Branch          │
-                           │  (CognitiveTriageService)      │
+                           │       Message Gate Branch      │
+                           │     (MessageGateService)       │
                            └──┬─────────────┬───────────────┘
                               │             │               │
                ┌──────────────▼──┐  ┌───────▼──────┐  ┌───▼──────────────┐
                │  PATH A         │  │  PATH B       │  │  PATH C          │
-               │  Social Exit    │  │  ACT →        │  │  RESPOND /       │
-               │  CANCEL/IGNORE/ │  │  Tool Worker  │  │  CLARIFY /       │
-               │  ACKNOWLEDGE    │  │  (PromptQueue) │  │  ACKNOWLEDGE     │
+               │  Fast Exit      │  │  ACT →        │  │  RESPOND /       │
+               │  CANCEL         │  │  Tool Worker  │  │  ACKNOWLEDGE     │
+               │                 │  │  (PromptQueue) │  │                  │
                └──────┬──────────┘  └──────┬────────┘  └──────┬───────────┘
                       │                    │                    │
                ┌──────▼──────────┐  ┌──────▼────────┐  ┌──────▼───────────┐
@@ -129,9 +129,9 @@ Runs immediately for every message, before any routing decision.
 
 ---
 
-## 3. Phase B — Signal Collection & Two-Layer Routing
+## 3. Phase B — Signal Collection & Message Gate
 
-This phase produces the routing decision in two separate layers.
+This phase produces the routing decision via a single deterministic gate. No LLM call is made.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -144,73 +144,45 @@ This phase produces the routing decision in two separate layers.
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
-│  LAYER 2: Cognitive Triage                                          │
-│  CognitiveTriageService  (4-step pipeline)                         │
+│  LAYER 2: Message Gate                            ⚡ DET  ~5ms     │
+│  MessageGateService  (3-step deterministic pipeline)               │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Step 2a  Social Filter                  ⚡ DET  ~1ms       │   │
+│  │  Step 2a  Empty Guard                    ⚡ DET  <1ms       │   │
 │  │                                                             │   │
-│  │  Pattern → Result (no LLM, returns immediately)            │   │
-│  │  ─────────────────────────────────────────────────          │   │
-│  │  Greeting / positive feedback (short) → ACKNOWLEDGE        │   │
-│  │  Cancel / nevermind                   → CANCEL             │   │
-│  │  Self-resolved / topic drop           → IGNORE             │   │
-│  │  Empty input                          → IGNORE             │   │
-│  │                                                             │   │
-│  │  If matched ──► PATH A (Social Exit)                       │   │
+│  │  Empty / whitespace-only input → CANCEL                     │   │
+│  │  If matched ──► PATH A (Fast Exit)                         │   │
 │  └─────────────────────────┬───────────────────────────────────┘   │
 │                            │ not matched                            │
 │  ┌─────────────────────────▼───────────────────────────────────┐   │
-│  │  Step 2b  Cognitive Triage LLM           🧠 LLM  ~100-300ms │   │
+│  │  Step 2b  CANCEL Detection               ⚡ DET  ~1ms       │   │
 │  │                                                             │   │
-│  │  Config:   cognitive-triage.json                           │   │
-│  │  Prompt:   cognitive-triage.md                             │   │
-│  │  Model:    lightweight (qwen3:4b or smaller)               │   │
-│  │  Timeout:  500ms (falls back to heuristics on timeout)     │   │
-│  │                                                             │   │
-│  │  Context sent to LLM:                                      │   │
-│  │    • User text                                             │   │
-│  │    • Previous mode + tools used                            │   │
-│  │    • Tool summaries (from profile service)                 │   │
-│  │    • Working memory summary (last 2 turns)                 │   │
-│  │    • context_warmth, memory_confidence, gist_count         │   │
-│  │                                                             │   │
-│  │  LLM output (JSON):                                        │   │
-│  │    branch:             respond | clarify | act             │   │
-│  │    mode:               RESPOND|CLARIFY|ACT|ACKNOWLEDGE…    │   │
-│  │    tools:              ["tool1", …]     (up to 3)          │   │
-│  │    skills:             ["recall", …]                       │   │
-│  │    confidence_internal: 0.0–1.0                            │   │
-│  │    confidence_tool_need: 0.0–1.0                           │   │
-│  │    freshness_risk:     0.0–1.0                             │   │
+│  │  Cancel / nevermind patterns → CANCEL                       │   │
+│  │  If matched ──► PATH A (Fast Exit)                         │   │
 │  └─────────────────────────┬───────────────────────────────────┘   │
-│                            │                                        │
+│                            │ not matched                            │
 │  ┌─────────────────────────▼───────────────────────────────────┐   │
-│  │  Step 2c  Self-Eval Sanity Check          ⚡ DET  ~1ms      │   │
+│  │  Step 2c  ONNX Mode Gate                 ⚡ DET  ~5ms       │   │
 │  │                                                             │   │
-│  │  • Cap tool list at 3 contextual skills                    │   │
-│  │  • Validate skill names                                    │   │
-│  │  • Factual question detected → may force ACT               │   │
-│  │  • URL in message detected  → may force ACT                │   │
-│  │  • Can OVERRIDE LLM result if heuristics detect issues     │   │
-│  └─────────────────────────┬───────────────────────────────────┘   │
-│                            │                                        │
-│  ┌─────────────────────────▼───────────────────────────────────┐   │
-│  │  Step 2d  Triage Calibration Log         📤 DB  ~1ms        │   │
-│  │  Table: triage_calibration                                  │   │
+│  │  ONNX classifier: high-confidence conversational → RESPOND  │   │
+│  │  Everything else                                 → ACT      │   │
+│  │  ONNX skill pre-filter: predicts required skills for ACT    │   │
+│  │                                                             │   │
+│  │  RESPOND ──► PATH C (RESPOND fast-path)                    │   │
+│  │  ACT      ──► PATH B (ACT pipeline + ONNX skill pre-filter) │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
               ┌────────────────┼───────────────────┐
               │                │                   │
-       branch=social    branch=act          branch=respond
+          CANCEL            branch=act        branch=respond
               │                │                   │
           PATH A           PATH B              PATH C
 ```
 
 ---
 
-## 4. Path C — RESPOND / CLARIFY / ACKNOWLEDGE
+## 4. Path C — RESPOND / ACKNOWLEDGE
 
 ### 4a. Mode Router (Deterministic)
 
@@ -242,11 +214,11 @@ This phase produces the routing decision in two separate layers.
 │    Fields: mode, scores, tiebreaker_used, margin, signal_snapshot  │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
-          ┌────────────────────┼───────────────────┐
-          │                    │                   │
-       RESPOND             CLARIFY           ACKNOWLEDGE
-          │                    │                   │
-          └────────────────────┴───────────────────┘
+          ┌────────────────────┬───────────────────┐
+          │                                        │
+       RESPOND                               ACKNOWLEDGE
+          │                                        │
+          └────────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  FrontalCortexService                        🧠 LLM  ~500ms–2s     │
@@ -262,7 +234,6 @@ This phase produces the routing decision in two separate layers.
 │                                                                     │
 │  Config files:                                                      │
 │    RESPOND      → frontal-cortex-respond.json                      │
-│    CLARIFY      → frontal-cortex-clarify.json                      │
 │    ACKNOWLEDGE  → frontal-cortex.json (base)                       │
 │                                                                     │
 │  Output: { response: str, confidence: float, mode: str }           │
@@ -273,7 +244,7 @@ This phase produces the routing decision in two separate layers.
 
 ### 4b. ACT Mode — The Action Loop
 
-Triggered when triage `branch=respond` but mode router selects ACT, **or** directly from triage `branch=act` via the internal path in `route_and_generate`.
+Triggered when `MessageGateService` routes to the ACT pipeline, or when the mode router (secondary, non-user flows) selects ACT.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -330,7 +301,7 @@ Triggered when triage `branch=respond` but mode router selects ACT, **or** direc
 
 ## 5. Path B — ACT → Tool Worker (PromptQueue)
 
-Triggered when `CognitiveTriageService` selects `branch=act` and specific tools are named.
+Triggered when `MessageGateService` routes to the ACT pipeline and the ONNX skill pre-filter identifies specific tools.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -404,11 +375,7 @@ Runs after every response is generated (Paths A, B, C).
 │          Fields: event_type='system_response', mode,               │
 │                  confidence, generation_time                        │
 │                         │                                           │
-│  Step 3  Onboarding state                       📤 DB              │
-│          SparkStateService — increment exchange count               │
-│          Table: spark_state                                         │
-│                         │                                           │
-│  Step 4  Encode response event                  📤 M  (async)      │
+│  Step 3  Encode response event                  📤 M  (async)      │
 │          EventBusService → ENCODE_EVENT                             │
 │          Triggers downstream memory consolidation:                  │
 │                                                                     │
@@ -592,13 +559,11 @@ cortex_iterations          ACT loop, Path B                observability endpoin
 episodes                   memory_chunker (async)          frontal_cortex, drift engine
 concepts                   semantic_consolidation (async)  drift engine, context assembly
 semantic_relationships     semantic_consolidation          drift engine
-user_traits                IIP hook, triage calibration    identity service
-triage_calibration         Phase B Step 2d                 triage_calibration_service
+user_traits                IIP hook                        identity service
 persistent_tasks           Path D (task worker)            persistent_task_worker
 topics                     Phase A (new topic)             topic_classifier
 threads                    session management              session_service
 chat_history               Phase D                         frontal_cortex
-spark_state                Phase D                         onboarding service
 place_fingerprints         ambient inference               place_learning_service
 curiosity_threads          drift (SEED_THREAD action)      curiosity_pursuit_service
 ```
@@ -613,10 +578,8 @@ Every LLM call in the system, with typical latency and model used.
 Service                      Model            Prompt                   Latency   Triggered by
 ────────────────────────────────────────────────────────────────────────────────────────────────
 TopicClassifierService       lightweight      topic-classifier.md      ~100ms    Every message
-CognitiveTriageService       lightweight      cognitive-triage.md      ~100-300ms Every message
-ModeRouterService (tiebreaker) qwen3:4b       mode-tiebreaker.md       ~100ms    Close scores only
+ModeRouterService (tiebreaker) qwen3:4b       mode-tiebreaker.md       ~100ms    Non-user flows only
 FrontalCortex (RESPOND)      primary model    soul + respond.md        ~500ms-2s Path C
-FrontalCortex (CLARIFY)      primary model    soul + clarify.md        ~500ms-2s Path C
 FrontalCortex (ACKNOWLEDGE)  primary model    soul + acknowledge.md    ~500ms-2s Path C
 FrontalCortex (ACT plan)     primary model    frontal-cortex-act.md    ~500ms-2s Path C ACT loop
 FrontalCortex (terminal)     primary model    mode-specific            ~500ms-2s After ACT loop
@@ -632,8 +595,9 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 **Deterministic paths (zero LLM):**
 - IIP hook (regex)
 - Intent classifier
-- Social filter in cognitive triage
-- Mode router scoring
+- MessageGateService (empty guard, CANCEL detection, ONNX mode gate)
+- ONNX skill pre-filter
+- Mode router scoring (non-user flows)
 - Fatigue budget check in ACT loop
 - Termination checks
 - Spreading activation in drift engine
@@ -647,10 +611,9 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 ```
 Path              P50 Latency    Bottleneck
 ────────────────────────────────────────────────────────────
-A — Social Exit   ~400ms         Topic classifier LLM
+A — CANCEL Exit   ~10ms          MessageGateService (deterministic)
 B — ACT + Tools   5s – 30s+      Tool execution (external)
 C — RESPOND       1s – 3s        Frontal cortex (primary LLM)
-C — CLARIFY       1s – 2s        Frontal cortex (primary LLM)
 C — ACT Loop      2s – 30s       N × frontal-cortex-act LLMs
 D — Task Worker   30min cycle    Background, no user wait
 E — Drift         300s cycle     Background, no user wait
@@ -658,15 +621,14 @@ E — Drift         300s cycle     Background, no user wait
 Component latency breakdown (Path C RESPOND, typical):
   Context assembly     <10ms   ── MemoryStore reads (all cached)
   Intent classify      ~5ms    ── Deterministic
-  Triage LLM           ~200ms  ── qwen3:4b
-  Social filter        ~1ms    ── Regex
-  Mode router          ~5ms    ── Math, no LLM
+  Message gate         ~5ms    ── ONNX, no LLM
+  Mode router          ~5ms    ── Math, no LLM (non-user flows only)
   Frontal cortex LLM   ~800ms  ── Primary model (varies by provider)
   Working memory write <5ms    ── MemoryStore append
   DB event log         ~10ms   ── SQLite WAL write
   WS publish           ~1ms    ── MemoryStore pub/sub
   ─────────────────────────────────────────────────────────
-  Total (typical)      ~1.1s
+  Total (typical)      ~0.9s
 ```
 
 ---
@@ -676,10 +638,10 @@ Component latency breakdown (Path C RESPOND, typical):
 | Principle | Where it shows up in the flow |
 |-----------|-------------------------------|
 | **Attention is sacred** | Social filter exits in <1ms — never wastes LLM for greetings; ACT fatigue model prevents runaway tool chains |
-| **Judgment over activity** | Two-layer routing: fast social filter first, then LLM triage only if needed; mode router is deterministic not generative |
+| **Judgment over activity** | Deterministic message gate (ONNX, no LLM) routes user messages; mode router handles non-user flows; neither generates — they classify |
 | **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
 | **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
-| **Single authority** | `RoutingStabilityRegulator` is the only process that mutates router weights (24h cycle); no tug-of-war possible |
+| **Single authority** | Router weights are fixed at deployment; no runtime weight mutation, no tug-of-war possible |
 
 ---
 

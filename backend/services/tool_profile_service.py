@@ -2,7 +2,7 @@
 Tool Profile Service — Builds, stores, queries, and enriches tool capability profiles.
 
 Profiles are LLM-generated structured descriptions of what each tool/skill does,
-when to use it, and example usage scenarios. Used by CognitiveTriageService to
+when to use it, and example usage scenarios. Used by MessageGateService to
 inject rich capability context into the triage LLM prompt.
 
 Profiles are stored in tool_capability_profiles SQLite table with:

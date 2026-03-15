@@ -1,8 +1,10 @@
 """
-ACT Loop Service - Fatigue-based cognitive iteration manager.
+ACT Loop Service - Iteration manager for the cognitive ACT loop.
 
-Manages ACT loop with fatigue-based termination. Each action type has a different
-base cost, and fatigue grows non-linearly with iteration depth.
+Manages ACT loop with hard iteration cap, timeout, and semantic repetition
+detection. Fatigue-based termination has been removed — the loop runs until
+it has something to say, hits the iteration cap (30), times out, or detects
+semantic repetition.
 """
 
 import re
@@ -30,37 +32,42 @@ def _strip_tool_markers(text: str) -> str:
     return text.strip()
 
 
-from services.act_action_categories import ACTION_FATIGUE_COSTS
-
 # Actions that never block the ACT loop — dispatched to background threads.
 # Their results aren't needed for subsequent iteration reasoning.
 FIRE_AND_FORGET: frozenset = frozenset({'memorize', 'focus'})
 
+# Iteration threshold after which the soft nudge hint is injected once.
+_SOFT_NUDGE_AFTER = 10
+
 
 class ActLoopService:
-    """Manages ACT loop with fatigue-based termination and concurrent execution."""
+    """Manages ACT loop with hard iteration cap, timeout, and repetition detection."""
 
     def __init__(
         self,
         config: dict,
         cumulative_timeout: float = 60.0,
         per_action_timeout: float = 10.0,
-        max_iterations: int = 7,
+        max_iterations: int = 30,
         cortex_iteration_service=None,
         critic=None,
         dispatcher=None,
+        loop_id: str = '',
+        scratchpad_enabled: bool = True,
     ):
         """
         Initialize ACT loop service.
 
         Args:
-            config: Configuration dict with cost parameters
+            config: Configuration dict
             cumulative_timeout: Maximum total execution time (seconds, safety limit)
             per_action_timeout: Maximum time per individual action (seconds)
-            max_iterations: Hard cap on iteration count (default 7)
+            max_iterations: Hard cap on iteration count (default 30)
             cortex_iteration_service: Service for exploration bonus calculation
             critic: Optional CriticService instance for post-action verification
             dispatcher: Optional ActDispatcherService instance (reused across iterations)
+            loop_id: Unique ID for this loop's scratchpad namespace
+            scratchpad_enabled: Whether to gate large results to scratchpad
         """
         self.config = config
         self.cumulative_timeout = cumulative_timeout
@@ -73,17 +80,13 @@ class ActLoopService:
         self._dispatcher = dispatcher
 
         # Loop state
-        self.loop_id = None  # Set by caller before loop starts
+        self.loop_id = loop_id or None  # Set by caller before loop starts
+        self.scratchpad_enabled = scratchpad_enabled
+        self._scratchpad_counter = 0
         self.iteration_number = 0  # 0-based iteration counter
         self.start_time = time.time()
         self.cumulative_cost = 0.0
         self.current_confidence = 0.0  # Tracks confidence across iterations
-
-        # Fatigue state
-        self.fatigue = 0.0
-        self.fatigue_budget = config.get('fatigue_budget', 10.0)
-        self.fatigue_growth_rate = config.get('fatigue_growth_rate', 0.3)
-        self.fatigue_costs = config.get('fatigue_costs', {})  # per-action overrides
 
         # History tracking
         self.act_history = []  # Action results for context injection
@@ -92,32 +95,40 @@ class ActLoopService:
 
         # Per-loop flags (declared here — not monkey-patched externally)
         self._escalation_hint_injected = False
+        self.soft_nudge_injected = False  # True after soft nudge emitted at iteration 10
 
-    def can_continue(self, mode: str = 'ACT', max_history_tokens: int = 4000, **kwargs) -> Tuple[bool, Optional[str]]:
+    def _write_to_scratchpad(self, entry: dict) -> None:
+        if not self.scratchpad_enabled or not self.loop_id:
+            return
+        import json
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        key = f"scratchpad:{self.loop_id}:entries"
+        store.rpush(key, json.dumps(entry))
+
+    def can_continue(self, mode: str = 'ACT', max_history_tokens: int = 24000, **kwargs) -> Tuple[bool, Optional[str]]:
         """
-        Determine if ACT loop should continue based on fatigue, timeout, iteration cap,
-        and history token budget.
+        Determine if ACT loop should continue.
 
-        Fatigue is the primary termination signal. Timeout, max_iterations, and
-        max_history_tokens are safety caps.
+        Exit conditions (in priority order):
+        1. Non-ACT terminal mode (RESPOND, etc.)
+        2. Cumulative timeout exceeded (safety limit)
+        3. Hard iteration cap reached (max_iterations, default 30)
+        4. History token budget exceeded (prevents unbounded prompt growth)
+
+        Semantic repetition detection is handled externally by ACTOrchestrator.
 
         Args:
             mode: Selected mode from decision gate (default 'ACT')
             max_history_tokens: Maximum estimated tokens for act_history context.
-                Prevents unbounded prompt growth across iterations.
                 Estimated via word_count * 1.3 heuristic.
 
         Returns:
             Tuple of (can_continue: bool, termination_reason: str | None)
         """
-        # Terminal modes always exit (RESPOND, CLARIFY, etc)
+        # Terminal modes always exit (RESPOND, etc.)
         if mode != 'ACT':
             return False, f'terminal_mode_{mode.lower()}'
-
-        # Primary: fatigue budget
-        if self.fatigue >= self.fatigue_budget:
-            logging.info(f"[MODE:ACT] [ACT LOOP] Fatigue exhausted ({self.fatigue:.2f}/{self.fatigue_budget})")
-            return False, 'fatigue_exhausted'
 
         # Safety: cumulative timeout (hard safety limit)
         elapsed = time.time() - self.start_time
@@ -125,7 +136,7 @@ class ActLoopService:
             logging.warning(f"[MODE:ACT] [ACT LOOP] Cumulative timeout reached ({elapsed:.2f}s)")
             return False, 'timeout'
 
-        # Safety: max iterations (hard cap, should rarely trigger)
+        # Safety: max iterations (hard cap)
         if self.iteration_number >= self.max_iterations:
             logging.info(f"[MODE:ACT] [ACT LOOP] Max iterations reached ({self.max_iterations})")
             return False, 'max_iterations'
@@ -141,74 +152,74 @@ class ActLoopService:
         # Can continue ACT mode
         return True, None
 
-    def accumulate_fatigue(self, actions_executed: list, iteration_number: int) -> float:
-        """Accumulate fatigue from executed actions with non-linear growth."""
-        added = 0.0
-        for result in actions_executed:
-            action_type = result.get('action_type', 'unknown')
-            base_cost = self.fatigue_costs.get(
-                action_type, ACTION_FATIGUE_COSTS.get(action_type, 1.0)
-            )
-            cost = base_cost * (1.0 + self.fatigue_growth_rate * iteration_number)
-            added += cost
-        self.fatigue += added
-        return added
-
-    @staticmethod
-    def estimate_net_value(actions_executed: list, iteration_number: int) -> float:
-        """Heuristic net value of actions — logs to cortex_iterations for strategy analysis."""
-        value = 0.0
-        for result in actions_executed:
-            if result['status'] == 'success':
-                result_text = str(result.get('result', ''))
-                if len(result_text) > 50:
-                    value += 1.0
-                else:
-                    value += 0.3
-            elif result['status'] == 'timeout':
-                value -= 0.5
-            else:
-                value -= 0.3
-        return value * (1.0 / (1.0 + 0.2 * iteration_number))
-
-    def charge_critic_fatigue(self, cost: float) -> None:
-        """Charge fatigue for a critic evaluation. Encapsulates external fatigue mutation."""
-        self.fatigue += cost
-
     def get_critic_telemetry(self) -> dict:
-        """Return critic telemetry if a critic was attached, else empty dict."""
+        """Return critic telemetry if a critic was attached, else empty dict.
+
+        Returns:
+            Dict of critic telemetry metrics, or an empty dict when no critic
+            was injected.
+        """
         if self._critic is not None:
             return self._critic.get_telemetry()
         return {}
 
-    def get_fatigue_telemetry(self) -> dict:
-        """Return fatigue metrics for telemetry logging."""
+    def get_loop_telemetry(self) -> dict:
+        """Return loop metrics for telemetry logging.
+
+        Returns:
+            Dict containing iterations_used, max_iterations, elapsed_seconds,
+            and actions_total.
+        """
         return {
-            'fatigue_total': round(self.fatigue, 2),
-            'fatigue_budget': self.fatigue_budget,
-            'fatigue_utilization': round(self.fatigue / self.fatigue_budget, 3) if self.fatigue_budget > 0 else 0,
             'iterations_used': self.iteration_number,
             'max_iterations': self.max_iterations,
             'elapsed_seconds': round(time.time() - self.start_time, 1),
             'actions_total': len(self.act_history),
-            'budget_headroom': round(self.fatigue_budget - self.fatigue, 2),
         }
 
     def append_results(self, results: List[Dict[str, Any]]) -> None:
         """
         Append action results to history for context injection.
 
+        Large results (>=1000 estimated tokens) are offloaded to the scratchpad
+        when scratchpad_enabled is True. The inline result is truncated to ~200
+        words with a reference to the scratchpad entry.
+
         Args:
             results: List of action result dictionaries from dispatcher
         """
-        self.act_history.extend(results)
+        gated = []
+        for result in results:
+            result_text = result.get('result', '')
+            if not isinstance(result_text, str):
+                gated.append(result)
+                continue
+            estimated_tokens = int(len(result_text.split()) * 1.3)
+            if estimated_tokens >= 1000 and self.scratchpad_enabled and self.loop_id:
+                self._scratchpad_counter += 1
+                sp_id = f"sp_{self._scratchpad_counter:03d}"
+                words = result_text.split()
+                summary = ' '.join(words[:200])
+                self._write_to_scratchpad({
+                    'id': sp_id,
+                    'source': result.get('action_type', 'unknown'),
+                    'iteration': self.iteration_number,
+                    'summary': summary,
+                    'full_content': result_text,
+                    'query_hint': result.get('notes', ''),
+                })
+                result = dict(result)
+                result['result'] = ' '.join(words[:200]) + f' ... [full result in notes as {sp_id}]'
+                result['scratchpad_ref'] = sp_id
+            gated.append(result)
+        self.act_history.extend(gated)
 
-    def get_history_context(self, max_history_tokens: int = 4000) -> str:
+    def get_history_context(self, max_history_tokens: int = 24000) -> str:
         """
         Format ACT history for injection into {{act_history}} prompt placeholder.
 
         When the full history exceeds max_history_tokens (estimated via word_count * 1.3),
-        truncates older entries but keeps the most recent 3 intact.
+        older entries are moved to the scratchpad and a retrieval hint is prepended.
 
         Returns:
             Formatted history string showing executed actions
@@ -218,14 +229,11 @@ class ActLoopService:
 
         history = self.act_history
 
-        # Build full history first
-        lines = ["## Internal Cognitive Actions"]
-        for idx, result in enumerate(history, 1):
+        def _format_entry(idx, result):
             action_type = result['action_type']
             status = result['status']
             result_text = result['result']
             exec_time = result['execution_time']
-
             card_note = ""
             if result_text == "__CARD_ONLY__":
                 display_text = "(card emitted — no text available)"
@@ -236,37 +244,53 @@ class ActLoopService:
                 display_text = _strip_tool_markers(result_text.split("\n", 1)[1])
             else:
                 display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
-            lines.append(f"{idx}. [{action_type}] {status.upper()}{card_note}: {display_text} ({exec_time:.2f}s)")
+            return f"{idx}. [{action_type}] {status.upper()}{card_note}: {display_text} ({exec_time:.2f}s)"
+
+        # Build full history first
+        lines = ["## Internal Cognitive Actions"]
+        for idx, result in enumerate(history, 1):
+            lines.append(_format_entry(idx, result))
 
         full_text = "\n".join(lines)
 
-        # Check token estimate
+        # Check token estimate — prune oldest entries to scratchpad when over budget
         if max_history_tokens > 0:
             estimated_tokens = int(len(full_text.split()) * 1.3)
             if estimated_tokens > max_history_tokens and len(history) > 3:
-                # Keep most recent 3 entries, summarize older ones
-                truncated_count = len(history) - 3
-                recent = history[-3:]
+                # Find the split point: keep as many recent entries as fit in budget,
+                # always keeping a minimum of 3. Start from the minimum (last 3) and
+                # expand forward until budget is exceeded.
+                keep_start = len(history) - 3  # index of first kept entry (minimum)
+                for candidate_start in range(len(history) - 3, 0, -1):
+                    trial = ["## Internal Cognitive Actions"]
+                    for idx, result in enumerate(history[candidate_start:], candidate_start + 1):
+                        trial.append(_format_entry(idx, result))
+                    if int(len("\n".join(trial).split()) * 1.3) <= max_history_tokens:
+                        keep_start = candidate_start
+                        break
+
+                pruned = history[:keep_start]
+                remaining = history[keep_start:]
+
+                for result in pruned:
+                    result_text = result.get('result', '')
+                    self._scratchpad_counter += 1
+                    self._write_to_scratchpad({
+                        'id': f"sp_pruned_{self._scratchpad_counter:03d}",
+                        'source': 'pruned',
+                        'iteration': result.get('iteration_number', self.iteration_number),
+                        'summary': str(result_text)[:200],
+                        'full_content': str(result_text),
+                        'query_hint': result.get('action_type', ''),
+                    })
+
+                pruned_count = len(pruned)
                 lines = [
                     "## Internal Cognitive Actions",
-                    f"[{truncated_count} earlier action(s) truncated for brevity]",
+                    f"[entries 1-{pruned_count} moved to notes — use notes skill to query]",
                 ]
-                for idx, result in enumerate(recent, truncated_count + 1):
-                    action_type = result['action_type']
-                    status = result['status']
-                    result_text = result['result']
-                    exec_time = result['execution_time']
-                    card_note = ""
-                    if result_text == "__CARD_ONLY__":
-                        display_text = "(card emitted — no text available)"
-                    elif isinstance(result_text, dict) and result_text.get("card_emitted"):
-                        display_text = "(card emitted — no text available)"
-                    elif isinstance(result_text, str) and result_text.startswith("__CARD_EMITTED__\n"):
-                        card_note = " [card delivered to user]"
-                        display_text = _strip_tool_markers(result_text.split("\n", 1)[1])
-                    else:
-                        display_text = _strip_tool_markers(str(result_text)) if result_text else "(empty)"
-                    lines.append(f"{idx}. [{action_type}] {status.upper()}{card_note}: {display_text} ({exec_time:.2f}s)")
+                for idx, result in enumerate(remaining, pruned_count + 1):
+                    lines.append(_format_entry(idx, result))
                 return "\n".join(lines)
 
         return full_text
@@ -400,52 +424,9 @@ class ActLoopService:
             'cumulative_cost': self.cumulative_cost,
         }
 
-        # Include full cost breakdown if decision_data is available
+        # Include net_value from decision_data if available
         if decision_data:
-            cost_breakdown = decision_data.get('cost_breakdown', {})
-            iteration_log.update({
-                'iteration_cost': cost_breakdown.get('iteration_cost', 0.0),
-                'diminishing_cost': cost_breakdown.get('diminishing_cost', 0.0),
-                'uncertainty_cost': cost_breakdown.get('uncertainty_cost', 0.0),
-                'action_base_cost': cost_breakdown.get('action_base_cost', 0.0),
-                'total_cost': decision_data.get('total_cost', 0.0),
-                'efficiency_score': decision_data.get('efficiency', 0.0),
-                'net_value': decision_data.get('net_value', 0.0),
-                'decision_override': decision_data.get('decision_override', False),
-                'overridden_mode': decision_data.get('overridden_mode'),
-                'exploration_bonus': decision_data.get('exploration_bonus', 0.0),
-            })
+            iteration_log['net_value'] = decision_data.get('net_value', 0.0)
 
         self.iteration_logs.append(iteration_log)
         logging.debug(f"[MODE:{chosen_mode}] [ACT LOOP] Logged iteration {self.iteration_number}, total logs: {len(self.iteration_logs)}")
-
-    def create_fatigue_response(self, last_response_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Create fallback response when cognitive fatigue hits (low efficiency).
-
-        Args:
-            last_response_data: Most recent response from frontal cortex
-
-        Returns:
-            Response dict with mode=RESPOND and fatigue explanation
-        """
-        partial_response = last_response_data.get('response', '')
-
-        fallback_text = (
-            "I've explored multiple approaches and reached my cognitive limit. "
-            "Based on my current understanding: "
-        )
-
-        if partial_response:
-            fallback_text += partial_response
-        else:
-            fallback_text += "I can provide a tentative answer, but clarification would help."
-
-        return {
-            'mode': 'RESPOND',
-            'modifiers': ['FATIGUE'],
-            'response': fallback_text,
-            'generation_time': last_response_data.get('generation_time', 0),
-            'actions': [],
-            'confidence': last_response_data.get('confidence', 0.3)
-        }

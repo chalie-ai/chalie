@@ -24,15 +24,21 @@ class CortexIterationService:
         self.db_service = database_service
 
     def calculate_exploration_bonus(self, topic: str, current_actions: List[str]) -> Dict[str, float]:
-        """
-        Calculate exploration bonus for action types.
+        """Calculate exploration bonus for a set of action types.
 
         Bonuses:
         - 0.01 per iteration an action was NOT used (existing)
         - 0.05 for first-time action types (NEW)
         - 0.02 for novel action sequences (NEW)
 
-        Returns dict mapping action types to bonus values.
+        Total bonus is capped at 0.30 and scaled proportionally when exceeded.
+
+        Args:
+            topic: Conversation topic used to scope historical iteration lookup.
+            current_actions: List of action type strings selected in the current iteration.
+
+        Returns:
+            Dict mapping each action type to its exploration bonus float.
         """
         action_types = ['memory_query', 'memory_write', 'world_state_read',
                        'internal_reasoning', 'background_job', 'schedule', 'semantic_query']

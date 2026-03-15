@@ -39,7 +39,7 @@ class OutputService:
         Args:
             topic: Conversation topic identifier
             response: The response text to deliver
-            mode: Output mode (RESPOND, CLARIFY, ACKNOWLEDGE)
+            mode: Output mode (RESPOND, ACT)
             confidence: Confidence score of the response
             generation_time: Time taken to generate the response
             original_metadata: Optional original metadata from the request (uuid, source, etc.)
@@ -81,9 +81,6 @@ class OutputService:
             'reminder': 'reminder',
             'task': 'task',
             'persistent_task': 'task',
-            'spark_welcome': 'drift',
-            'spark_suggest': 'drift',
-            'spark_nurture': 'drift',
             'critic_escalation': 'escalation',
             'notification': 'notification',
             'plan_action': 'task',

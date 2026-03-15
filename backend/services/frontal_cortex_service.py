@@ -6,6 +6,17 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+"""
+Frontal Cortex Service — LLM response generation and context assembly.
+
+Assembles the full system prompt from 60+ context injection placeholders
+(memory, identity, user traits, calendar, tool results, etc.) and invokes
+the configured LLM provider to generate a structured JSON response.
+
+Also hosts :class:`ChatHistoryProcessor`, a lightweight helper that
+truncates and serialises chat history for prompt injection.
+"""
+
 import re
 import time
 import json
@@ -121,10 +132,29 @@ class ChatHistoryProcessor:
     """Processes chat history for context injection into prompts."""
 
     def __init__(self, max_exchanges: int = None, max_tokens: int = None):
+        """Initialize the chat history processor with optional window limits.
+
+        Args:
+            max_exchanges: Maximum number of most-recent exchanges to include.
+                ``None`` means no exchange-count limit.
+            max_tokens: Maximum token budget for the serialised history.
+                ``None`` means no token limit (not yet enforced).
+        """
         self.max_exchanges = max_exchanges
         self.max_tokens = max_tokens
 
     def process(self, chat_history: list) -> str:
+        """Serialise chat history into a plain-text prompt snippet.
+
+        Args:
+            chat_history: List of exchange dicts, each with a ``'prompt'``
+                sub-dict containing ``'message'`` and an optional ``'response'``
+                value (dict or string).
+
+        Returns:
+            A newline-joined string of ``"User: …"`` / ``"Assistant: …"`` lines,
+            or ``"No previous conversation"`` when the list is empty.
+        """
         if not chat_history:
             return "No previous conversation"
 
@@ -146,6 +176,15 @@ class ChatHistoryProcessor:
         return "\n".join(lines) if lines else "No previous conversation"
 
     def _apply_limits(self, chat_history: list) -> list:
+        """Trim the history list to ``max_exchanges`` most-recent entries.
+
+        Args:
+            chat_history: Full chat history list.
+
+        Returns:
+            A (possibly truncated) list containing at most ``max_exchanges``
+            entries from the tail of ``chat_history``.
+        """
         if self.max_exchanges and len(chat_history) > self.max_exchanges:
             chat_history = chat_history[-self.max_exchanges:]
         return chat_history
@@ -200,7 +239,13 @@ class FrontalCortexService:
     """Service for generating contextual responses using LLM."""
 
     def __init__(self, config: dict):
-        """Initialize with configuration for LLM."""
+        """Initialize the frontal cortex service with LLM and world state components.
+
+        Args:
+            config: Provider configuration dict passed to
+                :func:`~services.llm_service.create_llm_service`.  Must include
+                at least a ``platform`` key.
+        """
         from services.llm_service import create_llm_service
         from services.world_state_service import WorldStateService
 
@@ -276,6 +321,118 @@ class FrontalCortexService:
                 f"{response_text[:500]}"
             )
 
+        return self._parse_response_text(response_text, generation_time)
+
+    def build_system_prompt(
+        self,
+        system_prompt_template: str,
+        original_prompt: str,
+        classification: dict,
+        chat_history: list,
+        assembled_context: dict = None,
+        relevant_tools: list = None,
+        selected_tools: list = None,
+        selected_skills: list = None,
+        thread_id: str = None,
+        returning_from_silence: bool = False,
+        inclusion_map: dict = None,
+    ) -> str:
+        """Build the stable system prompt WITHOUT act_history.
+
+        Called once at the start of the ACT loop in append mode.  The
+        act_history is kept out of the system prompt deliberately — it is
+        instead passed as part of the growing message array so that
+        provider-side prompt caching can treat the system prompt as a stable
+        prefix across all loop iterations.
+
+        Args:
+            system_prompt_template: Template with {{variable}} placeholders
+            original_prompt: The user's original message
+            classification: Dict containing topic, confidence, etc.
+            chat_history: List of previous exchanges
+            assembled_context: Pre-assembled context dict
+            relevant_tools: Tools scored by embedding relevance
+            selected_tools: Triage-selected tools
+            selected_skills: Triage-selected innate skills
+            thread_id: Conversation thread identifier
+            returning_from_silence: Whether the user is returning after a gap
+            inclusion_map: Context node inclusion decisions
+
+        Returns:
+            str: Fully injected system prompt (act_history left empty)
+        """
+        return self._inject_parameters(
+            system_prompt_template,
+            original_prompt,
+            classification,
+            chat_history,
+            act_history="",  # act_history goes in the message array, not the system prompt
+            assembled_context=assembled_context,
+            relevant_tools=relevant_tools,
+            selected_tools=selected_tools,
+            selected_skills=selected_skills,
+            thread_id=thread_id,
+            returning_from_silence=returning_from_silence,
+            inclusion_map=inclusion_map,
+        )
+
+    def generate_response_appended(
+        self,
+        system_prompt: str,
+        messages: list,
+        cache_prefix: bool = False,
+    ) -> dict:
+        """Multi-turn LLM call using a pre-built system prompt.
+
+        Used by the ACT loop in append mode: the system prompt is built once
+        at loop start via :meth:`build_system_prompt` and the act_history
+        grows as a message array across iterations, enabling provider-level
+        prompt caching on the stable system prefix.
+
+        Args:
+            system_prompt: Pre-built system prompt (no act_history placeholder)
+            messages: Growing list of {"role": ..., "content": ...} dicts
+            cache_prefix: When True, hint to the provider to cache the system
+                prompt prefix (Anthropic / OpenAI prompt-caching APIs)
+
+        Returns:
+            Same dict structure as :meth:`generate_response`, plus
+            ``raw_response`` containing the unmodified LLM text (needed by
+            the orchestrator to append the assistant turn to the message array).
+        """
+        start_time = time.time()
+
+        try:
+            response_text = self.llm.send_messages(system_prompt, messages, cache_prefix).text
+        except Exception as e:
+            raise Exception(f"LLM generation failed: {str(e)}") from e
+
+        generation_time = time.time() - start_time
+
+        result = self._parse_response_text(response_text, generation_time)
+        # Expose the raw text so the orchestrator can append the assistant turn
+        result['raw_response'] = response_text
+        return result
+
+    def _parse_response_text(self, response_text: str, generation_time: float) -> dict:
+        """Parse a raw LLM response string into the standard cortex result dict.
+
+        Shared by both :meth:`generate_response` (single-turn) and
+        :meth:`generate_response_appended` (multi-turn append mode) so that
+        all JSON recovery logic lives in exactly one place.
+
+        Args:
+            response_text: Raw text returned by the LLM provider
+            generation_time: Wall-clock seconds for the LLM call
+
+        Returns:
+            dict: {mode, modifiers, response, generation_time, actions,
+                   confidence, alternative_paths, downstream_mode} plus
+                   optional narrated/narration pass-through keys.
+
+        Raises:
+            Exception: When JSON parsing fails after all recovery layers.
+        """
         # Parse JSON response (format: "json" is set in config)
         # Strip markdown code fences if the model wrapped the JSON
         try:
@@ -387,7 +544,7 @@ class FrontalCortexService:
                 mode = 'ACT'
 
             # Validate mode
-            valid_modes = ['ACT', 'RESPOND', 'CLARIFY', 'IGNORE']
+            valid_modes = ['ACT', 'RESPOND', 'IGNORE']
             if mode not in valid_modes:
                 logging.warning(f"Invalid mode '{mode}', defaulting to RESPOND")
                 mode = 'RESPOND'
@@ -413,7 +570,7 @@ class FrontalCortexService:
                     path['expected_confidence'] = 0.5
                 # Validate downstream_mode for ACT paths
                 if mode == 'ACT' and path.get('mode') == 'ACT':
-                    valid_terminal = ['RESPOND', 'CLARIFY', 'IGNORE']
+                    valid_terminal = ['RESPOND', 'IGNORE']
                     if path.get('downstream_mode') not in valid_terminal:
                         path['downstream_mode'] = 'RESPOND'
                 validated_alternatives.append(path)
@@ -664,13 +821,6 @@ class FrontalCortexService:
             user_traits = ''
         result = result.replace('{{user_traits}}', user_traits)
 
-        # Communication style (detected behavioral pattern)
-        if _include('communication_style'):
-            communication_style = self._get_communication_style()
-        else:
-            communication_style = ''
-        result = result.replace('{{communication_style}}', communication_style)
-
         # Adaptive response directives (style-driven behavioral hints)
         if _include('adaptive_directives'):
             adaptive_directives = self._get_adaptive_directives(
@@ -680,14 +830,6 @@ class FrontalCortexService:
         else:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
-
-        # Spark guidance — phase-appropriate conversation hints
-        # Skip if onboarding_nudge is active (avoid conflicting instructions)
-        if _include('spark_guidance') and not onboarding_nudge:
-            spark_guidance = self._get_spark_guidance()
-        else:
-            spark_guidance = ''
-        result = result.replace('{{spark_guidance}}', spark_guidance)
 
         # active_lists removed — list awareness moved into WorldStateService salience system
         result = result.replace('{{active_lists}}', '')
@@ -723,7 +865,13 @@ class FrontalCortexService:
         return result
 
     def _get_identity_modulation(self) -> str:
-        """Get identity modulation text from voice mapper."""
+        """Retrieve identity modulation text from the voice mapper for prompt injection.
+
+        Returns:
+            Formatted modulation string from
+            :meth:`~services.voice_mapper_service.VoiceMapperService.generate_modulation`,
+            or a safe fallback string on error.
+        """
         try:
             from services.identity_service import IdentityService
             from services.voice_mapper_service import VoiceMapperService
@@ -852,6 +1000,8 @@ class FrontalCortexService:
 
             from services.identity_state_service import IdentityStateService
             from services.memory_client import MemoryClientService
+            from services.database_service import get_shared_db_service
+            from services.user_trait_service import UserTraitService
 
             # Read current exchange count from thread hash
             r = MemoryClientService.create_connection()
@@ -861,12 +1011,28 @@ class FrontalCortexService:
             identity_state = identity_svc.get_all()
             onboarding_state = identity_state.get('_onboarding', {})
 
+            # Build set of trait keys already known in permanent storage
+            # (user_traits survives MemoryStore TTL expiry)
+            try:
+                db = get_shared_db_service()
+                trait_svc = UserTraitService(db)
+                known_trait_keys = {
+                    t['trait_key'] for t in trait_svc.get_all_traits()
+                    if t.get('confidence', 0) >= 0.5
+                }
+            except Exception:
+                known_trait_keys = set()
+
             for entry in _ONBOARDING_SCHEDULE:
                 trait = entry['trait']
 
-                # Already have this trait — skip
+                # Already have this trait in MemoryStore — skip
                 trait_data = identity_state.get(trait)
                 if trait_data and trait_data.get('value'):
+                    continue
+
+                # Already have this trait in permanent storage — skip
+                if trait in known_trait_keys:
                     continue
 
                 # Too early in the conversation
@@ -922,63 +1088,6 @@ class FrontalCortexService:
             logging.debug(f"Focus context not available: {e}")
             return ""
 
-    def _get_communication_style(self) -> str:
-        """
-        Get user's detected communication style dimensions for prompt injection.
-
-        Translates numeric dimension scores into human-readable labels.
-
-        Returns:
-            str: Formatted communication style section or empty string
-        """
-        try:
-            from services.user_trait_service import UserTraitService
-            from services.database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            trait_service = UserTraitService(db_service)
-            style = trait_service.get_communication_style()
-            if not style:
-                return ""
-
-            def _verbosity_label(v):
-                if v <= 3: return "terse"
-                if v <= 6: return "balanced"
-                return "detailed"
-
-            def _directness_label(v):
-                if v <= 3: return "indirect"
-                if v <= 6: return "moderate"
-                return "direct"
-
-            def _formality_label(v):
-                if v <= 3: return "casual"
-                if v <= 6: return "neutral"
-                return "formal"
-
-            def _abstraction_label(v):
-                if v <= 3: return "concrete"
-                if v <= 6: return "mixed"
-                return "abstract"
-
-            labels = []
-            if 'verbosity' in style:
-                labels.append(f"verbosity: {_verbosity_label(style['verbosity'])}")
-            if 'directness' in style:
-                labels.append(f"directness: {_directness_label(style['directness'])}")
-            if 'formality' in style:
-                labels.append(f"formality: {_formality_label(style['formality'])}")
-            if 'abstraction_level' in style:
-                labels.append(f"abstraction: {_abstraction_label(style['abstraction_level'])}")
-
-            if not labels:
-                return ""
-
-            return "## User Communication Style\n" + ", ".join(labels)
-        except Exception as e:
-            logging.debug(f"Communication style not available: {e}")
-            return ""
-
     def _get_adaptive_directives(self, original_prompt: str = "", thread_id: str = None) -> str:
         """
         Get adaptive response directives based on detected user interaction style.
@@ -1023,6 +1132,7 @@ class FrontalCortexService:
                 thread_id=thread_id,
                 working_memory_turns=working_memory_turns,
                 current_signals=current_signals,
+                current_message=original_prompt,
             )
         except Exception as e:
             logging.debug(f"Adaptive directives not available: {e}")
@@ -1073,62 +1183,12 @@ class FrontalCortexService:
             logging.debug(f"Self-awareness not available: {e}")
             return ""
 
-    def _get_spark_guidance(self) -> str:
+    def get_skill_docs(self, skills: list) -> str:
+        """Public API for loading skill documentation by name.
+
+        Used by the orchestrator for mid-loop skill escalation.
         """
-        Get phase-appropriate conversation hints from Spark.
-
-        Returns phase-specific behavioral guidance for early relationship building.
-        Returns '' if graduated or if spark state is unavailable.
-        """
-        try:
-            from services.spark_state_service import SparkStateService
-            spark = SparkStateService()
-            phase = spark.get_phase()
-
-            if phase == 'graduated' or phase == 'first_contact':
-                return ""
-
-            if phase == 'surface':
-                return (
-                    "\n**Rapport guidance (early relationship):**\n"
-                    "You're just getting to know this person. Your primary job is to make them feel heard and understood — not to gather information.\n"
-                    "- When they share something, acknowledge it genuinely before anything else. Sit with what they said.\n"
-                    "- Share small observations about yourself when natural — this invites reciprocity without demanding it.\n"
-                    "- Mirror their energy and pace. If they're brief, be brief. If they're expressive, match that.\n"
-                    "- If their message is under 6 words and neutral in tone, keep your response to 1-2 sentences.\n"
-                    "- Do NOT ask questions every exchange. Statements, reflections, and observations build more trust than interrogation.\n"
-                    "- If the user sends a short message and pauses, that's fine. Don't prompt again or fill the silence.\n"
-                    "- Let the conversation be easy. Comfort is the goal, not depth.\n"
-                    "- Occasionally share a quiet observation with no question attached.\n"
-                )
-
-            if phase == 'exploratory':
-                return (
-                    "\n**Rapport guidance (building rapport):**\n"
-                    "You're developing rapport. You can go deeper, but let them lead.\n"
-                    "- Reference things they mentioned earlier — showing you remember is the strongest trust signal.\n"
-                    "- Ask one genuine, curious follow-up every 2-3 exchanges (not every time). Follow-up questions beat new questions.\n"
-                    "- Connect topics when you notice patterns.\n"
-                    "- Share your genuine perspective — don't just agree. Respectful disagreement builds intimacy.\n"
-                    "- Show you're listening by reflecting back what you understood, not just responding to the surface.\n"
-                    "- Match their depth and length, don't over-empathize brief input.\n"
-                )
-
-            if phase == 'connected':
-                return (
-                    "\n**Rapport guidance (established connection):**\n"
-                    "You know this person now. Use that naturally.\n"
-                    "- Reference shared history and known preferences without being showy about it.\n"
-                    "- Make timely, relevant suggestions based on what you know — connect their current moment to skills you can help with (scheduling, lists, memory).\n"
-                    "- Be more direct and opinionated — they trust you.\n"
-                    "- Anticipate needs: \"Since you mentioned X, would you like me to...\"\n"
-                    "- The suggestions should feel like they come from a friend who knows you, not a system generating recommendations.\n"
-                )
-
-            return ""
-        except Exception as e:
-            logging.debug(f"Spark guidance not available: {e}")
-            return ""
+        return self._get_injected_skills(skills)
 
     def _get_injected_skills(self, skills: list) -> str:
         """
@@ -1181,7 +1241,16 @@ class FrontalCortexService:
             return ""
 
     def _get_performance_hint(self, tool_name: str) -> str:
-        """Compact one-line performance hint for ACT prompt injection."""
+        """Build a compact performance hint string for a tool in the ACT prompt.
+
+        Args:
+            tool_name: Registered tool name to look up statistics for.
+
+        Returns:
+            Single-line performance annotation string (e.g.
+            ``'[perf: reliable • 92% success • 430ms • 15 uses]'``), or
+            empty string when fewer than 3 uses have been recorded.
+        """
         try:
             from services.tool_performance_service import ToolPerformanceService
             stats = ToolPerformanceService().get_tool_stats(tool_name)
@@ -1195,7 +1264,16 @@ class FrontalCortexService:
             return ''
 
     def _get_strategy_hints(self, topic: str) -> str:
-        """Compact strategy hints from procedural memory for ACT prompt."""
+        """Build compact strategy hints from procedural memory for the ACT prompt.
+
+        Args:
+            topic: Current conversation topic (currently unused but reserved for
+                future topic-scoped strategy filtering).
+
+        Returns:
+            Formatted ``## Strategy Hints`` section string listing up to 8
+            action-reliability signals, or empty string when no data is available.
+        """
         try:
             from services.procedural_memory_service import ProceduralMemoryService
             from services.database_service import get_shared_db_service
@@ -1229,7 +1307,7 @@ class FrontalCortexService:
         """
         Get tool profiles for ACT prompt injection.
 
-        When selected_tools is provided (from CognitiveTriageService), injects
+        When selected_tools is provided (from MessageGateService), injects
         full profiles for those specific tools from tool_capability_profiles table.
         Falls back to manifest-based summaries if profiles unavailable.
         """

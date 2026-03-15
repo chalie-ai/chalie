@@ -291,12 +291,11 @@ class TestBlockedActionPatterns:
 @pytest.mark.unit
 class TestRejectionTypes:
 
-    def test_all_seven_types_present(self):
-        assert len(ALL_REJECTION_TYPES) == 7
+    def test_all_six_types_present(self):
+        assert len(ALL_REJECTION_TYPES) == 6
         assert 'action_gate_rejected' in ALL_REJECTION_TYPES
         assert 'plan_rejected' in ALL_REJECTION_TYPES
         assert 'assimilation_rejected' in ALL_REJECTION_TYPES
         assert 'triage_override' in ALL_REJECTION_TYPES
         assert 'routing_anti_oscillation' in ALL_REJECTION_TYPES
         assert 'reliability_warning' in ALL_REJECTION_TYPES
-        assert 'uncertainty_downgraded' in ALL_REJECTION_TYPES

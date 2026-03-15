@@ -26,14 +26,10 @@ This separation eliminates:
 - Fatigue fallbacks on simple greetings
 - ~15s latency for trivial interactions (ACKNOWLEDGE now uses qwen3:4b, ~2s)
 
-### 2. Single Authority for Weight Mutation
-
-Multiple monitors observe routing quality but **none modify weights directly**. They log pressure signals. A single `RoutingStabilityRegulator` (24h cycle) is the only entity that mutates router weights, with bounded corrections (max ±0.02/day) and 48h cooldown per parameter.
-
-### 3. Self-Leveling via Context Warmth
+### 2. Self-Leveling via Context Warmth
 
 The router naturally shifts behavior as memory accumulates:
-- Cold context (new topic, no facts) → favors CLARIFY
+- Cold context (new topic, no facts) → favors RESPOND (ACT loop handles clarification)
 - Warm context (established topic, facts present) → favors RESPOND
 - This happens through signal-weighted scoring, not explicit rules
 
@@ -56,12 +52,6 @@ The router naturally shifts behavior as memory accumulates:
 - **Prompt:** `frontal-cortex-respond.md` + `soul.md`
 - **LLM Model:** qwen3:8b
 
-#### CLARIFY (Ask Question)
-- **Type:** Terminal mode
-- **Purpose:** Ask clarifying question when information is insufficient
-- **Prompt:** `frontal-cortex-clarify.md` + `soul.md`
-- **LLM Model:** qwen3:8b
-
 #### ACKNOWLEDGE (Brief Acknowledgment)
 - **Type:** Terminal mode
 - **Purpose:** Brief social response (greetings, thanks, confirmations)
@@ -81,8 +71,8 @@ The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, s
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
-| `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, gists, facts, episodes, concepts, user_traits) |
-| `memorize` | memory | <50ms | Store gists (short-term) and/or facts (medium-term) |
+| `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, episodes, concepts, user_traits) |
+| `memorize` | memory | <50ms | Explicit memory encoding |
 | `introspect` | perception | <100ms | Self-examination: context_warmth, FOK signal, recall_failure_rate, skill stats, world state, decision explanations (routing audit), recent autonomous actions |
 | `associate` | cognition | <500ms | Spreading activation from seed concepts through semantic graph |
 | `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
@@ -120,8 +110,9 @@ User Input → Topic Classifier (embedding-based)
 ### Step 2: Context Assembly (same as before)
 ```
 Classification Result → Load Context:
-  - Gists, facts, working memory, world state
+  - Working memory (12 turns), world state
   - Episodes + concepts (vector similarity)
+  - User traits (semantic retrieval)
   - Calculate context_warmth (0.0-1.0)
 ```
 
@@ -151,9 +142,7 @@ The router collects signals from existing services (all MemoryStore reads, ~5ms 
 
 **Context Signals (from MemoryStore):**
 - `context_warmth` (float 0-1)
-- `working_memory_turns` (int 0-4)
-- `gist_count` (int, excluding cold_start type)
-- `fact_count` (int 0-50), `fact_keys` (list)
+- `working_memory_turns` (int 0-12)
 - `world_state_present` (bool)
 - `topic_confidence`, `is_new_topic` (from classifier)
 - `session_exchange_count` (int)
@@ -171,9 +160,8 @@ Each mode gets a weighted composite score:
 
 | Mode | Base | Primary Boosters | Primary Penalties |
 |------|------|-----------------|-------------------|
-| RESPOND | 0.50 | context_warmth, fact_density, gist_density, question+context | cold start |
-| CLARIFY | 0.30 | cold context, question+no_facts, new_topic+question | warm context (>0.6) |
-| ACT | 0.20 | question+moderate_context, interrogative+gap_in_facts, implicit_reference | very cold, very warm+facts |
+| RESPOND | 0.50 | context_warmth, memory_density, question+context | cold start |
+| ACT | 0.20 | question+moderate_context, interrogative+context_gap, implicit_reference | very cold, very warm+context |
 | ACKNOWLEDGE | 0.10 | greeting_pattern (+0.60), positive_feedback (+0.40) | has_question (-0.30) |
 | IGNORE | -0.50 | empty_input only (+1.0) | everything else |
 
@@ -181,7 +169,6 @@ Each mode gets a weighted composite score:
 
 Per-request ephemeral adjustments (NOT weight mutations):
 - If `previous_mode == 'ACT'` and ACT was unproductive → `act_score -= 0.15`
-- If `previous_mode == 'CLARIFY'` → `respond_score += 0.05` (user just answered a question)
 
 ### Short-Term Hysteresis
 
@@ -218,13 +205,13 @@ The ACT loop executes internal actions with safety limits. No decision gate or n
 
 ### Triage-Driven Skill Injection
 
-The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder. The `CognitiveTriageService` decides which of the 9 innate skills to inject into each ACT prompt — only the relevant skill docs are included, reducing prompt size significantly.
+The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder. The ONNX skill-selector pre-filter decides which of the 14 innate skills to inject into each ACT prompt — only the relevant skill docs are included, reducing prompt size significantly.
 
 **Cognitive primitives** (`recall`, `memorize`, `introspect`) are always injected for ACT regardless of triage output. Up to 3 contextual skills are added based on triage reasoning.
 
 **Skill doc files** live in `backend/prompts/skills/{skill}.md` — one file per skill. `FrontalCortexService._get_injected_skills()` loads only the selected files at call time.
 
-**Triage output** (JSON field `"skills": [...]`) is validated through a whitelist (`_VALID_SKILLS`), deduplicated, primitives enforced, and contextual skills sorted and capped at `MAX_CONTEXTUAL_SKILLS = 3`. The result flows from `CognitiveTriageService` → `TriageResult.skills` → `context_snapshot['triage_selected_skills']` → `tool_worker` / `generate_with_act_loop` → `FrontalCortexService.generate_response(selected_skills=...)`.
+**Skill selection output** is validated through a whitelist (`_VALID_SKILLS`), deduplicated, primitives enforced, and contextual skills sorted and capped at `MAX_CONTEXTUAL_SKILLS = 3`. The result flows from `MessageGateService.prefilter_skills()` → `selected_skills` → `context_snapshot['triage_selected_skills']` → `tool_worker` / `generate_with_act_loop` → `FrontalCortexService.generate_response(selected_skills=...)`.
 
 **Token impact:** ACT static template ~300 tokens (was ~2,787). Typical ACT call injects ~300–550 tokens of skill docs (4 files) vs. ~1,200 tokens always before.
 
@@ -260,23 +247,11 @@ After generation, detect router misclassification using user behavior signals fr
 
 | Signal | Indicates | Logged As |
 |--------|-----------|-----------|
-| User immediately clarifies/repeats | RESPOND was wrong → should be CLARIFY | misroute (missed_clarify) |
 | User asks memory-related follow-up | RESPOND was wrong → should be ACT | misroute (missed_act) |
 | Negative reward after ACKNOWLEDGE | Should have been RESPOND | misroute (under_engagement) |
 | Positive reward after any mode | Routing was correct | correct_route |
 
 Feedback is stored in `routing_decisions.feedback` (JSONB).
-
-### Routing Stability Regulator (24h Cycle)
-
-Single authority for weight mutation. Follows `TopicStabilityRegulatorService` pattern:
-
-1. Reads pressure signals from `routing_decisions` table (last 24h)
-2. Computes: tie-breaker rate, mode entropy, misroute rate, ACT opportunity miss rate, reflection disagreement
-3. Selects worst pressure, maps to single parameter adjustment
-4. Max ±0.02 per day, 48h cooldown per parameter, hard bounds on all weights
-5. **Closed-loop control**: Evaluates whether previous adjustments improved metrics. Reverts if no improvement or degradation detected.
-6. Persists to `configs/generated/mode_router_config.json`
 
 ### Routing Reflection (Idle-Time Peer Review)
 
@@ -302,7 +277,6 @@ Healthy mode distribution ranges:
 | Mode | Healthy Range | Red Flag |
 |------|--------------|----------|
 | RESPOND | 50-75% | >85% (overconfident) or <40% (under-committing) |
-| CLARIFY | 8-20% | >30% (over-questioning) or <3% (never clarifying) |
 | ACT | 5-15% | <2% (ACT death) or >25% (over-processing) |
 | ACKNOWLEDGE | 3-12% | <1% (ignoring social cues) or >20% (trivializing) |
 | IGNORE | <2% | >5% (dropping messages) |
@@ -345,7 +319,7 @@ ACT loop iterations continue to log to `cortex_iterations` table for backward co
 
 ```
 [ROUTER] Mode selected: RESPOND (confidence: 0.85, 2.3ms)
-[ROUTER] Tie-breaker invoked: RESPOND vs CLARIFY → RESPOND
+[ROUTER] Tie-breaker invoked: RESPOND vs ACT → RESPOND
 [MODE:ACT] [ACT LOOP] Iteration 0: executing 2 actions
 [MODE:RESPOND] Generating response via frontal-cortex-respond.md
 ```
@@ -375,7 +349,7 @@ Retrieve grounding episode
       │
 LLM synthesis → reflection | question | hypothesis
       │
-Store as drift gist (surfaces in frontal cortex context)
+Store as drift thought (surfaces in frontal cortex context)
 ```
 
 ### Seed Selection Strategies
@@ -414,22 +388,18 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 ## Adaptive Layer
 
-The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND, CLARIFY, and ACKNOWLEDGE prompts.
+The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND and ACKNOWLEDGE prompts.
 
-### Style Detection (9 dimensions)
+### Style Detection (5 dimensions)
 
-The `memory_chunker_worker` extracts 9 communication style dimensions per exchange and merges them into a user trait using Exponential Moving Average (EMA). Cold-start uses a faster 0.5/0.5 EMA for the first 5 observations; stable state uses 0.3/0.7.
+`StyleMetricsService` measures 5 communication style dimensions per message using pure regex/heuristics (~1ms, zero LLM). Results feed the adaptive layer directly.
 
 | Dimension | Meaning |
 |-----------|---------|
 | verbosity | Preference for short vs. long responses (1-10) |
 | directness | Indirect suggestion vs. clear assertion (1-10) |
 | formality | Casual vs. formal register (1-10) |
-| abstraction_level | Concrete action vs. abstract reasoning (1-10) |
-| emotional_valence | Logical vs. emotional framing (1-10) |
-| certainty_level | Hedging/questioning vs. declarative/confident (1-10) |
-| challenge_appetite | Seeks validation vs. seeks counterpoints (1-10) |
-| depth_preference | Surface/practical vs. deep/exploratory (1-10) |
+| certainty | Hedging/questioning vs. declarative/confident (1-10) |
 | pacing | Rapid short messages vs. slow deliberate ones (1-10) |
 
 ### Directive Generation (rule-based, sub-1ms)
@@ -466,7 +436,7 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 - **Effective Margin:** Dynamic threshold for tie-breaker invocation (narrows with context warmth)
 - **Router Confidence:** Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal:** Metric logged by monitors, consumed by the single regulator
-- **Terminal Mode:** Mode that produces a user-facing response (RESPOND, CLARIFY, ACKNOWLEDGE, IGNORE)
+- **Terminal Mode:** Mode that produces a user-facing response (RESPOND, ACKNOWLEDGE, IGNORE)
 - **Continuation Mode:** Mode that triggers internal actions before re-routing (ACT only)
 - **Context Warmth:** Signal (0.0-1.0) measuring how much context is available for the current topic
 - **Anti-Oscillation Guard:** Per-request ephemeral score adjustment to prevent mode flip-flopping

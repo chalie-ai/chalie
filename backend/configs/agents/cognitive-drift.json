@@ -3,13 +3,6 @@
   "format": "json",
   "timeout": 360,
   "check_interval": 300,
-  "seed_weights": {
-    "decaying": 0.35,
-    "recent": 0.25,
-    "salient": 0.15,
-    "insight": 0.15,
-    "random": 0.10
-  },
   "insight_sessions_cap": 5,
   "max_activation_depth": 2,
   "max_activated_concepts": 5,
@@ -24,9 +17,14 @@
   ],
   "fatigue_budget": 2.5,
   "fatigue_window_minutes": 30,
-  "long_gap_probability": 0.1,
   "min_activation_energy": 0.4,
   "decaying_reinforce_bump": 0.1,
+  "signal_queue": {
+    "key": "reasoning:signals",
+    "idle_timeout_seconds": 600,
+    "min_signal_interval_seconds": 30,
+    "max_queue_depth": 50
+  },
   "autonomous_actions": {
     "communicate": {
       "enabled": true,
@@ -83,7 +81,7 @@
       "actionable_verbs": ["research", "find", "compare", "learn", "build", "prepare", "compile", "analyze", "investigate", "explore"]
     },
     "ambient_tool": {
-      "enabled": true,
+      "enabled": false,
       "relevance_threshold": 0.35,
       "min_activation": 0.5,
       "per_tool_cooldown": 43200,
@@ -92,9 +90,18 @@
       "surface_high_signal": false
     }
   },
+  "goal_inference": {
+    "enabled": true,
+    "min_conversations": 3,
+    "min_messages": 5,
+    "lookback_days": 14,
+    "min_confidence": 0.6,
+    "cooldown_seconds": 21600,
+    "max_candidates_per_run": 3,
+    "routine_topics": ["greeting", "general", "smalltalk", "weather", "thanks", "goodbye", "meta", "chalie", "test"]
+  },
   "descriptions": {
     "check_interval": "Base seconds between drift checks (jittered \u00b130%)",
-    "seed_weights": "Probability weights for each seed selection strategy",
     "episode_lookback_hours": "No drift if no episodes within this window (168h = 7 days)",
     "episode_recency_decay": "Exponential decay rate for recency weighting in seed selection (\u03bb in exp(-\u03bb*age_hours)). 0.02 = ~3.5% weight at 7 days vs today.",
     "salience_lookback_days": "Window for high-salience episode rumination",
@@ -102,13 +109,14 @@
     "jitter_range": "Random multiplier range for check interval [min, max]",
     "fatigue_budget": "Max cumulative activation score before fatigue (stronger drifts exhaust more)",
     "fatigue_window_minutes": "Window for drift fatigue counting",
-    "long_gap_probability": "Chance of extended silence between drifts (realism)",
     "min_activation_energy": "Minimum spreading activation score to produce a thought",
     "decaying_reinforce_bump": "Strength bump for decaying concepts on successful drift only",
     "insight_sessions_cap": "Minimum drift cycles between insight seed selections (throttle to avoid over-surfacing pattern observations)",
+    "signal_queue": "Signal queue config for reasoning-driven drift. idle_timeout_seconds controls how long to wait for a signal before falling back to memory-seeded drift.",
     "autonomous_actions.communicate": "Config for proactive messaging action. enabled=false to disable outreach entirely.",
     "autonomous_actions.reflect": "Config for internal reflection action. Enriches drift thoughts with associations, stores as reflection gists. type_repeat_decay penalizes consecutive same-type reflections.",
     "autonomous_actions.plan": "Config for proactive plan creation. Creates plan-backed persistent tasks from recurring drift topics. Signal persistence gate prevents over-eager planning.",
-    "autonomous_actions.ambient_tool": "Config for proactive external tool invocation. Bridges drift thoughts to ambient-capable tools (Reddit, News, etc.). per_tool_cooldown prevents flooding any single tool."
+    "autonomous_actions.ambient_tool": "Config for proactive external tool invocation. Disabled: produced low-quality content on weak similarity matching. Re-enable when signal-driven reasoning provides better context.",
+    "goal_inference": "Config for goal inference during idle time. Detects recurring topic patterns across signals and conversations, validates via LLM, creates PROPOSED persistent tasks. cooldown_seconds controls minimum time between inference runs."
   }
 }

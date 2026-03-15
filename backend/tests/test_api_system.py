@@ -169,7 +169,7 @@ class TestSystemAPI:
         assert data['memory']['gist_keys'] == 2
         assert data['memory']['fact_keys'] == 2
         # Queue depths
-        for q in ['prompt-queue', 'output-queue', 'memory-chunker-queue']:
+        for q in ['prompt-queue', 'output-queue']:
             assert data['queues'][q] == 5
 
     def test_system_status_degraded_when_store_fails(self, client):
@@ -199,7 +199,7 @@ class TestSystemAPI:
     def test_observability_routing_returns_distribution(self, client):
         """GET /system/observability/routing returns distribution, tiebreaker_rate, etc."""
         mock_svc = MagicMock()
-        mock_svc.get_mode_distribution.return_value = {'RESPOND': 60, 'ACT': 25, 'CLARIFY': 15}
+        mock_svc.get_mode_distribution.return_value = {'RESPOND': 75, 'ACT': 25}
         mock_svc.get_tiebreaker_rate.return_value = 0.1234
         mock_svc.get_recent_decisions.return_value = [
             {'selected_mode': 'RESPOND', 'router_confidence': 0.95, 'topic': 'chat', 'created_at': datetime(2026, 2, 26)},
@@ -211,7 +211,7 @@ class TestSystemAPI:
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['distribution'] == {'RESPOND': 60, 'ACT': 25, 'CLARIFY': 15}
+        assert data['distribution'] == {'RESPOND': 75, 'ACT': 25}
         assert data['tiebreaker_rate_24h'] == 0.1234
         assert data['total_decisions_24h'] == 2
         assert data['avg_confidence_24h'] == 0.875
@@ -233,36 +233,36 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_memory_returns_all_layers(self, client):
-        """GET /system/observability/memory returns SelfModel snapshot layers and MemoryStore counts."""
+        """GET /system/observability/memory returns flat counts from SQLite and MemoryStore."""
         mock_store = MagicMock()
         mock_store.keys.side_effect = lambda pattern: {
-            'working_memory:*': ['wm1'],
-            'gist_index:*': ['g1', 'g2'],
-            'fact_index:*': ['f1', 'f2', 'f3'],
+            'working_memory:*': ['wm:t1', 'wm:t2'],
+            'facts:*': [],
         }.get(pattern, [])
-        mock_store.llen.return_value = 0
+        mock_store.llen.side_effect = lambda key: {
+            'wm:t1': 3, 'wm:t2': 5, 'prompt-queue': 0, 'output-queue': 0,
+        }.get(key, 0)
 
-        fake_snapshot = {
-            'operational': {'memory_pressure': {'episode_count': 100}},
-            'epistemic': {'knowledge_gaps': []},
-            'noteworthy': ['something interesting'],
-        }
-
-        mock_self_model = MagicMock()
-        mock_self_model.get_snapshot.return_value = fake_snapshot
+        mock_db = MagicMock()
+        mock_db.fetch_all.side_effect = lambda sql, *a, **kw: {
+            'episodes': [{'cnt': 42, 'avg_act': 0.7123}],
+            'semantic_concepts': [{'cnt': 15}],
+            'user_traits': [{'cnt': 8, 'avg_conf': 0.6234}],
+        }.get(next((t for t in ('episodes', 'semantic_concepts', 'user_traits') if t in sql), ''), [])
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.self_model_service.SelfModelService', return_value=mock_self_model):
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['operational'] == fake_snapshot['operational']
-        assert data['epistemic'] == fake_snapshot['epistemic']
-        assert data['noteworthy'] == fake_snapshot['noteworthy']
-        assert data['working_memory'] == 1
-        assert data['gists'] == 2
-        assert data['facts'] == 3
+        assert data['episodes'] == 42
+        assert data['concepts'] == 15
+        assert data['traits'] == 8
+        assert data['facts'] == 8  # falls back to traits when no facts:* keys
+        assert data['avg_episode_activation'] == 0.7123
+        assert data['avg_trait_strength'] == 0.6234
+        assert data['working_memory'] == 8  # 3 + 5 turns across two threads
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -334,7 +334,7 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_tasks_returns_all_sections(self, client):
-        """GET /system/observability/tasks returns persistent_tasks, curiosity_threads, calibration."""
+        """GET /system/observability/tasks returns persistent_tasks and curiosity_threads."""
         mock_pt_svc = MagicMock()
         mock_pt_svc.get_active_tasks.return_value = [{'id': 1, 'goal': 'research X', 'state': 'active'}]
 
@@ -343,12 +343,8 @@ class TestSystemAPI:
             {'id': 2, 'question': 'Why is the sky blue?', 'last_explored_at': datetime(2026, 2, 26), 'created_at': '2026-02-25', 'last_surfaced_at': None},
         ]
 
-        mock_tc_svc = MagicMock()
-        mock_tc_svc.get_calibration_stats.return_value = {'accuracy': 0.88, 'total_scored': 200}
-
         with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc), \
-             patch('services.triage_calibration_service.TriageCalibrationService', return_value=mock_tc_svc):
+             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
@@ -360,14 +356,12 @@ class TestSystemAPI:
         assert data['curiosity_threads'][0]['last_explored_at'] == '2026-02-26 00:00:00'
         # Already a string, should be left as-is
         assert data['curiosity_threads'][0]['created_at'] == '2026-02-25'
-        assert data['calibration']['accuracy'] == 0.88
         assert 'generated_at' in data
 
     def test_observability_tasks_handles_sub_service_failures(self, client):
         """GET /system/observability/tasks gracefully handles individual sub-service failures."""
         with patch('services.persistent_task_service.PersistentTaskService', side_effect=RuntimeError('pt down')), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', side_effect=RuntimeError('ct down')), \
-             patch('services.triage_calibration_service.TriageCalibrationService', side_effect=RuntimeError('tc down')):
+             patch('services.curiosity_thread_service.CuriosityThreadService', side_effect=RuntimeError('ct down')):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
@@ -375,7 +369,6 @@ class TestSystemAPI:
         # All sections fallback to empty defaults
         assert data['persistent_tasks'] == []
         assert data['curiosity_threads'] == []
-        assert data['calibration'] == {}
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -442,10 +435,11 @@ class TestSystemAPI:
 
     def test_observability_traits_returns_categories(self, client):
         """GET /system/observability/traits returns traits grouped by category."""
+        # Schema: trait_key, trait_value, confidence, category, reinforcement_count, updated_at
         rows = [
-            ('favorite_drink', 'coffee', 0.92, 'preferences', 'inferred', 3, False, datetime(2026, 2, 25)),
-            ('name', 'Dylan', 0.99, 'identity', 'explicit', 5, True, datetime(2026, 2, 20)),
-            ('language', 'english', 0.85, 'preferences', 'inferred', 1, False, '2026-02-18'),
+            ('favorite_drink', 'coffee', 0.92, 'preferences', 3, datetime(2026, 2, 25)),
+            ('name', 'Dylan', 0.99, 'identity', 5, datetime(2026, 2, 20)),
+            ('language', 'english', 0.85, 'preferences', 1, '2026-02-18'),
         ]
 
         mock_db, mock_conn = _make_db_mock()
@@ -467,15 +461,12 @@ class TestSystemAPI:
         assert pref0['key'] == 'favorite_drink'
         assert pref0['value'] == 'coffee'
         assert pref0['confidence'] == 0.92
-        assert pref0['source'] == 'inferred'
         assert pref0['reinforcement_count'] == 3
-        assert pref0['is_literal'] is False
         # datetime object should be stringified
         assert pref0['updated_at'] == '2026-02-25 00:00:00'
 
         ident0 = categories['identity'][0]
         assert ident0['key'] == 'name'
-        assert ident0['is_literal'] is True
 
         # String updated_at should be left as-is
         pref1 = categories['preferences'][1]
@@ -503,11 +494,11 @@ class TestSystemAPI:
 
     def test_delete_trait_returns_404_when_not_found(self, client):
         """DELETE /system/observability/traits/<key> returns 404 when trait does not exist."""
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.rowcount = 0
+        mock_db = MagicMock()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
+             patch('services.user_trait_service.UserTraitService') as mock_svc_cls:
+            mock_svc_cls.return_value.delete_trait.return_value = False
             resp = client.delete('/system/observability/traits/nonexistent')
 
         assert resp.status_code == 404
@@ -558,8 +549,7 @@ class TestSystemAPI:
 
         with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=MagicMock(get_active_threads=MagicMock(return_value=[]))), \
-             patch('services.triage_calibration_service.TriageCalibrationService', return_value=MagicMock(get_calibration_stats=MagicMock(return_value={}))):
+             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=MagicMock(get_active_threads=MagicMock(return_value=[]))):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
@@ -585,21 +575,31 @@ class TestSystemAPI:
         mock_auto_cls.assert_called_once_with(mock_db)
         mock_delta_cls.assert_called_once_with(mock_db)
 
-    def test_observability_memory_returns_structured_snapshot(self, client):
-        """Memory endpoint returns SelfModelService snapshot (refactored from raw SQL)."""
-        mock_self_model = MagicMock()
-        mock_self_model.get_snapshot.return_value = {
-            'operational': {'working_memory_turns': 2, 'active_gists': 1},
-            'epistemic': {'episodes': 10, 'concepts': 5, 'traits': 3},
-            'noteworthy': False,
-        }
+    def test_observability_memory_returns_flat_structure(self, client):
+        """Memory endpoint returns flat counts (episodes, concepts, traits, etc.)."""
+        mock_store = MagicMock()
+        mock_store.keys.return_value = []
+        mock_store.llen.return_value = 0
 
-        with patch('services.self_model_service.SelfModelService', return_value=mock_self_model):
+        mock_db = MagicMock()
+        mock_db.fetch_all.side_effect = lambda sql, *a, **kw: {
+            'episodes': [{'cnt': 10, 'avg_act': 0.5}],
+            'semantic_concepts': [{'cnt': 5}],
+            'user_traits': [{'cnt': 3, 'avg_conf': 0.4}],
+        }.get(next((t for t in ('episodes', 'semantic_concepts', 'user_traits') if t in sql), ''), [])
+
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        assert 'operational' in data or 'epistemic' in data
+        assert 'episodes' in data
+        assert 'concepts' in data
+        assert 'traits' in data
+        assert 'avg_episode_activation' in data
+        assert 'avg_trait_strength' in data
+        assert 'working_memory' in data
 
     # ────────────────────────────────────────────
     # generated_at field on all observability endpoints
@@ -658,9 +658,18 @@ class TestSystemAPI:
         if not store_ok:
             mock_store.ping.side_effect = Exception('store down')
 
+        # Patch the embedding model sentinel so the embeddings component reports 'ok'
+        mock_st_model = MagicMock()  # any non-None value means model is loaded
+
+        # Patch ONNX service to report ready
+        mock_onnx_svc = MagicMock()
+        mock_onnx_svc.ready = True
+
         patches = {
             'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
             'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
+            'services.embedding_service._st_model': mock_st_model,
+            'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
         if not worker_ok:
             patches['services.prompt_queue.PromptQueue'] = MagicMock(side_effect=ImportError('no queue'))

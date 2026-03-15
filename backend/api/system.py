@@ -87,6 +87,19 @@ def readiness_check():
         logger.debug(f'[READY] embedding model not ready: {e}')
         components['embeddings'] = {'status': 'error', 'message': str(e)}
 
+    # ONNX models — preloaded in background thread on boot. Not ready until
+    # ensure_models() + warmup inference have completed.
+    try:
+        from services.onnx_inference_service import get_onnx_inference_service
+        onnx_svc = get_onnx_inference_service()
+        if onnx_svc.ready:
+            components['onnx'] = {'status': 'ok'}
+        else:
+            components['onnx'] = {'status': 'loading'}
+    except Exception as e:
+        logger.debug(f'[READY] ONNX not ready: {e}')
+        components['onnx'] = {'status': 'error', 'message': str(e)}
+
     ready = all(c.get('status') == 'ok' for c in components.values())
     return jsonify({'ready': ready, **components}), (200 if ready else 503)
 
@@ -144,7 +157,7 @@ def system_status():
             result["database_error"] = str(e)
 
         # Queue depths
-        for queue_name in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
+        for queue_name in ["prompt-queue", "output-queue"]:
             try:
                 result["queues"][queue_name] = store.llen(queue_name)
             except Exception:
@@ -217,41 +230,77 @@ def observability_routing():
 @system_bp.route('/system/observability/memory', methods=['GET'])
 @require_session
 def observability_memory():
-    """Memory layer counts and health indicators."""
-    try:
-        from services.memory_client import MemoryClientService
-        from services.self_model_service import SelfModelService
+    """Memory layer counts and health indicators.
 
-        # SelfModelService holds a cached (sub-ms) snapshot with the canonical
-        # nested structure: operational.memory_pressure.{episode_count, ...}
-        # Use it directly to avoid redundant DB queries and ensure the response
-        # shape matches what consumers (e.g. get_memory_richness()) expect.
-        snapshot = SelfModelService().get_snapshot()
+    Returns flat fields consumed by the brain admin frontend:
+      episodes, concepts, traits, facts,
+      avg_episode_activation, avg_trait_strength,
+      working_memory, queues
+    """
+    try:
+        from services.database_service import get_shared_db_service
+        from services.memory_client import MemoryClientService
+
+        db = get_shared_db_service()
+
+        # ── Long-term counts from SQLite ──
+        episode_row = db.fetch_all(
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(activation_score), 0) AS avg_act "
+            "FROM episodes WHERE deleted_at IS NULL"
+        )
+        episodes = episode_row[0]['cnt'] if episode_row else 0
+        avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
+
+        concept_row = db.fetch_all(
+            "SELECT COUNT(*) AS cnt FROM semantic_concepts"
+        )
+        concepts = concept_row[0]['cnt'] if concept_row else 0
+
+        trait_row = db.fetch_all(
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(confidence), 0) AS avg_conf "
+            "FROM user_traits"
+        )
+        traits = trait_row[0]['cnt'] if trait_row else 0
+        avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
+
+        # ── Short-term counts from MemoryStore ──
+        working_memory_turns = 0
+        facts = 0
+        queues = {}
+
+        try:
+            store = MemoryClientService.create_connection()
+
+            # Count total buffered turns across all active working-memory keys.
+            # Each key is a list of JSON turn entries; sum their lengths.
+            wm_keys = store.keys("working_memory:*")
+            for key in wm_keys:
+                working_memory_turns += store.llen(key)
+
+            # "Facts" = short-term atomic assertions stored in MemoryStore
+            # under the "facts:*" namespace (if any), otherwise fall back to
+            # user_traits count which already covers persistent facts.
+            fact_keys = store.keys("facts:*")
+            facts = len(fact_keys) if fact_keys else traits
+
+            for q in ["prompt-queue", "output-queue"]:
+                depth = store.llen(q)
+                if depth:
+                    queues[q] = depth
+        except Exception as e:
+            logger.warning(f"[OBS] memory store error: {e}")
 
         result = {
             'generated_at': _now_iso(),
-            'operational': snapshot.get('operational', {}),
-            'epistemic': snapshot.get('epistemic', {}),
-            'noteworthy': snapshot.get('noteworthy', []),
-            'working_memory': 0,
-            'gists': 0,
-            'facts': 0,
-            'queues': {},
+            'episodes': episodes,
+            'concepts': concepts,
+            'traits': traits,
+            'facts': facts,
+            'avg_episode_activation': round(avg_episode_activation, 4),
+            'avg_trait_strength': round(avg_trait_strength, 4),
+            'working_memory': working_memory_turns,
+            'queues': queues,
         }
-
-        # MemoryStore counts (not in the snapshot — add alongside)
-        try:
-            store = MemoryClientService.create_connection()
-            result['working_memory'] = len(store.keys("working_memory:*"))
-            result['gists'] = len(store.keys("gist_index:*"))
-            result['facts'] = len(store.keys("fact_index:*"))
-
-            for q in ["prompt-queue", "output-queue", "memory-chunker-queue"]:
-                depth = store.llen(q)
-                if depth:
-                    result['queues'][q] = depth
-        except Exception as e:
-            logger.warning(f"[OBS] memory store error: {e}")
 
         return jsonify(result), 200
     except Exception as e:
@@ -307,7 +356,7 @@ def observability_tools():
                 'updated_at': r.get('updated_at'),
             }
             if r['tool_name'] in perf_by_name:
-                entry['performance'] = perf_by_name[r['tool_name']]
+                entry.update(perf_by_name[r['tool_name']])
             tools.append(entry)
 
         return jsonify({
@@ -354,13 +403,12 @@ def observability_identity():
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Active persistent tasks, curiosity threads, and triage calibration."""
+    """Active persistent tasks and curiosity threads."""
     try:
         result = {
             'generated_at': _now_iso(),
             'persistent_tasks': [],
             'curiosity_threads': [],
-            'calibration': {},
         }
 
         # Persistent tasks
@@ -388,14 +436,6 @@ def observability_tasks():
             result['curiosity_threads'] = threads
         except Exception as e:
             logger.warning(f"[OBS] curiosity threads error: {e}")
-
-        # Triage calibration stats
-        try:
-            from services.triage_calibration_service import TriageCalibrationService
-            svc = TriageCalibrationService()
-            result['calibration'] = svc.get_calibration_stats()
-        except Exception as e:
-            logger.warning(f"[OBS] triage calibration error: {e}")
 
         return jsonify(result), 200
     except Exception as e:
@@ -476,8 +516,8 @@ def observability_traits():
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT trait_key, trait_value, confidence, category, source, "
-                "reinforcement_count, is_literal, updated_at "
+                "SELECT trait_key, trait_value, confidence, category, "
+                "reinforcement_count, updated_at "
                 "FROM user_traits "
                 "ORDER BY category, confidence DESC"
             )
@@ -487,14 +527,12 @@ def observability_traits():
                 cat = row[3] or 'general'
                 if cat not in categories:
                     categories[cat] = []
-                updated = row[7]
+                updated = row[5]
                 categories[cat].append({
                     'key': row[0],
                     'value': row[1],
                     'confidence': round(float(row[2] or 0), 3),
-                    'source': row[4],
-                    'reinforcement_count': row[5] or 0,
-                    'is_literal': bool(row[6]),
+                    'reinforcement_count': row[4] or 0,
                     'updated_at': str(updated) if updated and not isinstance(updated, str) else updated,
                 })
 
@@ -513,16 +551,11 @@ def observability_delete_trait(trait_key):
     """Delete a specific user trait by key."""
     try:
         from services.database_service import get_shared_db_service
+        from services.user_trait_service import UserTraitService
 
         db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM user_traits WHERE trait_key = ?",
-                (trait_key,)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
+        svc = UserTraitService(db)
+        deleted = svc.delete_trait(trait_key)
 
         if deleted:
             return jsonify({'ok': True, 'deleted': trait_key}), 200
@@ -643,6 +676,63 @@ def activity_feed():
     except Exception as e:
         logger.error(f"[REST API] activity feed error: {e}", exc_info=True)
         return jsonify({"error": "Failed to retrieve activity feed"}), 500
+
+
+
+@system_bp.route('/system/observability/failures', methods=['GET'])
+@require_session
+def observability_failures():
+    """Return failure-analysis blame distribution and lesson statistics."""
+    try:
+        from services.database_service import get_shared_db_service
+        from services.failure_analysis_service import FailureAnalysisService
+        db = get_shared_db_service()
+        fas = FailureAnalysisService(db)
+        stats = fas.get_stats()
+        return jsonify({'generated_at': _now_iso(), **stats}), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/failures error: {e}")
+        return jsonify({"error": "Failed to retrieve failure stats"}), 500
+
+
+# ──────────────────────────────────────────────
+# In-place update endpoints
+# ──────────────────────────────────────────────
+
+@system_bp.route('/system/update/check', methods=['GET'])
+@require_session
+def update_check():
+    """Check GitHub for a newer Chalie release."""
+    try:
+        from services.app_update_service import AppUpdateService
+        info = AppUpdateService().check_for_update()
+        return jsonify(info), 200
+    except Exception as e:
+        logger.error(f"[REST API] update/check error: {e}")
+        return jsonify({"error": "Failed to check for updates"}), 500
+
+
+@system_bp.route('/system/update/apply', methods=['POST'])
+@require_session
+def update_apply():
+    """Apply an in-place update (installed mode only)."""
+    try:
+        from services.app_update_service import AppUpdateService
+        data = request.get_json(silent=True) or {}
+        tag = data.get('tag')
+        if not tag:
+            return jsonify({"ok": False, "message": "Missing 'tag' parameter"}), 400
+
+        svc = AppUpdateService()
+        result = svc.apply_update(tag)
+
+        if result.get('ok'):
+            svc.request_restart()
+
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"[REST API] update/apply error: {e}")
+        return jsonify({"ok": False, "message": f"Update failed: {e}"}), 500
 
 
 # ──────────────────────────────────────────────

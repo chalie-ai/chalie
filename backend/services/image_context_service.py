@@ -118,30 +118,61 @@ def analyze(image_bytes: bytes, mime_type: str = 'image/png') -> dict:
 
 
 def has_vision_provider() -> bool:
-    """Return True if a vision-capable provider is available for chat-vision."""
+    """Check whether a vision-capable provider is configured for image analysis.
+
+    Returns:
+        ``True`` if at least one Gemini, Anthropic, or OpenAI provider is
+        assigned to the ``chat-vision`` or ``document-ocr`` job.
+    """
     return _get_vision_provider() is not None
 
 
 def compute_hash(image_bytes: bytes) -> str:
-    """Compute SHA-256 hash of image bytes for deduplication."""
+    """Compute the SHA-256 hash of image bytes for within-session deduplication.
+
+    Args:
+        image_bytes: Raw image bytes to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     return hashlib.sha256(image_bytes).hexdigest()
 
 
 # ─── Preprocessing ───────────────────────────────────────────────────────────
 
 def _strip_exif(img) -> object:
-    """
-    Return a copy of the PIL Image with EXIF metadata removed.
+    """Return a copy of the PIL Image with EXIF metadata removed.
 
     Strips GPS coordinates, device identifiers, timestamps, and all other
     EXIF tags that phones embed automatically.
+
+    Implementation uses a BytesIO PNG round-trip: the image is saved to an
+    in-memory buffer as PNG (PIL's PNG encoder does not write EXIF by default)
+    and immediately re-opened.  This is dramatically more memory-efficient than
+    the previous ``list(img.getdata())`` approach, which materialised the
+    entire pixel array as a Python list — up to ~470 MB for a 2048×2048 RGBA
+    image.
+
+    Args:
+        img: PIL Image object whose EXIF/metadata should be stripped.
+
+    Returns:
+        A new PIL Image with identical pixel content and no embedded metadata.
+        Falls back to returning the original image unchanged on any error
+        (non-fatal — analysis can still proceed with residual metadata).
     """
     try:
         from PIL import Image
-        # Create a new image from the raw pixel data — no metadata carried over
-        data = list(img.getdata())
-        clean = Image.new(img.mode, img.size)
-        clean.putdata(data)
+        buf = io.BytesIO()
+        # PNG format never carries EXIF in PIL's default encoder, so a
+        # save+reload cycle produces a completely metadata-free image.
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        clean = Image.open(buf)
+        # Force pixel data to load now so the BytesIO buffer can be
+        # garbage-collected rather than kept alive by lazy loading.
+        clean.load()
         return clean
     except Exception as e:
         logger.debug(f'[IMAGE CTX] EXIF strip failed (non-fatal): {e}')
@@ -193,14 +224,30 @@ def _get_vision_provider() -> Optional[dict]:
 # ─── Image Helpers ────────────────────────────────────────────────────────────
 
 def _img_to_base64(img, format='PNG') -> str:
-    """Convert PIL Image to base64-encoded string."""
+    """Encode a PIL Image as a base64 string for API payloads.
+
+    Args:
+        img: PIL Image object to encode.
+        format: Target image format (default ``'PNG'``).
+
+    Returns:
+        Base64-encoded string of the image bytes.
+    """
     buf = io.BytesIO()
     img.save(buf, format=format)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
 def _img_to_bytes(img, format='PNG') -> bytes:
-    """Convert PIL Image to raw bytes."""
+    """Serialize a PIL Image to raw bytes.
+
+    Args:
+        img: PIL Image object to serialize.
+        format: Target image format (default ``'PNG'``).
+
+    Returns:
+        Bytes object containing the encoded image data.
+    """
     buf = io.BytesIO()
     img.save(buf, format=format)
     return buf.getvalue()
@@ -209,7 +256,16 @@ def _img_to_bytes(img, format='PNG') -> bytes:
 # ─── Provider Implementations ─────────────────────────────────────────────────
 
 def _analyze_gemini(config: dict, img) -> tuple:
-    """Analyze image via Google Gemini. Returns (description, ocr_text)."""
+    """Analyze an image using Google Gemini for visual description and OCR.
+
+    Args:
+        config: Provider config dict with ``model`` and API credential keys.
+        img: Pre-processed PIL Image (EXIF-stripped, dimension-normalized).
+
+    Returns:
+        Tuple of ``(description, ocr_text)`` strings.  Each may be empty on
+        provider failure.
+    """
     from google import genai
     from services.llm_service import _resolve_api_key
 
@@ -248,7 +304,16 @@ def _analyze_gemini(config: dict, img) -> tuple:
 
 
 def _analyze_anthropic(config: dict, img) -> tuple:
-    """Analyze image via Anthropic Claude. Returns (description, ocr_text)."""
+    """Analyze an image using Anthropic Claude for visual description and OCR.
+
+    Args:
+        config: Provider config dict with ``model`` and API credential keys.
+        img: Pre-processed PIL Image (EXIF-stripped, dimension-normalized).
+
+    Returns:
+        Tuple of ``(description, ocr_text)`` strings.  Each may be empty on
+        provider failure.
+    """
     import anthropic
     from services.llm_service import _resolve_api_key
 
@@ -295,7 +360,16 @@ def _analyze_anthropic(config: dict, img) -> tuple:
 
 
 def _analyze_openai(config: dict, img) -> tuple:
-    """Analyze image via OpenAI GPT-4 Vision. Returns (description, ocr_text)."""
+    """Analyze an image using OpenAI GPT-4 Vision for visual description and OCR.
+
+    Args:
+        config: Provider config dict with ``model`` and API credential keys.
+        img: Pre-processed PIL Image (EXIF-stripped, dimension-normalized).
+
+    Returns:
+        Tuple of ``(description, ocr_text)`` strings.  Each may be empty on
+        provider failure.
+    """
     import openai
     from services.llm_service import _resolve_api_key
 

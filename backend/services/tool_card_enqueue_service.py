@@ -20,7 +20,7 @@ LOG_PREFIX = "[CARD ENQUEUE]"
 
 
 def enqueue_tool_cards(act_history: list, topic: str, metadata: dict,
-                       cycle_id: str = None) -> bool:
+                       cycle_id: str = None, exchange_id: str = '') -> bool:
     """Render and enqueue cards for card-enabled tools.
 
     Returns True if any synthesize=false tool was found (suppresses the text
@@ -48,8 +48,8 @@ def enqueue_tool_cards(act_history: list, topic: str, metadata: dict,
         from services.output_service import OutputService
 
         store = MemoryClientService.create_connection()
-        raw_items = store.lrange(act_memory_keys.tool_raw_cache(topic), 0, -1)
-        store.delete(act_memory_keys.tool_raw_cache(topic))
+        raw_items = store.lrange(act_memory_keys.tool_raw_cache(topic, exchange_id), 0, -1)
+        store.delete(act_memory_keys.tool_raw_cache(topic, exchange_id))
 
         # Build {tool_name: raw_result} map (last result per tool wins)
         raw_map = {}
@@ -74,7 +74,7 @@ def enqueue_tool_cards(act_history: list, topic: str, metadata: dict,
                     rendered_tools.add(rendered_by_emit)
 
         # B8: Check per-topic rendered_cards MemoryStore set for cross-invocation dedup
-        rendered_key = act_memory_keys.rendered_cards(topic)
+        rendered_key = act_memory_keys.rendered_cards(topic, exchange_id)
         already_rendered = store.smembers(rendered_key)
         if already_rendered:
             rendered_tools.update(

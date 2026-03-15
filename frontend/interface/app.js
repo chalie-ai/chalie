@@ -33,8 +33,20 @@ class ChalieApp {
     this.renderer = null;
     this.voice = null;
 
+    // Scroll-up pagination state
+    this._historyOffset = 0;
+    this._historyTotal = 0;
+    this._historyLoading = false;
+    this._historyExhausted = false;
+    this._historyLimit = 12;
+    this._historyMaxTurns = 120;
+
     // Attached images for current message
     this._attachedImages = [];  // [{id: string, element: HTMLElement}]
+
+    // Pending image analysis: image_id → {element: HTMLElement, timeout: number}
+    // Populated by _handleImageAttach; cleared by the 'image_ready' WS event or timeout.
+    this._pendingImageAnalysis = new Map();
 
     // Cards
     this._memoryCard = null;
@@ -99,6 +111,7 @@ class ChalieApp {
     this._initAmbientSensor();
     this._initPwaDialog();
     this._initTaskStrip();
+    this._initUpdateSystem();
     this._initAmbientCanvas();
     this._initVisibilityTracking();
     this._initConnectionMonitor();
@@ -118,7 +131,7 @@ class ChalieApp {
 
     // Show the "Waking up" overlay while we wait for the backend
     this._readyPollActive = true;
-    this._showSparkOverlay();
+    this._showLoadingOverlay();
 
     // Start the app
     await this._start();
@@ -167,7 +180,7 @@ class ChalieApp {
   async _start() {
     try {
       await this._pollUntilReady();
-      this._dismissSparkOverlay();
+      this._dismissLoadingOverlay();
       this.presence.setState('resting');
       const voiceReady = await this.voice.init();
       if (voiceReady.stt) document.getElementById('micBtn')?.classList.remove('hidden');
@@ -177,6 +190,14 @@ class ChalieApp {
       // Poll every 60s as a safety net for tasks that complete without a drift event
       this._taskStripInterval = setInterval(() => this._loadActiveTasks(), 60_000);
       this._connectWebSocket();
+      window.addEventListener('scroll', () => {
+        if (window.scrollY < 150 && !this._historyLoading && !this._historyExhausted) {
+          const anchor = document.body.scrollHeight - window.scrollY;
+          this._loadRecentConversation().then(() => {
+            window.scrollTo(0, document.body.scrollHeight - anchor);
+          });
+        }
+      });
       window.addEventListener('beforeunload', () => {
         this.ws.close();
         clearInterval(this._taskStripInterval);
@@ -792,8 +813,8 @@ class ChalieApp {
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
 
-    // Render user form with timestamp
-    this.renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp);
+    // Render user form with timestamp (pass imageIds so thumbnails are shown inline)
+    this.renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp, {}, pendingImageIds);
 
     // Create pending form and store reference for potential early resolution
     const pendingForm = this.renderer.createPendingForm();
@@ -887,34 +908,89 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   async _loadRecentConversation() {
+    if (this._historyLoading || this._historyExhausted) return;
+    this._historyLoading = true;
+
+    const loader = document.getElementById('historyLoader');
+    if (loader) loader.style.display = 'flex';
+
     try {
-      const data = await this.api.getRecentConversation();
-      if (!data.exchanges || data.exchanges.length === 0) {
+      const data = await this.api.getRecentConversation({
+        limit: this._historyLimit,
+        offset: this._historyOffset,
+      });
+
+      const exchanges = data.exchanges || [];
+
+      if (exchanges.length === 0 && this._historyOffset === 0) {
+        this._historyExhausted = true;
+        this._showHistoryEndPill();
         return;
       }
 
-      for (const exchange of data.exchanges) {
-        if (exchange.prompt) {
-          this.renderer.appendUserForm(exchange.prompt, exchange.timestamp);
+      if (this._historyOffset === 0) {
+        // Initial load — append in chronological order; use in_working_memory from API
+        for (const exchange of exchanges) {
+          this._appendExchange(exchange, exchange.in_working_memory !== false);
         }
-        if (exchange.response) {
-          this.renderer.appendChalieForm(exchange.response, {
-            topic: exchange.topic,
-            ts: exchange.timestamp,
-            exchange_id: exchange.id,
-          });
+      } else {
+        // Subsequent pages — prepend in reverse so oldest ends up at top
+        for (let i = exchanges.length - 1; i >= 0; i--) {
+          this._prependExchange(exchanges[i], false);
         }
+      }
+
+      this._historyOffset += exchanges.length;
+      this._historyTotal = data.total ?? this._historyOffset;
+
+      if (!data.has_more || this._historyOffset >= this._historyMaxTurns) {
+        this._historyExhausted = true;
+        this._showHistoryEndPill();
       }
     } catch (err) {
       if (err.message === 'AUTH') {
         this._handleAuthFailure();
       }
       // Otherwise silently fail — conversation history is nice-to-have
+    } finally {
+      if (loader) loader.style.display = 'none';
+      this._historyLoading = false;
     }
   }
 
-  _showSparkOverlay() {
-    const overlay = document.getElementById('sparkOverlay');
+  _appendExchange(exchange, inWorkingMemory) {
+    if (exchange.prompt) {
+      this.renderer.appendUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
+    }
+    if (exchange.response) {
+      this.renderer.appendChalieForm(exchange.response, {
+        topic: exchange.topic,
+        ts: exchange.timestamp,
+        exchange_id: exchange.id,
+      }, { inWorkingMemory });
+    }
+  }
+
+  _prependExchange(exchange, inWorkingMemory) {
+    if (exchange.response) {
+      this.renderer.prependChalieForm(exchange.response, {
+        topic: exchange.topic,
+        ts: exchange.timestamp,
+        exchange_id: exchange.id,
+      }, { inWorkingMemory });
+    }
+    if (exchange.prompt) {
+      this.renderer.prependUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
+    }
+  }
+
+  _showHistoryEndPill() {
+    const pill = document.getElementById('historyEndPill');
+    if (pill) pill.style.display = 'flex';
+  }
+
+  _showLoadingOverlay() {
+    const overlay = document.getElementById('loadingOverlay');
     const spine = document.getElementById('conversationSpine');
     const dock = document.querySelector('.input-dock');
     if (!overlay) return;
@@ -924,25 +1000,25 @@ class ChalieApp {
     if (dock) dock.style.display = 'none';
 
     // Skip button
-    const skipBtn = overlay.querySelector('.spark-overlay__skip');
+    const skipBtn = overlay.querySelector('.loading-overlay__skip');
     if (skipBtn) {
       skipBtn.addEventListener('click', () => {
         this._readyPollActive = false;
-        this._dismissSparkOverlay();
+        this._dismissLoadingOverlay();
       }, { once: true });
     }
   }
 
-  _dismissSparkOverlay() {
-    const overlay = document.getElementById('sparkOverlay');
+  _dismissLoadingOverlay() {
+    const overlay = document.getElementById('loadingOverlay');
     const spine = document.getElementById('conversationSpine');
     const dock = document.querySelector('.input-dock');
 
     if (overlay && !overlay.classList.contains('hidden')) {
-      overlay.classList.add('spark-overlay--fading');
+      overlay.classList.add('loading-overlay--fading');
       setTimeout(() => {
         overlay.classList.add('hidden');
-        overlay.classList.remove('spark-overlay--fading');
+        overlay.classList.remove('loading-overlay--fading');
       }, 220);
     }
 
@@ -960,9 +1036,39 @@ class ChalieApp {
   }
 
   _handleEvent(data) {
-    // Task progress/completion — refresh the task strip
+    // App update notification
+    if (data.type === 'app_update') {
+      this._handleUpdateEvent(data);
+      return;
+    }
+
+    // Task progress/completion — refresh the task strip (sticky bar only)
     if (data.type === 'task') {
       this._loadActiveTasks();
+      return;
+    }
+
+    // Step 4 / B4+B5 fix: image analysis completion pushed by _run_analysis via
+    // output:events.  Remove the spinner on success, or show an error badge so
+    // the user can decide whether to remove the failed image.
+    if (data.type === 'image_ready') {
+      const pending = this._pendingImageAnalysis.get(data.image_id);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this._pendingImageAnalysis.delete(data.image_id);
+        pending.element.classList.remove('analyzing');
+        pending.element.querySelector('.image-preview__spinner')?.remove();
+        if (data.status === 'failed') {
+          // Surface the failure with an error badge on the thumbnail.
+          const errBadge = document.createElement('span');
+          errBadge.className = 'image-preview__error';
+          errBadge.title = 'Image analysis failed — context unavailable';
+          errBadge.textContent = '✕';
+          pending.element.appendChild(errBadge);
+          this._showToast?.('Image analysis failed');
+        }
+      }
+      return;
     }
 
     // Tool result card event
@@ -1021,10 +1127,6 @@ class ChalieApp {
     // Render in conversation spine as a Chalie message
     const formEl = this.renderer.appendChalieForm(content, meta);
 
-    // Spark presence messages get ambient treatment (softer, not conversational)
-    if (data.topic && data.topic.startsWith('spark_')) {
-      formEl.classList.add('speech-form--ambient');
-    }
 
     // Critic escalation — amber border to signal "needs your attention"
     if (data.type === 'escalation') {
@@ -1233,8 +1335,18 @@ class ChalieApp {
 
   async _healthCheck() {
     try {
-      await this.api.healthCheck();
+      const data = await this.api.healthCheck();
       this._hideConnectionBanner();
+      // Version-change detection (post-restart cache bust)
+      if (data?.version) {
+        if (!window.__chalieVersion) {
+          window.__chalieVersion = data.version;
+        } else if (data.version !== window.__chalieVersion) {
+          window.__chalieVersion = data.version;
+          location.reload();
+          return;
+        }
+      }
       // Check again in 30s
       this._healthRetryTimeout = setTimeout(() => this._healthCheck(), 30000);
     } catch {
@@ -1535,6 +1647,20 @@ class ChalieApp {
     } catch { /* silently hide on any error */ }
   }
 
+  /**
+   * Handle an image file selected by the user.
+   *
+   * Uploads the file via REST, then keeps the spinner and `analyzing` CSS class
+   * on the thumbnail until the server pushes an `image_ready` WebSocket event
+   * (Step 4 / B4 fix).  A 90-second safety-net timeout replaces the spinner
+   * with a warning badge if the event never arrives.
+   *
+   * The send button is enabled as soon as the server returns an `image_id` so
+   * the user is not blocked — the WebSocket handler (Step 5) will still attempt
+   * a short poll for the result when the message is dispatched.
+   *
+   * @param {File} file - The image file selected by the user.
+   */
   async _handleImageAttach(file) {
     if (this._attachedImages.length >= 3) {
       this._showToast?.('Maximum 3 images per message');
@@ -1553,9 +1679,29 @@ class ChalieApp {
       const data = await res.json();
       if (res.ok && data.image_id) {
         this._attachedImages.push({ id: data.image_id, element: thumbEl });
-        thumbEl.classList.remove('analyzing');
-        thumbEl.querySelector('.image-preview__spinner')?.remove();
+        // Step 4 / B4 fix: keep the spinner and 'analyzing' class — they are
+        // cleared when the server sends an 'image_ready' WebSocket event after
+        // background analysis completes (see _handleEvent).  Do NOT remove them
+        // here; the previous behaviour removed them immediately (before analysis
+        // even started), which caused the LLM to silently miss image context.
         document.getElementById('sendBtn').disabled = false;
+
+        // Safety net: if the 'image_ready' event does not arrive within 90 s,
+        // replace the spinner with a warning badge so the user knows analysis
+        // timed out.  The image remains attached — the WS handler will still do
+        // a short fallback poll when the message is sent (Step 5).
+        const timeoutId = setTimeout(() => {
+          this._pendingImageAnalysis.delete(data.image_id);
+          thumbEl.classList.remove('analyzing');
+          thumbEl.querySelector('.image-preview__spinner')?.remove();
+          const warn = document.createElement('span');
+          warn.className = 'image-preview__warn';
+          warn.title = 'Image analysis timed out — context may be unavailable';
+          warn.textContent = '⚠';
+          thumbEl.appendChild(warn);
+        }, 90_000);
+
+        this._pendingImageAnalysis.set(data.image_id, { element: thumbEl, timeout: timeoutId });
       } else {
         thumbEl.remove();
         this._updatePreviewVisibility();
@@ -1612,7 +1758,20 @@ class ChalieApp {
     if (strip && !strip.children.length) strip.classList.add('hidden');
   }
 
+  /**
+   * Remove all image thumbnails and cancel pending analysis timeouts.
+   *
+   * Called when a message is sent or the user navigates away.  Cancels any
+   * in-flight safety-net timers created by _handleImageAttach so they do not
+   * fire after the preview strip has been cleared.
+   */
   _clearImagePreview() {
+    // Cancel all pending 90 s safety-net timers before clearing the DOM.
+    for (const { timeout } of this._pendingImageAnalysis.values()) {
+      clearTimeout(timeout);
+    }
+    this._pendingImageAnalysis.clear();
+
     this._attachedImages = [];
     const strip = document.getElementById('imagePreview');
     if (strip) {
@@ -1839,6 +1998,124 @@ class ChalieApp {
   }
 
   _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ---------------------------------------------------------------------------
+  // Update System
+  // ---------------------------------------------------------------------------
+
+  _initUpdateSystem() {
+    document.getElementById('updateBannerBtn')?.addEventListener('click', () => this._showUpdateDialog());
+    document.getElementById('updateBannerDismiss')?.addEventListener('click', () => this._dismissUpdateBanner());
+    document.getElementById('updateDialogClose')?.addEventListener('click', () => this._closeUpdateDialog());
+    document.getElementById('updateCancelBtn')?.addEventListener('click', () => this._closeUpdateDialog());
+    document.getElementById('updateApplyBtn')?.addEventListener('click', () => this._applyUpdate());
+  }
+
+  _handleUpdateEvent(data) {
+    this._pendingUpdate = data;
+    const dismissedVersion = _lsGet('chalie_update_dismissed');
+    if (dismissedVersion === data.latest_tag) return;
+    this._showUpdateBanner(data);
+  }
+
+  _showUpdateBanner(data) {
+    const banner = document.getElementById('updateBanner');
+    const versionEl = document.getElementById('updateBannerVersion');
+    if (!banner || !versionEl) return;
+
+    versionEl.textContent = `v${data.latest_version}`;
+
+    if (data.deployment_mode === 'docker' || data.deployment_mode === 'dev') {
+      const btn = document.getElementById('updateBannerBtn');
+      if (btn) btn.textContent = 'Details';
+    }
+
+    banner.classList.remove('hidden');
+  }
+
+  _dismissUpdateBanner() {
+    const banner = document.getElementById('updateBanner');
+    if (banner) banner.classList.add('hidden');
+    if (this._pendingUpdate) {
+      _lsSet('chalie_update_dismissed', this._pendingUpdate.latest_tag);
+    }
+  }
+
+  _showUpdateDialog() {
+    const dialog = document.getElementById('updateDialog');
+    if (!dialog || !this._pendingUpdate) return;
+
+    const data = this._pendingUpdate;
+    const currentEl = document.getElementById('updateCurrentVer');
+    const newEl = document.getElementById('updateNewVer');
+    const notesEl = document.getElementById('updateNotes');
+    const actionsEl = document.getElementById('updateActions');
+    const progressEl = document.getElementById('updateProgress');
+    const instructionsEl = document.getElementById('updateInstructions');
+
+    if (currentEl) currentEl.textContent = `v${data.current_version}`;
+    if (newEl) newEl.textContent = `v${data.latest_version}`;
+    if (notesEl) notesEl.textContent = data.release_notes || 'No release notes.';
+
+    if (actionsEl) actionsEl.classList.remove('hidden');
+    if (progressEl) progressEl.classList.add('hidden');
+    if (instructionsEl) instructionsEl.classList.add('hidden');
+
+    if (data.deployment_mode === 'docker') {
+      if (actionsEl) actionsEl.classList.add('hidden');
+      if (instructionsEl) {
+        instructionsEl.innerHTML = `<p>You're running Chalie in Docker. To update:</p><code>docker pull chalie/chalie:${this._esc(data.latest_tag)}\ndocker compose up -d</code>`;
+        instructionsEl.classList.remove('hidden');
+      }
+    } else if (data.deployment_mode === 'dev') {
+      if (actionsEl) actionsEl.classList.add('hidden');
+      if (instructionsEl) {
+        instructionsEl.innerHTML = `<p>You're running from a git clone. To update:</p><code>git pull origin main</code>`;
+        instructionsEl.classList.remove('hidden');
+      }
+    }
+
+    dialog.showModal();
+  }
+
+  _closeUpdateDialog() {
+    document.getElementById('updateDialog')?.close();
+  }
+
+  async _applyUpdate() {
+    if (!this._pendingUpdate) return;
+
+    const actionsEl = document.getElementById('updateActions');
+    const progressEl = document.getElementById('updateProgress');
+    if (actionsEl) actionsEl.classList.add('hidden');
+    if (progressEl) progressEl.classList.remove('hidden');
+
+    try {
+      const resp = await fetch('/system/update/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ tag: this._pendingUpdate.latest_tag }),
+      });
+      const result = await resp.json();
+
+      if (!result.ok) {
+        const statusEl = progressEl?.querySelector('.update-dialog__status');
+        if (statusEl) statusEl.textContent = result.message || 'Update failed.';
+        setTimeout(() => {
+          if (actionsEl) actionsEl.classList.remove('hidden');
+          if (progressEl) progressEl.classList.add('hidden');
+        }, 3000);
+        return;
+      }
+
+      const statusEl = progressEl?.querySelector('.update-dialog__status');
+      if (statusEl) statusEl.textContent = 'Restarting Chalie...';
+    } catch {
+      const statusEl = progressEl?.querySelector('.update-dialog__status');
+      if (statusEl) statusEl.textContent = 'Update request failed.';
+    }
+  }
 }
 
 // Boot

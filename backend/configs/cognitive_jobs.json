@@ -1,0 +1,130 @@
+{
+  "jobs": [
+    {
+      "id": "autobiography",
+      "name": "Autobiography Synthesis",
+      "desc": "Synthesises personal narrative prose from all memory layers (6h cycle).",
+      "caps": { "reasoning": "high", "structured": "low", "creativity": "high", "classification": "none" }
+    },
+    {
+      "id": "frontal-cortex",
+      "name": "Frontal Cortex",
+      "desc": "Core reasoning engine; orchestrates all response modes.",
+      "caps": { "reasoning": "high", "structured": "medium", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "frontal-cortex-act",
+      "name": "Act Mode",
+      "desc": "Plans and executes multi-step tool actions. Up to 7 iterations per invocation.",
+      "caps": { "reasoning": "high", "structured": "high", "creativity": "low", "classification": "none" }
+    },
+    {
+      "id": "plan-decomposition",
+      "name": "Plan Decomposition",
+      "desc": "Decomposes task goals into executable step DAGs for long-horizon planning.",
+      "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "frontal-cortex-respond",
+      "name": "Respond Mode",
+      "desc": "Primary conversational voice of Chalie in normal conversation.",
+      "caps": { "reasoning": "high", "structured": "medium", "creativity": "high", "classification": "none" }
+    },
+    {
+      "id": "cognitive-drift",
+      "name": "Cognitive Drift (DMN)",
+      "desc": "Generates spontaneous thoughts during idle windows (Default Mode Network).",
+      "caps": { "reasoning": "medium", "structured": "low", "creativity": "high", "classification": "none" }
+    },
+    {
+      "id": "episodic-memory",
+      "name": "Episodic Memory",
+      "desc": "Synthesises sessions into episodic narratives for long-term recall.",
+      "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "frontal-cortex-proactive",
+      "name": "Proactive Mode",
+      "desc": "Translates spontaneous thoughts into outreach messages.",
+      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "mode-reflection",
+      "name": "Mode Reflection",
+      "desc": "Peer-reviews routing decisions during idle time (nightly batch).",
+      "caps": { "reasoning": "high", "structured": "medium", "creativity": "none", "classification": "medium" }
+    },
+    {
+      "id": "semantic-memory",
+      "name": "Semantic Memory",
+      "desc": "Extracts concepts and relationships to build the knowledge graph.",
+      "caps": { "reasoning": "high", "structured": "high", "creativity": "none", "classification": "medium" }
+    },
+    {
+      "id": "tool-prefilter",
+      "name": "Tool Pre-filter",
+      "desc": "Selects relevant tools and skills when ONNX confidence is low. Lightweight, infrequent.",
+      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
+    },
+    {
+      "id": "experience-assimilation",
+      "name": "Experience Assimilation",
+      "desc": "Evaluates tool outputs for novel knowledge worth storing.",
+      "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high" }
+    },
+    {
+      "id": "fact-store",
+      "name": "Fact Store",
+      "desc": "Extracts and stores atomic facts from exchanges. Runs async.",
+      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "medium" }
+    },
+    {
+      "id": "autonomous-ambient-tool",
+      "name": "Ambient Tool Query",
+      "desc": "Generates search queries for proactive tool use triggered by cognitive drift.",
+      "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "frontal-cortex-reflexive",
+      "name": "Reflexive Mode",
+      "desc": "Fast reflexive responses for simple, self-contained queries via cognitive reflex path.",
+      "caps": { "reasoning": "low", "structured": "medium", "creativity": "low", "classification": "none" }
+    },
+    {
+      "id": "frontal-cortex-scheduled-tool",
+      "name": "Scheduled Tool Mode",
+      "desc": "Generates responses after scheduled tool/reminder execution.",
+      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none" }
+    },
+    {
+      "id": "trait-extraction",
+      "name": "Trait Extraction",
+      "desc": "Extracts user traits from messages via lightweight LLM call. Async, non-blocking.",
+      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
+    },
+    {
+      "id": "moment-enrichment",
+      "name": "Moment Enrichment",
+      "desc": "Generates titles and summaries for pinned moments.",
+      "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "document-synthesis",
+      "name": "Document Synthesis",
+      "desc": "Generates summaries for uploaded documents during processing.",
+      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none" }
+    },
+    {
+      "id": "document-classification",
+      "name": "Document Classification",
+      "desc": "Classifies documents into categories, projects, and dates for automatic organisation.",
+      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
+    },
+    {
+      "id": "document-ocr",
+      "name": "Document OCR",
+      "desc": "Extracts text from image-only PDFs and scanned documents via vision LLM.",
+      "caps": { "reasoning": "none", "structured": "medium", "creativity": "none", "classification": "low" }
+    }
+  ]
+}

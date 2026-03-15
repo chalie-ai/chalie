@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 def _make_config():
     return {
         'base_scores': {
-            'RESPOND': 0.40, 'CLARIFY': 0.30, 'ACT': 0.20,
+            'RESPOND': 0.40, 'ACT': 0.20,
             'IGNORE': -0.50,
         },
         'weights': {},
@@ -52,19 +52,13 @@ class TestAntiOscillation:
 
     def test_suppresses_act_after_act(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.6, 'IGNORE': -0.5}
+        scores = {'RESPOND': 0.5, 'ACT': 0.6, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='ACT')
         assert adjusted['ACT'] == pytest.approx(0.45)  # 0.6 - 0.15
 
-    def test_boosts_respond_after_clarify(self):
-        router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'IGNORE': -0.5}
-        adjusted = router._apply_anti_oscillation(scores, previous_mode='CLARIFY')
-        assert adjusted['RESPOND'] == pytest.approx(0.65)  # 0.5 + 0.15
-
     def test_no_change_for_other_modes(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'CLARIFY': 0.3, 'ACT': 0.2, 'IGNORE': -0.5}
+        scores = {'RESPOND': 0.5, 'ACT': 0.2, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='RESPOND')
         assert adjusted == scores
 
@@ -197,8 +191,8 @@ class TestIgnoreMode:
         """
         IGNORE wins for zero-token input when warmth is in the cold zone (0.20-0.30).
 
-        At warmth=0.25: IGNORE=0.50, CLARIFY=0.49 (cold_boost=(1-0.25)*0.25=0.19).
-        At warmth=0.0:  CLARIFY=0.55 (cold_boost=0.25 dominates), so CLARIFY beats IGNORE.
+        At warmth=0.25: IGNORE=0.50, RESPOND=0.49 (cold_boost=(1-0.25)*0.25=0.19).
+        At warmth=0.0:  RESPOND=0.55 (cold_boost=0.25 dominates), so RESPOND beats IGNORE.
         The sweet spot is 0.20 < warmth < 0.30 where cold_boost is weak enough.
         """
         router = ModeRouterService(_make_config())
@@ -259,7 +253,7 @@ class TestGreetingHandling:
             "Hi, how are you?",
             skip_tiebreaker=True,
         )
-        assert result['mode'] in ('RESPOND', 'CLARIFY')
+        assert result['mode'] == 'RESPOND'
 
     def test_greeting_cold_context_no_facts_not_act(self):
         """Greeting with zero facts and cold context should not select ACT."""
@@ -323,38 +317,44 @@ class TestHysteresisWidening:
 
         Inside route(), _track_confidence runs BEFORE _is_low_confidence_streak, so
         we plant 2 values and rely on the route call's own confidence reading to
-        complete the streak as the 3rd entry. Signals are tuned to produce confidence≈0
-        (RESPOND and ACT nearly tied) so the route call contributes a low value.
+        complete the streak as the 3rd entry. Signals are tuned to produce confidence≈0.13
+        (RESPOND dominates ACT but margin is narrow) so the route call contributes a low value.
 
         After route():
-        - Fresh router history: [0.0]          → len < 3, no streak, margin unwidened
-        - Streaked router history: [0.05, 0.05, 0.0] → all < 0.15, streak active → +0.05
+        - Fresh router history: [0.133]          → len < 3, no streak, margin unwidened
+        - Streaked router history: [0.05, 0.05, 0.133] → all < 0.15, streak active → +0.05
+
+        Signal tuning (gists and facts removed in Stream 1):
+          implicit_reference=True + question + interrog + mem_conf=0.10
+          → ACT gets +0.15 (implicit) + 0.20 (question moderate) + 0.10 (mem very low) = +0.45
+          → RESPOND gets base boost but not enough to dominate → confidence ≈ 0.133 < 0.15
         """
         topic = 'hysteresis_test'
-        # warmth=0.5, question, interrog, fact=0, gist=0, mem_conf=0.20
-        # → RESPOND = 0.40 + 0.10 + 0 + 0 + 0.15 = 0.65
-        # → ACT     = 0.20 + 0.20 + 0.15 + 0.10  = 0.65 (nearly tied → confidence ≈ 0)
-        tied_signals = {
+        low_conf_signals = {
             **_make_signals(
                 context_warmth=0.5,
                 has_question_mark=True,
                 interrogative_words=True,
-                fact_count=0,
-                gist_count=0,
+                implicit_reference=True,
             ),
-            'memory_confidence': 0.20,
+            'memory_confidence': 0.10,
             'topic': topic,
         }
 
-        # Fresh router — route adds first confidence reading (≈0), len=1, no streak
+        # Fresh router — route adds first confidence reading (~0.133), len=1, no streak
         fresh_router = ModeRouterService(_make_config())
-        r_fresh = fresh_router.route(tied_signals, "Where is X?", skip_tiebreaker=True)
+        r_fresh = fresh_router.route(low_conf_signals, "Where is X?", skip_tiebreaker=True)
+
+        # Confirm confidence is genuinely low for the planted readings
+        assert r_fresh['router_confidence'] < 0.15, (
+            f"Expected low confidence to trigger streak, got {r_fresh['router_confidence']}"
+        )
 
         # Streaked router — 2 pre-planted readings, route adds the 3rd → streak triggers
         streaked_router = ModeRouterService(_make_config())
         streaked_router._track_confidence(topic, 0.05)
         streaked_router._track_confidence(topic, 0.05)
-        r_streaked = streaked_router.route(tied_signals, "Where is X?", skip_tiebreaker=True)
+        r_streaked = streaked_router.route(low_conf_signals, "Where is X?", skip_tiebreaker=True)
 
         assert r_streaked['effective_margin'] == pytest.approx(
             r_fresh['effective_margin'] + 0.05

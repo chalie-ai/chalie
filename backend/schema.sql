@@ -153,24 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_relationships_target ON semantic_relationships(ta
 CREATE INDEX IF NOT EXISTS idx_relationships_type ON semantic_relationships(relationship_type);
 CREATE INDEX IF NOT EXISTS idx_relationships_strength ON semantic_relationships(strength DESC);
 
--- ────────────────────────────────────────────────────────────────
--- SEMANTIC SCHEMAS — mental frameworks
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS semantic_schemas (
-    id TEXT PRIMARY KEY,
-    schema_name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    core_concepts TEXT NOT NULL,              -- JSONB
-    relationships TEXT DEFAULT '[]',         -- JSONB
-    activation_count INTEGER DEFAULT 0,
-    last_activated_at TEXT,
-    learned_from_episodes TEXT DEFAULT '[]', -- JSONB
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_schemas_name ON semantic_schemas(schema_name);
-CREATE INDEX IF NOT EXISTS idx_schemas_activation ON semantic_schemas(activation_count DESC);
+-- semantic_schemas table removed — never used by any service.
 
 -- ────────────────────────────────────────────────────────────────
 -- INTERACTION LOG — append-only audit trail
@@ -313,10 +296,8 @@ CREATE TABLE IF NOT EXISTS user_traits (
     id TEXT PRIMARY KEY,
     trait_key TEXT NOT NULL,
     trait_value TEXT NOT NULL,
-    category TEXT DEFAULT 'general',
+    category TEXT DEFAULT 'preference',
     confidence REAL DEFAULT 0.5,
-    source TEXT DEFAULT 'inferred',
-    is_literal INTEGER DEFAULT 1,            -- BOOLEAN
     reinforcement_count INTEGER DEFAULT 1,
     last_reinforced_at TEXT DEFAULT (datetime('now')),
     last_conflict_at TEXT,
@@ -372,6 +353,30 @@ CREATE TABLE IF NOT EXISTS threads (
 
 CREATE INDEX IF NOT EXISTS idx_threads_channel ON threads(channel_id);
 CREATE INDEX IF NOT EXISTS idx_threads_state ON threads(state);
+
+-- ────────────────────────────────────────────────────────────────
+-- THREAD EXCHANGES — durable conversation history
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS thread_exchanges (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    topic TEXT NOT NULL DEFAULT '',
+    prompt_message TEXT NOT NULL DEFAULT '',
+    prompt_time TEXT NOT NULL,
+    response_message TEXT,
+    response_time TEXT,
+    response_error TEXT,
+    generation_time_ms REAL,
+    steps TEXT DEFAULT '[]',
+    memory_chunk TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_exchanges_thread
+    ON thread_exchanges(thread_id, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_thread_exchanges_created
+    ON thread_exchanges(created_at ASC);
 
 -- ────────────────────────────────────────────────────────────────
 -- TOOL CONFIGS — per-tool key-value configuration
@@ -564,40 +569,6 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
 CREATE INDEX IF NOT EXISTS idx_tcp_tool_name ON tool_capability_profiles(tool_name);
 
 -- ────────────────────────────────────────────────────────────────
--- TRIAGE CALIBRATION EVENTS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS triage_calibration_events (
-    id TEXT PRIMARY KEY,
-    exchange_id TEXT,
-    topic TEXT,
-    triage_branch TEXT NOT NULL,
-    triage_mode TEXT NOT NULL,
-    tool_selected TEXT,                       -- JSON array (was TEXT[])
-    confidence_internal REAL,
-    confidence_tool_need REAL,
-    reasoning TEXT,
-    freshness_risk REAL,
-    decision_entropy REAL,
-    self_eval_override INTEGER DEFAULT 0,     -- BOOLEAN
-    self_eval_reason TEXT,
-    outcome_mode TEXT,
-    outcome_tools_used TEXT,                  -- JSON array (was TEXT[])
-    outcome_tool_success INTEGER,             -- BOOLEAN
-    outcome_latency_ms REAL,
-    tool_abstention INTEGER DEFAULT 0,        -- BOOLEAN
-    signal_rephrase INTEGER DEFAULT 0,        -- BOOLEAN
-    signal_correction INTEGER DEFAULT 0,      -- BOOLEAN
-    signal_explicit_lookup INTEGER DEFAULT 0, -- BOOLEAN
-    signal_abandonment INTEGER DEFAULT 0,     -- BOOLEAN
-    correctness_label TEXT,
-    correctness_score REAL,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tce_created ON triage_calibration_events(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tce_topic ON triage_calibration_events(topic, created_at DESC);
-
--- ────────────────────────────────────────────────────────────────
 -- TOOL PERFORMANCE METRICS
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tool_performance_metrics (
@@ -608,8 +579,6 @@ CREATE TABLE IF NOT EXISTS tool_performance_metrics (
     latency_ms REAL,
     cost_estimate REAL DEFAULT 0,
     user_correction INTEGER DEFAULT 0,        -- BOOLEAN
-    follow_up_confusion INTEGER DEFAULT 0,    -- BOOLEAN
-    result_used_in_response INTEGER DEFAULT 1,-- BOOLEAN
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -702,21 +671,11 @@ CREATE TABLE IF NOT EXISTS persistent_tasks (
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_status ON persistent_tasks(account_id, status);
 CREATE INDEX IF NOT EXISTS idx_persistent_tasks_next_run ON persistent_tasks(status, next_run_after);
 
--- ────────────────────────────────────────────────────────────────
--- COGNITIVE REFLEXES — learned fast-path clusters
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS cognitive_reflexes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sample_queries TEXT DEFAULT '[]',         -- JSON array (was TEXT[])
-    times_seen INTEGER DEFAULT 1,
-    times_unnecessary INTEGER DEFAULT 0,
-    times_activated INTEGER DEFAULT 0,
-    times_succeeded INTEGER DEFAULT 0,
-    times_failed INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    last_seen TEXT DEFAULT (datetime('now')),
-    last_activated TEXT
-);
+-- cognitive_reflexes table removed — CognitiveReflexService removed.
+DROP TABLE IF EXISTS cognitive_reflexes;
+DROP TABLE IF EXISTS cognitive_reflexes_vec;
+-- triage_calibration_events table removed — TriageCalibrationService removed.
+DROP TABLE IF EXISTS triage_calibration_events;
 
 -- WATCHED FOLDERS — monitored filesystem directories
 -- ────────────────────────────────────────────────────────────────
@@ -892,12 +851,10 @@ CREATE TABLE IF NOT EXISTS uncertainties (
     reasoning TEXT,
     temporal_signal INTEGER DEFAULT 0,        -- BOOLEAN: 1 if uncertainty is time-sensitive
     surface_context TEXT,                     -- optional text to surface alongside the uncertainty
-    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'surfaced' | 'resolved'
+    state TEXT NOT NULL DEFAULT 'open',       -- 'open' | 'resolved'
     resolution_strategy TEXT,                 -- 'accepted' | 'rejected' | 'merged' | 'superseded'
     resolution_detail TEXT,
     resolved_at TEXT,
-    surfaced_count INTEGER DEFAULT 0,
-    last_surfaced_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 

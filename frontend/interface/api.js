@@ -90,9 +90,9 @@ export class ApiClient {
       .catch(() => ({ ready: false }));
   }
 
-  /** @returns {Promise<{thread_id: string, exchanges: Array}>} */
-  getRecentConversation() {
-    return this._get('/conversation/recent');
+  /** @returns {Promise<{thread_id: string, exchanges: Array, total: number, has_more: boolean, working_memory_count: number}>} */
+  getRecentConversation({ limit = 12, offset = 0 } = {}) {
+    return this._get(`/conversation/recent?limit=${limit}&offset=${offset}`);
   }
 
   /** @returns {Promise<{today: Array, this_week: Array, older_highlights: Array}>} */

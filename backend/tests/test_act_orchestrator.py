@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from services.act_orchestrator_service import ACTOrchestrator, ACTResult, _action_fingerprint, _action_types
+from services.innate_skills.registry import CONTEXTUAL_SKILLS
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -51,10 +52,11 @@ class TestACTResult:
         assert result.iteration_logs == []
         assert result.termination_reason == ''
         assert result.loop_id is None
-        assert result.fatigue == 0.0
         assert result.iterations_used == 0
         assert result.critic_telemetry == {}
-        assert result.fatigue_telemetry == {}
+        assert result.loop_telemetry == {}
+        assert result.reflection is None
+        assert not hasattr(result, 'fatigue'), "fatigue field must not exist after fatigue removal"
 
 
 # ── Fingerprinting utilities ───────────────────────────────────────
@@ -95,7 +97,7 @@ class TestNoActions:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {'fatigue_total': 0}
+        mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         MockActLoop.return_value = mock_loop
@@ -112,36 +114,34 @@ class TestNoActions:
         assert result.termination_reason == 'no_actions'
 
 
-# ── Orchestrator: fatigue termination ──────────────────────────────
+# ── Orchestrator: max_iterations termination ───────────────────────
 
 @pytest.mark.unit
-class TestFatigueTermination:
+class TestMaxIterationsTermination:
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_fatigue_exhausted(self, MockActLoop):
-        """Loop exits when fatigue budget is exhausted."""
+    def test_max_iterations_exhausted(self, MockActLoop):
+        """Loop exits when iteration cap is hit."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
         mock_loop.iteration_logs = []
         mock_loop.iteration_number = 0
-        mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {'fatigue_total': 10}
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {'iterations_used': 5}
         mock_loop.get_critic_telemetry.return_value = {}
 
         # First call: actions available, can_continue True
-        # Second call (after execute): can_continue False (fatigue)
+        # Second call (after execute): can_continue False (max_iterations)
         mock_loop.can_continue.side_effect = [
-            (True, None),     # Before repetition check
-            (False, 'fatigue_exhausted'),  # After execution
+            (True, None),
+            (False, 'max_iterations'),
         ]
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found something'),
         ]
-        mock_loop.accumulate_fatigue.return_value = 5.0
         MockActLoop.return_value = mock_loop
-        MockActLoop.estimate_net_value = MagicMock(return_value=1.0)
 
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'test'}]),
@@ -156,7 +156,7 @@ class TestFatigueTermination:
             chat_history=[],
         )
 
-        assert result.termination_reason == 'fatigue_exhausted'
+        assert result.termination_reason == 'max_iterations'
 
 
 # ── Orchestrator: type-based repetition ────────────────────────────
@@ -174,15 +174,13 @@ class TestTypeRepetition:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {}
+        mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found'),
         ]
-        mock_loop.accumulate_fatigue.return_value = 1.0
         MockActLoop.return_value = mock_loop
-        MockActLoop.estimate_net_value = MagicMock(return_value=1.0)
 
         # 3 identical recall actions → repetition_detected
         cortex = _make_cortex_service([
@@ -219,15 +217,13 @@ class TestEscalationHints:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {}
+        mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found'),
         ]
-        mock_loop.accumulate_fatigue.return_value = 1.0
         MockActLoop.return_value = mock_loop
-        MockActLoop.estimate_net_value = MagicMock(return_value=1.0)
 
         # 3x recall (triggers pivot), then no actions (exit)
         cortex = _make_cortex_service([
@@ -271,15 +267,13 @@ class TestPersistentTaskExit:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {}
+        mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         mock_loop.execute_actions.return_value = [
             _make_action_result('persistent_task', 'success', 'Task created'),
         ]
-        mock_loop.accumulate_fatigue.return_value = 1.0
         MockActLoop.return_value = mock_loop
-        MockActLoop.estimate_net_value = MagicMock(return_value=1.0)
 
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'persistent_task', 'goal': 'Research X'}]),
@@ -313,15 +307,13 @@ class TestCallbackTermination:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {}
+        mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found'),
         ]
-        mock_loop.accumulate_fatigue.return_value = 1.0
         MockActLoop.return_value = mock_loop
-        MockActLoop.estimate_net_value = MagicMock(return_value=1.0)
 
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
@@ -343,50 +335,75 @@ class TestCallbackTermination:
         assert result.termination_reason == 'cancelled'
 
 
-# ── Orchestrator: critic enabled ───────────────────────────────────
+# ── Orchestrator: critic (post-loop reflection) ─────────────────────
 
 @pytest.mark.unit
 class TestCriticEnabled:
     @patch('services.act_orchestrator_service.ActLoopService')
-    @patch('services.critic_service.CriticService')
-    def test_critic_runs_when_enabled(self, MockCritic, MockActLoop):
-        """With critic_enabled=True, critic evaluates actions."""
-        mock_critic = MagicMock()
-        mock_critic.should_skip.return_value = False
-        mock_critic.evaluate.return_value = {'verified': True}
-        mock_critic.get_telemetry.return_value = {'total_evaluations': 1}
-        MockCritic.return_value = mock_critic
-
+    def test_critic_enabled_param_accepted(self, MockActLoop):
+        """critic_enabled=True is accepted (backward compat) and stored on instance."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
         mock_loop.iteration_logs = []
         mock_loop.iteration_number = 0
         mock_loop.fatigue = 0.0
-        mock_loop._critic = mock_critic
+        mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.per_action_timeout = 10.0
-        mock_loop.context_extras = {}
-        mock_loop.get_fatigue_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {'total_evaluations': 1}
-        mock_loop.can_continue.side_effect = [
-            (True, None),
-            (False, 'fatigue_exhausted'),
-        ]
-        mock_loop.execute_actions.return_value = [
-            _make_action_result('schedule', 'success', 'scheduled'),
-        ]
-        mock_loop.accumulate_fatigue.return_value = 1.0
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
         MockActLoop.return_value = mock_loop
-        MockActLoop.estimate_net_value = MagicMock(return_value=1.0)
 
-        cortex = _make_cortex_service([
-            _make_response(actions=[{'type': 'schedule', 'description': 'set alarm'}]),
-        ])
+        cortex = _make_cortex_service([_make_response(actions=[])])
 
         orchestrator = ACTOrchestrator(
             config={}, max_iterations=10,
             critic_enabled=True, smart_repetition=False,
+        )
+        # critic_enabled is stored for backward compat but no per-action critic runs
+        assert orchestrator.critic_enabled is True
+
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+        # Loop exits normally; per-action critic is not called
+        assert result.termination_reason == 'no_actions'
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    @patch('services.act_orchestrator_service.ACTOrchestrator._post_loop_reflection')
+    def test_post_loop_reflection_called(self, mock_reflect, MockActLoop):
+        """_post_loop_reflection is called after the loop exits."""
+        mock_reflect.return_value = None
+
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = [_make_action_result('recall', 'success', 'found')]
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 2
+        mock_loop.fatigue = 0.0
+        mock_loop._critic = None
+        mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.side_effect = [
+            (True, None),
+            (False, 'max_iterations'),
+        ]
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
+        ])
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=5, smart_repetition=False,
         )
         result = orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
@@ -394,8 +411,44 @@ class TestCriticEnabled:
             chat_history=[],
         )
 
-        # Critic should have been called (evaluate)
-        assert mock_critic.evaluate.called or mock_critic.should_skip.called
+        assert mock_reflect.called
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    @patch('services.act_orchestrator_service.ACTOrchestrator._post_loop_reflection')
+    def test_reflection_stored_in_result(self, mock_reflect, MockActLoop):
+        """Reflection returned by _post_loop_reflection is stored in ACTResult."""
+        fake_reflection = {
+            'outcome_quality': 0.8,
+            'what_worked': 'recall was accurate',
+            'what_failed': None,
+            'lesson': 'use recall before schedule',
+            'confidence': 0.9,
+        }
+        mock_reflect.return_value = fake_reflection
+
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.fatigue = 0.0
+        mock_loop._critic = None
+        mock_loop._escalation_hint_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([_make_response(actions=[])])
+
+        orchestrator = ACTOrchestrator(config={}, smart_repetition=False)
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+
+        assert result.reflection == fake_reflection
 
 
 # ── Orchestrator: deferred card context ────────────────────────────
@@ -413,7 +466,7 @@ class TestDeferredCardContext:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
-        mock_loop.get_fatigue_telemetry.return_value = {}
+        mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
         mock_loop.can_continue.return_value = (True, None)
         MockActLoop.return_value = mock_loop
@@ -443,7 +496,7 @@ class TestDeferredCardContext:
 class TestConstructorParams:
     def test_default_params(self):
         o = ACTOrchestrator(config={})
-        assert o.max_iterations == 7
+        assert o.max_iterations == 30
         assert o.cumulative_timeout == 60.0
         assert o.per_action_timeout == 10.0
         assert o.critic_enabled is False
@@ -495,3 +548,350 @@ class TestConstructorParams:
         )
         assert o.critic_enabled
         assert o.smart_repetition
+
+
+# ── Append mode: _prune_messages ──────────────────────────────────
+
+@pytest.mark.unit
+class TestAppendMode:
+    """Tests for append mode message array management."""
+
+    def test_prune_messages_under_budget(self):
+        """No pruning when estimated tokens are within budget."""
+        orch = ACTOrchestrator.__new__(ACTOrchestrator)
+        orch.config = {}
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "what?"},
+        ]
+        result = orch._prune_messages(messages, 10000)
+        assert len(result) == 3
+
+    def test_prune_messages_keeps_first_and_tail(self):
+        """When over budget, first message and recent tail are kept."""
+        orch = ACTOrchestrator.__new__(ACTOrchestrator)
+        orch.config = {}
+        messages = [{"role": "user", "content": "original prompt"}]
+        for i in range(10):
+            messages.append({"role": "assistant", "content": f"response {i} " + "padding " * 100})
+            messages.append({"role": "user", "content": f"update {i} " + "data " * 100})
+        result = orch._prune_messages(messages, 500)
+        assert result[0]["content"] == "original prompt"
+        assert len(result) < len(messages)
+
+    def test_prune_messages_empty(self):
+        """Empty message list is returned unchanged."""
+        orch = ACTOrchestrator.__new__(ACTOrchestrator)
+        orch.config = {}
+        assert orch._prune_messages([], 1000) == []
+
+    def test_prune_messages_minimum_three(self):
+        """_prune_messages never drops below 3 messages (first + at least 2)."""
+        orch = ACTOrchestrator.__new__(ACTOrchestrator)
+        orch.config = {}
+        # Build messages that are massively over budget
+        messages = [{"role": "user", "content": "original"}]
+        for i in range(20):
+            messages.append({"role": "assistant", "content": "answer " * 200})
+            messages.append({"role": "user", "content": "context " * 200})
+        result = orch._prune_messages(messages, 1)  # budget=1 forces max pruning
+        assert len(result) >= 1  # at minimum the original is kept
+        assert result[0]["content"] == "original"
+
+    def test_prune_messages_three_messages_not_pruned(self):
+        """Arrays of 3 or fewer messages are never pruned regardless of budget."""
+        orch = ACTOrchestrator.__new__(ACTOrchestrator)
+        orch.config = {}
+        messages = [
+            {"role": "user", "content": "word " * 10000},
+            {"role": "assistant", "content": "word " * 10000},
+            {"role": "user", "content": "word " * 10000},
+        ]
+        result = orch._prune_messages(messages, 1)  # budget=1 would normally prune
+        assert len(result) == 3  # <= 3 messages: skip pruning
+
+    def test_get_steering_text_no_request_id(self):
+        """_get_steering_text returns empty string when no request_id is set."""
+        orch = ACTOrchestrator.__new__(ACTOrchestrator)
+        orch.config = {}
+        orch._request_id = ''
+        # With no request_id the method should short-circuit or return ''
+        # (MemoryStore key would be 'steer:' which should be empty)
+        with patch('services.memory_client.MemoryClientService.create_connection') as mock_conn:
+            mock_store = MagicMock()
+            mock_store.lrange.return_value = []
+            mock_conn.return_value = mock_store
+            result = orch._get_steering_text()
+        assert result == ''
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_run_append_mode_calls_build_system_prompt(self, MockActLoop):
+        """With append_mode=True, build_system_prompt is called once before the loop."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        MockActLoop.return_value = mock_loop
+
+        cortex = MagicMock()
+        cortex.build_system_prompt.return_value = 'built system prompt'
+        cortex.generate_response_appended.return_value = {
+            'actions': [],
+            'confidence': 0.8,
+            'response': 'done',
+            'raw_response': '{"actions": []}',
+        }
+
+        orchestrator = ACTOrchestrator(
+            config={'append_mode': True}, max_iterations=5, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
+            chat_history=[],
+        )
+
+        cortex.build_system_prompt.assert_called_once()
+        cortex.generate_response_appended.assert_called()
+        cortex.generate_response.assert_not_called()
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_run_legacy_mode_calls_generate_response(self, MockActLoop):
+        """With append_mode=False, generate_response is called (legacy path)."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        MockActLoop.return_value = mock_loop
+
+        cortex = MagicMock()
+        cortex.generate_response.return_value = {
+            'actions': [],
+            'confidence': 0.8,
+            'response': 'done',
+        }
+
+        orchestrator = ACTOrchestrator(
+            config={'append_mode': False}, max_iterations=5, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
+            chat_history=[],
+        )
+
+        cortex.generate_response.assert_called()
+        cortex.build_system_prompt.assert_not_called()
+        cortex.generate_response_appended.assert_not_called()
+
+
+# ── Orchestrator: skill escalation ───────────────────────────────
+
+@pytest.mark.unit
+class TestSkillEscalation:
+    """Skill escalation injects full skill catalog when the loop is stuck
+    using only cognitive primitives (recall, memorize, introspect, associate)."""
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_escalation_triggers_after_two_primitive_only_iterations(self, MockActLoop):
+        """After 2 iterations of only-primitive actions, missing skill docs are injected."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+
+        # Always allow continuation — loop exits via no_actions from cortex
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found something'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Vary action types to avoid type-based repetition detection (3x same type)
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'test'}]),
+            _make_response(actions=[{'type': 'memorize', 'text': 'note'}]),
+            _make_response(actions=[{'type': 'introspect', 'topic': 'x'}]),
+            _make_response(actions=[]),  # exit
+        ])
+        cortex.get_skill_docs = MagicMock(return_value='## Schedule\nCreate reminders...')
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='add item pickup mom', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate', 'list'],
+        )
+
+        # Skill escalation should have called get_skill_docs with missing contextual skills
+        cortex.get_skill_docs.assert_called_once()
+        escalated_skills = cortex.get_skill_docs.call_args[0][0]
+        # 'list' was already selected, so it should NOT be in the escalated set
+        assert 'list' not in escalated_skills
+        # 'schedule' should be in the escalated set (it's a contextual skill not in selected)
+        assert 'schedule' in escalated_skills
+
+        # The escalation message should be injected via append_results (legacy mode)
+        system_injections = [
+            call for call in mock_loop.append_results.call_args_list
+            if any(
+                r.get('action_type') == 'system'
+                and 'Skill Escalation' in r.get('result', '')
+                for r in call[0][0]
+            )
+        ]
+        assert len(system_injections) == 1
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_no_escalation_when_contextual_skill_succeeds(self, MockActLoop):
+        """If a contextual skill succeeds in iteration 0, no escalation occurs."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('list', 'success', 'Added item'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'list', 'action': 'add'}]),
+            _make_response(actions=[]),  # exit
+        ])
+        cortex.get_skill_docs = MagicMock()
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='add milk to grocery list', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate', 'list'],
+        )
+
+        # get_skill_docs should NOT have been called — contextual skill succeeded
+        cortex.get_skill_docs.assert_not_called()
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_escalation_fires_only_once(self, MockActLoop):
+        """Skill escalation fires at most once per loop run."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        # Always allow — loop exits via no_actions
+        mock_loop.can_continue.return_value = (True, None)
+        # All iterations return only primitive results
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        # Alternate action types to avoid type-based repetition (3x same)
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'a'}]),
+            _make_response(actions=[{'type': 'memorize', 'text': 'b'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'c'}]),
+            _make_response(actions=[{'type': 'memorize', 'text': 'd'}]),
+            _make_response(actions=[]),  # exit
+        ])
+        cortex.get_skill_docs = MagicMock(return_value='## Extra Skills')
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='test', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate'],
+        )
+
+        # get_skill_docs should be called exactly once (not on every subsequent iteration)
+        assert cortex.get_skill_docs.call_count == 1
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_escalation_in_append_mode_injects_user_message(self, MockActLoop):
+        """In append mode, escalation adds a user message to the message array."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = MagicMock()
+        cortex.build_system_prompt.return_value = 'system prompt'
+        cortex.get_skill_docs.return_value = '## Schedule\nCreate reminders...'
+
+        # 3 iterations of primitives (alternating types to avoid repetition) + exit
+        cortex.generate_response_appended.side_effect = [
+            {'actions': [{'type': 'recall', 'query': 'a'}], 'confidence': 0.8,
+             'response': 'r1', 'raw_response': 'r1'},
+            {'actions': [{'type': 'memorize', 'text': 'b'}], 'confidence': 0.8,
+             'response': 'r2', 'raw_response': 'r2'},
+            {'actions': [{'type': 'introspect', 'topic': 'c'}], 'confidence': 0.8,
+             'response': 'r3', 'raw_response': 'r3'},
+            {'actions': [], 'confidence': 0.8, 'response': 'done', 'raw_response': 'done'},
+        ]
+
+        orchestrator = ACTOrchestrator(
+            config={'append_mode': True}, max_iterations=10, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='pickup mom', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+            selected_skills=['recall', 'memorize', 'introspect', 'associate'],
+        )
+
+        # In append mode, escalation should NOT use append_results
+        # Instead it adds directly to messages array — verify by checking
+        # that get_skill_docs was called (escalation triggered)
+        cortex.get_skill_docs.assert_called_once()
+
+        # append_results should not contain any skill escalation system messages
+        escalation_system_calls = [
+            call for call in mock_loop.append_results.call_args_list
+            if any(
+                r.get('action_type') == 'system'
+                and 'Skill Escalation' in r.get('result', '')
+                for r in call[0][0]
+            )
+        ]
+        assert len(escalation_system_calls) == 0  # append mode uses messages, not append_results

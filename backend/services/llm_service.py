@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 class RateLimitError(Exception):
     """Raised when an LLM provider returns HTTP 429."""
     def __init__(self, message: str, retry_after: float = None, provider: str = None):
+        """Initialise the rate-limit error with optional retry metadata.
+
+        Args:
+            message: Human-readable description of the rate-limit condition.
+            retry_after: Suggested wait time in seconds extracted from the
+                provider's ``Retry-After`` response header, or ``None`` if
+                the header was absent or could not be parsed.
+            provider: Name of the provider that returned HTTP 429
+                (e.g., ``'anthropic'``, ``'openai'``), or ``None`` if unknown.
+        """
         super().__init__(message)
         self.retry_after = retry_after  # seconds, from Retry-After header
         self.provider = provider
@@ -55,6 +65,23 @@ def _resolve_api_key(config: dict) -> str:
 
 @dataclass
 class LLMResponse:
+    """Structured response returned by all LLM service implementations.
+
+    Attributes:
+        text: The generated text content from the model.
+        model: The model identifier reported by the provider
+            (e.g., ``'claude-haiku-4-5-20251001'``, ``'gpt-4o-mini'``).
+        provider: Name of the provider that handled the request
+            (``'anthropic'``, ``'openai'``, ``'gemini'``, ``'ollama'``),
+            or ``None`` if not set by the implementation.
+        tokens_input: Number of input/prompt tokens consumed, if reported
+            by the provider.
+        tokens_output: Number of output/completion tokens generated, if
+            reported by the provider.
+        latency_ms: End-to-end round-trip latency in milliseconds from
+            request dispatch to response receipt.
+    """
+
     text: str
     model: str
     provider: Optional[str] = None
@@ -103,10 +130,36 @@ class FallbackLLMService:
     """Wraps a primary + fallback service. On primary failure, invokes fallback."""
 
     def __init__(self, primary, fallback):
+        """Initialise the fallback wrapper with a primary and secondary client.
+
+        Args:
+            primary: The preferred LLM service instance to invoke first.
+            fallback: The LLM service to invoke when the primary raises any
+                exception other than ``RateLimitError``.
+        """
         self._primary = primary
         self._fallback = fallback
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        """Send a message, falling back to the secondary service on primary failure.
+
+        ``RateLimitError`` from the primary is re-raised immediately without
+        trying the fallback, because the fallback provider is likely to be
+        rate-limited under the same load conditions.
+
+        Args:
+            system_prompt: Instruction context placed in the system role.
+            user_message: The user-turn content to send to the model.
+            stream: If ``True``, request streamed output (passed through to
+                the underlying service; not yet supported by most providers).
+
+        Returns:
+            LLMResponse from whichever service successfully handled the request.
+
+        Raises:
+            RateLimitError: If the primary service returns HTTP 429.
+            Exception: If both the primary and fallback services raise errors.
+        """
         try:
             return self._primary.send_message(system_prompt, user_message, stream=stream)
         except RateLimitError:
@@ -114,6 +167,15 @@ class FallbackLLMService:
         except Exception as e:
             logger.warning(f"Primary LLM failed, using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        try:
+            return self._primary.send_messages(system_prompt, messages, cache_prefix)
+        except RateLimitError:
+            raise
+        except Exception as e:
+            logger.warning(f"Primary LLM failed, using fallback: {e}")
+            return self._fallback.send_messages(system_prompt, messages, cache_prefix)
 
 
 def _build_service(config: dict):
@@ -199,6 +261,18 @@ class RefreshableLLMService:
     """
 
     def __init__(self, agent_name: str):
+        """Initialise the wrapper without immediately creating the underlying client.
+
+        The underlying LLM client is lazily created on the first call to
+        :meth:`send_message` and is transparently re-created whenever the
+        provider cache version changes (i.e., when a provider is added,
+        updated, or reassigned via the Brain UI).
+
+        Args:
+            agent_name: Agent configuration name used to resolve provider
+                settings via ``ConfigService.resolve_agent_config``
+                (e.g., ``'cognitive-drift'``, ``'mode-reflection'``).
+        """
         self._agent_name = agent_name
         self._version = None  # Last seen provider cache version
         self._service = None  # Underlying LLM service
@@ -236,8 +310,31 @@ class RefreshableLLMService:
             self._version = current_version
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        """Send a message, refreshing the underlying client if the provider config has changed.
+
+        Calls :meth:`_ensure_fresh` before each request so that provider
+        configuration updates (e.g., new API key or model) are picked up
+        automatically without restarting the worker process.
+
+        Args:
+            system_prompt: Instruction context placed in the system role.
+            user_message: The user-turn content to send to the model.
+            stream: If ``True``, request streamed output (passed through to
+                the underlying service; not yet supported by most providers).
+
+        Returns:
+            LLMResponse from the (potentially freshly re-created) underlying
+            service instance.
+
+        Raises:
+            Any exception raised by the underlying LLM service.
+        """
         self._ensure_fresh()
         return self._service.send_message(system_prompt, user_message, stream=stream)
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        self._ensure_fresh()
+        return self._service.send_messages(system_prompt, messages, cache_prefix)
 
 
 def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
@@ -266,19 +363,47 @@ class AnthropicService:
     _MAX_TOKENS = 16384
 
     def __init__(self, config: dict):
+        """Initialise the Anthropic client with provider configuration.
+
+        Args:
+            config: Provider config dict sourced from the database.
+                Required key: ``api_key``.
+                Optional keys: ``model`` (default ``'claude-haiku-4-5-20251001'``),
+                ``timeout`` (seconds, default ``120``).
+        """
         self._config = config
         self.model = config.get('model', 'claude-haiku-4-5-20251001')
         self.timeout = config.get('timeout', 120)
 
+    def _get_client(self):
+        import anthropic
+        api_key = _resolve_api_key(self._config)
+        return anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
+
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        """Send a message to the Anthropic Messages API.
+
+        Args:
+            system_prompt: Text placed in the ``system`` role of the request.
+            user_message: Text placed in the ``user`` role of the request.
+            stream: Must be ``False``; streaming is not yet implemented.
+
+        Returns:
+            LLMResponse populated with the generated text, model identifier,
+            token counts, and round-trip latency.
+
+        Raises:
+            NotImplementedError: If ``stream=True`` is requested.
+            RateLimitError: If the API returns HTTP 429.
+            anthropic.APIError: For other Anthropic API errors after retries
+                are exhausted.
+        """
         if stream:
             raise NotImplementedError("Streaming not yet supported")
 
         import anthropic
 
-        api_key = _resolve_api_key(self._config)
-        client = anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
-
+        client = self._get_client()
         start_time = time.time()
 
         def _call():
@@ -320,26 +445,109 @@ class AnthropicService:
             latency_ms=latency_ms,
         )
 
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        import anthropic
+
+        client = self._get_client()
+        start_time = time.time()
+
+        system = (
+            [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+            if cache_prefix
+            else system_prompt
+        )
+
+        def _call():
+            try:
+                return client.messages.create(
+                    model=self.model,
+                    max_tokens=self._MAX_TOKENS,
+                    system=system,
+                    messages=messages,
+                )
+            except anthropic.RateLimitError as e:
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                raise RateLimitError(str(e), retry_after=retry_after, provider='anthropic') from e
+
+        response = _call_with_retry(_call)
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        text = response.content[0].text if response.content else ""
+
+        logger.info(
+            f"[AnthropicService] model={response.model}, "
+            f"tokens={response.usage.input_tokens}+{response.usage.output_tokens}, "
+            f"latency={latency_ms}ms"
+        )
+
+        return LLMResponse(
+            text=text,
+            model=response.model,
+            provider='anthropic',
+            tokens_input=response.usage.input_tokens,
+            tokens_output=response.usage.output_tokens,
+            latency_ms=latency_ms,
+        )
+
 
 class OpenAIService:
     """OpenAI API client."""
 
     def __init__(self, config: dict):
+        """Initialise the OpenAI client with provider configuration.
+
+        Args:
+            config: Provider config dict sourced from the database.
+                Required key: ``api_key``.
+                Optional keys: ``model`` (default ``'gpt-4o-mini'``),
+                ``timeout`` (seconds, default ``120``),
+                ``format`` (``'text'`` or ``'json'``, default ``'text'``).
+        """
         self._config = config
         self.model = config.get('model', 'gpt-4o-mini')
         self.timeout = config.get('timeout', 120)
         self.format = config.get('format', 'text')
 
+    def _get_client(self):
+        from openai import OpenAI
+        api_key = _resolve_api_key(self._config)
+        return OpenAI(api_key=api_key, timeout=self.timeout)
+
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        """Send a message to the OpenAI Chat Completions API.
+
+        When ``format='json'`` is set in the provider config, the request
+        includes ``response_format={"type": "json_object"}`` so the model
+        is instructed to return valid JSON.
+
+        Args:
+            system_prompt: Text placed in the ``system`` role of the request.
+            user_message: Text placed in the ``user`` role of the request.
+            stream: Must be ``False``; streaming is not yet implemented.
+
+        Returns:
+            LLMResponse populated with the generated text, model identifier,
+            token counts, and round-trip latency.
+
+        Raises:
+            NotImplementedError: If ``stream=True`` is requested.
+            RateLimitError: If the API returns HTTP 429.
+            openai.APIError: For other OpenAI API errors after retries are
+                exhausted.
+        """
         if stream:
             raise NotImplementedError("Streaming not yet supported")
 
         import openai as openai_mod
-        from openai import OpenAI
 
-        api_key = _resolve_api_key(self._config)
-        client = OpenAI(api_key=api_key, timeout=self.timeout)
-
+        client = self._get_client()
         start_time = time.time()
 
         create_kwargs = {
@@ -395,16 +603,100 @@ class OpenAIService:
             latency_ms=latency_ms,
         )
 
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        import openai as openai_mod
+
+        client = self._get_client()
+        start_time = time.time()
+
+        create_kwargs = {
+            'model': self.model,
+            'messages': [{"role": "system", "content": system_prompt}] + messages,
+        }
+        if self.format == 'json':
+            create_kwargs['response_format'] = {"type": "json_object"}
+
+        def _call():
+            try:
+                return client.chat.completions.create(**create_kwargs)
+            except openai_mod.RateLimitError as e:
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    ra = e.response.headers.get('retry-after')
+                    if ra:
+                        try:
+                            retry_after = float(ra)
+                        except (ValueError, TypeError):
+                            pass
+                raise RateLimitError(str(e), retry_after=retry_after, provider='openai') from e
+
+        response = _call_with_retry(_call)
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        text = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason
+
+        if not text or not text.strip():
+            logger.warning(
+                f"[OpenAIService] Empty response from model={response.model}, "
+                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+                f"latency={latency_ms}ms, finish_reason={finish_reason}. "
+                f"Content was: {repr(response.choices[0].message.content)}"
+            )
+        else:
+            logger.info(
+                f"[OpenAIService] model={response.model}, "
+                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+                f"latency={latency_ms}ms"
+            )
+
+        return LLMResponse(
+            text=text,
+            model=response.model,
+            provider='openai',
+            tokens_input=response.usage.prompt_tokens,
+            tokens_output=response.usage.completion_tokens,
+            latency_ms=latency_ms,
+        )
+
 
 class GeminiService:
     """Google Gemini API client."""
 
     def __init__(self, config: dict):
+        """Initialise the Gemini client with provider configuration.
+
+        Args:
+            config: Provider config dict sourced from the database.
+                Required key: ``api_key``.
+                Optional keys: ``model`` (default ``'gemini-2.5-flash'``),
+                ``format`` (``'text'`` or ``'json'``, default ``'text'``).
+                When ``format='json'``, the request uses
+                ``response_mime_type='application/json'``.
+        """
         self._config = config
         self.model = config.get('model', 'gemini-2.5-flash')
         self.format = config.get('format', 'text')
 
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        """Send a message to the Google Gemini generative AI API.
+
+        Args:
+            system_prompt: Instruction passed as the system instruction in
+                ``GenerateContentConfig``.
+            user_message: The user-turn content to generate a response for.
+            stream: Must be ``False``; streaming is not yet implemented.
+
+        Returns:
+            LLMResponse populated with the generated text, model identifier,
+            token counts (from ``usage_metadata``), and round-trip latency.
+
+        Raises:
+            NotImplementedError: If ``stream=True`` is requested.
+            RuntimeError: If the ``google-genai`` package is not installed.
+            RateLimitError: If the API raises ``ResourceExhausted`` (HTTP 429).
+            ValueError: If the model returns an empty response.
+        """
         if stream:
             raise NotImplementedError("Streaming not yet supported")
 
@@ -438,6 +730,75 @@ class GeminiService:
                 if 'ResourceExhausted' in ename or '429' in str(e):
                     raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
                 # 5xx server errors are permanent — do not retry
+                if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
+                    raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
+                raise
+
+        response = _call_with_retry(_call)
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        text = response.text if response.text else ""
+        if not text:
+            finish_reason = getattr(response, 'finish_reason', 'unknown')
+            logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
+            raise ValueError(f"Empty Gemini response (finish_reason={finish_reason})")
+
+        usage = getattr(response, 'usage_metadata', None)
+        tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
+        tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
+
+        logger.info(
+            f"[GeminiService] model={self.model}, "
+            f"tokens={tokens_input}+{tokens_output}, "
+            f"latency={latency_ms}ms"
+        )
+
+        return LLMResponse(
+            text=text,
+            model=self.model,
+            provider='gemini',
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            latency_ms=latency_ms,
+        )
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+        try:
+            from google import genai
+        except ImportError:
+            raise RuntimeError(
+                "google-genai package is not installed. "
+                "Run: pip install google-genai"
+            )
+
+        api_key = _resolve_api_key(self._config)
+        client = genai.Client(api_key=api_key)
+
+        start_time = time.time()
+
+        gemini_contents = [
+            {
+                "role": "model" if m["role"] == "assistant" else m["role"],
+                "parts": [{"text": m["content"]}],
+            }
+            for m in messages
+        ]
+
+        gen_config_kwargs = {'system_instruction': system_prompt}
+        if self.format == 'json':
+            gen_config_kwargs['response_mime_type'] = 'application/json'
+
+        def _call():
+            try:
+                return client.models.generate_content(
+                    model=self.model,
+                    contents=gemini_contents,
+                    config=genai.types.GenerateContentConfig(**gen_config_kwargs),
+                )
+            except Exception as e:
+                ename = type(e).__name__
+                if 'ResourceExhausted' in ename or '429' in str(e):
+                    raise RateLimitError(str(e), retry_after=None, provider='gemini') from e
                 if 'ServerError' in ename or '500' in str(e) or '503' in str(e):
                     raise NonRetryableError(f"Gemini server error (no retry): {e}") from e
                 raise

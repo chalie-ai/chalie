@@ -30,6 +30,51 @@
     <span>Retrying...</span>
   </div>
 
+  <!-- Update available banner -->
+  <div id="updateBanner" class="update-banner hidden">
+    <span class="update-banner__icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+    </span>
+    <span class="update-banner__text">Chalie <strong id="updateBannerVersion"></strong> available</span>
+    <button id="updateBannerBtn" class="update-banner__action">Update</button>
+    <button id="updateBannerDismiss" class="update-banner__dismiss" aria-label="Dismiss">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Update confirmation dialog -->
+  <dialog id="updateDialog" class="update-dialog">
+    <div class="update-dialog__content">
+      <button class="update-dialog__close btn-icon" aria-label="Close" id="updateDialogClose">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+      <h2 class="update-dialog__title">Update Chalie</h2>
+      <p class="update-dialog__version">
+        <span id="updateCurrentVer"></span> → <strong id="updateNewVer"></strong>
+      </p>
+      <div id="updateNotes" class="update-dialog__notes"></div>
+      <div id="updateActions" class="update-dialog__actions">
+        <button id="updateCancelBtn" class="btn-secondary">Cancel</button>
+        <button id="updateApplyBtn" class="btn-primary">Update Now</button>
+      </div>
+      <div id="updateProgress" class="update-dialog__progress hidden">
+        <div class="update-dialog__spinner"></div>
+        <p class="update-dialog__status">Applying update...</p>
+      </div>
+      <div id="updateInstructions" class="update-dialog__instructions hidden"></div>
+    </div>
+  </dialog>
+
   <!-- Presence bar -->
   <header class="presence-bar">
     <div class="presence-bar__left">
@@ -75,12 +120,12 @@
     </div>
   </header>
 
-  <!-- Spark overlay: shown on every load until backend health check passes -->
-  <div id="sparkOverlay" class="spark-overlay hidden" role="status" aria-live="polite">
-    <div class="spark-overlay__content">
-      <div class="spark-overlay__dot" aria-hidden="true"></div>
-      <p class="spark-overlay__text">Waking up Chalie...</p>
-      <button class="spark-overlay__skip" aria-label="Skip loading">skip</button>
+  <!-- Loading overlay: shown on every load until backend health check passes -->
+  <div id="loadingOverlay" class="loading-overlay hidden" role="status" aria-live="polite">
+    <div class="loading-overlay__content">
+      <div class="loading-overlay__dot" aria-hidden="true"></div>
+      <p class="loading-overlay__text">Waking up Chalie...</p>
+      <button class="loading-overlay__skip" aria-label="Skip loading">skip</button>
     </div>
   </div>
 
@@ -96,6 +141,15 @@
 
   <!-- Conversation spine -->
   <main class="conversation-spine" id="conversationSpine">
+    <!-- History end marker (hidden by default) -->
+    <div class="history-end-pill" id="historyEndPill" style="display:none">
+      <span class="history-end-pill__label">End of working history</span>
+    </div>
+
+    <!-- Top loader (hidden by default) -->
+    <div class="history-loader" id="historyLoader" style="display:none">
+      <div class="history-loader__spinner"></div>
+    </div>
     <!-- Speech forms and cards are appended here -->
   </main>
 

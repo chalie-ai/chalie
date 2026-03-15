@@ -35,8 +35,7 @@ class TestSelfModelSnapshot:
         ep = snapshot["epistemic"]
 
         assert "context_warmth" in ep
-        assert "gist_count" in ep
-        assert "fact_count" in ep
+        # gist_count and fact_count removed in Stream 1 (memory chunker killed)
         assert "working_memory_depth" in ep
         assert "recall_failure_rate" in ep
         assert "topic_age" in ep

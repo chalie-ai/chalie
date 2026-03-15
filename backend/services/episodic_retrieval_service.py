@@ -267,7 +267,7 @@ class EpisodicRetrievalService:
                 # strip all FTS5 operators so user messages containing URLs, questions,
                 # timestamps, or structured text don't trigger parse errors.
                 import re as _re
-                fts_safe = _re.sub(r'[:\(\)\*\^"\\?]', ' ', query_text)
+                fts_safe = _re.sub(r'[:\(\)\*\^"\\?,\']', ' ', query_text)
                 fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
                 fts_params = [fts_safe or '*']
 
@@ -440,7 +440,17 @@ class EpisodicRetrievalService:
 
     def _calculate_vector_similarity(self, query_embedding: List[float],
                                     distance: float) -> float:
-        """Convert cosine distance to similarity score (1-10 scale)."""
+        """Convert cosine distance to a similarity score on a 1–10 scale.
+
+        Args:
+            query_embedding: Query embedding vector (used to detect missing data).
+            distance: Cosine distance from the sqlite-vec MATCH query, or
+                ``None`` when no vector result is available.
+
+        Returns:
+            Similarity score in [1.0, 10.0].  Returns 5.0 (neutral) when either
+            argument is ``None``.
+        """
         if distance is None or query_embedding is None:
             return 5.0  # Neutral score if no vector data
         # Cosine distance: 0 = identical, 2 = opposite
@@ -449,7 +459,16 @@ class EpisodicRetrievalService:
         return similarity
 
     def _calculate_topic_overlap(self, query_topic: str, episode_topic: str) -> float:
-        """Calculate topic overlap score (1-10 scale)."""
+        """Calculate topic overlap score between query and episode topics.
+
+        Args:
+            query_topic: Topic string from the current query, or ``None``.
+            episode_topic: Topic string stored on the episode.
+
+        Returns:
+            Score in [2.0, 10.0]: 10 for exact match, 7 for partial match,
+            2 for no match, and 5.0 (neutral) when ``query_topic`` is ``None``.
+        """
         if not query_topic:
             return 5.0  # Neutral score if no topic filter
 
@@ -547,7 +566,16 @@ class EpisodicRetrievalService:
         return min(10.0, max(1.0, combined_score))
 
     def _calculate_outcome_relevance(self, query_text: str, outcome: str) -> float:
-        """Calculate outcome relevance using keyword matching (1-10 scale)."""
+        """Calculate outcome relevance using keyword overlap on a 1–10 scale.
+
+        Args:
+            query_text: The original user query string.
+            outcome: Episode outcome text to compare against.
+
+        Returns:
+            Jaccard-based score in [1.0, 10.0].  Returns 5.0 (neutral) when
+            either argument is empty or ``None``.
+        """
         if not query_text or not outcome:
             return 5.0
 
