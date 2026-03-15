@@ -191,8 +191,8 @@ class TestIgnoreMode:
         """
         IGNORE wins for zero-token input when warmth is in the cold zone (0.20-0.30).
 
-        At warmth=0.25: IGNORE=0.50, CLARIFY=0.49 (cold_boost=(1-0.25)*0.25=0.19).
-        At warmth=0.0:  CLARIFY=0.55 (cold_boost=0.25 dominates), so CLARIFY beats IGNORE.
+        At warmth=0.25: IGNORE=0.50, RESPOND=0.49 (cold_boost=(1-0.25)*0.25=0.19).
+        At warmth=0.0:  RESPOND=0.55 (cold_boost=0.25 dominates), so RESPOND beats IGNORE.
         The sweet spot is 0.20 < warmth < 0.30 where cold_boost is weak enough.
         """
         router = ModeRouterService(_make_config())
@@ -253,7 +253,7 @@ class TestGreetingHandling:
             "Hi, how are you?",
             skip_tiebreaker=True,
         )
-        assert result['mode'] in ('RESPOND', 'CLARIFY')
+        assert result['mode'] == 'RESPOND'
 
     def test_greeting_cold_context_no_facts_not_act(self):
         """Greeting with zero facts and cold context should not select ACT."""

@@ -80,7 +80,7 @@ class TestModeRouter:
 
         # Mock the full tiebreaker pipeline (ONNX → LLM) to return RESPOND
         with patch.object(router, '_invoke_tiebreaker', return_value='RESPOND') as mock_tb:
-            # Craft signals where RESPOND and CLARIFY are very close
+            # Craft signals where RESPOND and ACT are very close
             signals = _make_signals(
                 context_warmth=0.35,
                 has_question_mark=True,

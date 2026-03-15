@@ -58,13 +58,13 @@ class TestContextRelevanceService:
         }
 
     def test_template_mask_excludes_nodes(self, service):
-        """Test that template masks exclude nodes not in the CLARIFY template."""
-        result = service.compute_inclusion_map(mode='CLARIFY')
+        """Test that template masks exclude nodes not in the RESPOND template."""
+        result = service.compute_inclusion_map(mode='RESPOND')
 
-        # CLARIFY should exclude available_tools
+        # RESPOND should exclude available_tools
         assert result.get('available_tools') is False
 
-        # CLARIFY should include identity_context, communication_style
+        # RESPOND should include identity_context, communication_style
         assert result.get('identity_context') is True
         assert result.get('communication_style') is True
 
