@@ -12,7 +12,6 @@ def _make_config():
     return {
         'base_scores': {
             'RESPOND': 0.40,
-            'CLARIFY': 0.30,
             'ACT': 0.20,
             'IGNORE': -0.50,
         },
@@ -22,11 +21,6 @@ def _make_config():
             'respond.gist_density': 0.10,
             'respond.question_warm': 0.15,
             'respond.cold_penalty': 0.15,
-            'clarify.cold_boost': 0.25,
-            'clarify.question_no_facts': 0.20,
-            'clarify.new_topic_question': 0.10,
-            'clarify.cold_question': 0.05,
-            'clarify.warm_penalty': 0.20,
             'act.question_moderate_context': 0.20,
             'act.interrogative_gap': 0.15,
             'act.implicit_reference': 0.15,
@@ -71,20 +65,6 @@ class TestModeRouter:
         signals = _make_signals(context_warmth=0.8, gist_count=4, fact_count=5)
         result = router.route(signals, "Tell me about X")
         assert result['mode'] == 'RESPOND'
-
-    def test_cold_context_selects_clarify(self):
-        """Cold context (<0.3) with a question should favour CLARIFY."""
-        router = ModeRouterService(_make_config())
-        signals = _make_signals(
-            context_warmth=0.1,
-            has_question_mark=True,
-            interrogative_words=True,
-            fact_count=0,
-            gist_count=0,
-            is_new_topic=True,
-        )
-        result = router.route(signals, "What is this?")
-        assert result['mode'] == 'CLARIFY'
 
     def test_greeting_selects_respond(self):
         """Greeting pattern should flow to RESPOND (ACKNOWLEDGE removed)."""

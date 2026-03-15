@@ -7,7 +7,6 @@ from .orchestrator.path_schemas import ORCHESTRATOR_PATHS
 from .orchestrator.handlers import (
     RespondHandler,
     ActHandler,
-    ClarifyHandler,
     IgnoreHandler,
 )
 
@@ -33,7 +32,6 @@ class OrchestratorService:
         self.handlers = {
             'RESPOND': RespondHandler(self.output_service),
             'ACT': ActHandler(self.act_dispatcher_service),
-            'CLARIFY': ClarifyHandler(self.output_service),
             'IGNORE': IgnoreHandler(),
         }
 

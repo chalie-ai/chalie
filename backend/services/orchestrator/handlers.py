@@ -81,44 +81,6 @@ class ActHandler:
         return {'status': 'success', 'results': results}
 
 
-class ClarifyHandler:
-    """Handler for CLARIFY path - queues clarification question to output-queue."""
-
-    def __init__(self, output_service):
-        """
-        Initialize handler.
-
-        Args:
-            output_service: OutputService instance
-        """
-        self.output_service = output_service
-
-    def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute CLARIFY path.
-
-        Args:
-            context: Must contain clarification_question, topic, destination, metadata
-
-        Returns:
-            dict: {status: "success", queued: True, output_id: str}
-        """
-        # Enqueue text output (SSE delivery for web; notification tools for proactive drift)
-        output_id = self.output_service.enqueue_text(
-            topic=context['topic'],
-            response=context['clarification_question'],
-            mode='CLARIFY',
-            confidence=context.get('confidence', 0.0),
-            generation_time=context.get('generation_time', 0.0),
-            original_metadata=context.get('metadata'),
-            reply_actions=context.get('reply_actions'),
-        )
-
-        logger.info(f"[CLARIFY] Queued clarification {output_id} for topic '{context['topic']}' to output-queue")
-
-        return {'status': 'success', 'queued': True, 'output_id': output_id}
-
-
 class IgnoreHandler:
     """Handler for IGNORE path - logs and does nothing."""
 

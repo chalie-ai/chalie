@@ -161,14 +161,6 @@ class TestHandleIgnoreBranch:
             "not silently produce an empty response."
         )
 
-    def test_clarify_mode_returns_none(self):
-        result = _handle_ignore_branch(
-            _make_triage('CLARIFY'), 'Schedule it', 'topic', None,
-            None, {}, None, None, None,
-        )
-        assert result is None
-
-
 # ── _is_innate_skill_only / contextual_skills dispatch ───────────
 
 def _make_act_triage(skills):
