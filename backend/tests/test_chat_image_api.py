@@ -7,6 +7,8 @@ Uses Flask test client; no real vision LLM calls.
 
 import io
 import json
+import struct
+import zlib
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -34,12 +36,29 @@ def client(app):
 
 @pytest.fixture
 def sample_png():
-    """Minimal valid PNG image bytes."""
-    from PIL import Image
-    img = Image.new('RGB', (10, 10), color=(0, 128, 255))
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return buf.getvalue()
+    """
+    Minimal valid PNG image bytes (10×10, solid blue) built from stdlib only.
+
+    Avoids a Pillow import at fixture-time so the tests run in sandboxes where
+    the Pillow C extension's shared object cannot be mmap-executed (noexec
+    filesystem). The PNG is constructed by hand: PNG signature + IHDR + IDAT +
+    IEND chunks, following the PNG spec (RFC 2083).
+    """
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        """Return a length-prefixed PNG chunk with CRC appended."""
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
+
+    width, height = 10, 10
+    signature = b'\x89PNG\r\n\x1a\n'
+    ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    ihdr = _chunk(b'IHDR', ihdr_data)
+    # One scanline = filter-byte (0x00) + width*3 RGB bytes (0, 128, 255 = blue)
+    scanline = b'\x00' + b'\x00\x80\xff' * width
+    raw_data = scanline * height
+    idat = _chunk(b'IDAT', zlib.compress(raw_data))
+    iend = _chunk(b'IEND', b'')
+    return signature + ihdr + idat + iend
 
 
 @pytest.fixture
@@ -190,6 +209,73 @@ def test_status_returns_404_for_unknown_id(client, mock_store):
         res = client.get('/chat/image/notexist123/status')
 
     assert res.status_code == 404
+
+
+@pytest.mark.unit
+def test_status_returns_analyzing_after_bytes_expire(client, mock_store):
+    """
+    GET /chat/image/<id>/status must return HTTP 200 with status='analyzing'
+    when the bytes key has already expired (absent) but the progress key is
+    still present with value 'analyzing' (B3 fix).
+
+    Simulates the window where analysis is still in-flight but the 5-minute
+    bytes TTL has elapsed before the 2-minute progress TTL.
+    """
+    image_id = 'b3test000b3test0'
+    # Bytes key intentionally absent — simulates TTL expiry.
+    # Progress key still alive (within its 120 s window).
+    mock_store.set(f'chat_image_progress:{image_id}', 'analyzing')
+
+    with patch('api.chat_image._get_store', return_value=mock_store):
+        res = client.get(f'/chat/image/{image_id}/status')
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body['status'] == 'analyzing'
+    assert body['result'] is None
+
+
+@pytest.mark.unit
+def test_duplicate_returns_ready_when_analysis_complete(client, sample_png, mock_store):
+    """
+    Uploading a duplicate image must return status='ready' (not the hardcoded
+    'analyzing') when the original analysis result is already stored (B2 fix).
+
+    Workflow:
+      1. Upload the image once → image_id assigned, _run_analysis skipped.
+      2. Manually write a completed result into mock_store to simulate finished
+         analysis.
+      3. Upload the same bytes again → dedup hit → should return status='ready'.
+    """
+    with patch('api.chat_image._get_store', return_value=mock_store), \
+         patch('api.chat_image._run_analysis'):
+
+        # First upload — creates the hash key in mock_store.
+        data1 = {'image': (io.BytesIO(sample_png), 'img1.png', 'image/png')}
+        res1 = client.post('/chat/image', data=data1, content_type='multipart/form-data')
+        assert res1.status_code == 201
+        image_id = res1.get_json()['image_id']
+
+    # Simulate completed analysis by writing the result key directly.
+    completed_result = {
+        'description': 'A small blue square.',
+        'ocr_text': '',
+        'has_text': False,
+        'error': None,
+    }
+    mock_store.set(f'chat_image_result:{image_id}', json.dumps(completed_result))
+
+    with patch('api.chat_image._get_store', return_value=mock_store), \
+         patch('api.chat_image._run_analysis'):
+
+        # Second upload — should be a dedup hit returning actual status.
+        data2 = {'image': (io.BytesIO(sample_png), 'img2.png', 'image/png')}
+        res2 = client.post('/chat/image', data=data2, content_type='multipart/form-data')
+
+    assert res2.status_code == 200
+    body = res2.get_json()
+    assert body['image_id'] == image_id
+    assert body['status'] == 'ready'
 
 
 # ─── GET /chat/vision-capable ─────────────────────────────────────────────────
