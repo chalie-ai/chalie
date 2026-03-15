@@ -232,6 +232,12 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
     - Updates ``chat_image_progress:{image_id}`` to ``'ready'`` or ``'failed'``
       so that ``GET /status`` can return the correct state even after the bytes
       key has expired (B3 fix).
+    - Publishes ``{"type": "image_ready", "image_id": ..., "status": ...}`` to
+      the ``output:events`` pub/sub channel (Step 3 / B5 fix).  The existing
+      ``_drift_sender`` thread inside the WebSocket handler forwards all messages
+      on that channel to connected clients automatically, so no additional
+      WebSocket-handler code is needed.  The frontend listens for the
+      ``image_ready`` type to remove the upload spinner and surface errors.
 
     Args:
         image_id:    Unique identifier assigned during upload.
@@ -247,6 +253,13 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
         store.set(result_key, json.dumps(result), ex=_TTL_RESULT)
         # B3 fix: stamp progress key as 'ready' so status checks see completion.
         store.set(progress_key, 'ready', ex=_TTL_PROGRESS)
+        # Step 3 / B5 fix: push analysis completion to connected WebSocket clients.
+        # _drift_sender in websocket.py forwards output:events messages automatically.
+        store.publish('output:events', json.dumps({
+            'type': 'image_ready',
+            'image_id': image_id,
+            'status': 'ready',
+        }))
         logger.info(
             f'[CHAT IMAGE] Analysis complete image_id={image_id} '
             f'has_text={result.get("has_text")} '
@@ -258,3 +271,12 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
         store.set(result_key, json.dumps({'error': str(e), 'description': '', 'ocr_text': '', 'has_text': False}), ex=_TTL_RESULT)
         # B3 fix: stamp progress key as 'failed' so status checks surface the error.
         store.set(progress_key, 'failed', ex=_TTL_PROGRESS)
+        # Step 3 / B5 fix: push failure event so the frontend can show an error badge.
+        try:
+            store.publish('output:events', json.dumps({
+                'type': 'image_ready',
+                'image_id': image_id,
+                'status': 'failed',
+            }))
+        except Exception:
+            pass  # best-effort — do not shadow the original analysis error
