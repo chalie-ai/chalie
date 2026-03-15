@@ -119,7 +119,7 @@ Converts direction into completed actions — drafts, sends, schedules, research
 ### 3. Exercises Judgment
 Decides what deserves attention, chooses depth of reasoning based on value, escalates only when user input is necessary.
 
-*Codebase: message gate service (deterministic ONNX mode gate, ~5ms), mode router (deterministic scorer for non-user flows), critic service (post-execution learning signal with EMA confidence calibration).*
+*Codebase: message gate service (deterministic ONNX mode gate, ~5ms), mode router (deterministic scorer for non-user flows), critic service (post-execution learning signal with EMA confidence calibration), autonomous execution gate (consequence tier + domain confidence).*
 
 ### 4. Maintains Continuity
 Remembers context and priorities, understands recurring patterns, avoids requiring users to repeat themselves.
@@ -175,7 +175,7 @@ Escalate based on importance and ambiguity, not system convenience. Silent auton
 ### 4. Intent to Execution
 Users express direction; Chalie handles operations. The gap between "I want X" and "X is done" should be as small as possible.
 
-*Codebase anchor: ACT loop (plan → act → observe → continue-or-stop), tool dispatch via sandboxed containers, persistent tasks for multi-session execution.*
+*Codebase anchor: ACT loop (plan → act → observe → continue-or-stop), tool dispatch via sandboxed containers, persistent tasks for multi-session execution, autonomous execution gate for goal auto-acceptance.*
 
 ### 5. Calm Intelligence
 Brevity, timing, and restraint build trust. Verbosity erodes it.
@@ -211,29 +211,57 @@ Each interaction builds long-term understanding. Memory, identity, and history a
 
 Chalie evolves through capability stages, each building on the previous:
 
-| Stage | Capability | Status | Architectural Focus |
-|-------|-----------|--------|---------------------|
+| Stage | Capability | Status | What it delivers |
+|-------|-----------|--------|-----------------|
 | 1 | Memory & continuity | **Complete** | Progressive abstraction, decay, uncertainty |
 | 2 | Intent execution | **Complete** | ACT loop, persistent tasks, plan decomposition |
 | 3 | Judgment & attention protection | **Complete** | Deterministic gates (message gate, ONNX classifiers), post-execution critic |
 | 4 | Proactive reasoning | **Complete** | Reasoning loop, curiosity, autonomous actions |
 | 5 | Continuous reasoning loop | **Complete** | Goal inference, world model, event-driven signal processing |
-| 6 | Autonomous goal execution | **Next** | Delegation, monitoring, cross-session plan evolution, Cognitive OS agent API |
-| 7 | Vertical model orchestration | Future | Optimal model per cognitive function, ensemble reasoning |
-| 8 | Ambient presence | Future | Multi-surface input (voice, sensors, APIs, calendar), interface-agnostic reasoning |
-| 9 | Ambient superintelligence | Future | Goal detection from casual signals, full autonomy within trust boundaries |
+| 6 | True autonomy | **Complete** | Consequence classifier, domain confidence from memory, autonomous execution gate |
+| 7 | Situational intelligence | **Next** | Chalie understands *what's happening right now* — not just what you said |
+| 8 | Expanded perception | Future | Chalie sees beyond the chat window — calendar, email, files, APIs, webhooks |
+| 9 | Cognitive OS | Future | Chalie becomes the shared cognitive layer for external agents |
 
-**Current transition:** Stages 1–5 are complete. The continuous reasoning loop (PERCEIVE → UPDATE → REASON → ACT → REFLECT) is live with signal-driven processing, goal inference, and world model maintenance. Stage 6 — autonomous goal execution — is the next major evolution. This requires: the Cognitive OS agent API (Query/Observe/Judge/Report), cross-agent delegation and monitoring, and cross-session plan evolution with autonomous revision.
+### Stage 7: Situational Intelligence
 
-**Interface trajectory:** Stages 1–7 use the chat interface as primary input surface. Stage 8 marks the transition to ambient presence — Chalie becomes input-agnostic, receiving observations from any surface (voice, notifications, sensors, API callbacks, calendar events). Stage 9 is full ambient superintelligence where the chat interface is one of many equal surfaces and Chalie operates primarily through silent autonomous action.
+Chalie has all the raw signals — place, energy, attention, focus, topics, identity, engagement, world state. But nothing integrates them. The drift engine checks focus directly. Autonomous actions each check spark phase directly. Context assembly formats ambient as flat text. Every consumer makes its own isolated judgment from the same fragmented data.
 
-### Cognitive OS
+Stage 7 builds the **binding layer**: a continuously updated situation model that computes composite scores (interruptibility, receptiveness, cognitive load, proactivity budget) from existing signals. Every downstream consumer reads from one place instead of making its own assessment.
 
-At full maturity, Chalie is not an application — it is a **cognitive operating system**. The same way a traditional OS provides memory management, process scheduling, and inter-process communication to applications, Chalie provides persistent memory, reasoning, judgment, and user understanding to specialized agents.
+**What changes for the user:**
+- Responses adapt to context — shorter when you're low energy, deeper when you're engaged
+- Proactive thoughts arrive at the right moment, not on a fixed timer
+- Conversation phase awareness — Chalie doesn't introduce new topics when you're wrapping up
+- Memories surface because of where/when you are, not just what you said
 
-**Example:** A coding agent in an IDE receives "refactor the auth module." Instead of reasoning from scratch, it queries Chalie: "What does the user care about in auth?" Chalie's memory responds with preferences, past decisions, and reliability-weighted context accumulated across months. The coding agent makes informed decisions without needing its own memory system. On completion, it reports back — Chalie updates its world model, and that knowledge is available to every other agent.
+**What it requires:** SituationModelService (deterministic, <1ms), conversation phase tracking, behavioral adaptation rules, situation-aware prompt injection. Optional: ONNX emotion/engagement/tone models for richer signals. No new external data sources — this stage works with signals Chalie already has.
 
-**Agent API surface** (four operations on top of the existing cognitive runtime):
+**Plan:** `plans/situational-awareness-7-10.md` (Waves 1-4)
+
+### Stage 8: Expanded Perception
+
+Everything before Stage 8, Chalie is still a chat app that thinks in the background. Its only window into the user's world is what the user types and what the browser reports. Stage 8 gives Chalie eyes.
+
+**New input surfaces:**
+- Calendar integration (knows you have a meeting in 30 minutes, surfaces prep notes)
+- Email/notification ingestion (sees incoming signals without the user forwarding them)
+- File system watchers (notices when documents change)
+- API webhooks (price alerts, deployment notifications, external event triggers)
+- Sensor data (wearables, IoT, location beacons)
+
+**What changes for the user:**
+- "You have a meeting with Sarah in 20 minutes — last time you discussed the Q3 roadmap, here's where you left off"
+- Price alert fires → Chalie researches options and presents a recommendation when you're available
+- Document updated in shared drive → Chalie reads the diff and surfaces what matters to you
+
+**What it requires:** Input adapter framework (calendar, email, webhook, file watcher), signal normalization into the reasoning loop, privacy controls (what Chalie can and cannot see), and the situation model from Stage 7 to know *when* to surface information.
+
+### Stage 9: Cognitive OS
+
+Chalie stops being an application and becomes a **cognitive operating system**. External agents (coding tools, research agents, communication agents) plug into Chalie instead of building their own memory, judgment, and user models.
+
+**Agent API (four operations):**
 
 | Operation | What it does | Maps to |
 |-----------|-------------|---------|
@@ -242,7 +270,20 @@ At full maturity, Chalie is not an application — it is a **cognitive operating
 | **Judge** | "Should I proceed with X or escalate?" | Reasoning loop + uncertainty engine |
 | **Report** | "Task complete, here's what happened" | World model update + episode creation |
 
-Specialized agents (coding, research, scheduling, communication) are peripherals. They handle domain-specific execution. Chalie handles everything else: memory, judgment, user understanding, goal tracking, and cross-agent knowledge sharing. No agent needs its own memory system or user model — Chalie is the shared cognitive layer.
+**What changes for the user:**
+- A coding agent in an IDE asks Chalie "what does the user care about in auth?" and gets reliability-weighted context accumulated over months
+- Multiple specialized agents coordinate through Chalie's shared cognitive layer
+- The user's preferences, history, and judgment are available to every tool they use, without re-explaining
+
+**What it requires:** REST API for agent operations, agent registration, delegation and monitoring, cross-agent knowledge sharing, and the full memory + autonomy stack from Stages 1-8 as the foundation.
+
+**Current transition:** Stages 1–6 are complete. Stage 7 — situational intelligence — is next. It deepens *processing quality* with signals Chalie already has. Stage 8 then expands *what Chalie can perceive*. Stage 9 opens Chalie as a platform for external agents. Each stage builds on the previous — situational intelligence makes perception useful (knowing *when* to surface information), and perception makes the Cognitive OS valuable (agents need a world-aware cognitive layer, not just memory retrieval).
+
+### The Cognitive OS Endgame (Stage 9)
+
+At Stage 9, Chalie is not an application — it is a **cognitive operating system**. The same way a traditional OS provides memory management, process scheduling, and inter-process communication to applications, Chalie provides persistent memory, reasoning, judgment, and user understanding to specialized agents. No agent needs its own memory system or user model — Chalie is the shared cognitive layer.
+
+The path to Stage 9 is sequential and deliberate: situational intelligence (Stage 7) gives Chalie contextual awareness with existing signals. Expanded perception (Stage 8) gives it eyes beyond the chat window. The Cognitive OS (Stage 9) opens that intelligence as a platform. Each layer makes the next one valuable — without situational awareness, perception is noise; without perception, the agent API has nothing to share.
 
 ---
 

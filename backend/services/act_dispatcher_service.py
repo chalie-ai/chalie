@@ -109,6 +109,27 @@ class ActDispatcherService:
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
 
+        # Pre-action consequence check — lightweight tier classification.
+        # Tier 3 (COMMIT) actions are flagged but not blocked; the warning
+        # is surfaced to the ACT loop prompt via the result's notes field.
+        _commit_warning = ''
+        try:
+            from services.consequence_classifier_service import get_consequence_classifier_service
+            classifier = get_consequence_classifier_service()
+            action_description = action.get('description', action.get('params', {}).get('query', action_type))
+            cls_result = classifier.classify(str(action_description))
+            if cls_result['tier'] == 3:  # COMMIT — flag but don't block
+                _commit_warning = (
+                    "This action was classified as potentially irreversible (tier: COMMIT). "
+                    "Proceed with caution."
+                )
+                logging.warning(
+                    f"[ACT DISPATCH] ACT action classified as COMMIT (irreversible): "
+                    f"{action_description!r:.100}"
+                )
+        except Exception:
+            pass  # Non-critical, never block execution
+
         # Pre-action reliability check — non-blocking: only logs/annotates
         _reliability_warning = self._check_source_reliability(action)
 
@@ -184,6 +205,9 @@ class ActDispatcherService:
 
             confidence = _estimate_confidence(action_type, raw_result)
             notes = _extract_notes(action_type, action, raw_result)
+            # Append COMMIT-tier warning to notes so the ACT loop prompt sees it
+            if _commit_warning:
+                notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
 
             dispatch_result = {
                 'action_type': action_type,

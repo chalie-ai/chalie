@@ -57,13 +57,16 @@ def conversation_recent():
                     "from_expired": False,
                 }), 200
         else:
-            # Check if the active thread has any exchanges
+            # Check if the active thread has any exchanges (MemoryStore or SQLite)
             active_total = tcs.store.llen(tcs._conv_key(thread_id))
             if active_total == 0:
-                expired_id = tcs.get_most_recent_expired_thread_id()
-                if expired_id:
-                    thread_id = expired_id
-                    from_expired = True
+                # Try SQLite fallback for active thread first
+                page = tcs.get_paginated_history(thread_id, limit=1, offset=0)
+                if page["total"] == 0:
+                    expired_id = tcs.get_most_recent_expired_thread_id()
+                    if expired_id:
+                        thread_id = expired_id
+                        from_expired = True
 
         page = tcs.get_paginated_history(thread_id, limit=limit, offset=offset)
         total = page["total"]
