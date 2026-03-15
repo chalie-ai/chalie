@@ -1784,21 +1784,25 @@ def _handle_ignore_branch(
 ):
     """Handle ignore branch — CANCEL/IGNORE fast exits only."""
 
-    if triage_result.mode in ('CANCEL', 'IGNORE'):
+    if triage_result.mode == 'CANCEL':
         return {
             'response': '',
-            'mode': triage_result.mode,
+            'mode': 'CANCEL',
             'confidence': 1.0,
             'generation_time': 0.0,
         }
 
-    # Should not be reached — dispatch condition guards CANCEL/IGNORE only.
-    # If called with any other mode, log and return None so callers can detect
-    # the gap rather than silently delivering an empty response.
+    # IGNORE is no longer a valid routing outcome for user messages — it is remapped to
+    # RESPOND upstream in cognitive_triage_service.  If it somehow reaches here anyway
+    # (e.g. from the empty-input guard which returns IGNORE for whitespace), return None
+    # so the caller falls through to normal RESPOND processing rather than silently
+    # dropping the message with an empty string.
+    #
+    # Any other unexpected mode also falls through the same way.
     import logging as _log
     _log.warning(
-        f"[IGNORE BRANCH] Unexpected mode={triage_result.mode!r} for ignore branch — "
-        "caller should route through generate_for_mode instead."
+        f"[IGNORE BRANCH] mode={triage_result.mode!r} reached ignore handler — "
+        "falling through to normal processing."
     )
     return None
 
