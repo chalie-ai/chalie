@@ -14,6 +14,12 @@ Design:
 
   SHA-256 hash deduplication: uploading the same image twice within a session
   returns the existing image_id without re-analysis.
+
+  Progress tracking: a lightweight ``chat_image_progress:{image_id}`` key with
+  a 10 min TTL is written at upload time and updated by the analysis thread.
+  This acts as a tertiary fallback for GET /status so that the endpoint never
+  returns 404 while analysis is still in-flight, even after the 5-minute bytes
+  key has expired (B3 fix).
 """
 
 import hashlib
@@ -37,13 +43,15 @@ _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _ALLOWED_MIMES = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
 
 # MemoryStore key patterns and TTLs
-_KEY_BYTES = 'chat_image:{image_id}'         # raw bytes (bytes value)
-_KEY_RESULT = 'chat_image_result:{image_id}' # JSON analysis result
-_KEY_HASH = 'chat_image_hash:{hash}'         # hash → image_id dedup
+_KEY_BYTES = 'chat_image:{image_id}'             # raw bytes (bytes value)
+_KEY_RESULT = 'chat_image_result:{image_id}'     # JSON analysis result
+_KEY_HASH = 'chat_image_hash:{hash}'             # hash → image_id dedup
+_KEY_PROGRESS = 'chat_image_progress:{image_id}' # in-flight tracker ('analyzing'|'ready'|'failed')
 
 _TTL_BYTES = 300    # 5 minutes
 _TTL_RESULT = 600   # 10 minutes
 _TTL_HASH = 300     # 5 minutes
+_TTL_PROGRESS = 600 # 10 minutes — must outlive _TTL_BYTES so it can serve as fallback
 
 
 def _get_store():
@@ -59,8 +67,22 @@ def upload_image():
     """
     Multipart image upload.
 
-    Accepts field name 'image'. Stores bytes in MemoryStore, kicks off
-    async analysis, returns image_id immediately.
+    Accepts multipart field ``image``. Stores raw bytes in MemoryStore, writes
+    a ``chat_image_progress:{image_id}`` key (TTL=10 min) for in-flight tracking,
+    then kicks off background analysis in a daemon thread and returns
+    ``{image_id, status: 'analyzing'}`` immediately.
+
+    Deduplication: if the SHA-256 hash of the uploaded bytes already exists the
+    existing ``image_id`` is returned together with its *actual* current status
+    (``'ready'``, ``'failed'``, or ``'analyzing'``) instead of the hardcoded
+    ``'analyzing'`` string (B2 fix).
+
+    Returns:
+        201: ``{image_id, status: 'analyzing'}`` for a new upload.
+        200: ``{image_id, status: '<actual_status>'}`` for a duplicate.
+        400: missing or empty file.
+        413: file exceeds 10 MB.
+        415: unsupported MIME type.
     """
     if 'image' not in request.files:
         return jsonify({'error': 'No image file provided'}), 400
@@ -95,14 +117,30 @@ def upload_image():
         if isinstance(existing_id, bytes):
             existing_id = existing_id.decode()
         logger.debug(f'[CHAT IMAGE] Duplicate detected — returning existing image_id={existing_id}')
-        return jsonify({'image_id': existing_id, 'status': 'analyzing'}), 200
+        # B2 fix: return the *actual* status rather than always hardcoding 'analyzing'.
+        # Check whether the analysis result is already stored for the existing image.
+        dedup_result_key = _KEY_RESULT.format(image_id=existing_id)
+        raw_dedup = store.get(dedup_result_key)
+        if raw_dedup is not None:
+            try:
+                dedup_result = json.loads(raw_dedup)
+                dedup_status = 'failed' if dedup_result.get('error') else 'ready'
+            except Exception:
+                dedup_status = 'failed'
+        else:
+            dedup_status = 'analyzing'
+        return jsonify({'image_id': existing_id, 'status': dedup_status}), 200
 
     # New image — assign ID, store bytes, kick off analysis
     image_id = secrets.token_hex(8)
 
     bytes_key = _KEY_BYTES.format(image_id=image_id)
+    progress_key = _KEY_PROGRESS.format(image_id=image_id)
     store.set(bytes_key, image_bytes, ex=_TTL_BYTES)
     store.set(hash_key, image_id, ex=_TTL_HASH)
+    # B3 fix: write a progress key immediately so GET /status can return
+    # 'analyzing' even after the shorter bytes TTL has expired.
+    store.set(progress_key, 'analyzing', ex=_TTL_PROGRESS)
 
     # Background analysis (non-blocking)
     threading.Thread(
@@ -120,18 +158,43 @@ def image_status(image_id):
     """
     Poll analysis result for an uploaded image.
 
+    Lookup order for status resolution:
+
+    1. ``chat_image_result:{image_id}`` present → parse and return
+       ``'ready'`` or ``'failed'``.
+    2. ``chat_image:{image_id}`` (bytes key) present → return ``'analyzing'``.
+    3. ``chat_image_progress:{image_id}`` (progress key) present → return its
+       value (``'analyzing'``, ``'ready'``, or ``'failed'``). This handles the
+       B3 edge-case where the bytes key has already expired but analysis is
+       still in-flight or has just completed (B3 fix).
+    4. None of the above → 404.
+
+    Args:
+        image_id: Hex token returned by the upload endpoint.
+
     Returns:
-        {status: 'analyzing'|'ready'|'failed', result: {...} | null}
+        200: ``{status: 'analyzing'|'ready'|'failed', result: {...}|null}``
+        404: ``{error: 'Image not found'}`` when all keys are absent.
     """
     store = _get_store()
     result_key = _KEY_RESULT.format(image_id=image_id)
     raw = store.get(result_key)
 
     if raw is None:
-        # Check if we still have the raw bytes (means still analyzing)
+        # Primary fallback: raw bytes key still present → analysis is in-flight.
         bytes_key = _KEY_BYTES.format(image_id=image_id)
         if store.exists(bytes_key):
             return jsonify({'status': 'analyzing', 'result': None})
+        # B3 fix: secondary fallback — progress key survives longer than bytes key
+        # (600 s vs 300 s) and is updated by the analysis thread to 'ready'/'failed'.
+        # This prevents a 404 being returned while analysis is still running after
+        # the bytes key has expired.
+        progress_key = _KEY_PROGRESS.format(image_id=image_id)
+        progress = store.get(progress_key)
+        if progress is not None:
+            if isinstance(progress, bytes):
+                progress = progress.decode()
+            return jsonify({'status': progress, 'result': None})
         return jsonify({'error': 'Image not found'}), 404
 
     try:
@@ -161,13 +224,42 @@ def vision_capable():
 # ─── Background Analysis ──────────────────────────────────────────────────────
 
 def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
-    """Run image analysis in background thread and store result in MemoryStore."""
+    """
+    Run image analysis in a background daemon thread and persist the result.
+
+    On completion (success or failure) the function:
+    - Writes a JSON result blob to ``chat_image_result:{image_id}`` (10 min TTL).
+    - Updates ``chat_image_progress:{image_id}`` to ``'ready'`` or ``'failed'``
+      so that ``GET /status`` can return the correct state even after the bytes
+      key has expired (B3 fix).
+    - Publishes ``{"type": "image_ready", "image_id": ..., "status": ...}`` to
+      the ``output:events`` pub/sub channel (Step 3 / B5 fix).  The existing
+      ``_drift_sender`` thread inside the WebSocket handler forwards all messages
+      on that channel to connected clients automatically, so no additional
+      WebSocket-handler code is needed.  The frontend listens for the
+      ``image_ready`` type to remove the upload spinner and surface errors.
+
+    Args:
+        image_id:    Unique identifier assigned during upload.
+        image_bytes: Raw image content (never written to disk).
+        mime_type:   MIME type string, e.g. ``'image/png'``.
+    """
     result_key = _KEY_RESULT.format(image_id=image_id)
+    progress_key = _KEY_PROGRESS.format(image_id=image_id)
     try:
         from services.image_context_service import analyze
         result = analyze(image_bytes, mime_type)
         store = _get_store()
         store.set(result_key, json.dumps(result), ex=_TTL_RESULT)
+        # B3 fix: stamp progress key as 'ready' so status checks see completion.
+        store.set(progress_key, 'ready', ex=_TTL_PROGRESS)
+        # Step 3 / B5 fix: push analysis completion to connected WebSocket clients.
+        # _drift_sender in websocket.py forwards output:events messages automatically.
+        store.publish('output:events', json.dumps({
+            'type': 'image_ready',
+            'image_id': image_id,
+            'status': 'ready',
+        }))
         logger.info(
             f'[CHAT IMAGE] Analysis complete image_id={image_id} '
             f'has_text={result.get("has_text")} '
@@ -177,3 +269,14 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
         logger.error(f'[CHAT IMAGE] Analysis failed image_id={image_id}: {e}', exc_info=True)
         store = _get_store()
         store.set(result_key, json.dumps({'error': str(e), 'description': '', 'ocr_text': '', 'has_text': False}), ex=_TTL_RESULT)
+        # B3 fix: stamp progress key as 'failed' so status checks surface the error.
+        store.set(progress_key, 'failed', ex=_TTL_PROGRESS)
+        # Step 3 / B5 fix: push failure event so the frontend can show an error badge.
+        try:
+            store.publish('output:events', json.dumps({
+                'type': 'image_ready',
+                'image_id': image_id,
+                'status': 'failed',
+            }))
+        except Exception:
+            pass  # best-effort — do not shadow the original analysis error

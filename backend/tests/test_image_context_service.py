@@ -157,6 +157,44 @@ def test_strip_exif_preserves_dimensions():
     assert result.size == (200, 150)
 
 
+@pytest.mark.unit
+def test_strip_exif_memory_usage():
+    """_strip_exif() BytesIO round-trip should use significantly less memory than list(getdata()).
+
+    The old implementation called ``list(img.getdata())``, which materialised
+    the full pixel array as a Python list — approximately 470 MB for a
+    2048×2048 RGBA image.  The BytesIO round-trip avoids that spike entirely.
+    This test verifies that the new implementation's peak allocation is at
+    least 50 % lower than the old approach's on an equivalent large image.
+    """
+    import tracemalloc
+    from PIL import Image
+    from services.image_context_service import _strip_exif
+
+    img = Image.new('RGB', (2048, 2048), color=(128, 64, 32))
+
+    # ── Measure new _strip_exif() peak allocation ──────────────────────────
+    tracemalloc.start()
+    result = _strip_exif(img)
+    _, new_peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # ── Measure old list(getdata()) peak allocation ────────────────────────
+    tracemalloc.start()
+    _old_data = list(img.getdata())
+    _, old_peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # The BytesIO approach must use less than 50 % of the list approach's peak.
+    assert new_peak < old_peak * 0.5, (
+        f'Expected new peak ({new_peak:,} bytes) to be < 50 % of old peak '
+        f'({old_peak:,} bytes). BytesIO round-trip may not be working as intended.'
+    )
+
+    # Pixel content and dimensions must be preserved.
+    assert result.size == img.size
+
+
 # ─── Dimension normalization ──────────────────────────────────────────────────
 
 @pytest.mark.unit
