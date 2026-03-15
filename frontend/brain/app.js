@@ -2852,7 +2852,12 @@ function renderDocumentRow(doc) {
                    <button class="tool-card__btn" onclick="window.open('${API_BASE}/documents/${doc.id}/preview', '_blank')">Preview</button>`;
     }
 
+    const imageThumbnail = doc.mime_type?.startsWith('image/')
+        ? `<div class="doc-row__image-preview"><img src="${API_BASE}/documents/${doc.id}/preview" alt="${escapeHtml(doc.original_name)}" class="doc-row__image-thumb" loading="lazy"></div>`
+        : '';
+
     return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+        ${imageThumbnail}
         <div class="doc-row__info">
             <div class="doc-row__name">
                 <span class="doc-icon">${getDocIcon(doc.mime_type)}</span>
@@ -2875,9 +2880,11 @@ function renderDocuments() {
     let docs = allDocuments;
 
     if (docFilter === 'active') {
-        docs = docs.filter(d => !d.deleted_at && d.status === 'ready');
+        docs = docs.filter(d => !d.deleted_at && d.status === 'ready' && d.source_type !== 'chat_image');
     } else if (docFilter === 'processing') {
         docs = docs.filter(d => !d.deleted_at && ['pending', 'processing', 'awaiting_confirmation'].includes(d.status));
+    } else if (docFilter === 'uploads') {
+        docs = docs.filter(d => !d.deleted_at && d.source_type === 'chat_image');
     } else if (docFilter === 'deleted') {
         docs = docs.filter(d => d.deleted_at);
     }
