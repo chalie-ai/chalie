@@ -219,8 +219,8 @@ Chalie evolves through capability stages, each building on the previous:
 | 4 | Proactive reasoning | **Complete** | Reasoning loop, curiosity, autonomous actions |
 | 5 | Continuous reasoning loop | **Complete** | Goal inference, world model, event-driven signal processing |
 | 6 | True autonomy | **Complete** | Consequence classifier, domain confidence from memory, autonomous execution gate |
-| 7 | Situational intelligence | **Next** | Chalie understands *what's happening right now* — not just what you said |
-| 8 | Expanded perception | Future | Chalie sees beyond the chat window — calendar, email, files, APIs, webhooks |
+| 7 | Situational intelligence | **Complete** | Chalie understands *what's happening right now* — not just what you said |
+| 8 | Expanded perception | **Next** | Chalie sees beyond the chat window — calendar, email, files, APIs, webhooks |
 | 9 | Cognitive OS | Future | Chalie becomes the shared cognitive layer for external agents |
 
 ### Stage 7: Situational Intelligence
@@ -277,7 +277,7 @@ Chalie stops being an application and becomes a **cognitive operating system**. 
 
 **What it requires:** REST API for agent operations, agent registration, delegation and monitoring, cross-agent knowledge sharing, and the full memory + autonomy stack from Stages 1-8 as the foundation.
 
-**Current transition:** Stages 1–6 are complete. Stage 7 — situational intelligence — is next. It deepens *processing quality* with signals Chalie already has. Stage 8 then expands *what Chalie can perceive*. Stage 9 opens Chalie as a platform for external agents. Each stage builds on the previous — situational intelligence makes perception useful (knowing *when* to surface information), and perception makes the Cognitive OS valuable (agents need a world-aware cognitive layer, not just memory retrieval).
+**Current transition:** Stages 1–7 are complete. Stage 8 — expanded perception — is next. It gives Chalie eyes beyond the chat window: calendar, email, file watchers, API webhooks. The situation model from Stage 7 ensures Chalie knows *when* to surface information, not just *what*. Stage 9 then opens Chalie as a Cognitive OS — a shared cognitive layer for external agents.
 
 ### The Cognitive OS Endgame (Stage 9)
 

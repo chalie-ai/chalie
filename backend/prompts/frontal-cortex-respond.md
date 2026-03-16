@@ -97,6 +97,8 @@ Previous Internal Actions (use these results to inform your response):
 
 {{world_state}}
 
+{{situation}}
+
 ────────────────────────────────
 
 ## Optional Modifiers (0 or more)

@@ -232,11 +232,39 @@ class EventBridgeService:
         Check if event can pass the focus gate.
 
         Deep focus blocks all events except critical priority.
+        Situation model interruptibility score (< 0.2) also blocks non-critical events.
         """
         bypass_events = self._config.get('focus_gate_bypass', [])
         if event.event_type in bypass_events:
             return True
 
+        # Primary check: situation model interruptibility score.
+        # A very low score means the user is heavily focused or unavailable.
+        try:
+            from services.situation_model_service import get_situation_model_service
+            _situation = get_situation_model_service().get_current()
+            _interruptibility = (
+                _situation.get('scores', {})
+                .get('interruptibility', {})
+                .get('value', 0.5)
+            )
+            if _interruptibility < 0.2:
+                if event.interrupt_priority == 'critical':
+                    logger.info(
+                        f"{LOG_PREFIX} Critical event {event.event_type} bypasses "
+                        f"low-interruptibility gate (score={_interruptibility:.2f})"
+                    )
+                    return True
+                logger.debug(
+                    f"{LOG_PREFIX} Event {event.event_type} blocked by low interruptibility "
+                    f"(score={_interruptibility:.2f})"
+                )
+                return False
+        except Exception:
+            # Fall through to the legacy ambient-inference check below
+            pass
+
+        # Fallback: legacy ambient inference deep-focus check
         try:
             from services.ambient_inference_service import AmbientInferenceService
             inference = AmbientInferenceService()

@@ -369,15 +369,33 @@ class ReasoningLoopService:
         # Gate 1: Fatigue
         if self._is_fatigued():
             return
-        # Gate 2: Deep focus
+        # Gate 2: Situation model proactivity budget — skip when user is unlikely to
+        # welcome autonomous reasoning output (e.g. very low energy, disengaging).
+        try:
+            from services.situation_model_service import get_situation_model_service
+            _situation = get_situation_model_service().get_current()
+            _proactivity = (
+                _situation.get('scores', {})
+                .get('proactivity_budget', {})
+                .get('value', 0.5)
+            )
+            if _proactivity < 0.15:
+                logger.debug(
+                    f"{LOG_PREFIX} Proactivity budget too low ({_proactivity:.2f}), "
+                    f"skipping signal"
+                )
+                return
+        except Exception:
+            pass  # Fall through to existing checks
+        # Gate 3: Deep focus
         if self._is_user_deep_focus():
             logger.info(f"{LOG_PREFIX} User in deep focus, skipping signal")
             return
-        # Gate 3: Recent episodes required
+        # Gate 4: Recent episodes required
         if not self._has_recent_episodes():
             logger.debug(f"{LOG_PREFIX} No recent episodes, skipping signal")
             return
-        # Gate 4: Memory richness
+        # Gate 5: Memory richness
         try:
             from services.self_model_service import SelfModelService
             richness = SelfModelService().get_memory_richness()
@@ -387,7 +405,7 @@ class ReasoningLoopService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Richness check failed, skipping signal: {e}")
             return
-        # Gate 5: Workers idle
+        # Gate 6: Workers idle
         if not self._are_workers_idle():
             logger.debug(f"{LOG_PREFIX} Workers not idle, skipping signal")
             return
