@@ -1,5 +1,5 @@
 """
-Tests for document_skill.py — action dispatch, search, list, view, delete, restore.
+Tests for document_skill.py — action dispatch, search, list, view, delete, restore, create.
 """
 
 import pytest
@@ -354,3 +354,90 @@ class TestRestoreAction:
 
         assert "Restored" in result
         mock_svc.get_all_documents.assert_called_once_with(include_deleted=True)
+
+
+_P_DOC_QUEUE = "services.document_queue.enqueue_document_processing"
+
+
+@pytest.mark.unit
+class TestCreateAction:
+    """Test the create action handler."""
+
+    def test_create_success(self):
+        mock_svc = MagicMock()
+        mock_svc.create_document_from_text.return_value = "abc12345"
+
+        with patch(_P_DB), \
+             patch(_P_DOC_SVC, return_value=mock_svc), \
+             patch(_P_DOC_QUEUE) as mock_queue, \
+             patch(_P_CARD):
+            from services.innate_skills.document_skill import handle_document
+            result = handle_document("topic", {
+                "action": "create",
+                "name": "research-notes.md",
+                "content": "# Research Notes\n\nSome findings here.",
+            })
+
+        assert "Created" in result
+        assert "research-notes.md" in result
+        assert "abc12345" in result
+        mock_svc.create_document_from_text.assert_called_once_with(
+            original_name="research-notes.md",
+            text_content="# Research Notes\n\nSome findings here.",
+            source_type="conversation",
+        )
+        mock_queue.assert_called_once_with("abc12345")
+
+    def test_create_missing_name(self):
+        with patch(_P_DB), patch(_P_DOC_SVC):
+            from services.innate_skills.document_skill import handle_document
+            result = handle_document("topic", {
+                "action": "create",
+                "content": "some content",
+            })
+        assert "'name' is required" in result
+
+    def test_create_missing_content(self):
+        with patch(_P_DB), patch(_P_DOC_SVC):
+            from services.innate_skills.document_skill import handle_document
+            result = handle_document("topic", {
+                "action": "create",
+                "name": "notes.md",
+            })
+        assert "'content' is required" in result
+
+    def test_create_adds_md_extension(self):
+        mock_svc = MagicMock()
+        mock_svc.create_document_from_text.return_value = "def67890"
+
+        with patch(_P_DB), \
+             patch(_P_DOC_SVC, return_value=mock_svc), \
+             patch(_P_DOC_QUEUE), \
+             patch(_P_CARD):
+            from services.innate_skills.document_skill import handle_document
+            result = handle_document("topic", {
+                "action": "create",
+                "name": "my-notes",
+                "content": "content here",
+            })
+
+        # Should have added .md extension
+        mock_svc.create_document_from_text.assert_called_once()
+        call_args = mock_svc.create_document_from_text.call_args
+        assert call_args[1]["original_name"] == "my-notes.md"
+
+    def test_create_error_handling(self):
+        mock_svc = MagicMock()
+        mock_svc.create_document_from_text.side_effect = Exception("disk full")
+
+        with patch(_P_DB), \
+             patch(_P_DOC_SVC, return_value=mock_svc):
+            from services.innate_skills.document_skill import handle_document
+            result = handle_document("topic", {
+                "action": "create",
+                "name": "notes.md",
+                "content": "content",
+            })
+
+        assert "Failed" in result
+        assert "disk full" in result
