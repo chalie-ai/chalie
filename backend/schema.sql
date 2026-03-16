@@ -869,3 +869,23 @@ CREATE INDEX IF NOT EXISTS idx_uncertainties_severity ON uncertainties(severity,
 CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS persistent_tasks_vec USING vec0(embedding float[768]);
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
+
+-- ────────────────────────────────────────────────────────────────
+-- WRAPPER TOKENS — bearer auth for external programmatic access
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS wrapper_tokens (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    wrapper_id TEXT NOT NULL UNIQUE,
+    capabilities TEXT NOT NULL DEFAULT '{}',
+    permissions TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    last_seen_at TEXT,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_wrapper_tokens_hash
+    ON wrapper_tokens(token_hash)
+    WHERE revoked_at IS NULL;
