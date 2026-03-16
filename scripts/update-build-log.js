@@ -7,30 +7,6 @@ const fs = require('fs');
 const TODAY = new Date().toISOString().slice(0, 10);
 const BUILD_LOG_DIR = './chalie-web/src/build-log';
 
-function getLastProcessedDate() {
-  try {
-    // Find the most recent build log file
-    const files = fs.readdirSync(BUILD_LOG_DIR)
-      .filter(f => f.match(/^\d{4}-\d{2}-\d{2}\.md$/))
-      .sort()
-      .reverse();
-
-    if (files.length === 0) {
-      // No build logs exist yet; start from yesterday to be safe
-      const yesterday = new Date();
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      return yesterday.toISOString().slice(0, 10);
-    }
-
-    // Return the most recent build log's date
-    return files[0].slice(0, 10);
-  } catch (e) {
-    // If directory doesn't exist, start from yesterday
-    const yesterday = new Date();
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    return yesterday.toISOString().slice(0, 10);
-  }
-}
 
 function getCommitsForDate(date) {
   try {
@@ -300,13 +276,14 @@ function normalizeTags(tags) {
   return [...new Set(normalized)];
 }
 
-function formatFrontmatter(entry, date) {
+function formatFrontmatter(entry, date, commitCount) {
   const normalizedTags = normalizeTags(entry.tags);
 
   return `---
 title: "${entry.title}"
 description: "${entry.description}"
 date: ${date}
+commits: ${commitCount}
 tags: [${normalizedTags.map(t => `"${t}"`).join(', ')}]
 category: "Dev Log"
 layout: build-log-post.njk
@@ -315,18 +292,70 @@ layout: build-log-post.njk
 ${entry.body}`;
 }
 
-function getDatesToProcess() {
-  const lastProcessed = getLastProcessedDate();
-  const dates = [];
-  // Start from the day after last processed, up to and including today
-  const current = new Date(lastProcessed + 'T00:00:00Z');
-  current.setUTCDate(current.getUTCDate() + 1);
-  const end = new Date(TODAY + 'T00:00:00Z');
-  while (current <= end) {
-    dates.push(current.toISOString().slice(0, 10));
-    current.setUTCDate(current.getUTCDate() + 1);
+function getExistingBuildLogDates() {
+  try {
+    const files = fs.readdirSync(BUILD_LOG_DIR)
+      .filter(f => f.match(/^\d{4}-\d{2}-\d{2}\.md$/));
+    return new Set(files.map(f => f.slice(0, 10)));
+  } catch (e) {
+    return new Set();
   }
-  return { lastProcessed, dates };
+}
+
+function getCommitCountFromFile(filePath) {
+  // Extract the commit count from an existing build log's frontmatter
+  // We embed it as `commits: N` so we can detect when new commits land on an old date
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const match = content.match(/^commits:\s*(\d+)/m);
+    return match ? parseInt(match[1], 10) : -1;
+  } catch (e) {
+    return -1;
+  }
+}
+
+function getCommitCountsByDate() {
+  // Get commit counts per date across all branches (last 30 days) in one pass
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
+    const sinceDate = thirtyDaysAgo.toISOString().slice(0, 10);
+    const output = execSync(
+      `git log --all --since="${sinceDate}" --format="%ad" --date=short`,
+      { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+    );
+    const counts = {};
+    for (const date of output.trim().split('\n').filter(Boolean)) {
+      counts[date] = (counts[date] || 0) + 1;
+    }
+    return counts;
+  } catch (e) {
+    console.error('Error scanning commit dates:', e.message);
+    return {};
+  }
+}
+
+function getDatesToProcess() {
+  const existingDates = getExistingBuildLogDates();
+  const commitCounts = getCommitCountsByDate();
+  const dates = [];
+
+  for (const [date, count] of Object.entries(commitCounts)) {
+    if (!existingDates.has(date)) {
+      // Missing build log — needs generation
+      dates.push(date);
+    } else {
+      // Build log exists — regenerate if commit count changed
+      const filePath = `${BUILD_LOG_DIR}/${date}.md`;
+      const storedCount = getCommitCountFromFile(filePath);
+      if (count !== storedCount) {
+        dates.push(date);
+      }
+    }
+  }
+
+  dates.sort();
+  return { lastProcessed: existingDates.size > 0 ? [...existingDates].sort().pop() : 'none', dates };
 }
 
 async function main() {
@@ -350,7 +379,7 @@ async function main() {
       console.log(`  ${date}: ${stats.totalCommits} commits, ${stats.totalFilesChanged} files changed`);
 
       const entry = await generateBuildLogEntry(commits, stats);
-      const fileContent = formatFrontmatter(entry, date);
+      const fileContent = formatFrontmatter(entry, date, commits.length);
       const filePath = `${BUILD_LOG_DIR}/${date}.md`;
       fs.writeFileSync(filePath, fileContent);
       console.log(`  ${date}: written to ${filePath}`);
