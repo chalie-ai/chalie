@@ -671,6 +671,24 @@ def _generate_with_act_orchestrator(
             }), ex=300)
             store.publish(f"sse:{request_uuid}", narration_id)
             logging.info(f"[MODE:ACT] Narration published: {narration_id} → sse:{request_uuid[:12]}...")
+
+            # Phase B: Emit show_narration intent for wrapper contract
+            try:
+                from services.intent_service import IntentService, CognitiveIntent, _make_intent_id
+                intent = CognitiveIntent(
+                    intent_id=_make_intent_id(),
+                    intent_type='show_narration',
+                    target_wrapper='__chat_ui__',
+                    payload={
+                        'request_id': request_uuid,
+                        'text': narration_text,
+                        'step': step,
+                    },
+                )
+                IntentService().emit(intent)
+            except Exception:
+                pass  # Non-critical — sse delivery is primary
+
         except Exception as _e:
             logging.error(f"[MODE:ACT] Narration publish failed: {_e}", exc_info=True)
 
