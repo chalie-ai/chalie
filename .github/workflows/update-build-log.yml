@@ -5,9 +5,14 @@ on:
     branches: ['**']
   workflow_dispatch:
 
+concurrency:
+  group: build-log
+  cancel-in-progress: true
+
 jobs:
   update-build-log:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Chalie
         uses: actions/checkout@v4
