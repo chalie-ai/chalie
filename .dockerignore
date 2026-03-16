@@ -1,0 +1,33 @@
+# Data — never bake databases or generated configs into images
+backend/data/
+backend/configs/generated/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.deps-installed
+.voice-deps-installed
+
+# Environment & secrets
+*.env
+*.key
+*.session_secret
+
+# Editor & OS
+.idea/
+.vscode/
+.DS_Store
+.claude/
+
+# Git
+.git/
+.gitignore
+
+# Local-only
+plans/
+training/
+docker-compose.yml
+node_modules/

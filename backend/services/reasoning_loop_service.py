@@ -73,6 +73,7 @@ class ReasoningSignal:
     activation_energy: float = 0.5
     timestamp: float = dataclasses.field(default_factory=time.time)
     metadata: dict | None = None  # Extra data (e.g., user message routing info)
+    wrapper_id: str | None = None  # Source wrapper identifier (None = internal)
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))

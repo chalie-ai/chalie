@@ -345,6 +345,7 @@ def _handle_chat(ws, store, msg, active_request=None):
                 'source': source,
                 'image_ids': image_ids,
             },
+            wrapper_id='__chat_ui__',
         )
         store.rpush('reasoning:priority', signal.to_json())
         # bg_done is never set via signal path — the reasoning loop spawns

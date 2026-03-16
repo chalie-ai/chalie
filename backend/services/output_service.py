@@ -1,11 +1,11 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from .memory_client import MemoryClientService
 from .config_service import ConfigService
+from .time_utils import utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ class OutputService:
             "id": output_id,
             "type": "TEXT",
             "topic": topic,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": utc_now().isoformat(),
             "metadata": metadata_dict
         }
 
@@ -205,7 +205,7 @@ class OutputService:
             "type": "card",
             "output_id": output_id,
             "topic": topic,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": utc_now().isoformat(),
             **card_data,  # html, css, scope_id, title, accent_color, background_color, tool_name
         }
 
@@ -288,7 +288,7 @@ class OutputService:
             "id": output_id,
             "type": "ACT",
             "topic": topic,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": utc_now().isoformat(),
             "metadata": {
                 "actions": actions,
                 "downstream_mode": downstream_mode,
@@ -373,7 +373,7 @@ class OutputService:
             consumer_type: Type of consumer (e.g., "text", "act")
         """
         heartbeat_key = f"consumer:{consumer_type}:heartbeat"
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = utc_now().isoformat()
 
         self.store.setex(heartbeat_key, 60, timestamp)
         logger.debug(f"Updated heartbeat for consumer:{consumer_type}")
