@@ -110,49 +110,50 @@ class TestOnnxModeGate:
     """
 
     def test_onnx_respond_high_confidence_returns_respond(self):
-        """mode-gate predicts RESPOND with conf >= 0.85 → respond route."""
+        """mode-gate multi_label fires RESPOND → respond route."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        mock_onnx.predict.return_value = ('RESPOND', 0.92)
+        mock_onnx.predict_multi_label.return_value = [('RESPOND', 0.92)]
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
             result = svc.gate("hello how are you?")
 
-        mock_onnx.is_available.assert_called_with("mode-gate")
+        mock_onnx.is_available.assert_any_call("mode-gate")
         assert result.route == 'respond'
         assert result.confidence == pytest.approx(0.92)
 
-    def test_onnx_respond_low_confidence_falls_to_act(self):
-        """mode-gate predicts RESPOND but conf < 0.85 → act route (conservative)."""
+    def test_onnx_respond_below_threshold_falls_to_act(self):
+        """mode-gate RESPOND below threshold → empty predictions → act route."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        mock_onnx.predict.return_value = ('RESPOND', 0.70)
+        # predict_multi_label returns empty when below threshold
+        mock_onnx.predict_multi_label.return_value = []
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
             result = svc.gate("what should I do about this?")
 
         assert result.route == 'act'
 
-    def test_onnx_act_returns_act(self):
-        """mode-gate predicts ACT → act route."""
+    def test_onnx_no_respond_label_returns_act(self):
+        """mode-gate returns no RESPOND label → act route."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        mock_onnx.predict.return_value = ('ACT', 0.88)
+        mock_onnx.predict_multi_label.return_value = []
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
             result = svc.gate("search for the latest Python news")
 
         assert result.route == 'act'
-        assert result.confidence == pytest.approx(0.88)
+        assert result.confidence == pytest.approx(0.5)
 
     def test_onnx_unknown_label_defaults_to_act(self):
         """Unknown label from mode-gate → act (safe default)."""
@@ -161,7 +162,8 @@ class TestOnnxModeGate:
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        mock_onnx.predict.return_value = ('UNKNOWN', 0.80)
+        # Only non-RESPOND labels returned
+        mock_onnx.predict_multi_label.return_value = [('UNKNOWN', 0.80)]
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
             result = svc.gate("hey")
