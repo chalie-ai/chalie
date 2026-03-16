@@ -82,7 +82,7 @@ class TestConversationAPI:
             mock_get_ts.return_value = mock_ts
 
             mock_tcs = MagicMock()
-            mock_tcs.get_most_recent_expired_thread_id.return_value = None
+            mock_tcs.get_most_recent_thread_id.return_value = (None, False)
             mock_tcs_cls.return_value = mock_tcs
 
             response = client.get('/conversation/recent')
