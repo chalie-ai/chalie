@@ -110,6 +110,29 @@ class OutputService:
         if sse_channel:
             self.store.publish(f"sse:{sse_channel}", output_id)
 
+            # Phase B: Emit present_response intent for wrapper contract
+            try:
+                from services.intent_service import IntentService, CognitiveIntent, _make_intent_id
+                intent = CognitiveIntent(
+                    intent_id=_make_intent_id(),
+                    intent_type='present_response',
+                    target_wrapper='__chat_ui__',
+                    payload={
+                        'request_id': sse_channel,
+                        'text': response,
+                        'topic': topic,
+                        'mode': mode,
+                        'confidence': confidence,
+                        'exchange_id': (original_metadata or {}).get('exchange_id', ''),
+                    },
+                    confidence=confidence,
+                )
+                if reply_actions:
+                    intent.payload['reply_actions'] = reply_actions
+                IntentService().emit(intent)
+            except Exception as e:
+                logger.debug(f"[OutputService] Intent emission failed (non-critical): {e}")
+
         # Web push + catch-up buffer for all background output (no sync SSE connection)
         if not sse_channel:
             try:
