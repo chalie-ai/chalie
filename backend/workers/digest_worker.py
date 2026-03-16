@@ -601,9 +601,11 @@ def _generate_with_act_orchestrator(
     from services.act_orchestrator_service import ACTOrchestrator
     from services.act_loop_service import ActLoopService
 
-    act_cumulative_timeout = cortex_config.get('act_cumulative_timeout', 60.0)
-    act_per_action_timeout = cortex_config.get('act_per_action_timeout', 10.0)
-    max_act_iterations = cortex_config.get('max_act_iterations', 5)
+    # Use ACT-specific config (resolved from frontal-cortex-act.json) for loop
+    # parameters — the base cortex_config has different defaults (e.g. max=7 vs 50).
+    act_cumulative_timeout = config.get('act_cumulative_timeout', cortex_config.get('act_cumulative_timeout', 60.0))
+    act_per_action_timeout = config.get('act_per_action_timeout', cortex_config.get('act_per_action_timeout', 10.0))
+    max_act_iterations = config.get('max_act_iterations', cortex_config.get('max_act_iterations', 5))
 
     # Compute context inclusion map and assembled context
     act_inclusion_map = None
