@@ -410,6 +410,24 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
 
+    # Auto-register the __chat_ui__ wrapper (idempotent)
+    try:
+        from services.wrapper_auth_service import WrapperAuthService
+        wrapper_svc = WrapperAuthService(database_service)
+        existing = wrapper_svc.get_wrapper('__chat_ui__')
+        if not existing:
+            wrapper_svc.create_token(
+                name='Chat UI (built-in)',
+                capabilities={'signals': ['user_message'], 'intents': ['present_response']},
+                permissions={'query': ['situation', 'relevance', 'world-state', 'identity', 'memory']},
+                wrapper_id_override='__chat_ui__',
+            )
+            logger.info("[Startup] Registered __chat_ui__ wrapper token")
+        else:
+            logger.debug("[Startup] __chat_ui__ wrapper already registered")
+    except Exception as e:
+        logger.warning(f"[Startup] __chat_ui__ wrapper registration failed: {e}")
+
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker(shared_state=None):
         from api import create_app

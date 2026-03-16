@@ -196,9 +196,18 @@ def get_mode_router():
 
 
 def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_id: str = None):
-    """Enqueue lightweight trait extraction for a user message."""
+    """Enqueue lightweight trait extraction for a user message.
+
+    Messages over 300 chars are skipped entirely — long messages are almost
+    certainly pasted content (transcripts, plans, articles, code) and the
+    introductory framing is where third-party names appear.
+    """
     try:
         import threading
+
+        if len(prompt_message) > 300:
+            logger.debug("[TraitExtraction] Skipping — message too long (%d chars), likely pasted content", len(prompt_message))
+            return
 
         def _extract_traits():
             try:

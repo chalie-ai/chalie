@@ -136,6 +136,11 @@ class ActDispatcherService:
         # Get handler
         handler = self.handlers.get(action_type)
         if not handler:
+            # Try wrapper intent routing before falling through to error
+            wrapper_result = self._try_wrapper_intent(action_type, action)
+            if wrapper_result:
+                return wrapper_result
+
             logging.error(f"[ACT DISPATCH] No handler for '{action_type}'. Registered: {list(self.handlers.keys())}")
             # Log capability gap when no handler exists for requested action
             try:
@@ -259,6 +264,77 @@ class ActDispatcherService:
                 'confidence': 0.0,
                 'notes': '',
             }
+
+    def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
+        """Check if a connected wrapper declares the action type as a capability.
+
+        If a capable wrapper is found, emit a CognitiveIntent via IntentService
+        and return a structured result dict.  Returns None if no wrapper handles
+        this action type (caller should fall through to the error path).
+
+        Args:
+            action_type: The action category string (e.g. ``"open_pr"``).
+            action: Full action specification dict.
+
+        Returns:
+            Result dict with ``status: "intent_emitted"`` on success, or None.
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            from services.wrapper_auth_service import WrapperAuthService
+            from services.intent_service import IntentService, CognitiveIntent
+
+            db = get_shared_db_service()
+            wrapper_svc = WrapperAuthService(db)
+            wrappers = wrapper_svc.list_wrappers()
+
+            # Find the first wrapper that declares this action type
+            target_wrapper = None
+            for w in wrappers:
+                caps = w.get("capabilities", {})
+                declared_intents = caps.get("intents", [])
+                if action_type in declared_intents:
+                    target_wrapper = w
+                    break
+
+            if not target_wrapper:
+                return None
+
+            import uuid
+            intent_id = str(uuid.uuid4())
+            intent = CognitiveIntent(
+                intent_id=intent_id,
+                intent_type="execute",
+                target_wrapper=target_wrapper["wrapper_id"],
+                payload={
+                    "action_type": action_type,
+                    "params": action.get("params", {}),
+                    "description": action.get("description", ""),
+                },
+                confidence=0.7,
+            )
+
+            intent_svc = IntentService()
+            intent_svc.emit(intent)
+
+            logging.info(
+                f"[ACT DISPATCH] Routed {action_type} to wrapper "
+                f"{target_wrapper['wrapper_id']} via intent {intent_id}"
+            )
+
+            return {
+                "action_type": action_type,
+                "status": "intent_emitted",
+                "result": f"Intent emitted to wrapper {target_wrapper['wrapper_id']}",
+                "target_wrapper": target_wrapper["wrapper_id"],
+                "intent_id": intent_id,
+                "execution_time": 0.0,
+                "confidence": 0.7,
+                "notes": f"intent_id={intent_id}; target={target_wrapper['wrapper_id']}",
+            }
+        except Exception as e:
+            logging.debug(f"[ACT DISPATCH] Wrapper intent routing failed: {e}")
+            return None
 
     def _check_source_reliability(self, action: Dict[str, Any]) -> str:
         """
