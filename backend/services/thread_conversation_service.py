@@ -107,7 +107,7 @@ class ThreadConversationService:
                 self._db.execute(
                     """DELETE FROM thread_exchanges WHERE id IN (
                         SELECT id FROM thread_exchanges
-                        ORDER BY created_at ASC LIMIT ?
+                        ORDER BY rowid ASC LIMIT ?
                     )""",
                     (excess,)
                 )
@@ -124,7 +124,7 @@ class ThreadConversationService:
                           generation_time_ms, steps, memory_chunk
                    FROM thread_exchanges
                    WHERE thread_id = ?
-                   ORDER BY created_at ASC
+                   ORDER BY rowid ASC
                    LIMIT ?""",
                 (thread_id, self.MAX_EXCHANGES)
             )
@@ -416,13 +416,34 @@ class ThreadConversationService:
         has_more = (offset + limit) < total
         return {"exchanges": exchanges, "total": total, "has_more": has_more}
 
-    def get_most_recent_expired_thread_id(self) -> Optional[str]:
-        """Return the thread_id of the most recently expired thread from SQLite."""
+    def get_most_recent_thread_id(self) -> tuple[Optional[str], bool]:
+        """Return the most recent thread from SQLite — active first, then expired.
+
+        After a server restart MemoryStore is empty, so the active_thread
+        pointer is gone.  This queries SQLite to find the thread that should
+        be displayed.
+
+        Returns:
+            (thread_id, from_expired) — thread_id or None, and whether
+            the thread is expired.
+        """
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             with db.connection() as conn:
                 cursor = conn.cursor()
+                # Prefer active thread (survives restart in SQLite)
+                cursor.execute("""
+                    SELECT thread_id FROM threads
+                    WHERE state = 'active'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                if row:
+                    cursor.close()
+                    return row[0], False
+                # Fall back to most recent expired
                 cursor.execute("""
                     SELECT thread_id FROM threads
                     WHERE state = 'expired'
@@ -431,9 +452,16 @@ class ThreadConversationService:
                 """)
                 row = cursor.fetchone()
                 cursor.close()
-                return row[0] if row else None
+                return (row[0], True) if row else (None, False)
         except Exception:
-            return None
+            return None, False
+
+    def get_most_recent_expired_thread_id(self) -> Optional[str]:
+        """Return the thread_id of the most recently expired thread from SQLite."""
+        thread_id, from_expired = self.get_most_recent_thread_id()
+        if from_expired:
+            return thread_id
+        return None
 
     def remove_exchanges(self, thread_id: str, exchange_ids: list) -> None:
         """Remove specific exchanges by ID (for post-episodic cleanup)."""

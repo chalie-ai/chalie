@@ -41,13 +41,10 @@ def conversation_recent():
         tcs = ThreadConversationService()
         from_expired = False
 
-        # If no active thread, or active thread is empty, fall back to most recent expired thread
+        # After restart MemoryStore is empty — resolve thread from SQLite
         if not thread_id:
-            expired_id = tcs.get_most_recent_expired_thread_id()
-            if expired_id:
-                thread_id = expired_id
-                from_expired = True
-            else:
+            thread_id, from_expired = tcs.get_most_recent_thread_id()
+            if not thread_id:
                 return jsonify({
                     "thread_id": None,
                     "exchanges": [],
@@ -63,10 +60,9 @@ def conversation_recent():
                 # Try SQLite fallback for active thread first
                 page = tcs.get_paginated_history(thread_id, limit=1, offset=0)
                 if page["total"] == 0:
-                    expired_id = tcs.get_most_recent_expired_thread_id()
-                    if expired_id:
-                        thread_id = expired_id
-                        from_expired = True
+                    thread_id, from_expired = tcs.get_most_recent_thread_id()
+                    if not thread_id:
+                        from_expired = False
 
         page = tcs.get_paginated_history(thread_id, limit=limit, offset=offset)
         total = page["total"]
