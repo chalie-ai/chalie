@@ -695,6 +695,25 @@ def observability_failures():
         return jsonify({"error": "Failed to retrieve failure stats"}), 500
 
 
+@system_bp.route('/system/observability/situation', methods=['GET'])
+@require_session
+def observability_situation():
+    """Returns the full situation model state for debugging/observability."""
+    try:
+        from services.situation_model_service import get_situation_model_service
+        svc = get_situation_model_service()
+        state = svc.get_current()
+        directive = svc.get_directive()
+        return jsonify({
+            'ok': True,
+            'situation': state,
+            'directive': directive,
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/situation error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────

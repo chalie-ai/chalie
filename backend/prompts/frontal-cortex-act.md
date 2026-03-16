@@ -103,6 +103,8 @@ Older actions and large results are stored in your notes — use the notes skill
 
 {{world_state}}
 
+{{situation}}
+
 ────────────────────────────────
 
 ## Output Contract (STRICT)
