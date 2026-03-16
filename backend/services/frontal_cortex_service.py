@@ -316,9 +316,11 @@ class FrontalCortexService:
 
         # Diagnostic: log raw ACT response for debugging tool invocation issues
         if 'act' in system_prompt_template.lower()[:200]:
+            # Log full response for short ones, truncated for long ones
+            _trunc = response_text if len(response_text) <= 800 else response_text[:800]
             logging.info(
                 f"[CORTEX ACT RAW] LLM response ({len(response_text)} chars): "
-                f"{response_text[:500]}"
+                f"{_trunc}"
             )
 
         return self._parse_response_text(response_text, generation_time)
@@ -441,91 +443,114 @@ class FrontalCortexService:
                 stripped = stripped.split("\n", 1)[-1]  # remove opening fence line
                 stripped = stripped.rsplit("```", 1)[0]  # remove closing fence
 
-            # Two-attempt parse: on first failure, fix invalid escape sequences.
-            # LLMs occasionally produce \$ or similar in response text which are
-            # not valid JSON escape sequences (valid: \" \\ \/ \b \f \n \r \t \uXXXX).
+            # Multi-layer JSON parse with progressive recovery.
+            # Layer 0: direct parse
+            # Layer 0b: multi-object JSON (GPT-5.4 returns {…}\n{…})
+            # Layer 1: fix invalid escape sequences (\$ etc.)
+            # Layer 1b: multi-object on escape-fixed text
+            # Layer 2: extract {…} from prose wrapper
+            # Layer 3: fix literal newlines in string values
+            # Layer 4: extract "response" from broken JSON
+            # Layer 5: wrap prose as RESPOND
+            response_data = None
+
+            # Helper: try raw_decode to extract just the first JSON object
+            def _try_raw_decode(text):
+                try:
+                    obj, _end = json.JSONDecoder().raw_decode(text)
+                    logging.warning(
+                        f"[FRONTAL CORTEX] Parsed first JSON object from multi-object "
+                        f"response (used {_end}/{len(text)} chars)"
+                    )
+                    return obj
+                except (json.JSONDecodeError, ValueError):
+                    return None
+
+            # Layer 0: direct parse
             try:
                 response_data = json.loads(stripped)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as _first_err:
+                # Layer 0b: multi-object JSON ("Extra data" = valid first object + trailing data)
+                if 'Extra data' in str(_first_err):
+                    response_data = _try_raw_decode(stripped)
+
+            # Layer 1: fix invalid escape sequences
+            if response_data is None:
                 fixed = re.sub(r'\\([^"\\/bfnrtu])', r'\1', stripped)
                 try:
                     response_data = json.loads(fixed)
-                except json.JSONDecodeError:
-                    # Recovery layer 1: try to extract a {…} object embedded in prose
-                    brace_start = fixed.find('{')
-                    brace_end = fixed.rfind('}')
-                    if brace_start != -1 and brace_end > brace_start:
-                        candidate = fixed[brace_start:brace_end + 1]
-                        try:
-                            response_data = json.loads(candidate)
-                            logging.warning(
-                                "[FRONTAL CORTEX] Extracted JSON from prose response "
-                                f"(offset {brace_start}–{brace_end})"
-                            )
-                        except json.JSONDecodeError:
-                            response_data = None
-                    else:
-                        response_data = None
+                except json.JSONDecodeError as _fixed_err:
+                    # Layer 1b: multi-object on escape-fixed text
+                    if 'Extra data' in str(_fixed_err):
+                        response_data = _try_raw_decode(fixed)
 
-                    if response_data is None:
-                        # Recovery layer 1b: try fixing literal newlines inside JSON
-                        # strings.  LLMs sometimes embed real \n characters in string
-                        # values which is invalid JSON.  Walk the text character-by-
-                        # character and escape bare newlines/carriage-returns that
-                        # appear inside a quoted string.
-                        try:
-                            src = candidate if (brace_start != -1 and brace_end > brace_start) else fixed
-                            buf, in_str, esc = [], False, False
-                            for ch in src:
-                                if esc:
-                                    buf.append(ch); esc = False
-                                elif ch == '\\':
-                                    buf.append(ch); esc = True
-                                elif ch == '"':
-                                    in_str = not in_str; buf.append(ch)
-                                elif in_str and ch == '\n':
-                                    buf.append('\\n')
-                                elif in_str and ch == '\r':
-                                    buf.append('\\r')
-                                elif in_str and ch == '\t':
-                                    buf.append('\\t')
-                                else:
-                                    buf.append(ch)
-                            response_data = json.loads(''.join(buf))
-                            logging.warning(
-                                "[FRONTAL CORTEX] Fixed literal newlines in JSON string values"
-                            )
-                        except (json.JSONDecodeError, Exception):
-                            response_data = None
+            # Layer 2: extract {…} from prose wrapper
+            if response_data is None:
+                fixed = re.sub(r'\\([^"\\/bfnrtu])', r'\1', stripped)
+                brace_start = fixed.find('{')
+                brace_end = fixed.rfind('}')
+                if brace_start != -1 and brace_end > brace_start:
+                    candidate = fixed[brace_start:brace_end + 1]
+                    try:
+                        response_data = json.loads(candidate)
+                        logging.warning(
+                            "[FRONTAL CORTEX] Extracted JSON from prose response "
+                            f"(offset {brace_start}–{brace_end})"
+                        )
+                    except json.JSONDecodeError:
+                        pass
 
-                    if response_data is None:
-                        # Recovery layer 2: LLM returned broken JSON (e.g. unescaped
-                        # inner quotes like "status update"). Extract the response
-                        # value using known field boundaries rather than regex.
-                        prose = stripped.strip() or response_text.strip()
-                        if prose and prose.lstrip().startswith('{'):
-                            extracted = _extract_response_from_broken_json(prose)
-                            if extracted:
-                                logging.warning(
-                                    "[FRONTAL CORTEX] Extracted response from broken JSON "
-                                    f"(first 80 chars): {extracted[:80]!r}"
-                                )
-                                response_data = {"response": extracted, "modifiers": []}
-
-                    if response_data is None:
-                        # Recovery layer 3: LLM returned pure prose — wrap it as RESPOND.
-                        # Use fence-stripped text so markdown code blocks don't leak
-                        # into the frontend.
-                        prose = stripped.strip() or response_text.strip()
-                        if prose:
-                            logging.warning(
-                                "[FRONTAL CORTEX] LLM returned prose instead of JSON — "
-                                "wrapping as RESPOND (first 80 chars): "
-                                f"{prose[:80]!r}"
-                            )
-                            response_data = {"response": prose, "modifiers": []}
+            # Layer 3: fix literal newlines inside JSON string values
+            if response_data is None:
+                try:
+                    src = candidate if (brace_start != -1 and brace_end > brace_start) else fixed
+                    buf, in_str, esc = [], False, False
+                    for ch in src:
+                        if esc:
+                            buf.append(ch); esc = False
+                        elif ch == '\\':
+                            buf.append(ch); esc = True
+                        elif ch == '"':
+                            in_str = not in_str; buf.append(ch)
+                        elif in_str and ch == '\n':
+                            buf.append('\\n')
+                        elif in_str and ch == '\r':
+                            buf.append('\\r')
+                        elif in_str and ch == '\t':
+                            buf.append('\\t')
                         else:
-                            raise  # re-raise original JSONDecodeError (empty response)
+                            buf.append(ch)
+                    response_data = json.loads(''.join(buf))
+                    logging.warning(
+                        "[FRONTAL CORTEX] Fixed literal newlines in JSON string values"
+                    )
+                except (json.JSONDecodeError, Exception):
+                    pass
+
+            # Layer 4: extract "response" from broken JSON (unescaped inner quotes)
+            if response_data is None:
+                prose = stripped.strip() or response_text.strip()
+                if prose and prose.lstrip().startswith('{'):
+                    extracted = _extract_response_from_broken_json(prose)
+                    if extracted:
+                        logging.warning(
+                            "[FRONTAL CORTEX] Extracted response from broken JSON "
+                            f"(first 80 chars): {extracted[:80]!r}"
+                        )
+                        response_data = {"response": extracted, "modifiers": []}
+
+            # Layer 5: pure prose — wrap as RESPOND
+            if response_data is None:
+                prose = stripped.strip() or response_text.strip()
+                if prose:
+                    logging.warning(
+                        "[FRONTAL CORTEX] LLM returned prose instead of JSON — "
+                        "wrapping as RESPOND (first 80 chars): "
+                        f"{prose[:80]!r}"
+                    )
+                    response_data = {"response": prose, "modifiers": []}
+                else:
+                    raise Exception(f"Empty LLM response — no JSON to parse")
 
             # Extract fields (mode-specific prompts produce simpler output)
             mode = response_data.get('mode', 'RESPOND')
