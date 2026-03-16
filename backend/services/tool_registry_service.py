@@ -993,12 +993,14 @@ class ToolRegistryService:
 
         # Clean tool output via the shared text extraction pipeline (same service used by doc processor).
         # If result_text is empty but HTML was returned, derive clean text from the HTML.
-        # If result_text contains HTML markup, extract plain text from it.
-        # Plain text passes through unchanged.
+        # If result_text contains actual HTML tags, extract plain text from it.
+        # Plain text passes through unchanged. The regex check avoids false positives
+        # on comparison operators (e.g., "Rust < C++") in user-generated content.
+        import re
         from services.text_extractor import extract_html as _extract_html
         if not result_text and result_html:
             result_text = _extract_html(result_html)
-        elif result_text and "<" in result_text:
+        elif result_text and re.search(r'<[a-zA-Z/]', result_text):
             result_text = _extract_html(result_text)
         if len(result_text) > self.MAX_OUTPUT_CHARS:
             result_text = result_text[:self.MAX_OUTPUT_CHARS] + "\n... (truncated)"

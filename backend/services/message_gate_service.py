@@ -76,16 +76,21 @@ class MessageGateService:
             svc = get_onnx_inference_service()
 
             if svc.is_available("mode-gate"):
-                label, conf = svc.predict("mode-gate", text)
-                if label is not None:
-                    onnx_mode = label.upper()
-                    if onnx_mode == 'RESPOND' and conf >= 0.85:
-                        route = 'respond'
-                        confidence = conf
-                    else:
-                        route = 'act'
-                        confidence = conf
-                    logger.info(f"{LOG_PREFIX} ONNX: {onnx_mode}({conf:.2f}) → route={route}")
+                # mode-gate is multi_label with single "RESPOND" label.
+                # sigmoid > threshold → RESPOND fires; otherwise ACT (safe default).
+                predictions = svc.predict_multi_label("mode-gate", text)
+                respond_hit = next(
+                    ((lbl, c) for lbl, c in predictions if lbl.upper() == 'RESPOND'),
+                    None,
+                )
+                if respond_hit:
+                    route = 'respond'
+                    confidence = respond_hit[1]
+                    logger.info(f"{LOG_PREFIX} ONNX: RESPOND({confidence:.2f}) → route=respond")
+                else:
+                    route = 'act'
+                    confidence = 0.5
+                    logger.info(f"{LOG_PREFIX} ONNX: RESPOND below threshold → route=act")
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} ONNX gate failed: {e}")
 
