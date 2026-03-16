@@ -589,18 +589,13 @@ class ToolRegistryService:
         # Purge DB entries for tools that no longer exist on disk
         self._purge_stale_db_entries()
 
-        # Deferred pip install for trusted tools — runs in background so Flask
-        # starts without waiting for potentially slow package downloads.
-        # Tools are excluded from get_tool_names/get_on_demand_tools until
-        # deps are installed (see _is_ready / _deps_ready).
+        # Synchronous pip install for trusted tools — must complete before the
+        # system is ready so tools are never shown in prompts but unavailable
+        # for dispatch (see _is_ready / _deps_ready).
         if trusted_dirs:
-            def _install_all():
-                for tool_name, tool_dir in trusted_dirs:
-                    self._install_tool_requirements(tool_name, tool_dir)
-                logger.info(f"[TOOL REGISTRY] Background dep install complete ({len(trusted_dirs)} tools)")
-            import threading as _threading
-            t = _threading.Thread(target=_install_all, name="tool-dep-installer", daemon=True)
-            t.start()
+            for tool_name, tool_dir in trusted_dirs:
+                self._install_tool_requirements(tool_name, tool_dir)
+            logger.info(f"[TOOL REGISTRY] Dep install complete ({len(trusted_dirs)} tools)")
 
     def _purge_stale_db_entries(self):
         """Remove DB records for tools that no longer exist on disk.
@@ -1242,6 +1237,10 @@ class ToolRegistryService:
             # Build the tool (this calls _load_tool internally)
             self._load_tool(tool_dir, manifest_path)
 
+            # Install deps for trusted tools so they're ready immediately
+            if self._is_tool_trusted(tool_name):
+                self._install_tool_requirements(tool_name, tool_dir)
+
             # Success: clear build status
             with self._lock:
                 self._build_status.pop(tool_name, None)
@@ -1472,12 +1471,15 @@ class ToolRegistryService:
 
         lines = []
         for name in sorted(self.tools.keys()):
-            manifest = self.tools[name]["manifest"]
+            tool = self.tools[name]
+            manifest = tool["manifest"]
             trigger = manifest.get("trigger", {})
 
             if trigger.get("type") != "on_demand":
                 continue
             if "notification" in manifest:
+                continue
+            if not self._is_ready(name, tool):
                 continue
 
             desc = manifest.get("description", "")

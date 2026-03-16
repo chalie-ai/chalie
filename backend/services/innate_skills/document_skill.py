@@ -1,7 +1,7 @@
 """
-Document Skill — Search and manage uploaded documents via the ACT loop.
+Document Skill — Search and manage documents via the ACT loop.
 
-Actions: search, list, view, delete, restore
+Actions: search, list, view, delete, restore, create
 """
 
 import json as _json
@@ -35,6 +35,7 @@ def handle_document(topic: str, params: dict) -> str:
     - view:     View metadata and content preview for a specific document
     - delete:   Soft-delete a document
     - restore:  Restore a soft-deleted document
+    - create:   Create a new document from text content
 
     Args:
         topic: Current conversation topic
@@ -69,8 +70,10 @@ def _dispatch(service, action: str, params: dict, topic: str) -> str:
         return _handle_delete(service, params, topic)
     elif action == 'restore':
         return _handle_restore(service, params, topic)
+    elif action == 'create':
+        return _handle_create(service, params, topic)
     else:
-        valid = 'search, list, view, delete, restore'
+        valid = 'search, list, view, delete, restore, create'
         return f"[DOCUMENT] Unknown action '{action}'. Use: {valid}"
 
 
@@ -303,3 +306,49 @@ def _handle_restore(service, params: dict, topic: str) -> str:
             logger.warning(f"[DOCUMENT SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[DOCUMENT] Restored '{doc['original_name']}'."
     return f"[DOCUMENT] Failed to restore '{doc['original_name']}'."
+
+
+def _handle_create(service, params: dict, topic: str) -> str:
+    """Create a new document from text content.
+
+    Required params:
+        name: Document filename (e.g. 'research-notes.md')
+        content: The text content to store
+    """
+    name = params.get('name', '').strip()
+    content = params.get('content', '').strip()
+
+    if not name:
+        return "[DOCUMENT] 'name' is required for create."
+    if not content:
+        return "[DOCUMENT] 'content' is required for create."
+
+    # Ensure .md extension if none provided
+    if '.' not in name:
+        name = f"{name}.md"
+
+    try:
+        doc_id = service.create_document_from_text(
+            original_name=name,
+            text_content=content,
+            source_type=params.get('source_type', 'conversation'),
+        )
+
+        # Enqueue for processing (chunking, embedding, etc.)
+        from services.document_queue import enqueue_document_processing
+        enqueue_document_processing(doc_id)
+
+        try:
+            from services.document_card_service import DocumentCardService
+            DocumentCardService().emit_upload_card(topic, name, 'processing')
+        except Exception as card_err:
+            logger.warning(f"[DOCUMENT SKILL] Card emit failed (non-fatal): {card_err}")
+
+        return (
+            f"[DOCUMENT] Created '{name}' (id={doc_id}). "
+            f"Processing in background — will be searchable shortly."
+        )
+
+    except Exception as e:
+        logger.error(f"[DOCUMENT SKILL] Create failed: {e}", exc_info=True)
+        return f"[DOCUMENT] Failed to create document: {e}"

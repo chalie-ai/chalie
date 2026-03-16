@@ -102,7 +102,7 @@ def register_websocket(sock):
         from services.memory_client import MemoryClientService
         store = MemoryClientService.create_connection()
         pubsub = store.pubsub()
-        pubsub.subscribe('output:events', 'intents:__chat_ui__')
+        pubsub.subscribe('output:events')
 
         # Drain buffered notifications on connect
         while True:
@@ -124,60 +124,19 @@ def register_websocket(sock):
         ws_open.set()
 
         def _drift_sender():
-            """Listen to output:events and intents:__chat_ui__ pub/sub and forward to WebSocket."""
+            """Listen to output:events pub/sub and forward to WebSocket."""
             while ws_open.is_set():
                 try:
                     msg = pubsub.get_message(timeout=15)
                     if msg and msg['type'] == 'message':
-                        channel = msg.get('channel', '')
-                        if isinstance(channel, bytes):
-                            channel = channel.decode()
-
-                        if channel == 'intents:__chat_ui__':
-                            # Intent from cognitive contract — translate to WS protocol
-                            try:
-                                intent_data = json.loads(msg['data'])
-                                intent_type = intent_data.get('intent_type', '')
-                                payload = intent_data.get('payload', {})
-
-                                if intent_type == 'present_response':
-                                    seq = _next_seq()
-                                    evt = {
-                                        "type": "message",
-                                        "text": payload.get('text', ''),
-                                        "topic": payload.get('topic', ''),
-                                        "mode": payload.get('mode', ''),
-                                        "confidence": payload.get('confidence', 0),
-                                        "exchange_id": payload.get('exchange_id', ''),
-                                        "seq": seq,
-                                    }
-                                    if payload.get('reply_actions'):
-                                        evt["actions"] = payload['reply_actions']
-                                    _buffer_event(evt)
-                                    _send_json(ws, evt)
-                                elif intent_type == 'show_narration':
-                                    seq = _next_seq()
-                                    evt = {
-                                        "type": "act_narration",
-                                        "text": payload.get('text', ''),
-                                        "step": payload.get('step', 0),
-                                        "seq": seq,
-                                    }
-                                    _buffer_event(evt)
-                                    _send_json(ws, evt)
-                                # Other intent types can be added here
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        else:
-                            # Existing output:events handling (unchanged)
-                            try:
-                                data = json.loads(msg['data'])
-                                seq = _next_seq()
-                                data['seq'] = seq
-                                _buffer_event(data)
-                                _send_json(ws, data)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
+                        try:
+                            data = json.loads(msg['data'])
+                            seq = _next_seq()
+                            data['seq'] = seq
+                            _buffer_event(data)
+                            _send_json(ws, data)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
                     else:
                         # Keepalive ping
                         _send_json(ws, {"type": "ping"})
@@ -187,7 +146,7 @@ def register_websocket(sock):
                     time.sleep(1)
 
             try:
-                pubsub.unsubscribe('output:events', 'intents:__chat_ui__')
+                pubsub.unsubscribe('output:events')
                 pubsub.close()
             except Exception:
                 pass

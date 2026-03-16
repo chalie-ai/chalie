@@ -63,14 +63,11 @@ class MessageGateService:
                 gate_time_ms=(time.time() - start) * 1000,
             )
 
-        # 3. ONNX mode gate
+        # 3. ONNX mode gate — binary RESPOND/ACT classifier
         #
-        # The existing mode-tiebreaker ONNX model is a binary A/B tiebreaker
-        # designed for the old mode router — it can't classify respond vs act
-        # independently.  Until a proper binary respond/act classifier is trained,
-        # all non-cancel messages go to ACT.  The RESPOND fast-path in the digest
-        # worker is wired and ready — it activates once a "mode-gate" model is
-        # deployed that outputs 'RESPOND'/'ACT' with calibrated confidence.
+        # Qwen2.5-0.5B + sigmoid head. Trained on ~45k samples (14 edge case
+        # categories). Eval: 97.9% accuracy, RESPOND F1=0.978 (P=98.9%, R=96.7%).
+        # Threshold ≥ 0.85 → RESPOND fast-path. Below that → ACT (safe default).
         route = 'act'
         confidence = 0.5
 
