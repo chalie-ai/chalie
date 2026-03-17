@@ -25,7 +25,7 @@ class CronToolWorker:
     def __init__(self, tool_config: dict):
         """Initialise the worker from a resolved tool configuration dict.
 
-        Extracts all fields required for scheduling, container execution,
+        Extracts all fields required for scheduling, subprocess execution,
         OAuth token refresh, and output routing so that the instance can be
         pickled and sent to a child process via Python's ``multiprocessing``
         spawn start method.
@@ -33,14 +33,14 @@ class CronToolWorker:
         Args:
             tool_config: Fully-resolved tool configuration dictionary as
                 produced by ``ToolRegistryService``.  Expected keys include
-                ``name``, ``schedule``, ``prompt``, ``image``, ``sandbox``,
+                ``name``, ``schedule``, ``prompt``, ``runner_path``,
                 ``manifest``, and ``dir``.
         """
         self.tool_name = tool_config["name"]
         self.schedule = tool_config["schedule"]
         self.prompt_template = tool_config["prompt"]
-        self.image = tool_config["image"]
-        self.sandbox = tool_config.get("sandbox", {})
+        self.runner_path = tool_config.get("runner_path")
+        self.trust = tool_config.get("trust", "trusted")
         manifest = tool_config.get("manifest", {})
         self._auth = manifest.get("auth", {})
         output_config = manifest.get("output", {})
@@ -57,7 +57,7 @@ class CronToolWorker:
 
         1. Checks prompt-queue depth and defers if the queue is busy.
         2. Loads live tool settings and refreshes OAuth tokens when needed.
-        3. Invokes the tool container via ``ToolContainerService.run_interactive``.
+        3. Invokes the tool via ``ToolSubprocessService.run_interactive``.
         4. Persists any returned ``_state`` to MemoryStore (7-day TTL).
         5. Routes output via the formalised ``output`` field contract
            (``"card"``, ``"prompt"``, ``"tool"``) or falls back to legacy
@@ -109,7 +109,6 @@ class CronToolWorker:
                     except Exception as e:
                         _log.warning(f"[TOOL CRON] OAuth refresh failed for '{self.tool_name}': {e}")
 
-                from services.tool_container_service import ToolContainerService
                 raw_telemetry = {}
                 try:
                     from services.client_context_service import ClientContextService
@@ -119,7 +118,7 @@ class CronToolWorker:
 
                 flattened_telemetry = build_tool_telemetry(raw_telemetry)
 
-                # Load persisted tool state from MemoryStore (survives container restarts)
+                # Load persisted tool state from MemoryStore (survives restarts)
                 tool_state = {}
                 state_key = f"tool_state:{self.tool_name}"
                 old_state_key = f"tool_cron_state:{self.tool_name}"
@@ -153,8 +152,9 @@ class CronToolWorker:
                     dialog_turns.append({"request": request_text, "response": response})
                     return response
 
-                result = ToolContainerService().run_interactive(
-                    self.image, payload, sandbox_config=self.sandbox,
+                from services.tool_subprocess_service import ToolSubprocessService
+                result = ToolSubprocessService().run_interactive(
+                    self.runner_path, payload,
                     timeout=self.timeout, on_tool_output=_on_tool_output,
                 )
 

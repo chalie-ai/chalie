@@ -171,5 +171,127 @@
     "category": "productivity",
     "trigger": "on_demand",
     "installs_by_default": false
+  },
+
+  {
+    "name": "open_meteo",
+    "title": "Weather Intelligence",
+    "icon": "fa-cloud-sun",
+    "repo": "chalie-ai/open-meteo-tool",
+    "summary": "Rich weather intelligence — current conditions, hourly/daily forecasts, air quality, UV index, and pollen data via Open-Meteo. No API key required.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "location_intel",
+    "title": "Location Intelligence",
+    "icon": "fa-location-dot",
+    "repo": "chalie-ai/location-intel-tool",
+    "summary": "Location intelligence — reverse geocoding, nearby POIs, and area profiling via Nominatim and Overpass. No API key required.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "temporal_awareness",
+    "title": "Temporal Awareness",
+    "icon": "fa-calendar-days",
+    "repo": "chalie-ai/temporal-awareness-tool",
+    "summary": "Temporal awareness — public holidays, sunrise/sunset, daylight duration, and seasonal context. No API key required.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "rss_aggregator",
+    "title": "RSS Feeds",
+    "icon": "fa-rss",
+    "repo": "chalie-ai/rss-aggregator-tool",
+    "summary": "Personalized RSS/Atom feed aggregator — subscribe, fetch, and filter feeds from any source. No API key required.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "safety_alerts",
+    "title": "Safety Alerts",
+    "icon": "fa-triangle-exclamation",
+    "repo": "chalie-ai/safety-alerts-tool",
+    "summary": "Safety alerts — severe weather warnings and earthquake notifications via NWS, USGS, and GDACS. No API key required.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "entertainment",
+    "title": "Entertainment",
+    "icon": "fa-film",
+    "repo": "chalie-ai/entertainment-tool",
+    "summary": "Entertainment awareness — movie/TV discovery via TMDB and local event listings via Ticketmaster. Requires free API keys.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "market_data",
+    "title": "Market Data",
+    "icon": "fa-chart-line",
+    "repo": "chalie-ai/market-data-tool",
+    "summary": "Financial awareness — stock quotes, crypto prices, and market news via Finnhub and CoinGecko. Finnhub requires free API key.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "transit",
+    "title": "Transit",
+    "icon": "fa-bus",
+    "repo": "chalie-ai/transit-tool",
+    "summary": "Transit intelligence — real-time departures, delays, and service alerts via GTFS-RT feeds. No API key required.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "calendar",
+    "title": "Calendar",
+    "icon": "fa-calendar",
+    "repo": "chalie-ai/calendar-tool",
+    "summary": "Calendar integration — read/write events, check availability, and schedule context via Google Calendar and CalDAV. Requires OAuth.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "health_connect",
+    "title": "Health & Fitness",
+    "icon": "fa-heart-pulse",
+    "repo": "chalie-ai/health-connect-tool",
+    "summary": "Health and fitness data — activity, sleep, heart rate, and wellness trends from wearables and health platforms. Requires OAuth.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
+  },
+  {
+    "name": "spotify",
+    "title": "Spotify",
+    "icon": "fa-brands fa-spotify",
+    "repo": "chalie-ai/spotify-tool",
+    "summary": "Spotify integration — playback control, listening history, mood detection, and music recommendations. Requires Spotify OAuth.",
+    "category": "perception",
+    "trigger": "on_demand",
+    "trust": "trusted",
+    "installs_by_default": false
   }
 ]

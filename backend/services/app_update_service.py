@@ -11,8 +11,8 @@ App Update Service — in-place update system for installed Chalie instances.
 
 Detects deployment mode, checks GitHub for new releases, downloads and validates
 tarballs, and performs atomic rename-swap upgrades with automatic database backup
-and rollback on failure. Docker and dev environments receive mode-appropriate
-guidance instead of in-place mutation.
+and rollback on failure. Dev environments receive mode-appropriate guidance
+instead of in-place mutation.
 """
 
 import json
@@ -53,12 +53,9 @@ class AppUpdateService:
         """Detect how Chalie was deployed.
 
         Returns:
-            ``"docker"`` if running inside a Docker container,
             ``"dev"`` if a ``.git/`` directory exists at the app root,
             ``"installed"`` otherwise.
         """
-        if os.path.exists("/.dockerenv"):
-            return "docker"
         if (APP_ROOT / ".git").is_dir():
             return "dev"
         return "installed"
@@ -282,7 +279,7 @@ class AppUpdateService:
     def apply_update(self, tag: str) -> dict:
         """Orchestrate the full in-place update.
 
-        For Docker or dev deployments, returns guidance instead of mutating
+        For dev deployments, returns guidance instead of mutating
         the filesystem.  For installed deployments, performs:
 
         1. Database backup
@@ -303,17 +300,6 @@ class AppUpdateService:
             context fields.
         """
         mode = self.detect_deployment_mode()
-
-        if mode == "docker":
-            return {
-                "ok": False,
-                "deployment_mode": mode,
-                "message": (
-                    "Docker deployments update by pulling a new image. "
-                    "Run: docker pull ghcr.io/chalie-ai/chalie:{tag} && "
-                    "docker compose up -d".format(tag=tag)
-                ),
-            }
 
         if mode == "dev":
             return {

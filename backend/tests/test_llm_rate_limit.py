@@ -42,98 +42,56 @@ class TestRateLimitError:
 class TestCallWithRetryRateLimit:
 
     @patch('services.llm_service.time.sleep')
-    def test_rate_limit_uses_retry_after(self, mock_sleep):
-        """Rate limit with retry_after should sleep for that duration."""
+    def test_rate_limit_with_short_retry_after_retries_once(self, mock_sleep):
+        """Rate limit with retry_after <= 10s should retry once."""
         call_count = 0
 
         def fn():
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise RateLimitError("429", retry_after=42.0, provider="openai")
+                raise RateLimitError("429", retry_after=5.0, provider="openai")
             return "success"
 
         result = _call_with_retry(fn)
         assert result == "success"
         assert call_count == 2
-        mock_sleep.assert_called_once_with(42.0)
+        mock_sleep.assert_called_once_with(5.0)
 
     @patch('services.llm_service.time.sleep')
-    def test_rate_limit_default_30s_when_no_retry_after(self, mock_sleep):
-        """Rate limit without retry_after should default to 30s."""
-        call_count = 0
-
+    def test_rate_limit_no_retry_after_fails_fast(self, mock_sleep):
+        """Rate limit without retry_after should fail immediately (quota exhaustion)."""
         def fn():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RateLimitError("429", retry_after=None, provider="gemini")
-            return "success"
-
-        result = _call_with_retry(fn)
-        assert result == "success"
-        mock_sleep.assert_called_once_with(30.0)
-
-    @patch('services.llm_service.time.sleep')
-    def test_rate_limit_caps_at_120s(self, mock_sleep):
-        """retry_after values above 120s should be capped."""
-        call_count = 0
-
-        def fn():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RateLimitError("429", retry_after=300.0, provider="anthropic")
-            return "success"
-
-        result = _call_with_retry(fn)
-        assert result == "success"
-        mock_sleep.assert_called_once_with(120.0)
-
-    @patch('services.llm_service.time.sleep')
-    def test_rate_limit_exhausted_raises(self, mock_sleep):
-        """After 3 rate limit retries, should raise RateLimitError."""
-        def fn():
-            raise RateLimitError("429", retry_after=1.0, provider="openai")
+            raise RateLimitError("429", retry_after=None, provider="gemini")
 
         with pytest.raises(RateLimitError):
             _call_with_retry(fn)
 
-        # 3 rate limit retries + sleeps
-        assert mock_sleep.call_count == 3
+        # No sleeping — fail fast
+        mock_sleep.assert_not_called()
 
     @patch('services.llm_service.time.sleep')
-    def test_rate_limit_does_not_consume_generic_retries(self, mock_sleep):
-        """Rate limit retries should not consume generic retry budget."""
-        call_count = 0
-
+    def test_rate_limit_long_retry_after_fails_fast(self, mock_sleep):
+        """retry_after values above 10s should fail fast (not worth waiting)."""
         def fn():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 2:
-                raise RateLimitError("429", retry_after=1.0, provider="openai")
-            if call_count == 3:
-                raise ValueError("other error")
-            return "success"
+            raise RateLimitError("429", retry_after=42.0, provider="anthropic")
 
-        # Should handle 2 rate limits, then 1 generic error + 1 retry → success
-        # max_retries=2 means up to 3 generic attempts
-        # After 2 rate limits, call_count=3 raises ValueError (attempt 0),
-        # then call_count=4 would succeed (attempt 1)
-        call_count = 0
+        with pytest.raises(RateLimitError):
+            _call_with_retry(fn)
 
-        def fn2():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 2:
-                raise RateLimitError("429", retry_after=1.0, provider="openai")
-            if call_count == 3:
-                raise ValueError("transient")
-            return "success"
+        mock_sleep.assert_not_called()
 
-        result = _call_with_retry(fn2, max_retries=2)
-        assert result == "success"
-        assert call_count == 4
+    @patch('services.llm_service.time.sleep')
+    def test_rate_limit_second_attempt_also_limited_raises(self, mock_sleep):
+        """If the single retry also hits rate limit, raise immediately."""
+        def fn():
+            raise RateLimitError("429", retry_after=2.0, provider="openai")
+
+        with pytest.raises(RateLimitError):
+            _call_with_retry(fn)
+
+        # Slept once for the first retry, then second attempt raised
+        mock_sleep.assert_called_once_with(2.0)
 
     @patch('services.llm_service.time.sleep')
     def test_generic_error_unchanged(self, mock_sleep):
@@ -157,10 +115,10 @@ class TestCallWithRetryRateLimit:
 
 # ── FallbackLLMService propagation ───────────────────────────────────
 
-class TestFallbackPropagatesRateLimit:
+class TestFallbackHandlesRateLimit:
 
-    def test_rate_limit_not_caught_by_fallback(self):
-        """RateLimitError from primary should propagate, not trigger fallback."""
+    def test_rate_limit_triggers_fallback(self):
+        """RateLimitError from primary should trigger fallback (different provider)."""
         primary = MagicMock()
         primary.send_message.side_effect = RateLimitError(
             "429", retry_after=30.0, provider="anthropic"
@@ -171,11 +129,10 @@ class TestFallbackPropagatesRateLimit:
         )
 
         svc = FallbackLLMService(primary, fallback)
-        with pytest.raises(RateLimitError):
-            svc.send_message("sys", "user")
+        result = svc.send_message("sys", "user")
 
-        # Fallback should NOT have been called
-        fallback.send_message.assert_not_called()
+        assert result.text == "fallback response"
+        fallback.send_message.assert_called_once()
 
     def test_generic_error_still_uses_fallback(self):
         """Non-rate-limit errors should still fall through to fallback."""
@@ -190,6 +147,17 @@ class TestFallbackPropagatesRateLimit:
         result = svc.send_message("sys", "user")
         assert result.text == "fallback"
         fallback.send_message.assert_called_once()
+
+    def test_both_fail_raises(self):
+        """If both primary and fallback fail, the fallback's error propagates."""
+        primary = MagicMock()
+        primary.send_message.side_effect = RateLimitError("429", provider="anthropic")
+        fallback = MagicMock()
+        fallback.send_message.side_effect = ConnectionError("fallback also down")
+
+        svc = FallbackLLMService(primary, fallback)
+        with pytest.raises(ConnectionError):
+            svc.send_message("sys", "user")
 
 
 # ── Provider wrapping ────────────────────────────────────────────────

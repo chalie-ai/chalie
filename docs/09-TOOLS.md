@@ -1,26 +1,16 @@
 # Tools System
 
-Tools extend Chalie's capabilities by allowing execution of external code. Tools can run as **sandboxed** (Docker container) or **trusted** (Python subprocess), and can be triggered on-demand or on a schedule.
+Tools extend Chalie's capabilities by allowing execution of external code. Tools run as **trusted subprocesses** or are provided by **paired interfaces**, and can be triggered on-demand or on a schedule.
 
 ## Overview
 
 The tools system provides:
-- **Two trust levels**: Sandboxed tools run in isolated Docker containers; trusted tools run as subprocesses (no Docker required)
+- **Subprocess execution**: All tools run as Python subprocesses (same IPC contract: base64 JSON in, JSON out)
+- **Interface tools**: External applications can pair with Chalie and expose tool capabilities via the interface protocol
 - **Configuration Management**: Per-tool secrets and credentials stored in SQLite (encrypted)
 - **Semantic Matching**: Tool relevance determined via embedding-based similarity, not regex patterns
-- **Safety Limits**: Timeouts (default 9s), memory limits (256MB for sandboxed), no privilege escalation
+- **Safety Limits**: Timeouts (default 9s), no privilege escalation
 - **Audit Trail**: All tool invocations logged to procedural memory with success/failure and execution time
-
-## Trust Levels
-
-| Level | Execution | Docker Required | Isolation | Use Case |
-|---|---|---|---|---|
-| **Sandboxed** (default) | Docker container | Yes | Full (cgroups, namespaces, read-only FS) | Untrusted or third-party tools |
-| **Trusted** | Python subprocess | No | None (same OS user) | Curated, verified tools |
-
-Trust is determined by Chalie's internal `configs/embodiment_library.json` catalog — tool authors **cannot** self-declare trust via their own manifest. Only tools explicitly marked `"trust": "trusted"` in the catalog bypass Docker sandboxing.
-
-Trusted tools must include a `runner.py` entry point. Sandboxed tools must include a `Dockerfile`.
 
 ## Architecture
 
@@ -28,19 +18,14 @@ Trusted tools must include a `runner.py` entry point. Sandboxed tools must inclu
 
 **Tool Registry Service**
 - Singleton that discovers and validates tools from `backend/tools/` directory
-- Loads manifest.json; builds Docker images for sandboxed tools at startup
-- Dispatches invocations via `ToolContainerService` (sandboxed) or `ToolSubprocessService` (trusted)
+- Loads manifest.json at startup
+- Dispatches invocations via `ToolSubprocessService`
 - Logs outcomes for feedback/learning
 
-**Tool Container Service** (sandboxed tools only)
-- Manages Docker lifecycle: building images, running containers
-- Enforces sandbox constraints: memory limits, network isolation, read-only filesystem (by default)
-- Handles timeouts, captures stdout/stderr, parses JSON output
-
-**Tool Subprocess Service** (trusted tools only)
-- Runs trusted tools as Python subprocesses (same IPC contract as containers)
-- No sandboxing — runs as the same OS user as Chalie
-- Mirrors `ToolContainerService` API: `run()` and `run_interactive()`
+**Tool Subprocess Service**
+- Runs tools as Python subprocesses (same OS user as Chalie)
+- IPC contract: base64-encoded JSON in (CMD arg) → JSON out (stdout)
+- Supports `run()` for single-shot and `run_interactive()` for bidirectional dialog
 
 **Tool Config Service**
 - SQLite backend for per-tool configuration
@@ -60,7 +45,7 @@ Trusted tools must include a `runner.py` entry point. Sandboxed tools must inclu
 
 ## Creating a Tool
 
-Each tool is a subdirectory in `backend/tools/` with three required files:
+Each tool is a subdirectory in `backend/tools/` with two required files:
 
 ### Tool Contract (Formalized JSON Interface)
 
@@ -215,46 +200,13 @@ The `output` section controls how the tool's result is displayed:
     "timeout_seconds": 9,
     "cost_budget": 1000
   },
-  "sandbox": {
-    "memory": "512m",
-    "network": "bridge|none|host",
-    "writable": false
-  },
   "notification": {
     "default_enabled": false
   }
 }
 ```
 
-### 2. Dockerfile
-
-Must be a valid Dockerfile that:
-- Accepts base64-encoded JSON as command argument
-- Outputs JSON to stdout on success (containing `text`, `html`, `title`, and/or `error` fields)
-- Exits non-zero with error text on stderr for failures
-
-Example (Python):
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-COPY . .
-RUN pip install -q requests
-
-ENTRYPOINT ["python", "-u", "runner.py"]
-```
-
-Example (Bash):
-```dockerfile
-FROM alpine:3.19
-RUN apk add --no-cache bash jq
-WORKDIR /tool
-COPY runner.sh .
-RUN chmod +x runner.sh
-ENTRYPOINT ["bash", "runner.sh"]
-```
-
-### 3. runner.py or runner.sh
+### 2. runner.py or runner.sh
 
 The tool script receives the formalized payload and must return the formalized output.
 
@@ -355,7 +307,7 @@ When user sends a message that matches ACT mode:
 2. **Tool Selection** — Mode router picks most relevant tools with relevance > threshold
 3. **Parameter Extraction** — LLM extracts parameters from conversation context
 4. **Configuration Injection** — ToolConfigService fetches stored API keys/endpoints
-5. **Sandbox Execution** — ToolContainerService runs Docker container with timeout
+5. **Subprocess Execution** — ToolSubprocessService runs the tool with timeout
 6. **Output Sanitization** — Result stripped of action-like patterns, truncated to 3000 chars
 7. **Memory Logging** — Outcome (success/failure, execution time) logged to procedural memory
 8. **Integration** — Tool output wrapped in `[TOOL:name]...[/TOOL]` markers and included in LLM context
@@ -370,22 +322,11 @@ Tools have three status values (from API `/tools` endpoint):
 
 ## Safety & Constraints
 
-### Sandboxing
-
-Every tool container runs with:
-- **Memory limit** (default: 256MB, configurable in manifest `sandbox.memory`)
-- **CPU shares** (fair scheduling)
-- **Network mode** (default: bridge, can be isolated with `none`)
-- **Capabilities dropped** (no CAP_SYS_ADMIN, etc.)
-- **No privilege escalation** (no-new-privileges flag)
-- **PID limit** (max 64 processes)
-- **Read-only filesystem** (by default, unless `sandbox.writable: true`)
-
 ### Timeouts
 
 - **Default timeout**: 9 seconds
 - **Configurable** per tool in `constraints.timeout_seconds`
-- Exceeded timeouts logged as failures with `-0.2` reward in procedural memory
+- Exceeded timeouts logged as failures in procedural memory
 
 ### Cost Budgets
 
@@ -410,9 +351,6 @@ When creating a new tool, ensure:
   - [ ] `output` section with `synthesize` and `card` config
   - [ ] `trigger.type` is one of: `on_demand`, `cron`, `webhook`
   - [ ] Run `python -m json.tool manifest.json` to validate JSON syntax
-- [ ] **Dockerfile exists and builds**:
-  - [ ] `docker build -t test-tool .` succeeds
-  - [ ] Entrypoint is correct (e.g., `["bash", "runner.sh"]` or `["python", "runner.py"]`)
 - [ ] **runner.py/runner.sh implements the contract**:
   - [ ] Decodes base64 payload from `sys.argv[1]`
   - [ ] Extracts `params`, `settings`, `telemetry` from payload
@@ -423,7 +361,7 @@ When creating a new tool, ensure:
   ```bash
   PAYLOAD='{"params":{"name":"Test"},"settings":{},"telemetry":{"city":"Malta","country":"Malta"}}'
   ENCODED=$(echo $PAYLOAD | base64)
-  docker run --rm <image> "$ENCODED"
+  python runner.py "$ENCODED"
   ```
   - Output should be valid JSON with `text` and/or `html` fields
 - [ ] **No external dependencies on framework internals**: Tool should work standalone
@@ -465,7 +403,6 @@ Directory structure:
 ```
 backend/tools/tool_example/
 ├── manifest.json
-├── Dockerfile
 └── runner.sh
 ```
 
@@ -498,19 +435,8 @@ backend/tools/tool_example/
       "background_color": "rgba(108, 99, 255, 0.10)"
     }
   },
-  "constraints": { "timeout_seconds": 10 },
-  "sandbox": { "network": "none", "memory": "64m" }
+  "constraints": { "timeout_seconds": 10 }
 }
-```
-
-**Dockerfile:**
-```dockerfile
-FROM alpine:3.19
-RUN apk add --no-cache bash jq
-WORKDIR /tool
-COPY runner.sh .
-RUN chmod +x runner.sh
-ENTRYPOINT ["bash", "runner.sh"]
 ```
 
 **runner.sh:**
@@ -553,7 +479,7 @@ jq -n \
 ```bash
 PAYLOAD='{"params":{"name":"Dylan"},"settings":{},"telemetry":{"city":"Valletta","country":"Malta","time":"2026-02-20T17:00:00Z","lat":35.8762,"lon":14.5366}}'
 ENCODED=$(echo "$PAYLOAD" | base64)
-docker run --rm chalie-tool-tool_example:1.0 "$ENCODED"
+bash runner.sh "$ENCODED"
 # Output: {"text": "Hello, Dylan! You're in Valletta.", "html": "<div style=\"...\">...</div>"}
 ```
 
@@ -561,11 +487,10 @@ docker run --rm chalie-tool-tool_example:1.0 "$ENCODED"
 
 ### Tool Not Appearing in List
 
-1. Check Docker is running: `docker ps`
-2. Check tool directory exists: `backend/tools/tool_name/`
-3. Check manifest.json is valid JSON: `python -m json.tool manifest.json`
-4. Check Dockerfile exists: `ls backend/tools/tool_name/Dockerfile`
-5. View logs in the `python backend/run.py` console output
+1. Check tool directory exists: `backend/tools/tool_name/`
+2. Check manifest.json is valid JSON: `python -m json.tool manifest.json`
+3. Check runner.py or runner.sh exists: `ls backend/tools/tool_name/`
+4. View logs in the `python backend/run.py` console output
 
 ### "Tool not found" Error
 
@@ -581,33 +506,15 @@ Tool name in manifest must match directory name exactly (case-sensitive).
 
 1. Increase timeout in manifest: `"constraints": {"timeout_seconds": 30}`
 2. Optimize tool code (database queries, API calls, etc.)
-3. Check Docker resource limits (especially memory)
 
 ### "Timed out after 9s" Error
 
-Container exceeded timeout. Options:
+Tool exceeded timeout. Options:
 1. Increase `timeout_seconds` in manifest
 2. Optimize tool code
 3. Add caching if tool does expensive computation
 
 ## Advanced
-
-### Custom Sandbox Configuration
-
-In manifest.json:
-```json
-{
-  "sandbox": {
-    "memory": "1g",
-    "network": "none",
-    "writable": true
-  }
-}
-```
-
-- `memory`: Docker memory limit (e.g., `256m`, `1g`)
-- `network`: `bridge` (default), `none` (isolated), `host` (access host network)
-- `writable`: `false` (read-only) or `true` (can write to `/tmp`)
 
 ### Cron-Triggered Tools
 

@@ -2,7 +2,7 @@
 
 Chalie ships with a curated set of **default tools** that are installed automatically on first startup. These tools are listed in `backend/configs/embodiment_library.json` with `"installs_by_default": true`.
 
-Default tools are **trusted** — they run as subprocesses in Chalie's Python environment rather than inside Docker containers. This means they start instantly and don't require Docker to be installed.
+Default tools run as subprocesses in Chalie's Python environment. They start instantly and require only a `runner.py` entry point.
 
 ## Auto-Install Behavior
 
@@ -29,7 +29,7 @@ This writes a `backend/data/.no-default-tools` marker file. Chalie will not auto
 | **Repo** | [chalie-ai/chalie-tool-weather](https://github.com/chalie-ai/chalie-tool-weather) |
 | **Category** | Context |
 | **Trigger** | On-demand |
-| **Trust** | Trusted (subprocess) |
+| **Execution** | Subprocess |
 | **Requires API key** | No |
 
 Fetches current weather conditions and tomorrow's forecast using [Open-Meteo](https://open-meteo.com/) (coordinates-based, primary) and [wttr.in](https://wttr.in/) (city name fallback). Both sources are free with no API key required.
@@ -70,13 +70,13 @@ To mark a new tool as a default, add an entry to `backend/configs/embodiment_lib
   "summary": "One-line description shown in the catalog",
   "category": "utility",
   "trigger": "on_demand",
-  "trust": "trusted",
+  "trust": "subprocess",
   "installs_by_default": true
 }
 ```
 
-Requirements for trusted default tools:
-- Must have a `runner.py` (subprocess entry point) — no `Dockerfile` needed
+Requirements for default tools:
+- Must have a `runner.py` (subprocess entry point)
 - Must have a `manifest.json` with valid `name`, `description`, `trigger`, `parameters`, `returns`
 - Must be hosted on GitHub with at least one tagged release
 - Must not bundle any secrets or environment-specific configuration

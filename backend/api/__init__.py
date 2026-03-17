@@ -6,7 +6,7 @@ and static file serving (replaces nginx).
 import os
 import logging
 from pathlib import Path
-from flask import Flask, redirect, send_from_directory, send_file
+from flask import Flask, send_from_directory, send_file
 from flask_cors import CORS
 
 from .auth import require_session
@@ -91,11 +91,7 @@ def create_app():
     from .documents import documents_bp
     from .voice import voice_bp
     from .chat_image import chat_image_bp
-    from .wrappers import wrappers_bp
-    from .signals import signals_bp
-    from .intents import intents_bp
-    from .query import query_bp
-    from .updates import updates_bp
+    from .interfaces import interfaces_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -113,11 +109,7 @@ def create_app():
     app.register_blueprint(documents_bp)
     app.register_blueprint(voice_bp)
     app.register_blueprint(chat_image_bp)
-    app.register_blueprint(wrappers_bp)
-    app.register_blueprint(signals_bp)
-    app.register_blueprint(intents_bp)
-    app.register_blueprint(query_bp)
-    app.register_blueprint(updates_bp)
+    app.register_blueprint(interfaces_bp)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
@@ -136,14 +128,10 @@ def create_app():
         return send_from_directory(str(_BRAIN_DIR), 'index.html')
 
     @app.route('/brain/')
+    @app.route('/brain')
     def brain_index():
         """Serve brain dashboard index."""
         return send_from_directory(str(_BRAIN_DIR), 'index.html')
-
-    @app.route('/brain')
-    def brain_redirect():
-        """Redirect /brain to /brain/ so relative URLs resolve correctly."""
-        return redirect('/brain/')
 
     @app.route('/on-boarding/<path:filename>')
     def onboarding_static(filename):
@@ -154,14 +142,10 @@ def create_app():
         return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
 
     @app.route('/on-boarding/')
+    @app.route('/on-boarding')
     def onboarding_index():
         """Serve onboarding index."""
         return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
-
-    @app.route('/on-boarding')
-    def onboarding_redirect():
-        """Redirect /on-boarding to /on-boarding/ so relative URLs resolve correctly."""
-        return redirect('/on-boarding/')
 
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>')

@@ -93,28 +93,30 @@ class LLMResponse:
 def _call_with_retry(fn, max_retries=2, backoff=1.0):
     """Retry fn() up to max_retries times with exponential backoff.
 
-    Rate limits (RateLimitError) get special treatment: longer backoff
-    (Retry-After or 30s default, max 120s) and a separate retry counter
-    (3 attempts) that doesn't consume generic retries.
+    Rate limits (RateLimitError) are retried once with a short wait if the
+    provider includes a Retry-After header (capped at 10s).  If no header
+    is present (typical for quota exhaustion), the error propagates
+    immediately — quota exhaustion is not transient and sleeping 30-90s
+    just blocks the request without helping.
     """
     attempt = 0
-    rate_limit_retries = 0
-    max_rate_limit_retries = 3
     while attempt <= max_retries:
         try:
             return fn()
         except RateLimitError as e:
-            rate_limit_retries += 1
-            if rate_limit_retries > max_rate_limit_retries:
-                raise
-            wait = min(e.retry_after or 30.0, 120.0)
-            logger.warning(
-                f"Rate limited by {e.provider or 'provider'} "
-                f"(attempt {rate_limit_retries}/{max_rate_limit_retries}). "
-                f"Waiting {wait:.0f}s..."
-            )
-            time.sleep(wait)
-            # Don't increment attempt — rate limits have their own counter
+            # If the provider told us to wait a short time, honour it once.
+            # Otherwise fail fast — quota exhaustion won't resolve itself.
+            if e.retry_after and e.retry_after <= 10.0:
+                logger.warning(
+                    f"Rate limited by {e.provider or 'provider'} "
+                    f"(Retry-After {e.retry_after:.0f}s). Retrying once..."
+                )
+                time.sleep(e.retry_after)
+                try:
+                    return fn()
+                except RateLimitError:
+                    raise  # Second rate limit — give up
+            raise  # No Retry-After or > 10s — fail fast
         except NonRetryableError:
             raise
         except Exception as e:
@@ -143,9 +145,9 @@ class FallbackLLMService:
     def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
         """Send a message, falling back to the secondary service on primary failure.
 
-        ``RateLimitError`` from the primary is re-raised immediately without
-        trying the fallback, because the fallback provider is likely to be
-        rate-limited under the same load conditions.
+        Rate limits from the primary now trigger a fallback attempt —
+        the fallback is often a different provider (e.g., local Ollama)
+        that cannot be rate-limited by the primary's quota.
 
         Args:
             system_prompt: Instruction context placed in the system role.
@@ -157,24 +159,19 @@ class FallbackLLMService:
             LLMResponse from whichever service successfully handled the request.
 
         Raises:
-            RateLimitError: If the primary service returns HTTP 429.
             Exception: If both the primary and fallback services raise errors.
         """
         try:
             return self._primary.send_message(system_prompt, user_message, stream=stream)
-        except RateLimitError:
-            raise  # Rate limits propagate — fallback provider is likely also rate-limited
         except Exception as e:
-            logger.warning(f"Primary LLM failed, using fallback: {e}")
+            logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
         try:
             return self._primary.send_messages(system_prompt, messages, cache_prefix)
-        except RateLimitError:
-            raise
         except Exception as e:
-            logger.warning(f"Primary LLM failed, using fallback: {e}")
+            logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_messages(system_prompt, messages, cache_prefix)
 
 
