@@ -67,7 +67,7 @@ All background activity is attention-gated: if you're in deep focus, Chalie stay
 ## Can Chalie take actions autonomously?
 
 Yes, within hard limits. Chalie can:
-- Execute tasks via its ACT loop using sandboxed tools
+- Execute tasks via its ACT loop using tools
 - Schedule reminders and manage lists
 - Research topics via curiosity threads
 - Generate proactive suggestions and follow-ups
@@ -78,7 +78,7 @@ Chalie will **not** take irreversible or destructive actions autonomously. Conse
 
 ## What are "tools" in Chalie?
 
-Tools extend Chalie's ability to take action in the world: web search, weather, code execution, etc. Tools are isolated capsules — they run either in sandboxed Docker containers (no access to your system) or as trusted subprocesses (for first-party tools). Chalie's infrastructure is tool-agnostic: it doesn't know or care what specific tools are installed.
+Tools extend Chalie's ability to take action in the world: web search, weather, code execution, etc. Tools are isolated capsules — they run as subprocesses or via the interface protocol, with zero access to Chalie's internal services. Chalie's infrastructure is tool-agnostic: it doesn't know or care what specific tools are installed.
 
 See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the tools installed by default.
 
@@ -114,7 +114,7 @@ Everything is in a single SQLite database at `backend/data/chalie.db`. No cloud 
 
 ## Is Docker required?
 
-No. Docker is only used for **sandboxed tool execution** — tools that need isolation from your system. Trusted first-party tools (like the weather tool) run as subprocesses without Docker. The core runtime, voice features, and all cognitive services run natively without Docker.
+No. Docker is only used for deploying Chalie itself (via the provided Dockerfile and docker-compose.yml). All tools run as subprocesses. The core runtime, voice features, and all cognitive services run natively without Docker.
 
 ---
 

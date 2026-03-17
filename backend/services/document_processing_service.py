@@ -181,11 +181,18 @@ class DocumentProcessingService:
                                           'No text chunks could be created from this document.')
                 return False
 
-            # Step 12: Set status — watched folder and moment docs auto-confirm
-            if doc.get('source_type') in ('watched_folder', 'moment'):
+            # Step 12: Set status — auto-confirm unless the document came
+            # from an in-chat conversation (those need user review).
+            # Watched folders, moments, and dashboard uploads all skip confirmation.
+            _src = doc.get('source_type', '')
+            _auto = (
+                _src in ('watched_folder', 'moment', 'upload')
+                or doc.get('watched_folder_id')  # belt-and-suspenders for watched folders
+            )
+            if _auto:
                 doc_service.update_status(doc_id, 'ready',
                                           chunk_count=len(chunk_records))
-                logger.info(f"[DOC PROC] {fname} auto-confirmed ({doc['source_type']}): "
+                logger.info(f"[DOC PROC] {fname} auto-confirmed ({_src}): "
                             f"{len(chunk_records)} chunks — pipeline so far: {_elapsed()}")
             else:
                 doc_service.update_status(doc_id, 'awaiting_confirmation',

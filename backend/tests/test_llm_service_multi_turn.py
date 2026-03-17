@@ -242,17 +242,20 @@ class TestFallbackMultiTurn:
         fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True)
         assert result is expected
 
-    def test_rate_limit_propagates_without_fallback(self):
+    def test_rate_limit_triggers_fallback(self):
+        """Rate limit on primary should trigger fallback (may be a different provider)."""
         from services.llm_service import FallbackLLMService, RateLimitError
         primary = MagicMock()
         fallback = MagicMock()
         svc = FallbackLLMService(primary, fallback)
 
         primary.send_messages.side_effect = RateLimitError("429", provider="anthropic")
+        expected = LLMResponse(text="fallback ok", model="test", provider="ollama")
+        fallback.send_messages.return_value = expected
 
-        with pytest.raises(RateLimitError):
-            svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-        fallback.send_messages.assert_not_called()
+        result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
+        fallback.send_messages.assert_called_once()
+        assert result is expected
 
 
 class TestRefreshableMultiTurn:

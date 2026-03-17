@@ -1,5 +1,13 @@
 """
-Signal Ingestion API — external wrappers push signals into the reasoning loop.
+Signal Ingestion API — external signals update world state directly (zero LLM).
+
+Signals represent passive world knowledge — things Chalie overheard, not
+things directed at Chalie.  They bypass the reasoning loop entirely and
+write to the WorldStateService's external signals slot.  The reasoning
+loop picks them up naturally during idle cycles via world state context.
+
+For direct communication (messages that should trigger reasoning), use
+the ``/api/messages`` endpoint or WebSocket chat instead.
 
 Routes:
   POST /api/signals          — ingest a single signal
@@ -19,7 +27,7 @@ Signal schema (per item):
   content           str, required
   source            str, optional (defaults to wrapper_id or '__chat_ui__')
   topic             str | null, optional
-  activation_energy float 0–1, optional (default 0.5)
+  activation_energy float 0–1, optional (default 0.5, affects salience weight)
   metadata          dict | null, optional
 """
 
@@ -135,54 +143,40 @@ def _validate_signal(body: dict) -> tuple[dict | None, str | None]:
 
 
 def _build_and_emit(validated: dict, wrapper_id: str) -> str:
-    """Construct a ReasoningSignal from validated data and emit it.
+    """Write an external signal directly to world state (zero LLM).
 
-    The ``activation_energy`` value drives priority:
-    - >= 0.8 → pushed to ``reasoning:priority`` queue by the caller
-    - < 0.8  → pushed to ``reasoning:signals`` (normal queue)
-    Both queues are already handled by :func:`emit_reasoning_signal` when the
-    correct ``activation_energy`` is set — but that function always uses the
-    normal queue.  High-priority signals are pushed directly here to match the
-    pattern used by the WebSocket chat handler.
+    External signals update Chalie's world model without entering the
+    reasoning loop.  The reasoning loop picks up world state changes
+    during its normal idle cycle.  ``activation_energy`` is preserved
+    as a salience weight for temporal scoring — higher energy signals
+    stay visible longer in the world state.
 
     Args:
         validated: Dict produced by :func:`_validate_signal`.
         wrapper_id: The effective wrapper identifier for this signal.
 
     Returns:
-        A new UUID string identifying the emitted signal.
+        A new UUID string identifying the stored signal.
     """
-    from services.reasoning_loop_service import ReasoningSignal, emit_reasoning_signal
-    from services.memory_client import MemoryClientService
+    from services.world_state_service import WorldStateService
 
     signal_id = str(uuid.uuid4())
     source = validated["source"] or wrapper_id
 
-    signal = ReasoningSignal(
+    svc = WorldStateService()
+    svc.notify_external_signal(
         signal_type=validated["signal_type"],
         source=source,
         content=validated["content"],
         topic=validated["topic"],
         activation_energy=validated["activation_energy"],
         metadata=validated["metadata"],
-        wrapper_id=wrapper_id,
     )
 
-    # High-priority signals go straight to the priority queue (same pattern as
-    # WebSocket chat handler for user_message signals).
-    if validated["activation_energy"] >= 0.8:
-        store = MemoryClientService.create_connection()
-        store.rpush("reasoning:priority", signal.to_json())
-        logger.debug(
-            "[Signals API] High-priority signal %s from %s → reasoning:priority",
-            validated["signal_type"], wrapper_id,
-        )
-    else:
-        emit_reasoning_signal(signal)
-        logger.debug(
-            "[Signals API] Signal %s from %s → reasoning:signals",
-            validated["signal_type"], wrapper_id,
-        )
+    logger.debug(
+        "[Signals API] External signal %s from %s → world_state",
+        validated["signal_type"], wrapper_id,
+    )
 
     return signal_id
 
@@ -194,7 +188,7 @@ def _build_and_emit(validated: dict, wrapper_id: str) -> str:
 @signals_bp.route("", methods=["POST"])
 @require_auth
 def ingest_signal():
-    """Ingest a single signal into the reasoning loop.
+    """Ingest a single signal into world state (zero LLM).
 
     Body (JSON):
         signal_type (str, required): Identifies the type of signal.
@@ -202,8 +196,8 @@ def ingest_signal():
         source (str, optional): Identifies the originating system.  Defaults
             to the wrapper_id (or ``'__chat_ui__'`` for cookie auth).
         topic (str | null, optional): Conversation topic hint.
-        activation_energy (float 0–1, optional): Urgency / priority weight.
-            Values >= 0.8 go to the priority queue.  Defaults to ``0.5``.
+        activation_energy (float 0–1, optional): Salience weight.  Higher
+            values make the signal persist longer in world state.  Default 0.5.
         metadata (dict | null, optional): Arbitrary key-value context.
 
     Returns:

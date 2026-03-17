@@ -1,11 +1,9 @@
 """
 Tool Subprocess Service — Trusted tool execution via Python subprocess.
 
-Mirrors ToolContainerService's API but runs tools directly as subprocesses
-instead of Docker containers. Used for tools with "trust": "trusted" in their
-manifest. Trusted tools run as the same OS user — no sandboxing.
+Runs tools as subprocesses. All tools execute as the same OS user.
 
-IPC contract (same as ToolContainerService):
+IPC contract (same as ToolSubprocessService):
   Input:  base64-encoded JSON as command arg: {"params", "settings", "telemetry"}
   Output: JSON on stdout: {"text"?, "html"?, "title"?, "error"?}
   Error:  non-zero exit code + error text on stderr
@@ -26,7 +24,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Interactive protocol limits (same as ToolContainerService)
+# Interactive protocol limits (same as ToolSubprocessService)
 _MAX_LINE_BYTES = 50 * 1024        # 50KB per stdout line
 _MAX_TOTAL_BYTES = 200 * 1024      # 200KB cumulative stdout
 _MAX_TURNS = 10                    # Max tool↔Chalie dialog turns
@@ -92,7 +90,7 @@ class ToolSubprocessService:
         """
         Run a trusted tool with bidirectional stdin/stdout for tool↔Chalie dialog.
 
-        Same protocol as ToolContainerService.run_interactive().
+        Same protocol as ToolSubprocessService.run_interactive().
 
         Args:
             runner_path: Absolute path to the tool's runner.py

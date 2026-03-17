@@ -11,7 +11,25 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def service():
+def _auto_execute_gate():
+    """Mock the execution gate to always allow auto-execution in tests."""
+    mock_gate = MagicMock()
+    mock_gate.evaluate.return_value = {
+        'auto_execute': True,
+        'consequence_tier': 0,
+        'consequence_name': 'observe',
+        'domain': 'test',
+        'domain_confidence': 1.0,
+        'threshold': 0.0,
+        'reasoning': 'test override',
+    }
+    with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
+               return_value=mock_gate):
+        yield mock_gate
+
+
+@pytest.fixture
+def service(_auto_execute_gate):
     """Create an ActDispatcherService with innate-skill registration mocked out."""
     with patch('services.innate_skills.register_innate_skills'), \
          patch('services.self_model_service.SelfModelService.log_capability_gap'):
@@ -91,7 +109,7 @@ class TestHandlerException:
 
 class TestTimeout:
 
-    def test_slow_handler_returns_timeout(self):
+    def test_slow_handler_returns_timeout(self, _auto_execute_gate):
         """A handler that exceeds the timeout produces status=timeout."""
         with patch('services.innate_skills.register_innate_skills'), \
              patch('services.self_model_service.SelfModelService.log_capability_gap'):
@@ -164,6 +182,65 @@ class TestConfidenceEstimation:
 
 
 # ── _estimate_confidence unit tests (direct) ──────────────────
+
+
+# ── Execution Gate ────────────────────────────────────────────
+
+
+class TestExecutionGate:
+
+    def test_gate_blocks_tier3_action(self):
+        """Tier 3 (COMMIT) actions return requires_confirmation, not success."""
+        mock_gate = MagicMock()
+        mock_gate.evaluate.return_value = {
+            'auto_execute': False,
+            'consequence_tier': 3,
+            'consequence_name': 'commit',
+            'domain': 'general',
+            'domain_confidence': 0.0,
+            'threshold': float('inf'),
+            'reasoning': 'Tier 3 (commit) — irreversible; always requires explicit user approval.',
+        }
+        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
+                   return_value=mock_gate), \
+             patch('services.innate_skills.register_innate_skills'), \
+             patch('services.self_model_service.SelfModelService.log_capability_gap'):
+            svc = ActDispatcherService(timeout=2.0)
+            svc.handlers['document'] = lambda topic, action: 'deleted'
+
+            result = svc.dispatch_action('topic', {
+                'type': 'document',
+                'description': 'delete all my documents permanently',
+            })
+
+        assert result['status'] == 'requires_confirmation'
+        assert result['confidence'] == 0.0
+        assert 'gate_decision' in result
+        assert result['gate_decision']['consequence_tier'] == 3
+
+    def test_safe_actions_bypass_gate(self):
+        """Safe innate skills (recall, memorize, etc.) bypass the gate entirely."""
+        mock_gate = MagicMock()
+        mock_gate.evaluate.return_value = {
+            'auto_execute': False,  # Would block if called
+            'consequence_tier': 2,
+            'consequence_name': 'act',
+            'domain': 'general',
+            'domain_confidence': 0.0,
+            'threshold': 0.75,
+            'reasoning': 'Would block.',
+        }
+        with patch('services.autonomous_execution_gate.get_autonomous_execution_gate',
+                   return_value=mock_gate), \
+             patch('services.innate_skills.register_innate_skills'), \
+             patch('services.self_model_service.SelfModelService.log_capability_gap'):
+            svc = ActDispatcherService(timeout=2.0)
+            svc.handlers['recall'] = lambda topic, action: 'memory result'
+
+            result = svc.dispatch_action('topic', {'type': 'recall'})
+
+        assert result['status'] == 'success'
+        mock_gate.evaluate.assert_not_called()
 
 
 class TestEstimateConfidenceDirectly:

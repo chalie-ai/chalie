@@ -767,16 +767,7 @@ def delete_tool(tool_name: str):
                 (actual_name,),
             )
 
-        # 8. Best-effort Docker image removal (sandboxed tools only).
-        version = manifest.get("version", "latest")
-        image_tag = f"chalie-tool-{actual_name}:{version}"
-        try:
-            from services.tool_container_service import ToolContainerService
-            ToolContainerService().remove_image(image_tag)
-        except Exception as docker_err:
-            logger.debug(f"[TOOLS API] Docker image cleanup skipped for '{actual_name}': {docker_err}")
-
-        # 9. Remove the tool directory from disk.
+        # 8. Remove the tool directory from disk.
         shutil.rmtree(tool_path)
 
         logger.info(f"[TOOLS API] Deleted tool: {actual_name} (dir={tool_name})")
