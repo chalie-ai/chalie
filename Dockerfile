@@ -42,7 +42,7 @@ RUN cd /tmp \
 # Copy source
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
-COPY run.sh ./
+COPY run.sh VERSION ./
 
 # Data directory for SQLite DB and runtime files
 RUN mkdir -p /data
