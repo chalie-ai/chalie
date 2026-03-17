@@ -39,6 +39,12 @@ MAX_WORLD_STATE_ITEMS = 5
 MAX_SCHEDULED_CANDIDATES = 10
 MAX_TASK_CANDIDATES = 10
 MAX_LIST_CANDIDATES = 10
+MAX_EXTERNAL_SIGNAL_CANDIDATES = 10
+
+# External signal storage + decay
+EXTERNAL_SIGNALS_KEY = "world_state:external_signals"
+MAX_EXTERNAL_SIGNALS = 100  # Capped list in MemoryStore
+EXTERNAL_SIGNAL_DECAY_HOURS = 6.0  # Half-life for external signal temporal decay
 
 # Cache keys + TTL
 WORLD_MODEL_KEY = "world_model:items"
@@ -107,6 +113,9 @@ class WorldStateService:
 
         # 7. Reasoning focus (what Chalie is currently thinking about)
         items.extend(self._get_reasoning_focus())
+
+        # 8. External signals (from paired interfaces — zero LLM)
+        items.extend(self._get_external_signals(message_embedding))
 
         if not items:
             return ""
@@ -370,6 +379,146 @@ class WorldStateService:
             )
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} notify_schedule_changed failed (non-fatal): {e}")
+
+    def notify_external_signal(
+        self,
+        signal_type: str,
+        source: str,
+        content: str,
+        topic: str = None,
+        activation_energy: float = 0.5,
+        metadata: dict = None,
+    ) -> None:
+        """
+        Write an external signal directly to world state (zero LLM).
+
+        External signals represent passive world knowledge — things Chalie
+        overheard, not things directed at Chalie. They are stored in a capped
+        MemoryStore list and scored by temporal decay when the world state is
+        assembled.
+
+        Args:
+            signal_type: Signal category (e.g. 'stock_price', 'weather', 'alert').
+            source: Originating interface/wrapper identifier.
+            content: Human-readable signal content.
+            topic: Optional topic hint.
+            activation_energy: Urgency weight 0–1 (affects salience scoring).
+            metadata: Optional arbitrary context dict.
+        """
+        try:
+            store = self._get_store()
+            entry = json.dumps({
+                'signal_type': signal_type,
+                'source': source,
+                'content': content,
+                'topic': topic,
+                'activation_energy': activation_energy,
+                'metadata': metadata,
+                'timestamp': time.time(),
+            })
+            store.rpush(EXTERNAL_SIGNALS_KEY, entry)
+            # Cap the list to prevent unbounded growth
+            store.ltrim(EXTERNAL_SIGNALS_KEY, -MAX_EXTERNAL_SIGNALS, -1)
+            logger.debug(
+                f"{LOG_PREFIX} External signal: {signal_type} from {source}"
+            )
+        except Exception as e:
+            logger.debug(
+                f"{LOG_PREFIX} notify_external_signal failed (non-fatal): {e}"
+            )
+
+    def _get_external_signals(self, message_embedding: list = None) -> list:
+        """
+        Surface external signals from paired interfaces, grouped by source.
+
+        Each source gets exactly one world state slot, regardless of how many
+        signals it sent.  The slot shows the total count and the most salient
+        signal as the representative.  This prevents a noisy source from
+        monopolizing the world state and keeps context compact.
+
+        Salience per signal: ``min(1.0, temporal_decay × activation_energy × 2)``
+        with a 6-hour half-life.  The source-level salience is the salience of
+        its most notable signal.
+
+        Args:
+            message_embedding: Current message embedding (unused — reserved for
+                future semantic scoring).
+
+        Returns:
+            list: One item per source of type 'external_signal'.
+        """
+        try:
+            store = self._get_store()
+            raw_list = store.lrange(EXTERNAL_SIGNALS_KEY, 0, -1)
+            if not raw_list:
+                return []
+
+            now_ts = time.time()
+
+            # Group signals by source, track count and best signal per source
+            # source → { 'count': int, 'best_salience': float, 'best_content': str }
+            sources: dict = {}
+
+            for raw in raw_list:
+                try:
+                    entry = json.loads(raw) if isinstance(raw, str) else raw
+                    ts = entry.get('timestamp', 0)
+                    hours_ago = (now_ts - ts) / 3600.0
+                    if hours_ago < 0:
+                        hours_ago = 0
+
+                    # Temporal decay with external signal half-life
+                    temporal = math.exp(
+                        -0.693 * hours_ago / EXTERNAL_SIGNAL_DECAY_HOURS
+                    )
+
+                    # Activation energy amplifies salience
+                    energy = entry.get('activation_energy', 0.5)
+                    salience = min(1.0, temporal * energy * 2)
+
+                    if salience < SALIENCE_THRESHOLD:
+                        continue
+
+                    source = entry.get('source', 'unknown')
+                    content = entry.get('content', '')
+
+                    if source not in sources:
+                        sources[source] = {
+                            'count': 0,
+                            'best_salience': 0.0,
+                            'best_content': '',
+                        }
+
+                    bucket = sources[source]
+                    bucket['count'] += 1
+                    if salience > bucket['best_salience']:
+                        bucket['best_salience'] = salience
+                        bucket['best_content'] = content
+
+                except Exception:
+                    continue
+
+            # Build one world state item per source — most salient signal wins
+            items = []
+            for source, bucket in sources.items():
+                content = bucket['best_content']
+                label = f"[SIGNAL:{source}] {content}"
+
+                items.append({
+                    'type': 'external_signal',
+                    'label': label,
+                    'salience': bucket['best_salience'],
+                })
+
+            # Sort by salience descending, cap candidates
+            items.sort(key=lambda x: x['salience'], reverse=True)
+            return items[:MAX_EXTERNAL_SIGNAL_CANDIDATES]
+
+        except Exception as e:
+            logger.debug(
+                f"{LOG_PREFIX} _get_external_signals failed (non-fatal): {e}"
+            )
+            return []
 
     def _get_items_from_cache(self, message_embedding: list = None):
         """
@@ -714,6 +863,7 @@ class WorldStateService:
             'ambient': [],
             'topics': [],
             'reasoning_focus': [],
+            'external_signals': [],
         }
         try:
             store = self._get_store()
@@ -767,6 +917,9 @@ class WorldStateService:
 
         for item in self._get_reasoning_focus():
             summary['reasoning_focus'].append(item['label'])
+
+        for item in self._get_external_signals():
+            summary['external_signals'].append(item['label'])
 
         return summary
 

@@ -1,11 +1,11 @@
 """
-Tool Registry Service — Dynamic plugin discovery, Docker image building, and dispatch.
+Tool Registry Service — Dynamic plugin discovery and dispatch.
 
 Singleton. Discovers tools from the tools/ folder, validates manifests,
-builds Docker images at startup, and dispatches invocations via containers.
+installs deps at startup, and dispatches invocations via subprocess.
 
 IPC contract (formalized):
-  Input:  base64-encoded JSON as container command arg: {"params", "settings", "telemetry"}
+  Input:  base64-encoded JSON as subprocess arg: {"params", "settings", "telemetry"}
   Output: JSON on stdout: {"text"?, "html"?, "title"?, "error"?}
   Error:  non-zero exit code + error text on stderr
 
@@ -13,7 +13,6 @@ Tool output is sanitized and wrapped in [TOOL:name]...[/TOOL] markers.
 Cost metadata is appended to every result.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -46,22 +45,18 @@ class _CronToolWorker:
         """Initialise a cron worker from a resolved tool configuration dict.
 
         Unpacks all fields required for scheduled execution: scheduling interval,
-        prompt template, Docker image or runner path, sandbox policy, OAuth auth
-        config, card output settings, and per-invocation timeout.
+        prompt template, runner path, OAuth auth config, card output settings,
+        and per-invocation timeout.
 
         Args:
             tool_config: Resolved tool config dict produced by
                 ``ToolRegistryService.get_cron_tools()``.  Required keys are
-                ``name``, ``schedule``, ``prompt``, ``image``, and ``dir``.
-                Optional keys include ``sandbox``, ``trust``, ``runner_path``,
-                and ``manifest``.
+                ``name``, ``schedule``, ``prompt``, and ``dir``.
+                Optional keys include ``runner_path`` and ``manifest``.
         """
         self.tool_name = tool_config["name"]
         self.schedule = tool_config["schedule"]
         self.prompt_template = tool_config["prompt"]
-        self.image = tool_config["image"]
-        self.sandbox = tool_config.get("sandbox", {})
-        self.trust = tool_config.get("trust", "sandboxed")
         self.runner_path = tool_config.get("runner_path")
         manifest = tool_config.get("manifest", {})
         self._auth = manifest.get("auth", {})
@@ -80,7 +75,7 @@ class _CronToolWorker:
         2. Loads per-tool settings from the DB via ``ToolConfigService``.
         3. Refreshes OAuth tokens when required.
         4. Collects client telemetry and persisted tool state from MemoryStore.
-        5. Dispatches the tool via subprocess (trusted) or Docker container (sandboxed).
+        5. Dispatches the tool via subprocess.
         6. Persists any returned ``_state`` back to MemoryStore with a 7-day TTL.
         7. Routes output according to the formalized output-type contract
            (``card``, ``prompt``, or ``tool``); falls back to legacy routing
@@ -155,7 +150,7 @@ class _CronToolWorker:
                     "language": raw_telemetry.get("language", ""),
                 }
 
-                # Load persisted tool state from MemoryStore (survives container restarts)
+                # Load persisted tool state from MemoryStore (survives process restarts)
                 tool_state = {}
                 state_key = f"tool_state:{self.tool_name}"
                 old_state_key = f"tool_cron_state:{self.tool_name}"
@@ -189,19 +184,15 @@ class _CronToolWorker:
                     dialog_turns.append({"request": request_text, "response": response})
                     return response
 
-                # Branch: trusted → subprocess, sandboxed → Docker container
-                if self.trust == "trusted" and self.runner_path:
-                    from services.tool_subprocess_service import ToolSubprocessService
-                    result = ToolSubprocessService().run_interactive(
-                        self.runner_path, payload,
-                        timeout=self.timeout, on_tool_output=_on_tool_output,
-                    )
-                else:
-                    from services.tool_container_service import ToolContainerService
-                    result = ToolContainerService().run_interactive(
-                        self.image, payload, sandbox_config=self.sandbox,
-                        timeout=self.timeout, on_tool_output=_on_tool_output,
-                    )
+                # All tools run as trusted subprocesses
+                if not self.runner_path:
+                    _log.warning(f"[TOOL CRON] {self.tool_name}: no runner_path, skipping")
+                    continue
+                from services.tool_subprocess_service import ToolSubprocessService
+                result = ToolSubprocessService().run_interactive(
+                    self.runner_path, payload,
+                    timeout=self.timeout, on_tool_output=_on_tool_output,
+                )
 
                 # Persist returned state back to MemoryStore (7-day TTL)
                 if isinstance(result, dict) and "_state" in result:
@@ -386,10 +377,10 @@ class _CronToolWorker:
 
 class ToolRegistryService:
     """
-    Plugin registry for sandboxed external tools.
+    Plugin registry for external tools.
 
-    Singleton — one instance created at startup, cached. Images are built once
-    and reused across all invocations.
+    Singleton — one instance created at startup, cached. Tools are loaded once
+    and dispatched via subprocess on every invocation.
     """
 
     REQUIRED_MANIFEST_FIELDS = {"name", "description", "trigger", "parameters", "returns"}
@@ -422,8 +413,7 @@ class ToolRegistryService:
         Reads ``configs/frontal-cortex.json`` to check the ``tools_enabled``
         kill-switch.  When disabled, discovery is skipped entirely.  Otherwise,
         ``_discover_and_load()`` scans ``tools_dir`` for tool sub-directories,
-        validates manifests, builds Docker images in parallel (up to 4
-        concurrent workers), and registers each tool.
+        validates manifests, installs dependencies, and registers each tool.
 
         Args:
             tools_dir: Optional path to the tools root directory.  Defaults to
@@ -438,7 +428,7 @@ class ToolRegistryService:
         else:
             self.tools_dir = Path(__file__).parent.parent / "tools"
 
-        self.tools: Dict[str, dict] = {}  # name -> {manifest, image, dir, sandbox}
+        self.tools: Dict[str, dict] = {}  # name -> {manifest, dir, runner_path, ...}
         self._enabled = True
 
         # Lifecycle management
@@ -461,28 +451,8 @@ class ToolRegistryService:
 
         self._discover_and_load()
 
-    def _is_tool_trusted(self, tool_name: str) -> bool:
-        """Check if a tool has been granted trusted status via the embodiment library.
-
-        Trust is an internal Chalie decision stored in configs/embodiment_library.json.
-        Tool authors cannot self-declare trust — only the curated catalog can.
-        """
-        if not hasattr(self, '_trust_cache'):
-            self._trust_cache = {}
-            try:
-                catalog_path = Path(__file__).parent.parent / "configs" / "embodiment_library.json"
-                if catalog_path.exists():
-                    with open(catalog_path) as f:
-                        library = json.load(f)
-                    for entry in library:
-                        if entry.get("trust") == "trusted":
-                            self._trust_cache[entry.get("name", "")] = True
-            except Exception as e:
-                logger.warning(f"[TOOL REGISTRY] Failed to load trust from embodiment library: {e}")
-        return self._trust_cache.get(tool_name, False)
-
     def _discover_and_load(self):
-        """Scan tools/ folder for subdirectories with manifest.json. Build images in parallel."""
+        """Scan tools/ folder for subdirectories with manifest.json and runner.py."""
         if not self.tools_dir.exists():
             logger.info(f"[TOOL REGISTRY] Tools directory not found: {self.tools_dir}")
             return
@@ -508,20 +478,11 @@ class ToolRegistryService:
             except Exception:
                 tool_name = entry.name
 
-            trusted = self._is_tool_trusted(tool_name)
-
-            if trusted:
-                # Trusted tools need runner.py, no Dockerfile required
-                runner_path = entry / "runner.py"
-                if not runner_path.exists():
-                    logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: trusted tool missing runner.py")
-                    continue
-            else:
-                # Sandboxed tools need Dockerfile
-                dockerfile_path = entry / "Dockerfile"
-                if not dockerfile_path.exists():
-                    logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing Dockerfile (required for sandboxing)")
-                    continue
+            # All tools require runner.py
+            runner_path = entry / "runner.py"
+            if not runner_path.exists():
+                logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing runner.py")
+                continue
 
             candidates.append((entry, manifest_path))
 
@@ -549,12 +510,10 @@ class ToolRegistryService:
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
 
-        # Build images in parallel (up to 4 concurrent).
-        # Trusted tools register immediately inside _load_tool; sandboxed tools
-        # block on Docker image build. After the executor finishes, all registrations
-        # are complete and pip installs for trusted tools run in a daemon thread so
-        # Flask startup is not held behind slow package downloads.
-        trusted_dirs: list = []  # (tool_name, tool_dir) pairs for deferred pip install
+        # Load tools in parallel (up to 4 concurrent).
+        # After the executor finishes, all registrations are complete and pip
+        # installs run synchronously so tools are ready before Flask startup.
+        tool_dirs: list = []  # (tool_name, tool_dir) pairs for pip install
         for (entry, _manifest_path) in candidates:
             try:
                 import json as _json
@@ -562,8 +521,7 @@ class ToolRegistryService:
                     _name = _json.load(_f).get("name", entry.name)
             except Exception:
                 _name = entry.name
-            if self._is_tool_trusted(_name):
-                trusted_dirs.append((_name, entry))
+            tool_dirs.append((_name, entry))
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(self._load_tool, d, m): d.name for d, m in candidates}
@@ -589,13 +547,12 @@ class ToolRegistryService:
         # Purge DB entries for tools that no longer exist on disk
         self._purge_stale_db_entries()
 
-        # Synchronous pip install for trusted tools — must complete before the
-        # system is ready so tools are never shown in prompts but unavailable
-        # for dispatch (see _is_ready / _deps_ready).
-        if trusted_dirs:
-            for tool_name, tool_dir in trusted_dirs:
+        # Synchronous pip install — must complete before the system is ready so
+        # tools are never shown in prompts but unavailable for dispatch.
+        if tool_dirs:
+            for tool_name, tool_dir in tool_dirs:
                 self._install_tool_requirements(tool_name, tool_dir)
-            logger.info(f"[TOOL REGISTRY] Dep install complete ({len(trusted_dirs)} tools)")
+            logger.info(f"[TOOL REGISTRY] Dep install complete ({len(tool_dirs)} tools)")
 
     def _purge_stale_db_entries(self):
         """Remove DB records for tools that no longer exist on disk.
@@ -667,15 +624,6 @@ class ToolRegistryService:
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Stale DB purge failed (non-fatal): {e}")
 
-    def _compute_tool_hash(self, tool_dir: Path) -> str:
-        """Compute MD5 of all source files in a tool directory for staleness detection."""
-        h = hashlib.md5()
-        for filepath in sorted(tool_dir.rglob("*")):
-            if filepath.is_file() and not any(p.startswith(".") for p in filepath.parts):
-                h.update(filepath.name.encode())
-                h.update(filepath.read_bytes())
-        return h.hexdigest()
-
     def _install_tool_requirements(self, tool_name: str, tool_dir: Path) -> None:
         """Install pip packages declared in a trusted tool's requirements.txt.
 
@@ -717,69 +665,27 @@ class ToolRegistryService:
             )
 
     def _load_tool(self, tool_dir: Path, manifest_path: Path):
-        """Load, validate, and optionally build Docker image for a tool.
-
-        Trusted tools (per Chalie's DB config) skip Docker and use subprocess.
-        Sandboxed tools (default) build Docker images as before.
-        """
+        """Load and validate a tool, registering it for subprocess execution."""
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
 
         self._validate_manifest(manifest, tool_dir.name)
 
         tool_name = manifest["name"]
-        trusted = self._is_tool_trusted(tool_name)
+        runner_path = str(tool_dir / "runner.py")
 
-        if trusted:
-            # Trusted tool — subprocess execution, no Docker.
-            # Register immediately so the tool is visible in /tools before pip install
-            # completes. Dep installation is deferred to a background thread so the
-            # executor (and therefore Flask startup) is not blocked by pip.
-            runner_path = str(tool_dir / "runner.py")
-            with self._lock:
-                self.tools[tool_name] = {
-                    "manifest": manifest,
-                    "image": None,
-                    "dir": str(tool_dir),
-                    "sandbox": {},
-                    "trust": "trusted",
-                    "runner_path": runner_path,
-                }
-            trigger_type = manifest.get("trigger", {}).get("type", "unknown")
-            logger.info(f"[TOOL REGISTRY] Loaded trusted tool '{tool_name}' (trigger={trigger_type})")
-        else:
-            # Sandboxed tool — Docker container execution
-            version = manifest.get("version", "latest")
-            image_tag = f"chalie-tool-{tool_name}:{version}"
+        with self._lock:
+            self.tools[tool_name] = {
+                "manifest": manifest,
+                "image": None,
+                "dir": str(tool_dir),
+                "sandbox": {},
+                "trust": "trusted",
+                "runner_path": runner_path,
+            }
 
-            from services.tool_container_service import ToolContainerService
-            container_svc = ToolContainerService()
-
-            source_hash = self._compute_tool_hash(tool_dir)
-            existing_hash = container_svc.get_image_source_hash(image_tag) if container_svc.image_exists(image_tag) else None
-
-            if existing_hash == source_hash:
-                logger.info(f"[TOOL REGISTRY] Image {image_tag} is up to date, skipping build")
-            else:
-                if existing_hash is not None:
-                    logger.info(f"[TOOL REGISTRY] Tool '{tool_name}' source changed, rebuilding {image_tag}...")
-                else:
-                    logger.info(f"[TOOL REGISTRY] Building image {image_tag}...")
-                if not container_svc.build_image(str(tool_dir), image_tag, source_hash=source_hash):
-                    raise RuntimeError(f"Failed to build image for tool '{tool_name}'")
-
-            with self._lock:
-                self.tools[tool_name] = {
-                    "manifest": manifest,
-                    "image": image_tag,
-                    "dir": str(tool_dir),
-                    "sandbox": manifest.get("sandbox", {}),
-                    "trust": "sandboxed",
-                    "runner_path": None,
-                }
-
-            trigger_type = manifest.get("trigger", {}).get("type", "unknown")
-            logger.info(f"[TOOL REGISTRY] Loaded tool '{tool_name}' (trigger={trigger_type}, image={image_tag})")
+        trigger_type = manifest.get("trigger", {}).get("type", "unknown")
+        logger.info(f"[TOOL REGISTRY] Loaded tool '{tool_name}' (trigger={trigger_type})")
 
     def _validate_manifest(self, manifest: dict, dir_name: str):
         """Validate manifest has required fields and correct structure."""
@@ -847,11 +753,51 @@ class ToolRegistryService:
         from services.tool_output_utils import build_tool_telemetry
         return build_tool_telemetry(raw_telemetry)
 
+    def _invoke_interface_tool(self, tool_name: str, tool: dict, params: dict) -> str:
+        """Invoke a tool on an external interface via HTTP.
+
+        Uses InterfaceRegistryService.execute_capability() which does:
+        POST interface_host:port/execute {capability, params}
+        """
+        interface_id = tool.get("interface_id")
+        if not interface_id:
+            return f"[TOOL:{tool_name}] No interface_id for interface tool [/TOOL]"
+
+        try:
+            from services.interface_registry_service import InterfaceRegistryService
+            result = InterfaceRegistryService().execute_capability(interface_id, tool_name, params)
+        except Exception as e:
+            return f"[TOOL:{tool_name}] Interface execution error: {e} [/TOOL]"
+
+        if not isinstance(result, dict):
+            return f"[TOOL:{tool_name}] {result} [/TOOL]"
+
+        if result.get("error"):
+            return f"[TOOL:{tool_name}] Error: {result['error']} [/TOOL]"
+
+        # Format result like any other tool
+        text = result.get("text", "")
+        html = result.get("html")
+
+        output_parts = []
+        if text:
+            output_parts.append(text)
+        if html:
+            output_parts.append(html)
+
+        output = "\n".join(output_parts) if output_parts else "(no output)"
+
+        # Apply standard sanitization and length limits
+        if len(output) > self.MAX_OUTPUT_CHARS:
+            output = output[:self.MAX_OUTPUT_CHARS] + "\n...(truncated)"
+
+        return f"[TOOL:{tool_name}] {output} [/TOOL]"
+
     def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
         """
-        Invoke a tool by name via Docker container.
+        Invoke a tool by name via subprocess.
 
-        Validates params, fetches DB config, runs container, sanitizes output,
+        Validates params, fetches DB config, runs subprocess, sanitizes output,
         appends cost metadata, logs outcome to procedural memory.
 
         Returns:
@@ -863,6 +809,10 @@ class ToolRegistryService:
         tool = self.tools.get(tool_name)
         if not tool:
             return f"[TOOL:{tool_name}] Unknown tool: {tool_name} [/TOOL]"
+
+        # Interface tool — route via HTTP to the interface
+        if tool.get("source_type") == "interface":
+            return self._invoke_interface_tool(tool_name, tool, params)
 
         manifest = tool["manifest"]
         validated_params = self._validate_params(params, manifest.get("parameters", {}))
@@ -896,34 +846,24 @@ class ToolRegistryService:
         }
         timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 
-        # Gate: trusted tools must have deps installed before invocation
-        if tool.get("trust") == "trusted":
-            with self._lock:
-                deps_ok = tool_name in self._deps_ready
-            if not deps_ok:
-                return (
-                    f"[TOOL:{tool_name}] Tool '{tool_name}' is still installing "
-                    f"dependencies — please try again in a moment. [/TOOL]"
-                )
+        # Gate: tools must have deps installed before invocation
+        with self._lock:
+            deps_ok = tool_name in self._deps_ready
+        if not deps_ok:
+            return (
+                f"[TOOL:{tool_name}] Tool '{tool_name}' is still installing "
+                f"dependencies — please try again in a moment. [/TOOL]"
+            )
 
         start_time = time.time()
         success = False
         try:
-            if tool.get("trust") == "trusted" and tool.get("runner_path"):
-                from services.tool_subprocess_service import ToolSubprocessService
-                result = ToolSubprocessService().run(
-                    tool["runner_path"],
-                    payload,
-                    timeout=timeout,
-                )
-            else:
-                from services.tool_container_service import ToolContainerService
-                result = ToolContainerService().run(
-                    tool["image"],
-                    payload,
-                    sandbox_config=tool.get("sandbox", {}),
-                    timeout=timeout,
-                )
+            from services.tool_subprocess_service import ToolSubprocessService
+            result = ToolSubprocessService().run(
+                tool["runner_path"],
+                payload,
+                timeout=timeout,
+            )
             success = True
         except TimeoutError as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
@@ -1141,7 +1081,7 @@ class ToolRegistryService:
 
         Args:
             failure_class: 'external' for rate limits / network / upstream errors;
-                           'internal' for container crashes / tool bugs.
+                           'internal' for subprocess crashes / tool bugs.
                            None implies success. External failures receive an
                            attenuated penalty to avoid unjust weight degradation.
             exchange_id: Optional exchange ID for cross-referencing with interactions.
@@ -1179,7 +1119,7 @@ class ToolRegistryService:
         """
         Register a tool from a directory asynchronously.
 
-        Spawns a background thread to load and build the Docker image.
+        Spawns a background thread to load and install the tool's dependencies.
         Returns False if the tool is already being installed.
         Returns True if installation started successfully.
 
@@ -1223,9 +1163,9 @@ class ToolRegistryService:
 
     def _build_worker(self, tool_dir: Path, tool_name: str):
         """
-        Private worker function for background tool building (runs in thread).
+        Private worker function for background tool loading (runs in thread).
 
-        Attempts to load and build the tool. Updates _build_status and clears _install_locks.
+        Attempts to load the tool and install its dependencies. Updates _build_status and clears _install_locks.
         """
         try:
             # Check if directory still exists (might have been disabled)
@@ -1239,9 +1179,8 @@ class ToolRegistryService:
             # Build the tool (this calls _load_tool internally)
             self._load_tool(tool_dir, manifest_path)
 
-            # Install deps for trusted tools so they're ready immediately
-            if self._is_tool_trusted(tool_name):
-                self._install_tool_requirements(tool_name, tool_dir)
+            # Install deps so the tool is ready immediately
+            self._install_tool_requirements(tool_name, tool_dir)
 
             # Success: clear build status
             with self._lock:
@@ -1315,6 +1254,82 @@ class ToolRegistryService:
             self._install_locks.discard(tool_name)
         logger.info(f"[TOOL REGISTRY] Unregistered tool '{tool_name}'")
 
+    def register_interface_tool(self, interface_id: str, manifest: dict):
+        """Register a tool from an external interface.
+
+        Interface tools are stored in self.tools with source_type='interface'
+        and interface_id set. They appear in prompts like any other on_demand tool.
+        """
+        name = manifest.get("name", "")
+        if not name:
+            return
+
+        # Reject names that collide with innate skills or existing local tools
+        with self._lock:
+            existing = self.tools.get(name)
+            if existing and existing.get("source_type") != "interface":
+                logger.warning(
+                    "[TOOL REGISTRY] Interface tool '%s' rejected: collides with local tool",
+                    name,
+                )
+                return
+
+        # Build a tool entry that looks like a local tool but with interface metadata
+        tool_entry = {
+            "manifest": {
+                "name": name,
+                "description": manifest.get("description", ""),
+                "documentation": manifest.get("documentation", ""),
+                "trigger": {"type": "on_demand"},
+                "parameters": {
+                    p["name"]: {
+                        "type": p.get("type", "string"),
+                        "required": p.get("required", False),
+                        "description": p.get("description", ""),
+                    }
+                    for p in manifest.get("parameters", [])
+                    if p.get("name")
+                },
+                "returns": manifest.get("returns", {}),
+            },
+            "image": None,
+            "dir": None,
+            "sandbox": {},
+            "trust": "trusted",
+            "runner_path": None,
+            "source_type": "interface",
+            "interface_id": interface_id,
+        }
+
+        with self._lock:
+            self.tools[name] = tool_entry
+            # Interface tools are always ready (no pip deps to install)
+            self._deps_ready.add(name)
+
+        logger.info(f"[TOOL REGISTRY] Registered interface tool: {name} (interface={interface_id})")
+
+    def remove_interface_tools(self, interface_id: str):
+        """Remove all tools that belong to a specific interface."""
+        with self._lock:
+            to_remove = [
+                name for name, tool in self.tools.items()
+                if tool.get("source_type") == "interface" and tool.get("interface_id") == interface_id
+            ]
+            for name in to_remove:
+                self.tools.pop(name, None)
+                self._deps_ready.discard(name)
+                self._build_status.pop(name, None)
+
+        if to_remove:
+            logger.info(f"[TOOL REGISTRY] Removed {len(to_remove)} interface tools for interface {interface_id}")
+
+    def get_interface_id_for_tool(self, tool_name: str) -> str | None:
+        """Return the interface_id for an interface-sourced tool, or None."""
+        tool = self.tools.get(tool_name)
+        if tool and tool.get("source_type") == "interface":
+            return tool.get("interface_id")
+        return None
+
     def get_all_build_statuses(self) -> dict:
         """
         Get a shallow copy of all tool build statuses.
@@ -1333,10 +1348,19 @@ class ToolRegistryService:
 
     def _is_ready(self, name: str, tool: dict) -> bool:
         """Check if a tool is ready for invocation (deps installed)."""
-        if tool.get("trust") != "trusted":
-            return True  # sandboxed tools bundle deps in Docker
         with self._lock:
             return name in self._deps_ready
+
+    def _is_interface_online(self, tool: dict) -> bool:
+        """Check if an interface-sourced tool's interface is online."""
+        if tool.get("source_type") != "interface":
+            return True  # not an interface tool — always considered online
+        try:
+            from services.interface_registry_service import InterfaceRegistryService
+            iface = InterfaceRegistryService().get_interface(tool.get("interface_id", ""))
+            return iface is not None and iface.get("status") == "online"
+        except Exception:
+            return False
 
     def get_tool_names(self) -> List[str]:
         """Return the names of all successfully registered tools.
@@ -1346,7 +1370,8 @@ class ToolRegistryService:
             fields.  Order reflects insertion order (Python 3.7+ dict).
         """
         return [name for name, tool in self.tools.items()
-                if self._is_ready(name, tool)]
+                if self._is_ready(name, tool)
+                and self._is_interface_online(tool)]
 
     def get_on_demand_tools(self) -> List[str]:
         """Return names of registered tools whose trigger type is ``on_demand``.
@@ -1361,6 +1386,7 @@ class ToolRegistryService:
             name for name, tool in self.tools.items()
             if tool["manifest"].get("trigger", {}).get("type") == "on_demand"
             and self._is_ready(name, tool)
+            and self._is_interface_online(tool)
         ]
 
     def get_ambient_tools(self) -> List[dict]:
@@ -1393,18 +1419,15 @@ class ToolRegistryService:
 
     def get_cron_tools(self) -> List[dict]:
         """
-        Return cron tools with schedule, prompt, image/runner, sandbox config, and tool directory.
+        Return cron tools with schedule, prompt, runner path, and tool directory.
 
         Returns:
             List of {
                 "name": str,
                 "schedule": str,
                 "prompt": str,
-                "image": str | None,
-                "sandbox": dict,
                 "dir": str,
                 "manifest": dict,
-                "trust": str,
                 "runner_path": str | None,
             }
         """
@@ -1416,11 +1439,8 @@ class ToolRegistryService:
                     "name": name,
                     "schedule": trigger["schedule"],
                     "prompt": trigger["prompt"],
-                    "image": tool["image"],
-                    "sandbox": tool.get("sandbox", {}),
                     "dir": tool["dir"],
                     "manifest": tool["manifest"],
-                    "trust": tool.get("trust", "sandboxed"),
                     "runner_path": tool.get("runner_path"),
                 })
         return cron_tools
@@ -1483,6 +1503,8 @@ class ToolRegistryService:
                 continue
             if not self._is_ready(name, tool):
                 continue
+            if not self._is_interface_online(tool):
+                continue
 
             desc = manifest.get("description", "")
             params = manifest.get("parameters", {})
@@ -1514,7 +1536,7 @@ class ToolRegistryService:
         """
         Invoke a webhook-triggered tool.
 
-        Loads state from MemoryStore, builds payload with _webhook key, runs container
+        Loads state from MemoryStore, builds payload with _webhook key, runs subprocess
         interactively (so "tool" output dialogs work), persists returned state.
 
         Args:
@@ -1524,7 +1546,7 @@ class ToolRegistryService:
                 If None, "tool" output is treated as silent.
 
         Returns:
-            Final result dict from container.
+            Final result dict from subprocess.
 
         Raises:
             ValueError: If tool not found or not a webhook trigger.
@@ -1577,21 +1599,12 @@ class ToolRegistryService:
         }
 
         timeout = manifest.get("constraints", {}).get("timeout_seconds", 120)
-        if tool.get("trust") == "trusted" and tool.get("runner_path"):
-            from services.tool_subprocess_service import ToolSubprocessService
-            result = ToolSubprocessService().run_interactive(
-                tool["runner_path"], payload,
-                timeout=timeout,
-                on_tool_output=dialog_callback,
-            )
-        else:
-            from services.tool_container_service import ToolContainerService
-            result = ToolContainerService().run_interactive(
-                tool["image"], payload,
-                sandbox_config=tool.get("sandbox", {}),
-                timeout=timeout,
-                on_tool_output=dialog_callback,
-            )
+        from services.tool_subprocess_service import ToolSubprocessService
+        result = ToolSubprocessService().run_interactive(
+            tool["runner_path"], payload,
+            timeout=timeout,
+            on_tool_output=dialog_callback,
+        )
 
         # Persist returned state
         if isinstance(result, dict) and "_state" in result:

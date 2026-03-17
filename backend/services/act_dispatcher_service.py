@@ -109,26 +109,7 @@ class ActDispatcherService:
 
         logging.info(f"[ACT DISPATCH] Executing {action_type}")
 
-        # Pre-action consequence check — lightweight tier classification.
-        # Tier 3 (COMMIT) actions are flagged but not blocked; the warning
-        # is surfaced to the ACT loop prompt via the result's notes field.
         _commit_warning = ''
-        try:
-            from services.consequence_classifier_service import get_consequence_classifier_service
-            classifier = get_consequence_classifier_service()
-            action_description = action.get('description', action.get('params', {}).get('query', action_type))
-            cls_result = classifier.classify(str(action_description))
-            if cls_result['tier'] == 3:  # COMMIT — flag but don't block
-                _commit_warning = (
-                    "This action was classified as potentially irreversible (tier: COMMIT). "
-                    "Proceed with caution."
-                )
-                logging.warning(
-                    f"[ACT DISPATCH] ACT action classified as COMMIT (irreversible): "
-                    f"{action_description!r:.100}"
-                )
-        except Exception:
-            pass  # Non-critical, never block execution
 
         # Pre-action reliability check — non-blocking: only logs/annotates
         _reliability_warning = self._check_source_reliability(action)
@@ -160,6 +141,51 @@ class ActDispatcherService:
                 'confidence': 0.0,
                 'notes': '',
             }
+
+        # Pre-execution gate — evaluates consequence tier and domain confidence.
+        # Tier 3 (COMMIT / irreversible) is always blocked.
+        # Lower tiers are blocked when domain confidence is below threshold.
+        # Safe innate skills (recall, memorize, introspect, etc.) bypass the
+        # gate entirely — they are internal cognitive operations with no
+        # irreversible side effects.
+        from services.act_action_categories import SAFE_ACTIONS as _SAFE_ACTIONS
+        if action_type not in _SAFE_ACTIONS:
+            try:
+                from services.autonomous_execution_gate import get_autonomous_execution_gate
+                gate = get_autonomous_execution_gate()
+                action_description = action.get('description', action.get('params', {}).get('query', action_type))
+                gate_result = gate.evaluate(
+                    str(action_description),
+                    domain=topic or 'general',
+                )
+                if not gate_result['auto_execute']:
+                    execution_time = time.time() - start_time
+                    logging.info(
+                        f"[ACT DISPATCH] Blocked by execution gate: "
+                        f"tier={gate_result['consequence_tier']}, "
+                        f"confidence={gate_result['domain_confidence']:.2f}, "
+                        f"action={action_description!r:.100}"
+                    )
+                    return {
+                        'action_type': action_type,
+                        'status': 'requires_confirmation',
+                        'result': (
+                            f"This action requires user confirmation. "
+                            f"{gate_result['reasoning']}"
+                        ),
+                        'execution_time': execution_time,
+                        'confidence': 0.0,
+                        'notes': gate_result['reasoning'],
+                        'gate_decision': gate_result,
+                    }
+                if gate_result['consequence_tier'] >= 2:
+                    _commit_warning = (
+                        f"Action classified as tier {gate_result['consequence_tier']} "
+                        f"({gate_result['consequence_name']}), auto-executed with "
+                        f"domain confidence {gate_result['domain_confidence']:.2f}."
+                    )
+            except Exception:
+                pass  # Gate unavailable — proceed with execution
 
         # Execute with timeout
         try:

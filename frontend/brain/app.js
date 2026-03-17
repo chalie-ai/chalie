@@ -900,7 +900,7 @@ async function handleInstall() {
         const data = await res.json();
 
         if (data.ok) {
-            progressEl.innerHTML = 'Building container…';
+            progressEl.innerHTML = 'Installing…';
             setTimeout(() => {
                 closeInstallModal();
                 loadEmbodiment();
@@ -942,7 +942,7 @@ async function enableTool(name) {
         const res = await apiFetch(`/tools/${name}/enable`, { method: 'POST' });
         const data = await res.json();
         if (data.ok) {
-            showToast(`Enabling tool… building container`, 'success');
+            showToast(`Enabling tool…`, 'success');
             await loadEmbodiment();
             startBuildPoll();
         } else {
@@ -1210,7 +1210,7 @@ function confirmUpdate(name, currentTag, newTag) {
     updatingTool = name;
     const displayName = name.replace(/_/g, ' ');
     document.getElementById('updateToolDesc').textContent =
-        `Update ${displayName} from ${currentTag || 'unknown'} to ${newTag}? The tool will be unavailable during the container rebuild.`;
+        `Update ${displayName} from ${currentTag || 'unknown'} to ${newTag}? The tool will be briefly unavailable during the update.`;
     document.getElementById('updateToolModal').classList.remove('hidden');
 }
 

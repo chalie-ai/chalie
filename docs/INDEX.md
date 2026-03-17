@@ -36,14 +36,15 @@ Recommended reading order for engineers:
 2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; narrative explanation
 3. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
 4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
-5. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with sandboxed tools
+5. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with tools
 6. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Token optimization and selective context injection
 
 ## Tools & Extensions
 
 **Building tools to extend Chalie's capabilities?**
-- **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, sandbox constraints, examples
+- **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, subprocess execution, examples
 - **[14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md)** — First-party default tools installed on first startup, auto-install behavior, `--disable-default-tools`
+- **[15-INTERFACES.md](15-INTERFACES.md)** — External interfaces (calendar, IDE), pairing protocol, capability discovery
 
 ## Performance & Optimization
 
@@ -74,7 +75,8 @@ docs/
 ├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
 ├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
 ├── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
-└── 14-DEFAULT-TOOLS.md               ← Default tools installed on first startup
+├── 14-DEFAULT-TOOLS.md               ← Default tools installed on first startup
+└── 15-INTERFACES.md                  ← Interface layer architecture
 ```
 
 ### Important Project Files (Not in docs/)
@@ -124,13 +126,18 @@ docs/
 3. Document in 06-WORKERS.md
 4. Add tests in `backend/tests/`
 
+### Pairing an Interface
+1. Open the brain dashboard and go to Interfaces tab
+2. Click "Generate Pairing Key" to get a one-time key
+3. Enter Chalie's host:port + pairing key into the interface setup
+4. The interface pairs automatically and its capabilities appear as tools
+
 ### Creating a New Tool
 1. Read 09-TOOLS.md for architecture and requirements
 2. Create `backend/tools/tool_name/` directory
 3. Add `manifest.json` (metadata, parameters, trigger type)
-4. Add `Dockerfile` (container image definition)
-5. Implement tool logic in your language of choice
-6. Configure via REST API (`PUT /tools/<name>/config`)
+4. Implement tool logic in `runner.py` or `runner.sh`
+5. Configure via REST API (`PUT /tools/<name>/config`)
 
 ## Architecture Quick Facts
 
@@ -146,8 +153,9 @@ docs/
 ## Key Concepts
 
 ### Mode Routing
-Chalie selects one of 4 engagement modes for each user message:
+Chalie selects one of 5 engagement modes for each user message:
 - **RESPOND** — Give a substantive answer
+- **CLARIFY** — Ask a clarifying question
 - **ACKNOWLEDGE** — Brief social response
 - **ACT** — Execute internal actions (memory, reasoning)
 - **IGNORE** — No response needed
@@ -194,7 +202,7 @@ Chalie can generate spontaneous thoughts during idle periods via the Cognitive D
 - **Not a surveillance system** — memory decays by design; old facts fade unless reinforced
 - **Not a productivity robot** — it is a thinking aid, not a task manager
 - **Not a cloud service** — every byte stays local unless you configure an external LLM provider
-- **Not a general automation platform** — tools are sandboxed, audited, and bounded by hard limits
+- **Not a general automation platform** — tools are isolated, audited, and bounded by hard limits
 
 ## Support & Development
 
