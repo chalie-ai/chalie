@@ -406,6 +406,12 @@ class WorldStateService:
             metadata: Optional arbitrary context dict.
         """
         try:
+            # Context updates bridge into the telemetry pipeline so that
+            # backend services (ambient inference, tool telemetry, etc.)
+            # see the user's device/location/behavioral data.
+            if signal_type == 'context_update':
+                self._bridge_context_update(content)
+
             store = self._get_store()
             entry = json.dumps({
                 'signal_type': signal_type,
@@ -426,6 +432,29 @@ class WorldStateService:
             logger.debug(
                 f"{LOG_PREFIX} notify_external_signal failed (non-fatal): {e}"
             )
+
+    def _bridge_context_update(self, content: str) -> None:
+        """
+        Bridge a context_update signal into the telemetry pipeline.
+
+        When the chat interface (or any frontend) sends a context_update
+        signal, the payload is the same heartbeat JSON that POST /health
+        currently receives.  This bridge calls ClientContextService.save()
+        so that all downstream consumers (ambient inference, tool telemetry,
+        place learning, circadian data) see the fresh context — regardless
+        of whether it arrived via POST /health or via the signal pathway.
+
+        Fail-open: any error is logged and swallowed.
+        """
+        try:
+            payload = json.loads(content) if isinstance(content, str) else content
+            if not isinstance(payload, dict) or not payload:
+                return
+            from services.client_context_service import ClientContextService
+            ClientContextService().save(payload)
+            logger.debug(f"{LOG_PREFIX} context_update bridged to ClientContextService")
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} context_update bridge failed (non-fatal): {e}")
 
     def _get_external_signals(self, message_embedding: list = None) -> list:
         """

@@ -12,7 +12,7 @@ import math
 import time
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 from services.world_state_service import (
@@ -294,3 +294,76 @@ class TestGetExternalSignals:
         assert len(items) == 1
         # Only the fresh signal — stale one below threshold
         assert items[0]["label"] == "[SIGNAL:exchange] Fresh data"
+
+
+# ---------------------------------------------------------------------------
+# context_update bridge — telemetry flows to ClientContextService
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestContextUpdateBridge:
+    def test_context_update_calls_client_context_save(self):
+        """context_update signals should bridge to ClientContextService.save()."""
+        svc, _ = _make_service()
+        context_payload = {
+            "timezone": "Europe/London",
+            "locale": "en-GB",
+            "device": {"class": "phone", "platform": "iOS"},
+            "location": {"lat": 51.5, "lon": -0.12},
+        }
+        with patch("services.client_context_service.ClientContextService") as mock_cls:
+            mock_instance = MagicMock()
+            mock_cls.return_value = mock_instance
+            svc.notify_external_signal(
+                signal_type="context_update",
+                source="__chat_ui__",
+                content=json.dumps(context_payload),
+            )
+            mock_instance.save.assert_called_once_with(context_payload)
+
+    def test_non_context_signal_does_not_bridge(self):
+        """Regular signals should not call ClientContextService.save()."""
+        svc, _ = _make_service()
+        with patch("services.client_context_service.ClientContextService") as mock_cls:
+            svc.notify_external_signal(
+                signal_type="weather_update",
+                source="weather",
+                content="Sunny, 22C",
+            )
+            mock_cls.return_value.save.assert_not_called()
+
+    def test_bridge_fail_open(self):
+        """If ClientContextService.save() throws, the signal is still stored."""
+        svc, _ = _make_service()
+        with patch("services.client_context_service.ClientContextService") as mock_cls:
+            mock_cls.return_value.save.side_effect = Exception("save failed")
+            svc.notify_external_signal(
+                signal_type="context_update",
+                source="__chat_ui__",
+                content=json.dumps({"timezone": "UTC"}),
+            )
+        # Signal should still be in the store despite bridge failure
+        items = svc._get_external_signals()
+        assert len(items) == 1
+
+    def test_bridge_handles_invalid_json(self):
+        """If content is not valid JSON, bridge skips gracefully."""
+        svc, _ = _make_service()
+        with patch("services.client_context_service.ClientContextService") as mock_cls:
+            svc.notify_external_signal(
+                signal_type="context_update",
+                source="__chat_ui__",
+                content="not valid json {{{",
+            )
+            mock_cls.return_value.save.assert_not_called()
+
+    def test_bridge_handles_empty_payload(self):
+        """Empty dict payload should be skipped."""
+        svc, _ = _make_service()
+        with patch("services.client_context_service.ClientContextService") as mock_cls:
+            svc.notify_external_signal(
+                signal_type="context_update",
+                source="__chat_ui__",
+                content=json.dumps({}),
+            )
+            mock_cls.return_value.save.assert_not_called()
