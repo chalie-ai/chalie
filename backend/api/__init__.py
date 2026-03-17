@@ -92,6 +92,7 @@ def create_app():
     from .voice import voice_bp
     from .chat_image import chat_image_bp
     from .interfaces import interfaces_bp
+    from .signals import signals_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -110,6 +111,7 @@ def create_app():
     app.register_blueprint(voice_bp)
     app.register_blueprint(chat_image_bp)
     app.register_blueprint(interfaces_bp)
+    app.register_blueprint(signals_bp)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
