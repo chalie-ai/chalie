@@ -95,7 +95,7 @@ def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:
         return False
 
     allowed_signals = wrapper.get("capabilities", {}).get("signals", [])
-    return signal_type in allowed_signals
+    return "*" in allowed_signals or signal_type in allowed_signals
 
 
 def _validate_signal(body: dict) -> tuple[dict | None, str | None]:

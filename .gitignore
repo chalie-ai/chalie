@@ -31,5 +31,6 @@ training/
 
 # Frontend build artifacts (none currently, vanilla JS)
 node_modules/
+frontend/_interfaces
 
 docker-compose.yml

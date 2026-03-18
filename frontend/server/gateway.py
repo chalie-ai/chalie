@@ -275,18 +275,30 @@ def proxy_message(interface_id: str):
     if topic and not _check_scope(iface["approved_scopes"], "messages", topic):
         return jsonify({"error": f"Message topic '{topic}' not approved"}), 403
 
-    # For MVP, inject as a high-energy signal
-    # TODO: proper /api/messages endpoint on Chalie
-    result = _chalie_client.push_signal(
-        signal_type=f"interface_message:{topic or 'general'}",
-        content=f"[Message from {iface['name']}] {text}",
-        source=f"interface:{iface['name']}",
-        activation_energy=0.9,
-        metadata={"interface_id": interface_id, "topic": topic, **(body.get("metadata") or {})},
-    )
+    # Inject into Chalie's reasoning loop — Chalie will process and respond in chat
+    try:
+        from services.memory_client import MemoryClientService
+        from services.reasoning_loop_service import ReasoningSignal
 
-    if "error" in result and result["error"]:
-        return jsonify(result), 502
+        signal = ReasoningSignal(
+            signal_type='user_message',
+            source=f"interface:{iface['name']}",
+            content=f"[{iface['name']}] {text}",
+            activation_energy=0.9,
+            metadata={
+                "interface_id": interface_id,
+                "topic": topic,
+                "source": "interface",
+                **(body.get("metadata") or {}),
+            },
+            wrapper_id='__chat_ui__',
+        )
+        store = MemoryClientService.create_connection()
+        store.rpush('reasoning:priority', signal.to_json())
+    except Exception as e:
+        logger.error("[Gateway] Failed to inject message into reasoning loop: %s", e)
+        return jsonify({"error": str(e)}), 502
+
     return jsonify({"ok": True}), 202
 
 
