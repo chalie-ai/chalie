@@ -88,17 +88,6 @@
     "installs_by_default": true
   },
   {
-    "name": "tvmaze",
-    "title": "TV Shows",
-    "icon": "fa-tv",
-    "repo": "chalie-ai/chalie-tool-tvmaze",
-    "summary": "Search TV shows, episodes, schedules, and cast info via TVmaze. No API key required.",
-    "category": "entertainment",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
     "name": "itunes_search",
     "title": "iTunes Search",
     "icon": "fa-brands fa-apple",
