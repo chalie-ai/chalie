@@ -552,6 +552,21 @@ class FrontalCortexService:
                 else:
                     raise Exception(f"Empty LLM response — no JSON to parse")
 
+            # Guard: response_data must be a dict — LLM may return a bare JSON
+            # array (e.g. [{...}]) which passes json.loads but has no .get()
+            if not isinstance(response_data, dict):
+                if isinstance(response_data, list):
+                    dict_items = [x for x in response_data if isinstance(x, dict)]
+                    if dict_items:
+                        logging.warning(
+                            "[FRONTAL CORTEX] LLM returned JSON array — using first dict element"
+                        )
+                        response_data = dict_items[0]
+                    else:
+                        response_data = {"response": str(response_data), "modifiers": []}
+                else:
+                    response_data = {"response": str(response_data) if response_data else "", "modifiers": []}
+
             # Extract fields (mode-specific prompts produce simpler output)
             mode = response_data.get('mode', 'RESPOND')
             modifiers = response_data.get('modifiers', [])
@@ -1397,9 +1412,11 @@ class FrontalCortexService:
                     lines.append(f"- {name}{param_str}: {desc}{suffix}")
                 return "\n".join(lines)
 
-            # No selected tools — return all registered tools
-            summaries = registry.get_tool_prompt_summaries()
-            return summaries if summaries else "(no tools loaded)"
+            # No pre-selected tools — Chalie discovers tools on demand via find_tools skill
+            count = len(registry.get_on_demand_tools())
+            if count > 0:
+                return f"({count} external tool(s) available — use the `find_tools` skill to discover and inspect them)"
+            return "(no external tools loaded)"
         except Exception as e:
             logging.debug(f"Tool registry not available for prompt: {e}")
             return "(no tools loaded)"
