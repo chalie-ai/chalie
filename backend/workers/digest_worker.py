@@ -646,7 +646,6 @@ def _generate_with_act_orchestrator(
         smart_repetition=True,
         escalation_hints=True,
         persistent_task_exit=True,
-        deferred_card_context=False,
     )
 
     # ── Narration callback: stream progress to user via WebSocket ─────
@@ -1765,28 +1764,6 @@ def _check_active_tool_work(text: str, topic: str) -> str:
         return None
 
 
-def _cancel_active_tool_work(topic: str):
-    """Cancel all active tool-work cycles for this topic."""
-    try:
-        from services.cycle_service import CycleService
-        from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
-
-        db_service = get_shared_db_service()
-        store = MemoryClientService.create_connection()
-        cycle_service = CycleService(db_service)
-        active = cycle_service.get_active_cycles(
-            topic=topic, cycle_type='tool_work', status='processing'
-        )
-        for cycle in active:
-            cycle_service.complete_cycle(cycle['cycle_id'], status='cancelled')
-            store.set(f"cancel:{cycle['cycle_id']}", "1", ex=300)
-        if active:
-            logging.info(f"[DIGEST] Cancelled {len(active)} active tool-work cycles")
-    except Exception as e:
-        logging.debug(f"[DIGEST] Cancel tool work failed: {e}")
-
-
 def _log_cycle_event(event_type: str, payload: dict, topic: str):
     """Log a cycle-related event to interaction_log."""
     try:
@@ -2556,25 +2533,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             f"time={gate_result.gate_time_ms:.1f}ms"
         )
 
-        # ── CANCEL fast-exit ──
-        if gate_result.route == 'cancel':
-            _cancel_active_tool_work(topic)
-            is_fast_path_ack = True
-            response_data = {
-                'response': '',
-                'mode': 'CANCEL',
-                'confidence': 1.0,
-                'generation_time': 0.0,
-            }
-            routing_result = {
-                'mode': 'CANCEL',
-                'router_confidence': 1.0,
-                'routing_source': 'gate',
-                'routing_time_ms': gate_result.gate_time_ms,
-            }
-
         # ── RESPOND fast-path (high-confidence conversational) ──
-        elif gate_result.route == 'respond' and gate_result.confidence >= 0.85:
+        if gate_result.route == 'respond' and gate_result.confidence >= 0.85:
             # Cost optimisation: skip tool context for clear conversational messages
             _nlp = compute_nlp_signals(text, intent)
             _respond_signals = {
