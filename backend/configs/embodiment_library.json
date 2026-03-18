@@ -22,17 +22,6 @@
     "installs_by_default": true
   },
   {
-    "name": "news_tool",
-    "title": "News",
-    "icon": "fa-newspaper",
-    "repo": "chalie-ai/news-tool",
-    "summary": "Search Google News for current headlines and multi-source coverage. No API key required.",
-    "category": "research",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
     "name": "reddit",
     "title": "Reddit",
     "icon": "fa-brands fa-reddit",
@@ -161,5 +150,27 @@
     "category": "research",
     "trigger": "on_demand",
     "installs_by_default": false
+  },
+  {
+    "name": "news-interface",
+    "title": "News",
+    "icon": "fa-newspaper",
+    "repo": "chalie-ai/news-interface",
+    "summary": "News aggregator across 40+ sources — BBC, Reuters, CNN, Al Jazeera, AP, and more. Source-specific queries, interest tracking, and hourly world state updates. No API key required.",
+    "category": "context",
+    "trigger": "ambient",
+    "trust": "trusted",
+    "installs_by_default": true
+  },
+  {
+    "name": "world_clock",
+    "title": "World Clock",
+    "icon": "fa-sun",
+    "repo": "chalie-ai/world-clock-interface",
+    "summary": "Populates world state every 15 minutes with current time-of-day phase, sunrise, sunset, solar noon, and day length derived from client telemetry. No API key required.",
+    "category": "context",
+    "trigger": "cron",
+    "trust": "trusted",
+    "installs_by_default": true
   }
 ]
