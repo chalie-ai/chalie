@@ -496,10 +496,17 @@ class ChalieApp {
     this._toggleAppsPanel(false);
 
     try {
-      const resp = await fetch(`http://${app.host}:${app.port}/`, { timeout: 5000 });
+      const resp = await fetch(`/gw/${app.id}/render`);
       if (resp.ok) {
-        content.innerHTML = await resp.text();
-        // Re-initialize lucide icons in injected content
+        const html = await resp.text();
+        // innerHTML doesn't execute <script> tags — parse and re-insert them
+        content.innerHTML = html;
+        content.querySelectorAll('script').forEach(old => {
+          const s = document.createElement('script');
+          if (old.src) s.src = old.src;
+          else s.textContent = old.textContent;
+          old.replaceWith(s);
+        });
         if (window.lucide) lucide.createIcons({ node: content });
       } else {
         content.innerHTML = '<p style="color:var(--text-secondary)">Could not load app interface.</p>';
