@@ -195,7 +195,12 @@ class AutonomousExecutionGate:
         try:
             if self._confidence_service is None:
                 from services.domain_confidence_service import DomainConfidenceService
-                self._confidence_service = DomainConfidenceService()
+                from services.database_service import get_shared_db_service
+                from services.memory_client import MemoryClientService
+                self._confidence_service = DomainConfidenceService(
+                    get_shared_db_service(),
+                    MemoryClientService.create_connection(),
+                )
             return float(self._confidence_service.compute_domain_confidence(
                 domain, account_id
             ))
