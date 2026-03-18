@@ -142,7 +142,7 @@ class CognitiveTriageService:
 
         # 3. Self-eval sanity check (~0ms, deterministic)
         original_mode = result.mode
-        result = self._self_evaluate(result, text, context)
+        result = self._self_evaluate(result, text, context, original_mode)
 
         # Log self-eval overrides to interaction_log for constraint learning
         if result.self_eval_override:
@@ -335,7 +335,7 @@ class CognitiveTriageService:
             'CANCEL': 'ignore',
         }.get(mode, 'respond')
 
-    def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext) -> TriageResult:
+    def _self_evaluate(self, result: TriageResult, text: str, ctx: TriageContext, original_mode: str = 'RESPOND') -> TriageResult:
         """Deterministic sanity check rules. ~0ms."""
 
         # Rule 1: ACT without tools → keep if contextual skill, defer to ACT loop if tools exist, else downgrade
@@ -354,20 +354,12 @@ class CognitiveTriageService:
                 result.self_eval_override = True
                 result.self_eval_reason = 'act_tool_deferred_to_loop'
             else:
-                # No external tools — but innate skills don't need them.
-                # Triage LLM sometimes omits skills[] when tool_summaries is empty.
-                # Recover by running the keyword heuristic directly on the text.
-                _recovered = self._detect_innate_skill(text.lower())
-                if _recovered and _recovered in _CONTEXTUAL_SKILLS:
-                    if _recovered not in result.skills:
-                        result.skills.append(_recovered)
-                    for _p in _PRIMITIVES:
-                        if _p not in result.skills:
-                            result.skills.insert(0, _p)
-                    result.self_eval_override = True
-                    result.self_eval_reason = 'act_innate_skill_recovered'
-                else:
-                    # Genuinely no tools and no innate skill — downgrade to RESPOND
+                # No external tools matched — but LLM explicitly chose ACT.
+                # Preserve ACT mode and let the ACT loop handle the gracefully-declined
+                # tool invocation. The ACT loop's fatigue/exhaustion logic will terminate
+                # cleanly without hallucinating.
+                # Only downgrade to RESPOND if LLM itself did not request ACT.
+                if original_mode != 'ACT':
                     result.branch = 'respond'
                     result.mode = 'RESPOND'
                     result.self_eval_override = True
