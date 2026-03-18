@@ -111,20 +111,9 @@
         <div class="tab-panel" id="tab-embodiment">
             <div class="panel-header">
                 <h2>Embodiment</h2>
-                <div class="panel-header-actions">
-                    <input type="search" id="toolSearch" placeholder="Search skills…" class="search-input">
-                    <button class="btn btn-primary" id="addToolBtn">+ Add Tool</button>
-                </div>
             </div>
-
-            <!-- Installed Tools Section -->
-            <div class="embodiment-section">
-                <div class="section-header">
-                    <span class="section-title">Installed</span>
-                </div>
-                <div id="toolsGrid" class="tools-grid">
-                    <div class="loading">Loading skills…</div>
-                </div>
+            <div id="embodimentList" class="embodiment-list">
+                <div class="loading">Loading embodiments…</div>
             </div>
         </div>
         <!-- Lists Tab -->
@@ -378,66 +367,6 @@
             <div class="modal-actions">
                 <button class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
                 <button class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Install Tool Modal -->
-    <div class="modal-overlay hidden" id="installModal">
-        <div class="modal modal-lg">
-            <div class="modal-header">
-                <div class="modal-title-row">
-                    <h2>Add Tool</h2>
-                    <button class="btn-close" id="closeInstallModal">✕</button>
-                </div>
-            </div>
-            <!-- Custom URL Panel -->
-            <div id="installCustomPanel">
-                <div class="form-group" style="margin-top: 16px;">
-                    <label>Repository URL</label>
-                    <input type="url" id="installGitUrl" placeholder="https://github.com/user/tool-repo">
-                    <p class="form-hint form-hint--warning">Custom repos are unreviewed. Only install from sources you trust. The latest tagged release will be installed.</p>
-                </div>
-                <div id="installProgress" class="install-progress hidden"></div>
-                <div id="installError" class="form-error hidden"></div>
-                <div class="form-actions">
-                    <button class="btn btn-secondary" id="cancelInstallBtn">Cancel</button>
-                    <button class="btn btn-primary" id="installBtn">Install</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Tool Settings Modal -->
-    <div class="modal-overlay hidden" id="toolSettingsModal">
-        <div class="modal">
-            <div class="modal-header">
-                <div class="modal-title-row">
-                    <h2 id="toolSettingsTitle">Tool Settings</h2>
-                    <button class="btn-close" id="closeToolSettingsModal">✕</button>
-                </div>
-            </div>
-            <div id="toolSettingsForm"></div>
-            <div class="form-actions">
-                <button class="btn btn-secondary" id="cancelToolSettingsBtn">Cancel</button>
-                <button class="btn btn-primary" id="saveToolSettingsBtn">Save</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Update Tool Modal -->
-    <div class="modal-overlay hidden" id="updateToolModal">
-        <div class="modal modal-sm">
-            <div class="modal-header">
-                <div class="modal-title-row">
-                    <h2>Update Available</h2>
-                    <button class="btn-close" id="closeUpdateToolModal">✕</button>
-                </div>
-            </div>
-            <p id="updateToolDesc" style="color: var(--text-muted); font-size: 14px; margin: 4px 0 20px;"></p>
-            <div class="form-actions">
-                <button class="btn btn-secondary" id="cancelUpdateBtn">Later</button>
-                <button class="btn btn-primary" id="confirmUpdateBtn">Update Now</button>
             </div>
         </div>
     </div>

@@ -1,65 +1,66 @@
-# Default Tools
+# Embodiments
 
-Chalie ships with a curated set of **default tools** that are installed automatically on first startup. These tools are listed in `backend/configs/embodiment_library.json` with `"installs_by_default": true`.
+Embodiments are Chalie's built-in capabilities — always installed, always enabled, internally managed. They are not user-configurable tools; they are core abilities that Chalie uses autonomously through the ACT loop.
 
-Default tools run as subprocesses in Chalie's Python environment. They start instantly and require only a `runner.py` entry point.
+Embodiments live in separate repositories but are bundled with every Chalie instance. On startup, Chalie downloads or upgrades each embodiment to the version pinned in `backend/configs/embodiment_library.json`.
 
-## Auto-Install Behavior
-
-On first startup, if a default tool is not present in `backend/tools/`, Chalie fetches the latest release tarball from the tool's GitHub repository and installs it automatically (background thread, non-blocking). Subsequent startups skip tools that are already present.
-
-To opt out of this behavior at install time:
-
-```bash
-curl -fsSL https://chalie.ai/install | bash -s -- --disable-default-tools
-```
-
-This writes a `backend/data/.no-default-tools` marker file. Chalie will not auto-install default tools as long as this file exists.
-
-> **Note:** Disabling default tools does not prevent you from installing them manually later via the Tools → Catalog UI or the `POST /api/tools/install` endpoint.
-
----
-
-## Installed by Default
+## Current Embodiments
 
 ### Weather
 
 | | |
 |---|---|
 | **Repo** | [chalie-ai/chalie-tool-weather](https://github.com/chalie-ai/chalie-tool-weather) |
-| **Category** | Context |
 | **Trigger** | On-demand |
-| **Execution** | Subprocess |
-| **Requires API key** | No |
 
-Fetches current weather conditions and tomorrow's forecast using [Open-Meteo](https://open-meteo.com/) (coordinates-based, primary) and [wttr.in](https://wttr.in/) (city name fallback). Both sources are free with no API key required.
+Fetches current weather conditions and tomorrow's forecast using [Open-Meteo](https://open-meteo.com/) and [wttr.in](https://wttr.in/). No API key required.
 
-**When Chalie uses it:** Any time weather context is relevant — explicit questions ("what's the weather like?"), implied context ("should I bring a jacket?"), or when outdoor conditions matter to an activity ("I'm going for a run").
+### Reddit
 
-**Returns:**
-
-| Field | Description |
+| | |
 |---|---|
-| `temperature_c` / `temperature_f` | Current temperature |
-| `feels_like_c` | Apparent temperature |
-| `condition` | Human-readable description (e.g. "Partly cloudy") |
-| `humidity_pct` | Relative humidity % |
-| `wind_kmh` / `wind_direction` | Wind speed and compass direction |
-| `visibility_km` | Visibility |
-| `uv_index` | UV index |
-| `precip_mm` | Precipitation |
-| `is_raining` / `is_hot` / `is_cold` / `is_windy` / `is_clear` / `is_daylight` | Boolean condition flags |
-| `forecast_tomorrow_condition` | Tomorrow's condition description |
-| `forecast_tomorrow_max_c` / `_min_c` | Tomorrow's temperature range |
-| `forecast_tomorrow_precip_chance_pct` | Tomorrow's rain probability |
+| **Repo** | [chalie-ai/reddit-tool](https://github.com/chalie-ai/reddit-tool) |
+| **Trigger** | On-demand |
 
-Results are cached per location for 10 minutes. Location is detected automatically from client telemetry — only pass an explicit `location` parameter when asking about a different place.
+Searches Reddit for community discussions, opinions, recommendations, and troubleshooting threads. No API key required.
+
+### Web Search
+
+| | |
+|---|---|
+| **Repo** | [chalie-ai/chalie-tool-web-search](https://github.com/chalie-ai/chalie-tool-web-search) |
+| **Trigger** | On-demand |
+
+Searches the web via DuckDuckGo. Privacy-focused, no API key required.
+
+### Code Eval
+
+| | |
+|---|---|
+| **Trigger** | On-demand |
+
+Executes Python snippets in a restricted sandbox to verify formulas, test algorithms, or compute results precisely. Built-in (no external repo).
+
+### World Clock
+
+| | |
+|---|---|
+| **Repo** | [chalie-ai/world-clock-interface](https://github.com/chalie-ai/world-clock-interface) |
+| **Trigger** | Cron (15-minute interval) |
+
+Populates world state with current time-of-day phase, sunrise, sunset, solar noon, and day length derived from client telemetry. No API key required.
 
 ---
 
-## Adding More Default Tools
+## Versioning
 
-To mark a new tool as a default, add an entry to `backend/configs/embodiment_library.json`:
+Each embodiment is pinned to a specific version (git tag) in `backend/configs/embodiment_library.json`. On startup, Chalie compares the installed version against the pinned version and downloads the correct release if they differ.
+
+Versions are updated in `embodiment_library.json` as part of Chalie releases — users do not manage embodiment versions manually.
+
+## Adding an Embodiment
+
+Add an entry to `backend/configs/embodiment_library.json`:
 
 ```json
 {
@@ -67,16 +68,13 @@ To mark a new tool as a default, add an entry to `backend/configs/embodiment_lib
   "title": "My Tool",
   "icon": "fa-star",
   "repo": "chalie-ai/chalie-tool-my-tool",
-  "summary": "One-line description shown in the catalog",
-  "category": "utility",
+  "summary": "One-line description",
   "trigger": "on_demand",
-  "trust": "subprocess",
-  "installs_by_default": true
+  "version": "v1.0.0"
 }
 ```
 
-Requirements for default tools:
+Requirements:
 - Must have a `runner.py` (subprocess entry point)
 - Must have a `manifest.json` with valid `name`, `description`, `trigger`, `parameters`, `returns`
-- Must be hosted on GitHub with at least one tagged release
-- Must not bundle any secrets or environment-specific configuration
+- Must be hosted on GitHub with a tagged release matching the `version` field

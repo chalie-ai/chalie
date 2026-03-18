@@ -4,10 +4,6 @@ Tools blueprint — /tools endpoints for listing tools and managing their config
 
 import json
 import logging
-import re
-import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 from urllib.parse import quote as url_quote
 
@@ -18,25 +14,6 @@ from .auth import require_session
 logger = logging.getLogger(__name__)
 
 tools_bp = Blueprint("tools", __name__)
-
-
-def _normalize_config_schema(schema_dict: dict) -> list:
-    """Convert config_schema dict to normalized array format.
-
-    Input: {"field_name": {"description": "...", "secret": True, ...}, ...}
-    Output: [{"key": "field_name", "label": "...", "secret": True, ...}, ...]
-    """
-    result = []
-    for key, value in schema_dict.items():
-        if isinstance(value, dict):
-            result.append({
-                "key": key,
-                "label": value.get("description", key),
-                "secret": value.get("secret", False),
-                "placeholder": value.get("default", ""),
-                "hint": value.get("description", ""),
-            })
-    return result
 
 
 def _check_webhook_rate_limit(tool_name: str) -> bool:
@@ -144,23 +121,7 @@ def tool_webhook(tool_name):
         # Route output
         output_type = result.get("output") if isinstance(result, dict) else None
 
-        if output_type == "card":
-            result_html = result.get("html")
-            result_title = result.get("title")
-            if result_html:
-                try:
-                    from services.card_renderer_service import CardRendererService
-                    from services.output_service import OutputService
-                    card_cfg = result.get("card_config") or {}
-                    card_data = CardRendererService().render_tool_html(
-                        tool_name, result_html,
-                        result_title or card_cfg.get("title", tool_name), card_cfg
-                    )
-                    if card_data:
-                        OutputService().enqueue_card("webhook", card_data, {})
-                except Exception as e:
-                    logger.warning(f"[TOOLS API] Webhook card render failed for '{tool_name}': {e}")
-        elif output_type == "prompt":
+        if output_type == "prompt":
             result_text = result.get("text", "")
             if result_text:
                 try:
@@ -224,560 +185,6 @@ def generate_webhook_key(tool_name: str):
         return jsonify({"error": "Failed to generate webhook key"}), 500
 
 
-@tools_bp.route("/tools/install", methods=["POST"])
-@require_session
-def install_tool():
-    """
-    Install a tool from a git URL.
-
-    Resolves the latest tag from the repository, clones it at that tag,
-    validates the manifest, and triggers an async Docker image build.
-
-    Body: {"git_url": "https://...", "source_type": "catalog"|"custom"}
-
-    Returns:
-        {"ok": true, "status": "building", "tool_name": "...", "installed_tag": "..."} on success
-        {"ok": false, "error": "..."} on failure
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        from services.database_service import get_shared_db_service
-
-        registry = ToolRegistryService()
-        tools_dir = registry.tools_dir
-
-        if not request.is_json:
-            return jsonify({"ok": False, "error": "JSON body required"}), 400
-
-        data = request.get_json()
-        git_url = data.get("git_url", "").strip()
-        source_type = data.get("source_type", "custom")
-
-        if not git_url:
-            return jsonify({"ok": False, "error": "Provide a git_url"}), 400
-
-        # Create temporary directory for cloning
-        temp_dir = Path(tempfile.mkdtemp(prefix="chalie_tool_install_"))
-        resolved_tag = None
-
-        try:
-            # Resolve latest tag before cloning — we never install from HEAD
-            logger.info(f"[TOOLS API] Resolving latest tag for {git_url}")
-            try:
-                ls_result = subprocess.run(
-                    ["git", "ls-remote", "--tags", "--sort=-v:refname", git_url],
-                    timeout=30,
-                    capture_output=True,
-                    text=True,
-                )
-                if ls_result.returncode == 0:
-                    for line in ls_result.stdout.strip().split("\n"):
-                        if line and "^{}" not in line and "\t" in line:
-                            resolved_tag = line.split("\t")[1].replace("refs/tags/", "").strip()
-                            break
-            except subprocess.TimeoutExpired:
-                return jsonify({"ok": False, "error": "Could not reach repository (timeout resolving tags)"}), 400
-            except Exception as e:
-                return jsonify({"ok": False, "error": f"Could not resolve tags: {str(e)[:200]}"}), 400
-
-            if not resolved_tag:
-                return jsonify({
-                    "ok": False,
-                    "error": "Repository has no tagged releases. Only tagged versions can be installed."
-                }), 400
-
-            # Clone at the resolved tag
-            logger.info(f"[TOOLS API] Cloning {git_url} at tag {resolved_tag}")
-            try:
-                result = subprocess.run(
-                    [
-                        "git", "clone",
-                        "--depth=1",
-                        f"--branch={resolved_tag}",
-                        "--no-recurse-submodules",
-                        git_url,
-                        str(temp_dir),
-                    ],
-                    timeout=60,
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    return jsonify({
-                        "ok": False,
-                        "error": f"Git clone failed: {result.stderr[:200]}"
-                    }), 400
-            except subprocess.TimeoutExpired:
-                return jsonify({"ok": False, "error": "Git clone timed out (>60s)"}), 400
-            except Exception as e:
-                return jsonify({"ok": False, "error": f"Git clone error: {str(e)[:200]}"}), 400
-
-            # Strip .git directory to save space and prevent git ops inside tools/
-            git_dir = temp_dir / ".git"
-            if git_dir.exists():
-                shutil.rmtree(git_dir, ignore_errors=True)
-
-            # Size check (200MB limit)
-            total_size = sum(
-                f.stat().st_size for f in temp_dir.rglob("*") if f.is_file()
-            )
-            if total_size > 200 * 1024 * 1024:
-                return jsonify({
-                    "ok": False,
-                    "error": f"Tool size exceeds 200MB (got {total_size // (1024*1024)}MB)"
-                }), 400
-
-            # Symlink scan
-            for path in temp_dir.rglob("*"):
-                if path.is_symlink():
-                    return jsonify({
-                        "ok": False,
-                        "error": f"Symlinks not allowed in tool repo: {path.relative_to(temp_dir)}"
-                    }), 400
-
-            # Validate manifest exists
-            manifest_path = temp_dir / "manifest.json"
-
-            if not manifest_path.exists():
-                return jsonify({
-                    "ok": False,
-                    "error": "manifest.json not found in root"
-                }), 400
-
-            # Parse and validate manifest
-            try:
-                with open(manifest_path, "r") as f:
-                    manifest = json.load(f)
-            except json.JSONDecodeError as e:
-                return jsonify({
-                    "ok": False,
-                    "error": f"Invalid manifest.json: {str(e)[:200]}"
-                }), 400
-
-            # Require Dockerfile (sandboxed) or runner.py (trusted) depending on trust status
-            _tool_name_for_trust = manifest.get("name", "")
-            _is_trusted = registry._is_tool_trusted(_tool_name_for_trust)
-            if _is_trusted:
-                if not (temp_dir / "runner.py").exists():
-                    return jsonify({
-                        "ok": False,
-                        "error": "runner.py not found in root (required for trusted tools)"
-                    }), 400
-            else:
-                if not (temp_dir / "Dockerfile").exists():
-                    return jsonify({
-                        "ok": False,
-                        "error": "Dockerfile not found in root (required for sandboxed tools)"
-                    }), 400
-
-            # Check required fields
-            required_fields = {"name", "description", "trigger", "parameters", "returns"}
-            missing = required_fields - set(manifest.keys())
-            if missing:
-                return jsonify({
-                    "ok": False,
-                    "error": f"Manifest missing required fields: {', '.join(sorted(missing))}"
-                }), 400
-
-            # Warn if documentation field is missing (non-fatal)
-            if not manifest.get('documentation'):
-                logging.warning(
-                    f"[TOOLS API] Tool '{manifest.get('name', 'unknown')}' installed without "
-                    f"'documentation' field. Capability profiles will use 'description' as fallback."
-                )
-
-            tool_name = manifest.get("name", "").strip()
-
-            # Validate tool name format
-            if not re.match(r"^[a-z0-9_-]+$", tool_name):
-                return jsonify({
-                    "ok": False,
-                    "error": "Tool name must be lowercase alphanumeric with underscores/hyphens"
-                }), 400
-
-            # Check for collisions
-            if (tools_dir / tool_name).exists():
-                return jsonify({
-                    "ok": False,
-                    "error": f"Tool '{tool_name}' already installed"
-                }), 409
-
-            # Check if already installing
-            if tool_name in registry.get_all_build_statuses():
-                return jsonify({
-                    "ok": False,
-                    "error": f"Tool '{tool_name}' is already being installed"
-                }), 409
-
-            # Move temp_dir to tools/{tool_name}
-            final_dir = tools_dir / tool_name
-            shutil.move(str(temp_dir), str(final_dir))
-            logger.info(f"[TOOLS API] Installed tool directory: {final_dir}")
-
-            # Persist source metadata for update tracking
-            try:
-                from services.tool_config_service import ToolConfigService
-                ToolConfigService(get_shared_db_service())._set_source_metadata(
-                    tool_name, source_type, git_url, resolved_tag
-                )
-            except Exception as meta_err:
-                logger.warning(f"[TOOLS API] Failed to write source metadata for '{tool_name}': {meta_err}")
-
-            # Trigger async build
-            if not registry.register_tool_async(final_dir):
-                # If register_tool_async returns False, build is already in progress
-                return jsonify({
-                    "ok": False,
-                    "error": "Tool installation already in progress"
-                }), 409
-
-            return jsonify({
-                "ok": True,
-                "status": "building",
-                "tool_name": tool_name,
-                "installed_tag": resolved_tag,
-            }), 200
-
-        except Exception as e:
-            logger.error(f"[TOOLS API] Install error: {e}", exc_info=True)
-            # Clean up temp dir
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            return jsonify({
-                "ok": False,
-                "error": f"Installation failed: {str(e)[:200]}"
-            }), 500
-
-    except Exception as e:
-        logger.error(f"[TOOLS API] Install endpoint error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to install tool"}), 500
-
-
-@tools_bp.route("/tools/catalog", methods=["GET"])
-@require_session
-def get_catalog():
-    """
-    Return the curated embodiment library with install status for each entry.
-
-    Returns:
-        {"catalog": [{"name", "title", "icon", "repo", "summary", "category", "trigger", "installed", "building"}]}
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-
-        catalog_path = Path(__file__).parent.parent / "configs" / "embodiment_library.json"
-        if not catalog_path.exists():
-            return jsonify({"catalog": []}), 200
-
-        with open(catalog_path, "r") as f:
-            library = json.load(f)
-
-        registry = ToolRegistryService()
-        build_statuses = registry.get_all_build_statuses()
-        installed_names = set(registry.tools.keys())
-
-        # Also include tools that exist on disk (disabled/errored)
-        tools_dir = registry.tools_dir
-        if tools_dir.exists():
-            for tool_dir in tools_dir.iterdir():
-                if tool_dir.is_dir() and not tool_dir.name.startswith(("_", ".")):
-                    installed_names.add(tool_dir.name)
-
-        enriched = []
-        for entry in library:
-            name = entry.get("name", "")
-            enriched.append({
-                **entry,
-                "installed": name in installed_names,
-                "building": name in build_statuses and build_statuses[name].get("status") == "building",
-            })
-
-        return jsonify({"catalog": enriched}), 200
-
-    except Exception as e:
-        logger.error(f"[TOOLS API] Catalog error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to load catalog"}), 500
-
-
-@tools_bp.route("/tools/<tool_name>/update", methods=["POST"])
-@require_session
-def update_tool(tool_name: str):
-    """
-    Update an installed tool to the latest detected tag.
-
-    Clones the new tag to a temp dir, validates it, then replaces the existing tool directory.
-    Tool config keys (API keys, OAuth tokens) survive the update because they're keyed by tool_name in DB.
-
-    Returns:
-        {"ok": true, "status": "building", "new_tag": "v1.x.x"} on success
-        {"error": "..."} on failure
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        from services.tool_config_service import ToolConfigService
-        from services.database_service import get_shared_db_service
-
-        registry = ToolRegistryService()
-        db = get_shared_db_service()
-        config_svc = ToolConfigService(db)
-        tools_dir = registry.tools_dir
-
-        meta = config_svc.get_source_metadata(tool_name)
-        source_url = meta.get("_source_url")
-        latest_tag = meta.get("_latest_tag")
-
-        if not source_url or not latest_tag:
-            return jsonify({"error": "No update available for this tool"}), 400
-
-        if tool_name in registry.get_all_build_statuses():
-            return jsonify({"error": f"Tool '{tool_name}' is already building"}), 409
-
-        # Clone the new tag to a temp dir first — validate before touching existing install
-        temp_dir = Path(tempfile.mkdtemp(prefix="chalie_tool_update_"))
-        try:
-            result = subprocess.run(
-                [
-                    "git", "clone",
-                    "--depth=1",
-                    f"--branch={latest_tag}",
-                    "--no-recurse-submodules",
-                    source_url,
-                    str(temp_dir),
-                ],
-                timeout=60,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return jsonify({"error": f"Git clone failed: {result.stderr[:200]}"}), 400
-        except subprocess.TimeoutExpired:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return jsonify({"error": "Git clone timed out (>60s)"}), 400
-
-        # Strip .git directory
-        git_dir = temp_dir / ".git"
-        if git_dir.exists():
-            shutil.rmtree(git_dir, ignore_errors=True)
-
-        # Validate the new version has manifest and either Dockerfile or runner.py
-        if not (temp_dir / "manifest.json").exists():
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return jsonify({"error": "manifest.json not found in new version"}), 400
-        _trusted_update = registry._is_tool_trusted(tool_name)
-        if _trusted_update:
-            if not (temp_dir / "runner.py").exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return jsonify({"error": "runner.py not found in new version (required for trusted tools)"}), 400
-        else:
-            if not (temp_dir / "Dockerfile").exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return jsonify({"error": "Dockerfile not found in new version"}), 400
-
-        # Now replace the old tool directory
-        old_dir = tools_dir / tool_name
-        registry.unregister_tool(tool_name)
-        if old_dir.exists():
-            shutil.rmtree(old_dir)
-
-        shutil.move(str(temp_dir), str(old_dir))
-        logger.info(f"[TOOLS API] Updated tool '{tool_name}' to {latest_tag}")
-
-        # Update source metadata: installed_tag = latest_tag, clear _latest_tag
-        config_svc._set_source_metadata(
-            tool_name,
-            meta.get("_source_type", "custom"),
-            source_url,
-            latest_tag,
-        )
-        config_svc._clear_latest_tag(tool_name)
-
-        # Trigger async rebuild
-        if not registry.register_tool_async(old_dir):
-            return jsonify({"error": "Failed to start rebuild"}), 500
-
-        return jsonify({"ok": True, "status": "building", "new_tag": latest_tag}), 200
-
-    except Exception as e:
-        logger.error(f"[TOOLS API] Update error for '{tool_name}': {e}", exc_info=True)
-        # Clean up temp dir if it still exists (clone succeeded but move/rebuild failed)
-        try:
-            if temp_dir and temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        except NameError:
-            pass  # temp_dir never created
-        return jsonify({"error": f"Update failed: {str(e)[:200]}"}), 500
-
-
-@tools_bp.route("/tools/<tool_name>/disable", methods=["POST"])
-@require_session
-def disable_tool(tool_name: str):
-    """
-    Disable a tool by moving it to tools_disabled/.
-
-    Returns:
-        {"ok": true} on success
-        {"error": "..."} on failure
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        from services.tool_config_service import ToolConfigService
-        from services.database_service import get_shared_db_service
-
-        registry = ToolRegistryService()
-        tools_dir = registry.tools_dir
-
-        tool_path = tools_dir / tool_name
-        if not tool_path.exists():
-            return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
-
-        try:
-            with open(tool_path / "manifest.json") as f:
-                actual_name = json.load(f).get("name", tool_name)
-        except Exception:
-            actual_name = tool_name
-
-        ToolConfigService(get_shared_db_service())._set_enabled_flag(actual_name, enabled=False)
-        registry.unregister_tool(actual_name)
-        logger.info(f"[TOOLS API] Disabled tool: {actual_name}")
-        return jsonify({"ok": True}), 200
-
-    except Exception as e:
-        logger.error(f"[TOOLS API] Disable error: {e}", exc_info=True)
-        return jsonify({"error": f"Failed to disable tool: {str(e)[:200]}"}), 500
-
-
-@tools_bp.route("/tools/<tool_name>/enable", methods=["POST"])
-@require_session
-def enable_tool(tool_name: str):
-    """
-    Enable a tool by moving it back to tools/ and rebuilding.
-
-    Returns:
-        {"ok": true, "status": "building", "tool_name": "..."} on success
-        {"error": "..."} on failure
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        from services.tool_config_service import ToolConfigService
-        from services.database_service import get_shared_db_service
-
-        registry = ToolRegistryService()
-        tools_dir = registry.tools_dir
-
-        tool_path = tools_dir / tool_name
-        if not tool_path.exists():
-            return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
-
-        try:
-            with open(tool_path / "manifest.json") as f:
-                actual_name = json.load(f).get("name", tool_name)
-        except Exception:
-            actual_name = tool_name
-
-        config_svc = ToolConfigService(get_shared_db_service())
-
-        if config_svc.is_tool_enabled(actual_name):
-            return jsonify({"error": f"Tool '{tool_name}' is not disabled"}), 400
-
-        config_svc._set_enabled_flag(actual_name, enabled=True)
-
-        if not registry.register_tool_async(tool_path):
-            return jsonify({"error": f"Tool '{tool_name}' is already being built"}), 409
-
-        logger.info(f"[TOOLS API] Enabled tool: {actual_name}")
-        return jsonify({"ok": True, "status": "building", "tool_name": actual_name}), 200
-
-    except Exception as e:
-        logger.error(f"[TOOLS API] Enable error: {e}", exc_info=True)
-        return jsonify({"error": f"Failed to enable tool: {str(e)[:200]}"}), 500
-
-
-@tools_bp.route("/tools/<tool_name>", methods=["DELETE"])
-@require_session
-def delete_tool(tool_name: str):
-    """Permanently uninstall a tool.
-
-    Removes the tool directory, deregisters it from the in-memory registry,
-    purges all ``tool_configs`` rows, cleans up satellite DB tables, and
-    (best-effort) removes the associated Docker image.
-
-    Guards:
-    - 404 if the tool directory does not exist.
-    - 400 if the tool is trusted (a curated system tool from embodiment_library).
-    - 409 if the tool is currently being built.
-
-    Args:
-        tool_name: The tool directory name as it appears in the URL path.
-
-    Returns:
-        ``{"ok": true, "deleted": "<actual_name>"}`` with HTTP 200 on success.
-        ``{"error": "..."}`` with an appropriate 4xx/5xx status on failure.
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        from services.tool_config_service import ToolConfigService
-        from services.database_service import get_shared_db_service
-
-        registry = ToolRegistryService()
-        tools_dir = registry.tools_dir
-        tool_path = tools_dir / tool_name
-
-        # 1. Verify the tool directory exists.
-        if not tool_path.exists():
-            return jsonify({"error": f"Tool '{tool_name}' not found"}), 404
-
-        # 2. Read manifest to get the canonical tool name (may differ from dir name).
-        try:
-            with open(tool_path / "manifest.json") as f:
-                manifest = json.load(f)
-            actual_name = manifest.get("name", tool_name)
-        except Exception:
-            actual_name = tool_name
-            manifest = {}
-
-        # 3. Guard: refuse to delete trusted (curated system) tools.
-        if registry._is_tool_trusted(actual_name):
-            return jsonify({"error": f"Tool '{actual_name}' is a trusted system tool and cannot be deleted"}), 400
-
-        # 4. Guard: refuse to delete a tool that is currently building.
-        build_statuses = registry.get_all_build_statuses()
-        if build_statuses.get(actual_name, {}).get("status") == "building":
-            return jsonify({"error": f"Tool '{actual_name}' is currently building and cannot be deleted"}), 409
-
-        # 5. Deregister from the in-memory tool registry.
-        registry.unregister_tool(actual_name)
-
-        # 6. Purge all config rows for the tool from the primary config table.
-        db = get_shared_db_service()
-        ToolConfigService(db).delete_tool_config(actual_name)
-
-        # 7. Clean up satellite DB tables using explicit parameterized statements.
-        with db.connection() as conn:
-            conn.execute(
-                "DELETE FROM tool_capability_profiles WHERE tool_name = ?",
-                (actual_name,),
-            )
-            conn.execute(
-                "DELETE FROM tool_performance_metrics WHERE tool_name = ?",
-                (actual_name,),
-            )
-            conn.execute(
-                "DELETE FROM user_tool_preferences WHERE tool_name = ?",
-                (actual_name,),
-            )
-
-        # 8. Remove the tool directory from disk.
-        shutil.rmtree(tool_path)
-
-        logger.info(f"[TOOLS API] Deleted tool: {actual_name} (dir={tool_name})")
-        return jsonify({"ok": True, "deleted": actual_name}), 200
-
-    except Exception as e:
-        logger.error(f"[TOOLS API] Delete error for '{tool_name}': {e}", exc_info=True)
-        return jsonify({"error": f"Failed to delete tool: {str(e)[:200]}"}), 500
-
-
 @tools_bp.route("/tools", methods=["GET"])
 @require_session
 def list_tools():
@@ -792,8 +199,6 @@ def list_tools():
                     "status": "connected|available|system|disabled|building|error",
                     "icon": str,
                     "description": str,
-                    "category": str,
-                    "config_schema": [{"key", "label", "secret", ...}],
                     "last_error": str|null,
                     ...
                 }
@@ -860,28 +265,19 @@ def list_tools():
             else:
                 status = "available"
 
-            config_schema_array = _normalize_config_schema(schema_dict)
-
-            installed_tag = stored_config.get("_installed_tag")
-            latest_tag = stored_config.get("_latest_tag")
-            update_available = latest_tag if latest_tag and latest_tag != installed_tag else None
-
             tool_entry = {
                 "name": name,
                 "display_name": display_name,
                 "icon": icon,
                 "description": manifest.get("description", ""),
-                "category": manifest.get("category", ""),
                 "trigger_type": trigger.get("type", ""),
                 "status": status,
                 "config_keys": [k for k in stored_config.keys() if k not in ToolConfigService.RESERVED_KEYS],
-                "config_schema": config_schema_array,
                 "has_sandbox": bool(manifest.get("sandbox")),
                 "last_error": None,
                 "source_type": stored_config.get("_source_type"),
                 "source_url": stored_config.get("_source_url"),
-                "installed_tag": installed_tag,
-                "update_available": update_available,
+                "installed_tag": stored_config.get("_installed_tag"),
             }
             if trigger.get("type") == "webhook":
                 tool_entry["webhook_url"] = f"/api/tools/webhook/{name}"
@@ -909,8 +305,6 @@ def list_tools():
             manifest = {}
             icon = "⚙"
             description = ""
-            category = ""
-            config_schema = []
 
             if tool_dir.exists():
                 manifest_path = tool_dir / "manifest.json"
@@ -920,35 +314,23 @@ def list_tools():
                             manifest = json.load(f)
                         icon = manifest.get("icon", "⚙")
                         description = manifest.get("description", "")
-                        category = manifest.get("category", "")
-                        schema_dict = manifest.get("config_schema", {})
-                        # Handle array format
-                        if isinstance(schema_dict, list):
-                            schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
-                        config_schema = _normalize_config_schema(schema_dict)
                     except Exception:
                         pass
 
             # Source metadata (best-effort from DB)
             build_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
-            b_installed_tag = build_config.get("_installed_tag")
-            b_latest_tag = build_config.get("_latest_tag")
-            b_update = b_latest_tag if b_latest_tag and b_latest_tag != b_installed_tag else None
 
             result.append({
                 "name": name,
                 "display_name": name.replace("_", " ").title(),
                 "icon": icon,
                 "description": description,
-                "category": category,
                 "trigger_type": manifest.get("trigger", {}).get("type", ""),
                 "status": status,
-                "config_schema": config_schema,
                 "last_error": error,
                 "source_type": build_config.get("_source_type"),
                 "source_url": build_config.get("_source_url"),
-                "installed_tag": b_installed_tag,
-                "update_available": b_update,
+                "installed_tag": build_config.get("_installed_tag"),
             })
             processed_names.add(name)
 
@@ -986,30 +368,18 @@ def list_tools():
 
                 icon = manifest.get("icon", "⚙")
                 description = manifest.get("description", "")
-                category = manifest.get("category", "")
-                schema_dict = manifest.get("config_schema", {})
-                if isinstance(schema_dict, list):
-                    schema_dict = {item.get("key"): item for item in schema_dict if isinstance(item, dict) and "key" in item}
-                config_schema = _normalize_config_schema(schema_dict)
-
-                fs_installed_tag = stored_config.get("_installed_tag")
-                fs_latest_tag = stored_config.get("_latest_tag")
-                fs_update = fs_latest_tag if fs_latest_tag and fs_latest_tag != fs_installed_tag else None
 
                 result.append({
                     "name": name,
                     "display_name": name.replace("_", " ").title(),
                     "icon": icon,
                     "description": description,
-                    "category": category,
                     "trigger_type": manifest.get("trigger", {}).get("type", ""),
                     "status": status,
-                    "config_schema": config_schema,
                     "last_error": last_error,
                     "source_type": stored_config.get("_source_type"),
                     "source_url": stored_config.get("_source_url"),
-                    "installed_tag": fs_installed_tag,
-                    "update_available": fs_update,
+                    "installed_tag": stored_config.get("_installed_tag"),
                 })
                 processed_names.add(name)
 

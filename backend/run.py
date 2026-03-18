@@ -61,43 +61,31 @@ def _safe_tar_extract(tf, dest):
     tf.extractall(dest)
 
 
-def _auto_install_from_release(name, repo, tools_dir):
-    """Download and install a default tool from its latest GitHub release tarball.
+def _install_embodiment(name, repo, version, tools_dir):
+    """Download and install an embodiment at a pinned version.
 
     Uses stdlib only (urllib + tarfile). Short timeouts; atomic move via staging dir.
     """
-    import json as _json
     import tarfile
     import tempfile
     import shutil
     from pathlib import Path as _Path
-    from urllib.request import urlopen, Request
+    from urllib.request import urlopen
     from urllib.error import URLError
 
-    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
-    logger.info(f"[Startup] Auto-installing default tool '{name}' from {repo}")
+    logger.info(f"[Startup] Installing embodiment '{name}' ({version}) from {repo}")
 
     tmp_dir = None
     staging = tools_dir / f".{name}_installing"
     try:
-        # 1. Resolve latest release tag (5s timeout — fail fast)
-        req = Request(api_url, headers={"Accept": "application/vnd.github+json",
-                                         "User-Agent": "Chalie/1.0"})
-        with urlopen(req, timeout=5) as resp:
-            release = _json.loads(resp.read())
-        tag = release.get("tag_name")
-        if not tag:
-            logger.warning(f"[Startup] No release found for '{name}', skipping auto-install")
-            return
-
-        # 2. Download source tarball (10s timeout)
-        tarball_url = f"https://github.com/{repo}/archive/refs/tags/{tag}.tar.gz"
-        tmp_dir = _Path(tempfile.mkdtemp(prefix=f"chalie_default_{name}_"))
+        # 1. Download source tarball at pinned version (10s timeout)
+        tarball_url = f"https://github.com/{repo}/archive/refs/tags/{version}.tar.gz"
+        tmp_dir = _Path(tempfile.mkdtemp(prefix=f"chalie_embody_{name}_"))
         tarball_path = tmp_dir / "tool.tar.gz"
         with urlopen(tarball_url, timeout=10) as resp:
             tarball_path.write_bytes(resp.read())
 
-        # 3. Safe extraction (path traversal + symlink protection)
+        # 2. Safe extraction (path traversal + symlink protection)
         extract_dir = tmp_dir / "extracted"
         extract_dir.mkdir()
         with tarfile.open(tarball_path) as tf:
@@ -107,35 +95,38 @@ def _auto_install_from_release(name, repo, tools_dir):
         children = list(extract_dir.iterdir())
         source_dir = children[0] if len(children) == 1 and children[0].is_dir() else extract_dir
 
-        # 4. Validate manifest exists
+        # 3. Validate manifest exists
         if not (source_dir / "manifest.json").exists():
-            logger.warning(f"[Startup] '{name}' release has no manifest.json, skipping")
+            logger.warning(f"[Startup] '{name}' ({version}) has no manifest.json, skipping")
             return
 
-        # 5. Atomic install: move to staging, then rename to final path
+        # 4. Atomic install: move to staging, then rename to final path
         if staging.exists():
             shutil.rmtree(staging)
+        final_path = tools_dir / name
+        if final_path.exists():
+            shutil.rmtree(final_path)
         shutil.move(str(source_dir), str(staging))
-        staging.rename(tools_dir / name)
-        logger.info(f"[Startup] Installed default tool '{name}' (release {tag})")
+        staging.rename(final_path)
+        logger.info(f"[Startup] Installed embodiment '{name}' ({version})")
 
-        # 6. Record source metadata so the update checker can track it
+        # 5. Record source metadata
         try:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
             cfg = ToolConfigService(get_shared_db_service())
-            cfg.set_tool_config(name, "_source_type", "default")
+            cfg.set_tool_config(name, "_source_type", "embodiment")
             cfg.set_tool_config(name, "_source_url", f"https://github.com/{repo}")
-            cfg.set_tool_config(name, "_installed_tag", tag)
+            cfg.set_tool_config(name, "_installed_tag", version)
         except Exception:
             pass  # non-fatal
 
     except (URLError, OSError) as e:
-        logger.warning(f"[Startup] Failed to auto-install '{name}': {e}")
+        logger.warning(f"[Startup] Failed to install embodiment '{name}': {e}")
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
     except Exception as e:
-        logger.warning(f"[Startup] Unexpected error auto-installing '{name}': {e}")
+        logger.warning(f"[Startup] Unexpected error installing embodiment '{name}': {e}")
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
     finally:
@@ -143,24 +134,17 @@ def _auto_install_from_release(name, repo, tools_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _install_default_tools():
-    """Install any missing tools marked installs_by_default, blocking until complete.
+def _sync_embodiments():
+    """Ensure all embodiments are installed at their pinned versions.
 
-    Chalie must not accept traffic until all trusted tools are present and
-    registered — an instance without its default tools is not fully functional.
-
-    Skipped entirely if backend/data/.no-default-tools exists (written by the
-    installer when --disable-default-tools was passed).
+    Downloads missing embodiments and upgrades/downgrades any that don't match
+    the version declared in embodiment_library.json. Blocks until complete —
+    Chalie is not fully functional without its embodiments.
     """
     import json as _json
     from pathlib import Path as _Path
 
     backend_dir = _Path(__file__).parent
-    marker = backend_dir / "data" / ".no-default-tools"
-    if marker.exists():
-        logger.info("[Startup] Default tools disabled (.no-default-tools marker found)")
-        return
-
     lib_path = backend_dir / "configs" / "embodiment_library.json"
     if not lib_path.exists():
         return
@@ -170,25 +154,40 @@ def _install_default_tools():
     with open(lib_path) as f:
         library = _json.load(f)
 
-    pending = [
-        (e["name"], e["repo"])
-        for e in library
-        if e.get("installs_by_default") and e.get("name") and e.get("repo")
-        and not (tools_dir / e["name"]).exists()
-    ]
+    pending = []
+    for e in library:
+        name = e.get("name")
+        repo = e.get("repo")
+        version = e.get("version")
+        if not name or not repo or not version:
+            continue
+
+        tool_path = tools_dir / name
+        if tool_path.exists():
+            # Check if installed version matches pinned version
+            try:
+                from services.tool_config_service import ToolConfigService
+                from services.database_service import get_shared_db_service
+                cfg = ToolConfigService(get_shared_db_service())
+                installed_tag = cfg.get_tool_config(name).get("_installed_tag")
+                if installed_tag == version:
+                    continue  # Already at correct version
+                logger.info(f"[Startup] Embodiment '{name}' version mismatch: {installed_tag} → {version}")
+            except Exception:
+                continue  # Can't check version, assume OK
+        pending.append((name, repo, version))
 
     if not pending:
         return
 
     logger.info(
-        f"[Startup] Downloading {len(pending)} default tool(s) — "
-        f"Chalie will be available once all tools are ready: "
-        f"{[name for name, _ in pending]}"
+        f"[Startup] Syncing {len(pending)} embodiment(s): "
+        f"{[name for name, _, _ in pending]}"
     )
-    for name, repo in pending:
-        _auto_install_from_release(name, repo, tools_dir)
-    installed = sum(1 for name, _ in pending if (tools_dir / name).exists())
-    logger.info(f"[Startup] Default tool install complete ({installed}/{len(pending)} ready)")
+    for name, repo, version in pending:
+        _install_embodiment(name, repo, version, tools_dir)
+    installed = sum(1 for name, _, _ in pending if (tools_dir / name).exists())
+    logger.info(f"[Startup] Embodiment sync complete ({installed}/{len(pending)} ready)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -220,11 +219,11 @@ def main():
     def _preload_embedding_model():
         try:
             logger.info("[System] Preloading embedding model (background)...")
-            from services.embedding_service import get_embedding_service, _get_st_model
+            from services.embedding_service import get_embedding_service
             svc = get_embedding_service()
-            _get_st_model(svc.model_name)
-            # Warm the inference path — first encode() triggers PyTorch graph
-            # compilation. Throwaway call here so the user never hits that delay.
+            # Warm the ONNX session — first encode() triggers model load and,
+            # on first run, a ~300MB HuggingFace download. Running here so the
+            # user never hits that delay during an actual conversation.
             svc.generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
@@ -360,11 +359,11 @@ def main():
                   "services.profile_enrichment_service", "profile_enrichment_worker")
     _try_register(manager, "temporal-pattern-service",
                   "services.temporal_pattern_service", "temporal_pattern_worker")
-    _try_register(manager, "tool-update-checker",
-                  "services.tool_update_service", "tool_update_worker")
+    # tool-update-checker removed — embodiment versions are pinned in
+    # embodiment_library.json and synced on boot, no periodic polling needed
 
-    # Auto-install any missing default tools (synchronous, blocks until complete)
-    _install_default_tools()
+    # Sync embodiments to pinned versions (synchronous, blocks until complete)
+    _sync_embodiments()
 
     # Register cron-triggered tools
     registry = None
