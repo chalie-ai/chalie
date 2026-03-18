@@ -279,8 +279,8 @@ def _handle_chat(ws, store, msg, active_request=None):
     image_ids = (msg.get('image_ids') or [])[:3]  # max 3 images
 
     if not text and not image_ids:
-        _send_json(ws, {"type": "error", "message": "Missing 'text' field"})
-        return
+        # Empty with no images — let the message gate handle it (returns cancel/done).
+        pass
 
     # If user sent only images with no text, provide a sensible fallback.
     # Image resolution (polling MemoryStore for analysis results) is handled by
