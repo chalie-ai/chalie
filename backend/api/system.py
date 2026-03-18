@@ -75,11 +75,11 @@ def readiness_check():
         logger.debug(f'[READY] worker check failed: {e}')
         components['workers'] = {'status': 'error', 'message': str(e)}
 
-    # Embedding model — preloaded in background thread on boot. Not ready until
-    # the model is loaded AND the first inference pass has warmed the graph.
+    # Embedding model — lazy-loaded on first use. Ready once the ONNX session
+    # and tokenizer are initialised.
     try:
-        from services.embedding_service import _st_model
-        if _st_model is not None:
+        from services.embedding_service import _session
+        if _session is not None:
             components['embeddings'] = {'status': 'ok'}
         else:
             components['embeddings'] = {'status': 'loading'}

@@ -112,7 +112,10 @@ def register_daemon():
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()
     port = body.get("port")
-    host = body.get("host") or request.remote_addr or "127.0.0.1"
+    # Daemons always run locally (same machine / same container).
+    # request.remote_addr can resolve to ::1, ::ffff:127.0.0.1, or
+    # 172.x.x.x inside Docker — normalize to 127.0.0.1.
+    host = "127.0.0.1"
 
     if not name:
         return jsonify({"error": "name is required"}), 400
@@ -355,6 +358,59 @@ def patch_meta(interface_id: str):
     from . import db
     result = db.patch_meta(interface_id, body)
     return jsonify(result), 200
+
+
+# ── Render proxy ──────────────────────────────────────────────────────────
+
+@gateway_bp.route("/gw/<interface_id>/render", methods=["GET"])
+def proxy_render(interface_id: str):
+    """Proxy the daemon's renderInterface() HTML so the browser doesn't
+    need direct access to the daemon's port.
+
+    Injects a global CHALIE_GW_BASE variable so the daemon's UI code can
+    call gateway routes (execute, signals, etc.) without knowing its own ID.
+    """
+    iface, err = _get_interface(interface_id)
+    if err:
+        return err
+    try:
+        resp = requests.get(
+            f"http://{iface['host']}:{iface['port']}/",
+            timeout=_DISCOVER_TIMEOUT,
+        )
+        if resp.ok:
+            # Inject the gateway base path so the SDK's client-side helper
+            # (window.chalie) routes requests through the gateway proxy.
+            # The SDK script checks for CHALIE_GW_BASE before falling back
+            # to the path baked in at daemon startup.
+            gw_base = f"/gw/{interface_id}"
+            script = f'<script>window.CHALIE_GW_BASE="{gw_base}";</script>'
+            html = script + resp.text
+            return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        return jsonify({"error": f"Daemon returned {resp.status_code}"}), 502
+    except Exception as e:
+        return jsonify({"error": f"Daemon unreachable: {e}"}), 502
+
+
+# ── Execute proxy ─────────────────────────────────────────────────────────
+
+@gateway_bp.route("/gw/<interface_id>/execute", methods=["POST"])
+def proxy_execute(interface_id: str):
+    """Proxy a capability execution request to the daemon."""
+    iface, err = _get_interface(interface_id)
+    if err:
+        return err
+    body = request.get_data()
+    try:
+        resp = requests.post(
+            f"http://{iface['host']}:{iface['port']}/execute",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            timeout=_DISCOVER_TIMEOUT,
+        )
+        return resp.text, resp.status_code, {"Content-Type": "application/json"}
+    except Exception as e:
+        return jsonify({"error": f"Daemon unreachable: {e}"}), 502
 
 
 # ── Data files ────────────────────────────────────────────────────────────

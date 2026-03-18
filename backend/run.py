@@ -249,6 +249,7 @@ def main():
                 logger.info("[System] ONNX mode-tiebreaker ready (inference warm)")
             else:
                 logger.info("[System] ONNX mode-tiebreaker not available — higher-score fallback active")
+            svc._ready = True
         except Exception as e:
             logger.warning(f"[System] ONNX preload failed: {e}")
 
@@ -330,6 +331,9 @@ def main():
 
     from workers.interface_health_worker import interface_health_worker
     manager.register_service("interface-health-monitor", interface_health_worker)
+
+    from workers.interface_daemon_worker import interface_daemon_worker
+    manager.register_service("interface-daemon-watcher", interface_daemon_worker)
 
     # Moment enrichment service
     from services.moment_enrichment_service import moment_enrichment_worker
