@@ -58,21 +58,14 @@ class TestAppUpdateService:
         assert svc.parse_version("v0.2.0") == svc.parse_version("0.2.0")
         assert svc.parse_version("v0.2.0") < svc.parse_version("v0.3.0")
 
-    @patch('services.app_update_service.os.path.exists', return_value=False)
-    def test_detect_deployment_mode_dev(self, _mock_exists, tmp_path):
+    def test_detect_deployment_mode_dev(self, tmp_path):
         """When .git/ exists in app root, mode is dev."""
         (tmp_path / ".git").mkdir()
         with patch('services.app_update_service.APP_ROOT', tmp_path):
             assert AppUpdateService.detect_deployment_mode() == "dev"
 
-    @patch('services.app_update_service.os.path.exists', return_value=True)
-    def test_detect_deployment_mode_docker(self, _mock_exists):
-        """When /.dockerenv exists, mode is docker."""
-        assert AppUpdateService.detect_deployment_mode() == "docker"
-
-    @patch('services.app_update_service.os.path.exists', return_value=False)
-    def test_detect_deployment_mode_installed(self, _mock_exists, tmp_path):
-        """When neither .git nor /.dockerenv exist, mode is installed."""
+    def test_detect_deployment_mode_installed(self, tmp_path):
+        """When .git/ does not exist in app root, mode is installed."""
         # tmp_path has no .git/ directory
         with patch('services.app_update_service.APP_ROOT', tmp_path):
             assert AppUpdateService.detect_deployment_mode() == "installed"
