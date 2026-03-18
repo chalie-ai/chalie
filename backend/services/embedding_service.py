@@ -1,67 +1,166 @@
 """
 Unified Embedding Service — Single source of truth for all vector embeddings.
 
-Uses sentence-transformers (all-mpnet-base-v2) — pure Python, no external service required.
+Uses gte-modernbert-base via ONNX Runtime — no PyTorch required.
 All outputs are L2-normalized for cosine similarity via dot product.
 
-Embeddings are cached in MemoryStore (1h TTL) keyed by text hash. Identical text
-never hits the model twice within the TTL window, regardless of which service
-requests it (reflex, topic classifier, context assembly, etc.).
+Model: Alibaba-NLP/gte-modernbert-base
+  - 768 dimensions (drop-in compatible with existing vector store)
+  - ~300MB model file (smaller than previous all-mpnet-base-v2 at 438MB)
+  - MTEB 64.38 (vs 57.8 for all-mpnet-base-v2)
+  - 8192 token context window (vs 512 previously)
+  - ONNX Runtime inference, CPU-friendly, no PyTorch dependency
 
-Model downloads automatically from HuggingFace on first run (~438MB, cached locally).
+Model downloads automatically from HuggingFace on first run (~300MB, cached
+at backend/data/models/gte-modernbert-base/onnx/model.onnx).
 """
 
 import hashlib
 import json
 import logging
 import threading
-import numpy as np
+from pathlib import Path
 from typing import List, Optional
+
+import numpy as np
 
 from services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)
 
-# Singleton model (lazy loaded, thread-safe)
-_st_model = None
-_st_model_lock = threading.Lock()
+# Model config
+_MODEL_ID = "Alibaba-NLP/gte-modernbert-base"
+_MODEL_SUBDIR = "gte-modernbert-base"
+_ONNX_FILENAME = "onnx/model.onnx"
+
+# Singleton (lazy loaded, thread-safe)
+_session = None
+_tokenizer = None
+_output_names: List[str] = []
+_input_names: List[str] = []
+_model_lock = threading.Lock()
 
 # Cache TTL — 1 hour covers all request-scoped reuse and short-term repeats
 _CACHE_TTL = 3600
 _CACHE_PREFIX = 'emb:'
 
 
-def _get_st_model(model_name: str = 'all-mpnet-base-v2'):
-    """Return the shared sentence-transformers model, loading it on first call.
+def _model_dir() -> Path:
+    """Return path to local model cache directory, creating it if needed."""
+    base = Path(__file__).parent.parent / "data" / "models" / _MODEL_SUBDIR
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
-    Uses a double-checked locking pattern so only one thread triggers the
-    (potentially expensive) model load.
 
-    Args:
-        model_name: HuggingFace model identifier
-            (default ``'all-mpnet-base-v2'``).
+def _get_session_and_tokenizer():
+    """Return (ort.InferenceSession, AutoTokenizer), loading on first call.
 
-    Returns:
-        A loaded :class:`~sentence_transformers.SentenceTransformer` instance.
+    Uses double-checked locking so only one thread triggers the model load.
     """
-    global _st_model
-    if _st_model is not None:
-        return _st_model
-    with _st_model_lock:
-        # Double-check after acquiring lock
-        if _st_model is not None:
-            return _st_model
-        from sentence_transformers import SentenceTransformer
-        # Try loading from local cache first to avoid HuggingFace revision checks on
-        # every startup. Falls back to normal load (with network) only on first run.
+    global _session, _tokenizer, _output_names, _input_names
+
+    if _session is not None and _tokenizer is not None:
+        return _session, _tokenizer
+
+    with _model_lock:
+        if _session is not None and _tokenizer is not None:
+            return _session, _tokenizer
+
+        import onnxruntime as ort
+        from transformers import AutoTokenizer
+        from huggingface_hub import hf_hub_download
+
+        model_dir = _model_dir()
+        onnx_path = model_dir / "onnx" / "model.onnx"
+
+        # Download ONNX model if not cached locally
+        if not onnx_path.exists():
+            logger.info("[EMBEDDING] Downloading gte-modernbert-base (~300MB, first run)...")
+            try:
+                hf_hub_download(
+                    repo_id=_MODEL_ID,
+                    filename=_ONNX_FILENAME,
+                    local_dir=str(model_dir),
+                )
+                logger.info(f"[EMBEDDING] Model saved to {onnx_path}")
+            except Exception as e:
+                logger.error(f"[EMBEDDING] Failed to download model: {e}")
+                raise
+
+        # Load ONNX session
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 2
+        opts.inter_op_num_threads = 1
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=opts,
+            providers=["CPUExecutionProvider"],
+        )
+
+        _output_names = [o.name for o in session.get_outputs()]
+        _input_names = [i.name for i in session.get_inputs()]
+        logger.debug(f"[EMBEDDING] Inputs: {_input_names}, outputs: {_output_names}")
+
+        # Load tokenizer — cached in HF default cache after first download
         try:
-            _st_model = SentenceTransformer(model_name, local_files_only=True)
-            logger.info(f"[EMBEDDING] Model '{model_name}' ready (loaded from cache)")
+            tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID, local_files_only=True)
+            logger.info("[EMBEDDING] Tokenizer loaded from cache")
         except Exception:
-            logger.info(f"[EMBEDDING] Loading sentence-transformers model '{model_name}' (first run may download ~438MB)...")
-            _st_model = SentenceTransformer(model_name)
-            logger.info(f"[EMBEDDING] Model '{model_name}' ready")
-    return _st_model
+            logger.info("[EMBEDDING] Downloading tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID)
+
+        _session = session
+        _tokenizer = tokenizer
+
+        size_mb = onnx_path.stat().st_size / (1024 * 1024)
+        logger.info(f"[EMBEDDING] gte-modernbert-base ready ({size_mb:.0f}MB, ONNX)")
+        return _session, _tokenizer
+
+
+def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
+    """Mean pool token embeddings, excluding padding tokens."""
+    mask = attention_mask[..., np.newaxis].astype(np.float32)
+    sum_emb = (last_hidden_state * mask).sum(axis=1)
+    sum_mask = mask.sum(axis=1).clip(min=1e-9)
+    return sum_emb / sum_mask
+
+
+def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
+    """L2-normalize embeddings along the last axis."""
+    norms = np.linalg.norm(embeddings, axis=-1, keepdims=True).clip(min=1e-9)
+    return embeddings / norms
+
+
+def _encode_batch(texts: List[str]) -> np.ndarray:
+    """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized."""
+    session, tokenizer = _get_session_and_tokenizer()
+
+    encoded = tokenizer(
+        texts,
+        return_tensors="np",
+        padding=True,
+        truncation=True,
+        max_length=8192,
+    )
+    input_ids = encoded["input_ids"]
+    attention_mask = encoded["attention_mask"]
+
+    feed = {"input_ids": input_ids, "attention_mask": attention_mask}
+    if "token_type_ids" in _input_names:
+        feed["token_type_ids"] = np.zeros_like(input_ids)
+
+    outputs = session.run(None, feed)
+
+    # Use pre-pooled output if available, otherwise mean pool last_hidden_state
+    if "sentence_embedding" in _output_names:
+        pooled = outputs[_output_names.index("sentence_embedding")]
+    else:
+        last_hidden = outputs[_output_names.index("last_hidden_state")]
+        pooled = _mean_pool(last_hidden, attention_mask)
+
+    return _l2_normalize(pooled).astype(np.float32)
 
 
 def _cache_key(text: str) -> str:
@@ -80,11 +179,7 @@ _embedding_service_instance = None
 
 
 def get_embedding_service() -> 'EmbeddingService':
-    """Return the process-wide EmbeddingService singleton, creating it if needed.
-
-    Returns:
-        The singleton :class:`EmbeddingService` instance.
-    """
+    """Return the process-wide EmbeddingService singleton, creating it if needed."""
     global _embedding_service_instance
     if _embedding_service_instance is None:
         _embedding_service_instance = EmbeddingService()
@@ -92,7 +187,7 @@ def get_embedding_service() -> 'EmbeddingService':
 
 
 class EmbeddingService:
-    """Unified embedding service using sentence-transformers (no external service required).
+    """Unified embedding service using gte-modernbert-base via ONNX Runtime.
 
     All single-text methods check MemoryStore before computing. Cache is keyed by
     sha256(text)[:16] with a 1-hour TTL. Batch embeddings bypass the cache (bulk
@@ -100,17 +195,8 @@ class EmbeddingService:
     """
 
     def __init__(self, config: dict = None):
-        """Initialize the embedding service.
-
-        Args:
-            config: Optional configuration dict. When ``None`` the config is
-                resolved from the ``'semantic-memory'`` agent entry. Supported
-                keys: ``embedding_dimensions`` (int, default 768) and
-                ``embedding_model`` (str, default ``'all-mpnet-base-v2'``).
-        """
         self.config = config or ConfigService.resolve_agent_config("semantic-memory")
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
-        self.model_name = self.config.get('embedding_model', 'all-mpnet-base-v2')
 
     def _cache_get(self, text: str) -> Optional[list]:
         """Check MemoryStore for a cached embedding. Returns list or None."""
@@ -120,7 +206,7 @@ class EmbeddingService:
             if raw is not None:
                 return json.loads(raw)
         except Exception:
-            pass  # Cache miss — compute normally
+            pass
         return None
 
     def _cache_put(self, text: str, embedding: list) -> None:
@@ -129,30 +215,22 @@ class EmbeddingService:
             store = _get_store()
             store.set(_cache_key(text), json.dumps(embedding), ex=_CACHE_TTL)
         except Exception:
-            pass  # Non-fatal — next call will just recompute
+            pass
 
     def generate_embedding(self, text: str) -> list:
         """Generate a single L2-normalized embedding vector as a list. Cached.
 
-        Args:
-            text: Text string to embed.
-
         Returns:
             Embedding as a plain Python list of floats suitable for SQLite storage.
-
-        Raises:
-            Exception: Propagates embedding generation errors to the caller.
         """
         cached = self._cache_get(text)
         if cached is not None:
             return cached
 
         try:
-            model = _get_st_model(self.model_name)
-            embedding = model.encode(text, normalize_embeddings=True).tolist()
+            embedding = _encode_batch([text])[0].tolist()
             self._cache_put(text, embedding)
             return embedding
-
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
@@ -160,26 +238,17 @@ class EmbeddingService:
     def generate_embedding_np(self, text: str) -> np.ndarray:
         """Generate a single L2-normalized embedding vector as a numpy array. Cached.
 
-        Args:
-            text: Text string to embed.
-
         Returns:
-            Embedding as a ``float32`` numpy array for cosine similarity math.
-
-        Raises:
-            Exception: Propagates embedding generation errors to the caller.
+            Embedding as a float32 numpy array for cosine similarity math.
         """
         cached = self._cache_get(text)
         if cached is not None:
             return np.array(cached, dtype=np.float32)
 
         try:
-            model = _get_st_model(self.model_name)
-            embedding = model.encode(text, normalize_embeddings=True)
-            embedding_list = embedding.tolist()
-            self._cache_put(text, embedding_list)
-            return np.array(embedding, dtype=np.float32)
-
+            embedding = _encode_batch([text])[0]
+            self._cache_put(text, embedding.tolist())
+            return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
@@ -191,23 +260,21 @@ class EmbeddingService:
         caching — the overhead of N cache lookups + JSON serialization would negate
         the benefit for large batches.
 
-        Args:
-            texts: List of text strings to embed.
-
         Returns:
-            List of ``float32`` numpy arrays, one per input text.
-
-        Raises:
-            Exception: Propagates batch embedding errors to the caller.
+            List of float32 numpy arrays, one per input text.
         """
         if not texts:
             return []
 
         try:
-            model = _get_st_model(self.model_name)
-            embeddings = model.encode(texts, normalize_embeddings=True, batch_size=32)
-            return [np.array(emb, dtype=np.float32) for emb in embeddings]
-
+            results = []
+            # Process in chunks of 32 to bound memory usage
+            chunk_size = 32
+            for i in range(0, len(texts), chunk_size):
+                chunk = texts[i:i + chunk_size]
+                embeddings = _encode_batch(chunk)
+                results.extend(embeddings)
+            return results
         except Exception as e:
             logger.error(f"[EMBEDDING] Batch generation failed: {e}")
             raise
