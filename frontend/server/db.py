@@ -51,6 +51,11 @@ def init_db(path: str) -> None:
     _db_path = path
     conn = _get_conn()
     conn.executescript(_SCHEMA)
+    # Normalize any non-loopback hosts from previous registrations
+    conn.execute(
+        "UPDATE installed_interfaces SET host = '127.0.0.1' "
+        "WHERE host != '127.0.0.1'"
+    )
     conn.commit()
     logger.info("[Dashboard DB] Initialised at %s", path)
 
