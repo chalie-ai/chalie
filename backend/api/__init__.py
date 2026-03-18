@@ -20,6 +20,7 @@ _FRONTEND_DIR = _BACKEND_DIR.parent / 'frontend'
 _INTERFACE_DIR = _FRONTEND_DIR / 'interface'
 _BRAIN_DIR = _FRONTEND_DIR / 'brain'
 _ONBOARDING_DIR = _FRONTEND_DIR / 'on-boarding'
+_SHARED_DIR = _FRONTEND_DIR / 'shared'
 
 
 def _get_or_generate_session_secret() -> str:
@@ -51,6 +52,68 @@ def _get_or_generate_session_secret() -> str:
     secret_file.chmod(0o600)
     logger.info(f"[Flask] Generated new session secret → {secret_file}")
     return value
+
+
+def _init_dashboard_gateway(app):
+    """Initialise the dashboard gateway for interface daemons.
+
+    Registers the gateway and app-management blueprints, inits the dashboard
+    DB, and creates a ChalieClient for proxying signals/context to the backend.
+    All runs inside the same Flask process — no separate server or proxy needed.
+    """
+    import sys
+
+    # Ensure the repo root is on sys.path so `frontend.server` is importable.
+    # In Docker: /app is the repo root, /app/backend is the working dir.
+    repo_root = str(_BACKEND_DIR.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    from frontend.server import db as dashboard_db
+    from frontend.server.gateway import gateway_bp, init_gateway
+    from frontend.server.interfaces import interfaces_bp as apps_bp, init_interfaces
+    from frontend.server.chalie_client import ChalieClient
+
+    from runtime_config import get as rc_get
+
+    port = int(rc_get('port', 8081))
+
+    # Dashboard DB lives alongside Chalie's data
+    data_dir = str(_BACKEND_DIR / 'data')
+    db_path = os.path.join(data_dir, 'dashboard.db')
+    dashboard_db.init_db(db_path)
+
+    # ChalieClient talks to ourselves (localhost) — no network hop.
+    # Auto-generate a wrapper bearer token so the gateway can authenticate
+    # with Chalie's own API endpoints (signals, context, interfaces).
+    client = ChalieClient(f'http://127.0.0.1:{port}')
+    boot_token = dashboard_db.get_config('boot_token')
+    if not boot_token:
+        try:
+            from services.wrapper_auth_service import WrapperAuthService
+            from services.database_service import get_shared_db_service
+            wrapper_svc = WrapperAuthService(get_shared_db_service())
+            boot_token, _wrapper_id = wrapper_svc.create_token(
+                name="Dashboard Gateway",
+                capabilities={"signals": ["*"]},
+                permissions={"query": ["memory", "context"], "update": ["context"]},
+                metadata={"type": "dashboard", "version": "1.0.0"},
+                wrapper_id_override="__dashboard_gateway__",
+            )
+            dashboard_db.set_config('boot_token', boot_token)
+            logger.info("[Dashboard] Auto-generated boot token for gateway auth")
+        except Exception as e:
+            logger.warning("[Dashboard] Could not generate boot token: %s", e)
+    if boot_token:
+        client.token = boot_token
+
+    init_gateway(client, port, data_dir)
+    init_interfaces(client, port, data_dir)
+
+    app.register_blueprint(gateway_bp)
+    app.register_blueprint(apps_bp)
+
+    logger.info("[Dashboard] Gateway + app management blueprints registered")
 
 
 def create_app():
@@ -93,6 +156,7 @@ def create_app():
     from .chat_image import chat_image_bp
     from .interfaces import interfaces_bp
     from .signals import signals_bp
+    from .context import context_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -112,6 +176,10 @@ def create_app():
     app.register_blueprint(chat_image_bp)
     app.register_blueprint(interfaces_bp)
     app.register_blueprint(signals_bp)
+    app.register_blueprint(context_bp)
+
+    # ── Dashboard gateway (interface daemons) ─────────────────────
+    _init_dashboard_gateway(app)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
@@ -120,6 +188,11 @@ def create_app():
     register_websocket(sock)
 
     # ── Static file serving (replaces nginx) ─────────────────────────
+
+    @app.route('/shared/<path:filename>')
+    def shared_static(filename):
+        """Serve shared frontend assets (theme.css, etc.)."""
+        return send_from_directory(str(_SHARED_DIR), filename)
 
     @app.route('/brain/<path:filename>')
     def brain_static(filename):

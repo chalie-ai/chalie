@@ -4,6 +4,7 @@ FROM python:3.12-slim
 #   build-essential + libffi-dev  → native extensions (cryptography/pywebpush)
 #   libsndfile1                   → soundfile (voice STT/TTS)
 #   libsqlite3-dev + gettext-base + curl → build sqlite-vec from source (PyPI wheel ships broken aarch64 binary)
+#   unzip                         → required by Deno installer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libffi-dev \
@@ -11,7 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-dev \
     gettext-base \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Deno — for running interface daemons
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_DIR=/tmp/deno
+ENV PATH="/root/.deno/bin:${PATH}"
 
 WORKDIR /app
 

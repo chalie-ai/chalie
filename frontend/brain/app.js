@@ -737,6 +737,7 @@ function renderTools(filter = '') {
     }
 
     grid.innerHTML = filtered.map(t => renderToolCard(t)).join('');
+    if (typeof lucide !== 'undefined') lucide.createIcons({ node: grid });
 }
 
 function renderToolCard(tool) {
@@ -2713,10 +2714,9 @@ function renderIconHtml(icon) {
         return `<img src="${escapeHtml(icon)}" style="width:100%;height:100%;object-fit:contain" alt="">`;
     }
     if (icon.startsWith('fa-')) {
-        // Multi-word = full class string supplied (e.g. "fa-brands fa-google")
-        // Single word = solid icon shorthand (e.g. "fa-cloud")
-        const classes = icon.includes(' ') ? escapeHtml(icon) : `fa-solid ${escapeHtml(icon)}`;
-        return `<i class="${classes}"></i>`;
+        // Legacy FA icon name — map to Lucide equivalent where possible, else fallback glyph
+        const lucideName = icon.replace(/^fa-solid\s+/, '').replace(/^fa-/, '');
+        return `<i data-lucide="${escapeHtml(lucideName)}"></i>`;
     }
     return escapeHtml(icon);
 }
@@ -2872,15 +2872,16 @@ function renderDocuments() {
 
     // Flat view (default)
     el.innerHTML = docs.map(renderDocumentRow).join('');
+    if (typeof lucide !== 'undefined') lucide.createIcons({ node: el });
 }
 
 function getDocIcon(mime) {
-    if (mime?.includes('pdf')) return '<i class="fa-solid fa-file-pdf"></i>';
-    if (mime?.includes('word') || mime?.includes('docx')) return '<i class="fa-solid fa-file-word"></i>';
-    if (mime?.includes('presentation') || mime?.includes('pptx')) return '<i class="fa-solid fa-file-powerpoint"></i>';
-    if (mime?.includes('html')) return '<i class="fa-solid fa-file-code"></i>';
-    if (mime?.includes('image')) return '<i class="fa-solid fa-file-image"></i>';
-    return '<i class="fa-solid fa-file-lines"></i>';
+    if (mime?.includes('pdf')) return '<i data-lucide="file-type"></i>';
+    if (mime?.includes('word') || mime?.includes('docx')) return '<i data-lucide="file-text"></i>';
+    if (mime?.includes('presentation') || mime?.includes('pptx')) return '<i data-lucide="presentation"></i>';
+    if (mime?.includes('html')) return '<i data-lucide="file-code"></i>';
+    if (mime?.includes('image')) return '<i data-lucide="image"></i>';
+    return '<i data-lucide="file-text"></i>';
 }
 
 async function previewDocument(id) {
@@ -3308,3 +3309,5 @@ async function deleteWatchFolder(id) {
 // Start
 // ==========================================
 init();
+
+if (typeof lucide !== 'undefined') lucide.createIcons();

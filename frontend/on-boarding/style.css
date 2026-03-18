@@ -1,35 +1,4 @@
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
-:root {
-    --bg-dark: #06080e;
-    --bg-card: rgba(255, 255, 255, 0.03);
-    --bg-input: rgba(255, 255, 255, 0.05);
-    --text-primary: #eae6f2;
-    --text-secondary: rgba(234, 230, 242, 0.58);
-    --accent: #8A5CFF;
-    --accent-hover: #9B6FFF;
-    --error: #fb7185;
-    --success: #34d399;
-    --border: rgba(255, 255, 255, 0.07);
-}
-
-html, body {
-    width: 100%;
-    height: 100%;
-}
-
-body {
-    background: #06080e;
-    color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    line-height: 1.6;
-    position: relative;
-}
-
+/* Ambient background animation — Bootstrap doesn't provide this */
 body::before {
     content: '';
     position: fixed;
@@ -47,6 +16,7 @@ body::before {
     50% { transform: scale(1.06); opacity: 1; }
 }
 
+/* Container centering */
 .container {
     display: flex;
     align-items: center;
@@ -55,33 +25,22 @@ body::before {
     padding: 20px;
 }
 
+/* Card size + padding override — Bootstrap card is generic */
 .card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
     width: 100%;
     max-width: 500px;
     padding: 40px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
 }
 
 .card-header {
-    margin-bottom: 32px;
     text-align: center;
+    margin-bottom: 32px;
+    background: transparent;
+    border: none;
+    padding: 0;
 }
 
-.card-header h1 {
-    font-size: 28px;
-    font-weight: 700;
-    margin-bottom: 8px;
-}
-
-.card-header p {
-    color: var(--text-secondary);
-    font-size: 14px;
-}
-
-/* Platform Tabs */
+/* Platform tabs */
 .platform-tabs {
     display: flex;
     gap: 8px;
@@ -101,23 +60,25 @@ body::before {
     font-weight: 600;
     cursor: pointer;
     transition: all 0.2s ease;
+    text-align: center;
 }
 
 .platform-tab:hover {
     background: rgba(138, 92, 255, 0.06);
     border-color: rgba(138, 92, 255, 0.25);
+    color: var(--text-primary);
 }
 
 .platform-tab.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #ffffff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: #fff;
 }
 
-/* Platform Description */
+/* Platform description box */
 .platform-desc {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.07);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px;
     margin-bottom: 24px;
@@ -127,7 +88,7 @@ body::before {
 }
 
 .platform-desc a {
-    color: var(--accent);
+    color: var(--accent-primary);
     text-decoration: none;
 }
 
@@ -135,11 +96,11 @@ body::before {
     text-decoration: underline;
 }
 
-/* Warning Box */
+/* Warning box — custom danger callout */
 .warning-box {
     background: rgba(251, 113, 133, 0.08);
     border: 1px solid rgba(251, 113, 133, 0.35);
-    border-left: 3px solid #fb7185;
+    border-left: 3px solid var(--error);
     border-radius: 6px;
     padding: 16px;
     margin-bottom: 24px;
@@ -153,53 +114,23 @@ body::before {
 
 .warning-box p {
     font-size: 13px;
-    color: #e0dde6;
+    color: var(--text-primary);
     line-height: 1.6;
     margin-bottom: 6px;
 }
 
-.warning-box p:last-child {
-    margin-bottom: 0;
-}
+.warning-box p:last-child { margin-bottom: 0; }
 
-/* Forms */
-.form-group {
-    margin-bottom: 20px;
-}
+/* Form group spacing */
+.form-group { margin-bottom: 20px; }
 
-.form-group label {
-    display: block;
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 6px;
-    color: var(--text-primary);
-}
-
-.form-group input {
-    width: 100%;
-    padding: 10px 12px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-primary);
-    font-size: 14px;
-    transition: all 0.2s ease;
-}
-
+/* Radiant focus glow — overrides Bootstrap's default focus ring */
 .form-group input:focus {
-    outline: none;
     border-color: rgba(138, 92, 255, 0.35);
     box-shadow: 0 0 8px rgba(138, 92, 255, 0.06);
 }
 
-.form-group input::placeholder {
-    color: var(--text-secondary);
-}
-
-.form-group button {
-    margin-top: 8px;
-}
-
+/* Connection status indicator */
 #connectionStatus {
     display: block;
     margin-top: 6px;
@@ -207,62 +138,19 @@ body::before {
     font-weight: 600;
 }
 
-#connectionStatus.status-ok {
-    color: var(--success);
-}
+#connectionStatus.status-ok  { color: var(--success); }
+#connectionStatus.status-err { color: var(--error); }
 
-#connectionStatus.status-err {
-    color: var(--error);
-}
-
-/* Form Actions */
+/* Form actions row */
 .form-actions {
     display: flex;
     gap: 12px;
     margin-top: 28px;
 }
 
-/* Buttons */
-.btn {
-    padding: 10px 16px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    white-space: nowrap;
-}
+.btn-primary { flex: 1; }
 
-.btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.btn-primary {
-    background: var(--accent);
-    color: #ffffff;
-    border-color: var(--accent);
-    flex: 1;
-}
-
-.btn-primary:hover:not(:disabled) {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
-}
-
-.btn-secondary {
-    background: var(--bg-input);
-    color: var(--text-primary);
-    border-color: var(--border);
-}
-
-.btn-secondary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(138, 92, 255, 0.25);
-}
-
-/* Completion Phase */
+/* Completion cards grid */
 .completion-cards {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -275,7 +163,7 @@ body::before {
     border-radius: 8px;
     padding: 24px;
     text-align: center;
-    transition: all 0.2s ease;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .completion-card:hover {
@@ -288,23 +176,7 @@ body::before {
     margin-bottom: 12px;
 }
 
-.completion-card h3 {
-    font-size: 16px;
-    font-weight: 700;
-    margin-bottom: 8px;
-}
-
-.completion-card p {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 16px;
-}
-
-.completion-card .btn {
-    width: 100%;
-}
-
-/* Toast */
+/* Toast system */
 .toast-container {
     position: fixed;
     bottom: 20px;
@@ -317,7 +189,7 @@ body::before {
 }
 
 .toast {
-    background: var(--bg-card);
+    background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px 16px;
@@ -328,58 +200,24 @@ body::before {
     animation: slideIn 0.3s ease;
 }
 
-.toast-success {
-    border-left: 3px solid var(--success);
-}
-
-.toast-error {
-    border-left: 3px solid var(--error);
-}
-
-.toast-info {
-    border-left: 3px solid var(--accent);
-}
+.toast-success { border-left: 3px solid var(--success); }
+.toast-error   { border-left: 3px solid var(--error); }
+.toast-info    { border-left: 3px solid var(--accent-primary); }
 
 @keyframes slideIn {
-    from {
-        transform: translateX(400px);
-        opacity: 0;
-    }
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
+    from { transform: translateX(400px); opacity: 0; }
+    to   { transform: translateX(0);     opacity: 1; }
 }
 
 /* Responsive */
 @media (max-width: 600px) {
-    .card {
-        padding: 24px;
-    }
+    .card { padding: 24px; }
 
-    .card-header h1 {
-        font-size: 24px;
-    }
+    .platform-tabs { flex-direction: column; }
+    .platform-tab  { min-width: auto; }
 
-    .platform-tabs {
-        flex-direction: column;
-    }
+    .completion-cards { grid-template-columns: 1fr; }
 
-    .platform-tab {
-        min-width: auto;
-    }
-
-    .completion-cards {
-        grid-template-columns: 1fr;
-    }
-
-    .toast-container {
-        left: 10px;
-        right: 10px;
-        bottom: 10px;
-    }
-
-    .toast {
-        font-size: 12px;
-    }
+    .toast-container { left: 10px; right: 10px; bottom: 10px; }
+    .toast { font-size: 12px; }
 }
