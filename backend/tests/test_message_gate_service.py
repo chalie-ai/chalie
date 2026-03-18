@@ -7,107 +7,26 @@ pytestmark = pytest.mark.unit
 
 
 class TestEmptyInputGuard:
-    """Test the empty-input guard in gate()."""
+    """Empty/None input defaults to act (no signal to classify)."""
 
-    def test_empty_text_returns_cancel(self):
+    def test_empty_text_returns_act(self):
         from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
+        result = MessageGateService().gate("")
+        assert result.route == 'act'
 
-    def test_whitespace_returns_cancel(self):
+    def test_whitespace_returns_act(self):
         from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("   ")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
+        result = MessageGateService().gate("   ")
+        assert result.route == 'act'
 
-    def test_none_text_returns_cancel(self):
+    def test_none_text_returns_act(self):
         from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate(None)
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-
-class TestCancelDetection:
-    """Test deterministic CANCEL keyword matching."""
-
-    def test_stop_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("stop")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_cancel_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("cancel that")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_nevermind_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("nevermind")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_never_mind_two_words_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("never mind about that")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_forget_it_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("forget it")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_abort_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("abort")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_nvm_returns_cancel(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("nvm")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_cancel_case_insensitive(self):
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("STOP doing that")
-        assert result.route == 'cancel'
-        assert result.confidence == 1.0
-
-    def test_cancel_not_matched_mid_sentence(self):
-        """Cancel keyword only fires when it starts the message."""
-        from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        # "please cancel" does not start with a cancel keyword
-        result = svc.gate("please cancel that")
-        # Should not be cancel (no match at start)
-        assert result.route in ('act', 'respond')
+        result = MessageGateService().gate(None)
+        assert result.route == 'act'
 
 
 class TestOnnxModeGate:
-    """Test ONNX mode gate routing.
-
-    Note: The gate looks for a 'mode-gate' model (binary respond/act classifier).
-    The old 'mode-tiebreaker' model outputs A/B labels and cannot drive the gate.
-    Until 'mode-gate' is trained and deployed, all messages default to act.
-    These tests verify the gate works correctly once the model is available.
-    """
+    """Test ONNX mode gate routing."""
 
     def test_onnx_respond_high_confidence_returns_respond(self):
         """mode-gate multi_label fires RESPOND → respond route."""
@@ -132,7 +51,6 @@ class TestOnnxModeGate:
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        # predict_multi_label returns empty when below threshold
         mock_onnx.predict_multi_label.return_value = []
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
@@ -162,7 +80,6 @@ class TestOnnxModeGate:
 
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = True
-        # Only non-RESPOND labels returned
         mock_onnx.predict_multi_label.return_value = [('UNKNOWN', 0.80)]
 
         with patch('services.onnx_inference_service.get_onnx_inference_service', return_value=mock_onnx):
@@ -197,11 +114,10 @@ class TestOnnxModeGate:
         assert result.confidence == pytest.approx(0.5)
 
     def test_no_mode_gate_model_means_all_act(self):
-        """Without mode-gate deployed, every non-cancel message → act."""
+        """Without mode-gate deployed, every message → act."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
-        # Simulate: mode-gate not available (the current state)
         mock_onnx = MagicMock()
         mock_onnx.is_available.return_value = False
 
@@ -216,8 +132,7 @@ class TestGateResultMetadata:
 
     def test_gate_time_ms_is_non_negative(self):
         from services.message_gate_service import MessageGateService
-        svc = MessageGateService()
-        result = svc.gate("")
+        result = MessageGateService().gate("")
         assert result.gate_time_ms >= 0.0
 
     def test_gate_time_ms_set_for_normal_message(self):
@@ -237,7 +152,6 @@ class TestPrefilterSkills:
     """Test ONNX skill pre-filtering."""
 
     def test_returns_skills_and_ext_tool_flag(self):
-        """prefilter_skills returns selected skills and needs_external_tool flag."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -255,7 +169,6 @@ class TestPrefilterSkills:
         assert needs_tool is False
 
     def test_needs_external_tool_flag_detected(self):
-        """needs_external_tool flag is set when skill selector predicts it."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -273,7 +186,6 @@ class TestPrefilterSkills:
         assert 'needs_external_tool' not in skills
 
     def test_onnx_unavailable_returns_empty(self):
-        """When ONNX is unavailable, returns empty skills and False for tool flag."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 
@@ -287,7 +199,6 @@ class TestPrefilterSkills:
         assert needs_tool is False
 
     def test_onnx_exception_returns_empty(self):
-        """When ONNX raises, gracefully returns empty skills."""
         from services.message_gate_service import MessageGateService
         svc = MessageGateService()
 

@@ -279,8 +279,7 @@ def _handle_chat(ws, store, msg, active_request=None):
     image_ids = (msg.get('image_ids') or [])[:3]  # max 3 images
 
     if not text and not image_ids:
-        # Empty with no images — let the message gate handle it (returns cancel/done).
-        pass
+        return  # Nothing to process — silently drop
 
     # If user sent only images with no text, provide a sensible fallback.
     # Image resolution (polling MemoryStore for analysis results) is handled by
