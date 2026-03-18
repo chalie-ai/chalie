@@ -24,9 +24,6 @@ let deletingProviderId = null;
 
 // Embodiment state
 let embodyTools = [];           // full tool list from API
-let settingsTool = null;        // tool name open in settings modal
-let updatingTool = null;        // tool name being updated
-let pollTimer = null;           // setInterval id for build polling
 
 // Cognition observability state
 let obsData = {};               // cached API responses keyed by subtab name
@@ -685,455 +682,95 @@ async function assignJob(jobName, selectEl) {
 }
 
 // ==========================================
-// Embodiment Tab — Tool Management
+// Embodiment Tab — Read-Only Embodiment List
 // ==========================================
 async function loadEmbodiment() {
+    const el = document.getElementById('embodimentList');
     try {
         const res = await apiFetch('/tools');
-        if (!res.ok) throw new Error('Failed to load tools');
+        if (!res.ok) throw new Error('Failed to load embodiments');
         const data = await res.json();
         embodyTools = data.tools || [];
-        renderTools('');
-
-        // Start polling if any tool is building
-        if (embodyTools.some(t => t.status === 'building')) {
-            startBuildPoll();
-        }
+        renderEmbodimentList();
     } catch (e) {
         console.error('loadEmbodiment error:', e);
-        document.getElementById('toolsGrid').innerHTML = `<div class="empty-state"><h3>Error loading tools</h3><p>${escapeHtml(e.message)}</p></div>`;
+        el.innerHTML = `<div class="empty-state"><h3>Error loading embodiments</h3><p>${escapeHtml(e.message)}</p></div>`;
     }
 }
 
-
-function renderTools(filter = '') {
-    const grid = document.getElementById('toolsGrid');
-    if (!grid) return;
-
-    let filtered = embodyTools;
-    if (filter.trim()) {
-        const q = filter.toLowerCase();
-        filtered = embodyTools.filter(t =>
-            t.name.toLowerCase().includes(q) ||
-            t.description.toLowerCase().includes(q) ||
-            (t.category && t.category.toLowerCase().includes(q))
-        );
-    }
+function renderEmbodimentList() {
+    const el = document.getElementById('embodimentList');
+    if (!el) return;
 
     if (embodyTools.length === 0) {
-        grid.innerHTML = `
-            <div class="tools-empty" style="grid-column: 1/-1; text-align: center; padding: 64px 24px;">
-                <h3>No tools installed yet</h3>
-                <p>Chalie can gain new abilities by installing tools.</p>
-                <button class="btn btn-primary" onclick="openInstallModal()" style="margin-top: 16px;">+ Add Tool</button>
-            </div>
-        `;
+        el.innerHTML = `<div class="empty-state" style="text-align:center;padding:64px 24px"><h3>No embodiments installed</h3><p>Embodiments are installed automatically on startup.</p></div>`;
         return;
     }
 
-    if (filtered.length === 0) {
-        grid.innerHTML = `<div class="tools-empty" style="grid-column: 1/-1; text-align: center; padding: 32px 0;"><p>No results for "${escapeHtml(filter)}"</p></div>`;
-        return;
-    }
-
-    grid.innerHTML = filtered.map(t => renderToolCard(t)).join('');
-    if (typeof lucide !== 'undefined') lucide.createIcons({ node: grid });
+    el.innerHTML = embodyTools.map(renderEmbodimentItem).join('');
+    if (typeof lucide !== 'undefined') lucide.createIcons({ node: el });
 }
 
-function renderToolCard(tool) {
+function renderEmbodimentItem(tool) {
     const name = tool.name;
     const icon = tool.icon || '⚙';
     const status = tool.status;
-    const hasError = status === 'error';
-    const isBuilding = status === 'building';
-    const isDisabled = status === 'disabled';
-    const hasConfig = (tool.config_schema || []).length > 0;
+    const version = tool.installed_tag || '';
 
-    // Status badge styling
-    const statusBadgeMap = {
-        'connected': { label: 'Active', class: '--connected' },
-        'available': { label: 'Ready', class: '--available' },
-        'system': { label: 'System', class: '--system' },
-        'disabled': { label: 'Disabled', class: '--disabled' },
-        'building': { label: '⏳ Building…', class: '--building' },
-        'error': { label: 'Error', class: '--error' },
-    };
-    const statusInfo = statusBadgeMap[status] || { label: status, class: '' };
+    const statusClass = {
+        'connected': '--active', 'available': '--active', 'system': '--active',
+        'building': '--building', 'error': '--error', 'disabled': '--disabled',
+    }[status] || '--active';
 
-    // OAuth status
-    const hasOAuth = tool.auth_type === 'oauth2';
-    const oauthConnected = tool.oauth_connected;
+    const statusLabel = {
+        'connected': 'Active', 'available': 'Ready', 'system': 'Active',
+        'building': 'Building…', 'error': 'Error', 'disabled': 'Disabled',
+    }[status] || status;
 
-    // Actions HTML
-    let actionsHtml = '';
-    if (!isBuilding) {
-        if (hasConfig || hasOAuth) {
-            actionsHtml += `<button class="tool-card__btn" onclick="openToolSettings('${name}')" title="Settings">⚙ Settings</button>`;
-        }
-        if (isDisabled || hasError) {
-            if (isDisabled) {
-                actionsHtml += `<button class="tool-card__btn --primary" onclick="enableTool('${name}')">Enable</button>`;
-            }
-            actionsHtml += `<button class="tool-card__btn --danger" onclick="if(confirm('Permanently uninstall ${escapeHtml(name)}? This cannot be undone.')) deleteTool('${escapeHtml(name)}')">Uninstall</button>`;
-        } else {
-            actionsHtml += `<button class="tool-card__btn --danger" onclick="disableTool('${name}')">Disable</button>`;
-        }
-    }
-
-    // Error details (collapsible)
+    // Error details
     let errorHtml = '';
-    if (hasError && tool.last_error) {
-        errorHtml = `
-            <div class="tool-card__error-row">
-                <button class="tool-card__error-toggle" onclick="toggleErrorDetails(this)">▶ Error details</button>
-                <div class="tool-card__error-details hidden">
-                    <div class="tool-card__error-msg">${escapeHtml(tool.last_error)}</div>
-                </div>
-            </div>
-        `;
+    if (status === 'error' && tool.last_error) {
+        errorHtml = `<div class="embodiment-item__error">${escapeHtml(tool.last_error)}</div>`;
     }
 
-    // OAuth badge HTML
-    let oauthBadgeHtml = '';
-    if (hasOAuth) {
-        if (oauthConnected) {
-            oauthBadgeHtml = `<span class="oauth-badge --connected">${escapeHtml(tool.auth_provider_hint || 'OAuth')} Connected</span>`;
+    // OAuth section (only if tool declares OAuth)
+    let oauthHtml = '';
+    if (tool.auth_type === 'oauth2') {
+        if (tool.oauth_connected) {
+            oauthHtml = `
+                <div class="embodiment-item__oauth">
+                    <span class="embodiment-item__oauth-status --connected">${escapeHtml(tool.auth_provider_hint || 'OAuth')} connected</span>
+                    <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px" onclick="event.stopPropagation();disconnectOAuth('${escapeHtml(name)}')">Disconnect</button>
+                </div>`;
         } else {
-            oauthBadgeHtml = `<span class="oauth-badge --disconnected">Not Connected</span>`;
+            oauthHtml = `
+                <div class="embodiment-item__oauth">
+                    <span class="embodiment-item__oauth-status --disconnected">Not connected</span>
+                    <button class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="event.stopPropagation();startOAuth('${escapeHtml(name)}')">Connect ${escapeHtml(tool.auth_provider_hint || 'Account')}</button>
+                </div>`;
         }
-    }
-
-    // Update badge (shown when a newer tag is available)
-    const hasUpdate = tool.update_available && !isBuilding && !isDisabled;
-    let updateHtml = '';
-    if (hasUpdate) {
-        const curTag = escapeHtml(tool.installed_tag || '');
-        const newTag = escapeHtml(tool.update_available);
-        updateHtml = `
-            <div class="tool-card__update-row">
-                <span class="tool-card__update-badge">${newTag} available</span>
-                <button class="tool-card__btn --primary" onclick="confirmUpdate('${escapeHtml(name)}', '${curTag}', '${newTag}')">Update</button>
-            </div>
-        `;
     }
 
     return `
-        <div class="tool-card ${isBuilding ? '--building' : ''} ${isDisabled ? '--disabled' : ''} ${hasError ? '--error' : ''}">
-            <div class="tool-card__header">
-                <div class="tool-card__icon">${renderIconHtml(icon)}</div>
-                <div>
-                    <div class="tool-card__name">${escapeHtml(tool.display_name || tool.name)}</div>
-                    ${tool.category ? `<div class="tool-card__category">${escapeHtml(tool.category)}</div>` : ''}
-                    ${tool.installed_tag ? `<div class="tool-card__version">${escapeHtml(tool.installed_tag)}</div>` : ''}
-                </div>
+        <div class="embodiment-item" onclick="this.classList.toggle('--expanded')">
+            <div class="embodiment-item__header">
+                <div class="embodiment-item__icon">${renderIconHtml(icon)}</div>
+                <div class="embodiment-item__name">${escapeHtml(tool.display_name || tool.name)}</div>
+                ${version ? `<span class="embodiment-item__version">${escapeHtml(version)}</span>` : ''}
+                <span class="embodiment-item__dot ${statusClass}" title="${escapeHtml(statusLabel)}"></span>
+                <span class="embodiment-item__chevron">▸</span>
             </div>
-            <p class="tool-card__desc">${escapeHtml(tool.description)}</p>
-            ${errorHtml}
-            ${oauthBadgeHtml}
-            ${updateHtml}
-            <div class="tool-card__footer">
-                <span class="tool-card__status ${statusInfo.class}">${statusInfo.label}</span>
-                <div class="tool-card__actions">
-                    ${actionsHtml}
+            <div class="embodiment-item__body">
+                <p class="embodiment-item__desc">${escapeHtml(tool.description)}</p>
+                <div class="embodiment-item__meta">
+                    <span>Trigger: ${escapeHtml(tool.trigger_type || 'on_demand')}</span>
+                    ${tool.source_url ? `<span><a href="${escapeHtml(tool.source_url)}" target="_blank" rel="noopener" style="color:var(--accent-primary)">Source</a></span>` : ''}
                 </div>
+                ${errorHtml}
+                ${oauthHtml}
             </div>
         </div>
     `;
-}
-
-function toggleErrorDetails(btn) {
-    const details = btn.nextElementSibling;
-    if (details.classList.contains('hidden')) {
-        details.classList.remove('hidden');
-        btn.textContent = '▼ Error details';
-    } else {
-        details.classList.add('hidden');
-        btn.textContent = '▶ Error details';
-    }
-}
-
-function startBuildPoll() {
-    if (pollTimer) return;
-    pollTimer = setInterval(async () => {
-        if (document.hidden) return; // pause when tab not visible
-        await loadEmbodiment();
-        const stillBuilding = embodyTools.some(t => t.status === 'building');
-        if (!stillBuilding) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-        }
-    }, 3000);
-}
-
-function openInstallModal() {
-    document.getElementById('installModal').classList.remove('hidden');
-    document.getElementById('installGitUrl').value = '';
-    document.getElementById('installProgress').classList.add('hidden');
-    document.getElementById('installError').classList.add('hidden');
-}
-
-function closeInstallModal() {
-    document.getElementById('installModal').classList.add('hidden');
-}
-
-async function handleInstall() {
-    const errorEl = document.getElementById('installError');
-    const progressEl = document.getElementById('installProgress');
-    const btn = document.getElementById('installBtn');
-
-    const url = document.getElementById('installGitUrl').value.trim();
-    if (!url) {
-        showError(errorEl, 'Enter a repository URL');
-        return;
-    }
-
-    errorEl.classList.add('hidden');
-    progressEl.classList.remove('hidden');
-    progressEl.innerHTML = 'Resolving latest tag…';
-    btn.disabled = true;
-
-    try {
-        const res = await apiFetch('/tools/install', {
-            method: 'POST',
-            body: JSON.stringify({ git_url: url, source_type: 'custom' }),
-        });
-
-        const data = await res.json();
-
-        if (data.ok) {
-            progressEl.innerHTML = 'Installing…';
-            setTimeout(() => {
-                closeInstallModal();
-                loadEmbodiment();
-                startBuildPoll();
-                showToast(`Tool "${data.tool_name}" installing…`, 'success');
-            }, 1500);
-        } else {
-            showError(errorEl, data.error || 'Installation failed');
-            btn.disabled = false;
-        }
-    } catch (e) {
-        showError(errorEl, `Network error: ${e.message}`);
-        btn.disabled = false;
-    }
-}
-
-function showError(el, msg) {
-    el.textContent = msg;
-    el.classList.remove('hidden');
-}
-
-async function disableTool(name) {
-    try {
-        const res = await apiFetch(`/tools/${name}/disable`, { method: 'POST' });
-        if (res.ok) {
-            showToast(`Tool disabled`, 'success');
-            await loadEmbodiment();
-        } else {
-            const err = await res.json();
-            showToast(err.error || 'Failed to disable tool', 'error');
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
-}
-
-async function enableTool(name) {
-    try {
-        const res = await apiFetch(`/tools/${name}/enable`, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) {
-            showToast(`Enabling tool…`, 'success');
-            await loadEmbodiment();
-            startBuildPoll();
-        } else {
-            showToast(data.error || 'Failed to enable tool', 'error');
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
-}
-
-/**
- * Permanently uninstalls a tool by calling the DELETE /tools/:name endpoint.
- *
- * On success, shows a success toast and refreshes the embodiment tool grid.
- * On failure (non-OK HTTP response or network error), shows an error toast
- * with the server-provided message when available.
- *
- * @async
- * @param {string} name - The tool directory name to uninstall.
- * @returns {Promise<void>}
- */
-async function deleteTool(name) {
-    try {
-        const res = await apiFetch(`/tools/${name}`, { method: 'DELETE' });
-        if (res.ok) {
-            showToast('Tool uninstalled', 'success');
-            await loadEmbodiment();
-        } else {
-            const err = await res.json().catch(() => ({}));
-            showToast(err.error || 'Failed to delete tool', 'error');
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
-}
-
-async function openToolSettings(name) {
-    try {
-        const res = await apiFetch(`/tools/${name}/config`);
-        if (!res.ok) throw new Error('Failed to load config');
-        const data = await res.json();
-
-        settingsTool = name;
-        document.getElementById('toolSettingsTitle').textContent = `${escapeHtml(name)} Settings`;
-
-        const schema = data.config_schema || {};
-        const config = data.config || {};
-
-        let formHtml = '';
-        for (const [key, fieldDef] of Object.entries(schema)) {
-            const value = config[key] || '';
-            const isSecret = fieldDef.secret;
-            const isMultiline = fieldDef.multiline;
-            const hint = fieldDef.hint || '';
-
-            if (isMultiline) {
-                formHtml += `
-                    <div class="form-group">
-                        <label>${escapeHtml(fieldDef.label || key)}</label>
-                        <textarea id="config_${key}"
-                                  rows="5"
-                                  placeholder="${escapeHtml(fieldDef.placeholder || '')}"
-                                  data-secret="${isSecret}">${escapeHtml(value)}</textarea>
-                        ${hint ? `<p class="form-hint">${escapeHtml(hint)}</p>` : ''}
-                    </div>
-                `;
-            } else {
-                formHtml += `
-                    <div class="form-group">
-                        <label>${escapeHtml(fieldDef.label || key)}</label>
-                        <input type="${isSecret ? 'password' : 'text'}"
-                               id="config_${key}"
-                               value="${escapeHtml(value)}"
-                               placeholder="${escapeHtml(fieldDef.placeholder || '')}"
-                               data-secret="${isSecret}">
-                        ${hint ? `<p class="form-hint">${escapeHtml(hint)}</p>` : ''}
-                    </div>
-                `;
-            }
-        }
-
-        if (!formHtml) {
-            formHtml = '<p style="color: var(--text-muted); font-size: 13px;">No configuration needed for this tool.</p>';
-        } else {
-            formHtml += '<p style="color: var(--text-muted); font-size: 12px; margin-top: 12px;"><em>Configuration is stored securely and encrypted.</em></p>';
-        }
-
-        // OAuth section — generic, reads auth_type from tool listing data
-        const toolInfo = embodyTools.find(t => t.name === name);
-        if (toolInfo && toolInfo.auth_type === 'oauth2') {
-            const providerHint = toolInfo.auth_provider_hint || 'OAuth';
-            const hasCredentials = !!(config.client_id && config.client_id !== '***' && config.client_id !== '') ||
-                                   !!(config.client_secret && config.client_secret === '***');
-
-            formHtml += `<div class="oauth-section" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">`;
-
-            // Setup guide when credentials are empty
-            if (!hasCredentials) {
-                const callbackUrl = `${window.location.origin}/tools/${name}/oauth/callback`;
-                formHtml += `
-                    <div class="oauth-setup-guide">
-                        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">
-                            Setup ${escapeHtml(providerHint)} Credentials
-                        </div>
-                        <ol style="font-size:12px;color:var(--text-muted);line-height:1.8;padding-left:18px;margin:0 0 12px 0">
-                            <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">console.cloud.google.com</a></li>
-                            <li>Create a new project (or select an existing one)</li>
-                            <li>Enable APIs:
-                                <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">Gmail</a>,
-                                <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">Calendar</a>,
-                                <a href="https://console.cloud.google.com/apis/library/tasks.googleapis.com" target="_blank" rel="noopener" style="color:var(--accent-hover)">Tasks</a>
-                            </li>
-                            <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--accent-hover)">Credentials</a> &rarr; Create OAuth Client ID &rarr; Web application</li>
-                            <li>Add redirect URI: <code style="font-size:11px;color:var(--accent-hover);background:rgba(138,92,255,0.08);padding:2px 6px;border-radius:3px">${escapeHtml(callbackUrl)}</code></li>
-                            <li>Go to <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener" style="color:var(--accent-hover)">OAuth consent screen</a> &rarr; <strong>Test users</strong> &rarr; Add your Google email address <span style="opacity:0.5">(required while app is in "Testing" publishing status)</span></li>
-                            <li>Paste Client ID and Client Secret in the fields above, then click Save</li>
-                        </ol>
-                    </div>`;
-            }
-
-            // OAuth connect/disconnect status
-            formHtml += `<div id="oauthStatusArea" style="margin-top:12px">`;
-            if (toolInfo.oauth_connected) {
-                formHtml += `
-                    <div class="oauth-status --connected">
-                        <i class="fas fa-check-circle" style="color:var(--success);margin-right:6px"></i>
-                        <span>${escapeHtml(providerHint)} account connected</span>
-                        <button class="tool-card__btn --danger" style="margin-left:auto" onclick="disconnectOAuth('${name}')">Disconnect</button>
-                    </div>`;
-            } else if (hasCredentials) {
-                formHtml += `
-                    <div class="oauth-status --ready">
-                        <span style="color:var(--text-muted);font-size:13px">Account not connected</span>
-                        <button class="btn btn-primary" style="margin-left:auto;font-size:12px;padding:6px 14px" onclick="startOAuth('${name}')">
-                            Connect ${escapeHtml(providerHint)} Account
-                        </button>
-                    </div>`;
-            } else {
-                formHtml += `
-                    <div class="oauth-status --pending">
-                        <span style="color:var(--text-muted);font-size:12px;font-style:italic">
-                            Save your credentials above, then connect your account
-                        </span>
-                    </div>`;
-            }
-            formHtml += `</div></div>`;
-        }
-
-        document.getElementById('toolSettingsForm').innerHTML = formHtml;
-        document.getElementById('toolSettingsModal').classList.remove('hidden');
-    } catch (e) {
-        showToast('Error loading config: ' + e.message, 'error');
-    }
-}
-
-async function saveToolSettings() {
-    if (!settingsTool) return;
-
-    const config = {};
-    const inputs = document.querySelectorAll('#toolSettingsForm input[id^="config_"]');
-    inputs.forEach(inp => {
-        const key = inp.id.replace('config_', '');
-        // Skip secret fields still showing the server-side mask — don't overwrite stored value
-        if (inp.dataset.secret === 'true' && inp.value === '***') return;
-        config[key] = inp.value;
-    });
-    const textareas = document.querySelectorAll('#toolSettingsForm textarea[id^="config_"]');
-    textareas.forEach(ta => {
-        const key = ta.id.replace('config_', '');
-        if (ta.dataset.secret === 'true' && ta.value === '***') return;
-        config[key] = ta.value;
-    });
-
-    try {
-        const res = await apiFetch(`/tools/${settingsTool}/config`, {
-            method: 'PUT',
-            body: JSON.stringify(config),
-        });
-
-        if (res.ok) {
-            document.getElementById('toolSettingsModal').classList.add('hidden');
-            showToast('Settings saved', 'success');
-            await loadEmbodiment();
-        } else {
-            const err = await res.json();
-            showToast(err.error || 'Failed to save settings', 'error');
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
 }
 
 // ==========================================
@@ -1166,9 +803,6 @@ async function disconnectOAuth(toolName) {
         const res = await apiFetch(`/tools/${toolName}/oauth/disconnect`, { method: 'POST' });
         if (res.ok) {
             showToast('Account disconnected', 'success');
-            // Close settings modal and reload tools
-            document.getElementById('toolSettingsModal').classList.add('hidden');
-            settingsTool = null;
             await loadEmbodiment();
         } else {
             const err = await res.json();
@@ -1206,69 +840,6 @@ function handleOAuthCallback() {
         }
     }
 }
-
-function confirmUpdate(name, currentTag, newTag) {
-    updatingTool = name;
-    const displayName = name.replace(/_/g, ' ');
-    document.getElementById('updateToolDesc').textContent =
-        `Update ${displayName} from ${currentTag || 'unknown'} to ${newTag}? The tool will be briefly unavailable during the update.`;
-    document.getElementById('updateToolModal').classList.remove('hidden');
-}
-
-async function executeUpdate() {
-    if (!updatingTool) return;
-    document.getElementById('updateToolModal').classList.add('hidden');
-    const name = updatingTool;
-    updatingTool = null;
-
-    try {
-        const res = await apiFetch(`/tools/${name}/update`, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) {
-            showToast(`Updating ${name.replace(/_/g, ' ')} to ${data.new_tag}…`, 'success');
-            loadEmbodiment();
-            startBuildPoll();
-        } else {
-            showToast(data.error || 'Update failed', 'error');
-        }
-    } catch (e) {
-        showToast(`Network error: ${e.message}`, 'error');
-    }
-}
-
-// ==========================================
-// Embodiment Event Listeners
-// ==========================================
-document.getElementById('addToolBtn').addEventListener('click', openInstallModal);
-document.getElementById('closeInstallModal').addEventListener('click', closeInstallModal);
-document.getElementById('cancelInstallBtn').addEventListener('click', closeInstallModal);
-document.getElementById('installBtn').addEventListener('click', handleInstall);
-document.getElementById('toolSearch').addEventListener('input', (e) => {
-    renderTools(e.target.value);
-});
-
-document.getElementById('closeToolSettingsModal').addEventListener('click', () => {
-    document.getElementById('toolSettingsModal').classList.add('hidden');
-    settingsTool = null;
-});
-
-document.getElementById('cancelToolSettingsBtn').addEventListener('click', () => {
-    document.getElementById('toolSettingsModal').classList.add('hidden');
-    settingsTool = null;
-});
-
-document.getElementById('saveToolSettingsBtn').addEventListener('click', saveToolSettings);
-
-
-document.getElementById('closeUpdateToolModal').addEventListener('click', () => {
-    document.getElementById('updateToolModal').classList.add('hidden');
-    updatingTool = null;
-});
-document.getElementById('cancelUpdateBtn').addEventListener('click', () => {
-    document.getElementById('updateToolModal').classList.add('hidden');
-    updatingTool = null;
-});
-document.getElementById('confirmUpdateBtn').addEventListener('click', executeUpdate);
 
 // ==========================================
 // Scheduler Tab

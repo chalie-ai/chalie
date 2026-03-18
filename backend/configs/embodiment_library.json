@@ -5,10 +5,8 @@
     "icon": "fa-cloud",
     "repo": "chalie-ai/chalie-tool-weather",
     "summary": "Current weather conditions and tomorrow's forecast via Open-Meteo and wttr.in. No API key required.",
-    "category": "context",
     "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
+    "version": "v1.0.2"
   },
   {
     "name": "reddit",
@@ -16,10 +14,8 @@
     "icon": "fa-brands fa-reddit",
     "repo": "chalie-ai/reddit-tool",
     "summary": "Search Reddit for community discussions, opinions, recommendations, and troubleshooting. No API key required.",
-    "category": "research",
     "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
+    "version": "v1.0.1"
   },
   {
     "name": "web_search",
@@ -27,85 +23,15 @@
     "icon": "fa-magnifying-glass",
     "repo": "chalie-ai/chalie-tool-web-search",
     "summary": "Search the web via DuckDuckGo. Privacy-focused, no API key required.",
-    "category": "research",
     "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
-    "name": "hackernews",
-    "title": "Hacker News",
-    "icon": "fa-brands fa-hacker-news",
-    "repo": "chalie-ai/chalie-tool-hackernews",
-    "summary": "Search Hacker News for tech discussions, startup news, Show HN projects, and developer opinions. No API key required.",
-    "category": "research",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
-    "name": "youtube",
-    "title": "YouTube",
-    "icon": "https://www.youtube.com/favicon.ico",
-    "repo": "chalie-ai/youtube-tool",
-    "summary": "Search YouTube for videos or retrieve trending content. Optional API key for better reliability.",
-    "category": "research",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
-    "name": "itunes_search",
-    "title": "iTunes Search",
-    "icon": "fa-brands fa-apple",
-    "repo": "chalie-ai/chalie-tool-itunes-search",
-    "summary": "Search Apple's catalog for podcasts, music, movies, audiobooks, and apps. No API key required.",
-    "category": "entertainment",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
-    "name": "food-interface",
-    "title": "Kitchen",
-    "icon": "fa-utensils",
-    "repo": "chalie-ai/food-interface",
-    "summary": "Recipe discovery, cocktails, daily meal planning, and dietary preference management. Allergy-aware — preferences inject into world state so Chalie always has your dietary context. No API key required.",
-    "category": "lifestyle",
-    "trigger": "ambient",
-    "trust": "trusted",
-    "installs_by_default": true
+    "version": "v1.0.2"
   },
   {
     "name": "code_eval",
     "title": "Code Eval",
     "icon": "fa-solid fa-code",
     "summary": "Execute Python snippets to verify formulas, test algorithms, or compute results precisely. Restricted sandbox with math, statistics, decimal, and more.",
-    "category": "productivity",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
-    "name": "searxng",
-    "title": "SearXNG",
-    "icon": "https://www.vectorlogo.zone/logos/google/google-icon.svg",
-    "repo": "chalie-ai/searxng-tool",
-    "summary": "Privacy-focused metasearch aggregating Google, Bing, DuckDuckGo, Brave, and more. Requires Docker.",
-    "category": "research",
-    "trigger": "on_demand",
-    "installs_by_default": false
-  },
-  {
-    "name": "news-interface",
-    "title": "News",
-    "icon": "fa-newspaper",
-    "repo": "chalie-ai/news-interface",
-    "summary": "News aggregator across 40+ sources — BBC, Reuters, CNN, Al Jazeera, AP, and more. Source-specific queries, interest tracking, and hourly world state updates. No API key required.",
-    "category": "context",
-    "trigger": "ambient",
-    "trust": "trusted",
-    "installs_by_default": true
+    "trigger": "on_demand"
   },
   {
     "name": "world_clock",
@@ -113,9 +39,7 @@
     "icon": "fa-sun",
     "repo": "chalie-ai/world-clock-interface",
     "summary": "Populates world state every 15 minutes with current time-of-day phase, sunrise, sunset, solar noon, and day length derived from client telemetry. No API key required.",
-    "category": "context",
     "trigger": "cron",
-    "trust": "trusted",
-    "installs_by_default": true
+    "version": "v0.1.0"
   }
 ]

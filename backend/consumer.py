@@ -480,12 +480,8 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
-    # Tool update checker
-    try:
-        from services.tool_update_service import tool_update_worker
-        manager.register_service("tool-update-checker", tool_update_worker)
-    except Exception as e:
-        logging.warning(f"[Consumer] Tool update checker registration failed: {e}")
+    # tool-update-checker removed — embodiment versions are pinned in
+    # embodiment_library.json and synced on boot, no periodic polling needed
 
     # One-time migration: tools_disabled → tools
     try:

@@ -26,10 +26,7 @@ class TestToolsAPI:
         with patch('services.auth_session_service.validate_session', return_value=True):
             yield
 
-    def test_install_no_source(self, client):
-        """Install without source should return 400."""
-        response = client.post('/tools/install', json={})
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data or "ok" in data
+    def test_install_endpoint_removed(self, client):
+        """Install endpoint no longer exists — returns 404."""
+        response = client.post('/tools/install', json={"git_url": "https://example.com/repo"})
+        assert response.status_code == 404
