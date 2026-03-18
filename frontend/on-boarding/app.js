@@ -432,3 +432,5 @@ async function submitSetupForm() {
 // Start
 // ==========================================
 init();
+
+if (typeof lucide !== 'undefined') lucide.createIcons();
