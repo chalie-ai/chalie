@@ -618,9 +618,17 @@ class TestSystemAPI:
         ),
         (
             '/system/observability/tools',
-            {'services.tool_performance_service.ToolPerformanceService': MagicMock(
-                return_value=MagicMock(get_all_tool_stats=MagicMock(return_value=[]))
-            )},
+            {
+                'services.tool_performance_service.ToolPerformanceService': MagicMock(
+                    return_value=MagicMock(get_all_tool_stats=MagicMock(return_value=[]))
+                ),
+                'services.database_service.get_shared_db_service': MagicMock(
+                    return_value=MagicMock(fetch_all=MagicMock(return_value=[]))
+                ),
+                'services.tool_registry_service.ToolRegistryService': MagicMock(
+                    return_value=MagicMock(tools={})
+                ),
+            },
         ),
         (
             '/system/observability/identity',
@@ -658,8 +666,10 @@ class TestSystemAPI:
         if not store_ok:
             mock_store.ping.side_effect = Exception('store down')
 
-        # Patch the embedding model sentinel so the embeddings component reports 'ok'
-        mock_st_model = MagicMock()  # any non-None value means model is loaded
+        # Load the real ONNX embedding model so the /ready endpoint sees _session
+        # as non-None and reports 'ok'. No mock — we verify the real model works.
+        from services.embedding_service import _get_session_and_tokenizer
+        _get_session_and_tokenizer()
 
         # Patch ONNX service to report ready
         mock_onnx_svc = MagicMock()
@@ -668,7 +678,6 @@ class TestSystemAPI:
         patches = {
             'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
             'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
-            'services.embedding_service._st_model': mock_st_model,
             'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
         if not worker_ok:

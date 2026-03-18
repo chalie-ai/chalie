@@ -175,12 +175,14 @@ class ToolProfileService:
         usage_scenarios = profile_data.get('usage_scenarios', [])[:MAX_SCENARIOS]
         anti_scenarios = profile_data.get('anti_scenarios', [])[:20]
 
-        # Generate embedding from full_profile
+        # Generate embedding from short_summary + full_profile for robust semantic search
         embedding = None
         try:
             emb_service = self._get_embedding_service()
+            short_summary = profile_data.get('short_summary', '')
             full_profile = profile_data.get('full_profile', description)
-            embedding = emb_service.generate_embedding(full_profile)
+            embedding_text = f"{short_summary}\n{full_profile}" if short_summary else full_profile
+            embedding = emb_service.generate_embedding(embedding_text)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Embedding generation failed for {tool_name}: {e}")
 
@@ -299,10 +301,14 @@ class ToolProfileService:
 
         usage_scenarios = profile_data.get('usage_scenarios', [])[:MAX_SCENARIOS]
 
+        # Generate embedding from short_summary + full_profile for robust semantic search
         embedding = None
         try:
             emb_service = self._get_embedding_service()
-            embedding = emb_service.generate_embedding(profile_data.get('full_profile', skill_desc))
+            short_summary = profile_data.get('short_summary', '')
+            full_profile = profile_data.get('full_profile', skill_desc)
+            embedding_text = f"{short_summary}\n{full_profile}" if short_summary else full_profile
+            embedding = emb_service.generate_embedding(embedding_text)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Embedding failed for skill {skill_name}: {e}")
 
@@ -427,12 +433,14 @@ class ToolProfileService:
         if len(merged) > MAX_SCENARIOS:
             merged = merged[:MAX_SCENARIOS]
 
-        # Refresh embedding
+        # Refresh embedding from short_summary + full_profile (consistent with build_profile)
         embedding = None
         try:
             emb_service = self._get_embedding_service()
-            profile_text = profile.get('full_profile', '') + ' ' + ' '.join(merged[:10])
-            embedding = emb_service.generate_embedding(profile_text)
+            short_summary = profile.get('short_summary', '')
+            full_profile = profile.get('full_profile', '')
+            embedding_text = f"{short_summary}\n{full_profile}" if short_summary else full_profile
+            embedding = emb_service.generate_embedding(embedding_text)
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Embedding refresh failed for {tool_name}: {e}")
 
@@ -754,9 +762,11 @@ class ToolProfileService:
                 logger.warning(f"{LOG_PREFIX} Bootstrap failed for skill {skill_name}: {e}")
 
         # Bootstrap registered tools
+        active_tool_names: set = set()
         try:
             from services.tool_registry_service import ToolRegistryService
             registry = ToolRegistryService()
+            active_tool_names = set(registry.tools.keys())
             for tool_name, tool_data in registry.tools.items():
                 try:
                     manifest = tool_data['manifest']
@@ -775,6 +785,19 @@ class ToolProfileService:
                     logger.warning(f"{LOG_PREFIX} Bootstrap failed for tool {tool_name}: {e}")
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Tool registry not available during bootstrap: {e}")
+
+        # Purge profiles for tools/skills that no longer exist
+        try:
+            valid_names = set(SKILL_DESCRIPTIONS.keys()) | active_tool_names
+            db = self._get_db()
+            existing = db.fetch_all("SELECT tool_name FROM tool_capability_profiles")
+            stale = [r['tool_name'] for r in (existing or []) if r['tool_name'] not in valid_names]
+            if stale:
+                placeholders = ','.join('?' * len(stale))
+                db.execute(f"DELETE FROM tool_capability_profiles WHERE tool_name IN ({placeholders})", stale)
+                logger.info(f"{LOG_PREFIX} Purged {len(stale)} stale profile(s): {stale}")
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to purge stale profiles: {e}")
 
         logger.info(f"{LOG_PREFIX} Bootstrap complete")
 
