@@ -646,6 +646,7 @@ def _generate_with_act_orchestrator(
         smart_repetition=True,
         escalation_hints=True,
         persistent_task_exit=True,
+        execution_gate=False,  # User explicitly requested this action — skip autonomous gate
     )
 
     # ── Narration callback: stream progress to user via WebSocket ─────
