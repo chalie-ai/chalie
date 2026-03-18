@@ -343,8 +343,17 @@ class TestSystemAPI:
             {'id': 2, 'question': 'Why is the sky blue?', 'last_explored_at': datetime(2026, 2, 26), 'created_at': '2026-02-25', 'last_surfaced_at': None},
         ]
 
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = (1,)
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        mock_db = MagicMock()
+        mock_db.connection.return_value = mock_ctx
+
         with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc):
+             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc), \
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
