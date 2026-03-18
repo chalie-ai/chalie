@@ -315,14 +315,35 @@ def observability_tools():
     try:
         from services.database_service import get_shared_db_service
         from services.tool_performance_service import ToolPerformanceService
+        from services.tool_profile_service import SKILL_DESCRIPTIONS
 
         db = get_shared_db_service()
-        rows = db.fetch_all(
-            "SELECT tool_name, tool_type, short_summary, domain, effort, "
-            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
-            "triage_triggers, updated_at "
-            "FROM tool_capability_profiles ORDER BY domain, tool_name"
-        )
+
+        # Build the set of currently valid names (registered tools + innate skills)
+        valid_names: set | None = None
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            valid_names = set(ToolRegistryService().tools.keys()) | set(SKILL_DESCRIPTIONS.keys())
+        except Exception:
+            pass  # If registry is unavailable, show all profiles rather than nothing
+
+        if valid_names is not None:
+            placeholders = ','.join('?' * len(valid_names))
+            rows = db.fetch_all(
+                "SELECT tool_name, tool_type, short_summary, domain, effort, "
+                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+                "triage_triggers, updated_at "
+                f"FROM tool_capability_profiles WHERE tool_name IN ({placeholders}) "
+                "ORDER BY domain, tool_name",
+                list(valid_names),
+            )
+        else:
+            rows = db.fetch_all(
+                "SELECT tool_name, tool_type, short_summary, domain, effort, "
+                "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+                "triage_triggers, updated_at "
+                "FROM tool_capability_profiles ORDER BY domain, tool_name"
+            )
 
         # Index performance stats by tool name for merging
         perf_by_name = {}
