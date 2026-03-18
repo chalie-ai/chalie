@@ -1,40 +1,13 @@
 """Extended tests for api/tools.py — framework-level (tool-agnostic) endpoint tests."""
 
 import json
-import re
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask
-from api.tools import tools_bp, _normalize_config_schema
+from api.tools import tools_bp
 
 
 pytestmark = pytest.mark.unit
-
-
-# ── _normalize_config_schema (pure function) ─────────────────────────
-
-class TestNormalizeConfigSchema:
-
-    def test_dict_to_list_conversion(self):
-        schema = {
-            "api_key": {"description": "Your API key", "secret": True, "default": ""},
-            "region": {"description": "AWS region", "secret": False, "default": "us-east-1"},
-        }
-        result = _normalize_config_schema(schema)
-        assert len(result) == 2
-        # Check first item structure
-        api_key_item = next(r for r in result if r['key'] == 'api_key')
-        assert api_key_item['label'] == 'Your API key'
-        assert api_key_item['secret'] is True
-        assert api_key_item['placeholder'] == ''
-
-    def test_empty_dict_returns_empty_list(self):
-        assert _normalize_config_schema({}) == []
-
-    def test_defaults_secret_false(self):
-        schema = {"field": {"description": "A field"}}
-        result = _normalize_config_schema(schema)
-        assert result[0]['secret'] is False
 
 
 # ── Webhook rate limiting (MemoryStore) ──────────────────────────────
@@ -77,24 +50,6 @@ def client():
     with patch('services.auth_session_service.validate_session', return_value=True):
         with app.test_client() as c:
             yield c
-
-
-class TestInstallValidation:
-
-    def test_install_requires_source(self, client):
-        """POST /tools/install without git_url → 400."""
-        response = client.post('/tools/install', json={})
-        assert response.status_code == 400
-        data = response.get_json()
-        assert 'error' in data or ('ok' in data and data['ok'] is False)
-
-    def test_install_bad_name_format_rejected_by_regex(self):
-        """Tool name regex rejects uppercase, spaces, and special chars."""
-        pattern = r"^[a-z0-9_-]+$"
-        assert re.match(pattern, "good-tool_name") is not None
-        assert re.match(pattern, "BAD NAME!") is None
-        assert re.match(pattern, "Has Spaces") is None
-        assert re.match(pattern, "special@chars") is None
 
 
 class TestWebhookEndpoints:

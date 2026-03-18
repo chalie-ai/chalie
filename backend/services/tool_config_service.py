@@ -30,7 +30,7 @@ class ToolConfigService:
         "_enabled", "_webhook_key",
         "_oauth_access_token", "_oauth_refresh_token",
         "_oauth_token_expires_at", "_oauth_connected_at", "_oauth_scopes",
-        "_source_type", "_source_url", "_installed_tag", "_latest_tag",
+        "_source_type", "_source_url", "_installed_tag",
     }
 
     def __init__(self, database_service):
@@ -117,35 +117,10 @@ class ToolConfigService:
             logger.error(f"[TOOL CONFIG] _set_source_metadata('{tool_name}'): {e}", exc_info=True)
             return False
 
-    def _set_latest_tag(self, tool_name: str, latest_tag: str) -> bool:
-        """Write _latest_tag when a newer upstream version is detected."""
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO tool_configs (tool_name, config_key, config_value)
-                    VALUES (?, '_latest_tag', ?)
-                    ON CONFLICT (tool_name, config_key)
-                    DO UPDATE SET config_value = EXCLUDED.config_value,
-                                  updated_at = datetime('now')
-                    """,
-                    (tool_name, latest_tag)
-                )
-                cursor.close()
-            return True
-        except Exception as e:
-            logger.error(f"[TOOL CONFIG] _set_latest_tag('{tool_name}'): {e}", exc_info=True)
-            return False
-
-    def _clear_latest_tag(self, tool_name: str) -> bool:
-        """Remove _latest_tag after a successful update or when versions match."""
-        return self.delete_tool_config_key(tool_name, "_latest_tag")
-
     def get_source_metadata(self, tool_name: str) -> dict:
-        """Return source tracking fields for a tool: _source_type, _source_url, _installed_tag, _latest_tag."""
+        """Return source tracking fields for a tool: _source_type, _source_url, _installed_tag."""
         cfg = self.get_tool_config(tool_name)
-        return {k: cfg[k] for k in ("_source_type", "_source_url", "_installed_tag", "_latest_tag") if k in cfg}
+        return {k: cfg[k] for k in ("_source_type", "_source_url", "_installed_tag") if k in cfg}
 
     def set_tool_config(self, tool_name: str, config: dict) -> bool:
         """
