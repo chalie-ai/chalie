@@ -66,24 +66,13 @@
     "installs_by_default": true
   },
   {
-    "name": "mealdb",
-    "title": "Recipes",
+    "name": "food-interface",
+    "title": "Kitchen",
     "icon": "fa-utensils",
-    "repo": "chalie-ai/chalie-tool-mealdb",
-    "summary": "Search recipes by name, ingredient, category, or cuisine. Full instructions and ingredients. No API key required.",
+    "repo": "chalie-ai/food-interface",
+    "summary": "Recipe discovery, cocktails, daily meal planning, and dietary preference management. Allergy-aware — preferences inject into world state so Chalie always has your dietary context. No API key required.",
     "category": "lifestyle",
-    "trigger": "on_demand",
-    "trust": "trusted",
-    "installs_by_default": true
-  },
-  {
-    "name": "cocktaildb",
-    "title": "Cocktails",
-    "icon": "fa-martini-glass",
-    "repo": "chalie-ai/chalie-tool-cocktaildb",
-    "summary": "Search cocktail recipes by name, ingredient, or category. Full instructions with glassware and measurements. No API key required.",
-    "category": "lifestyle",
-    "trigger": "on_demand",
+    "trigger": "ambient",
     "trust": "trusted",
     "installs_by_default": true
   },
