@@ -67,10 +67,6 @@ Skill/tool output reading: recall groups by layer with confidence. introspect re
 
 {{working_memory}}
 
-{{facts}}
-
-{{chat_history}}
-
 {{episodic_memory}}
 
 {{semantic_concepts}}

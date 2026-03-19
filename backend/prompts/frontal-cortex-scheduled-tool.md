@@ -22,8 +22,6 @@ Data from the tool:
 
 {{working_memory}}
 
-{{chat_history}}
-
 ────────────────────────────────
 
 ## Your Task

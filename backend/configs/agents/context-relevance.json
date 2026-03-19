@@ -12,9 +12,7 @@
       "client_context": true,
       "focus": true,
       "working_memory": true,
-      "facts": true,
       "active_goals": false,
-      "gists": true,
       "episodic_memory": true,
       "concepts": true,
       "act_history": true,
@@ -34,9 +32,6 @@
       "client_context": true,
       "focus": true,
       "working_memory": true,
-      "facts": true,
-      "active_goals": false,
-      "gists": true,
       "episodic_memory": true,
       "concepts": true,
       "act_history": true,
@@ -56,9 +51,6 @@
       "client_context": true,
       "focus": true,
       "working_memory": true,
-      "facts": true,
-      "active_goals": false,
-      "gists": true,
       "episodic_memory": true,
       "concepts": true,
       "act_history": true,
@@ -70,7 +62,7 @@
     }
   },
   "dependencies": {
-    "episodic_memory": ["gists"],
+    "episodic_memory": [],
     "focus": [],
     "onboarding_nudge": ["identity_context"],
     "warm_return_hint": ["identity_context"],
@@ -138,23 +130,6 @@
         "strength": "hard"
       }
     ],
-    "facts": [
-      {
-        "when": {
-          "fact_count_eq": 0
-        },
-        "strength": "hard"
-      }
-    ],
-    "gists": [
-      {
-        "when": {
-          "gist_count_eq": 0,
-          "working_memory_turns_gte": 2
-        },
-        "strength": "hard"
-      }
-    ],
     "onboarding_nudge": [],
     "identity_context": [
       {
@@ -174,8 +149,7 @@
   },
   "urgency_overrides": [
     "working_memory",
-    "world_state",
-    "facts"
+    "world_state"
   ],
   "safety_overrides": {
     "identity_context": [
@@ -217,9 +191,7 @@
     "episodic_memory",
     "working_memory",
     "world_state",
-    "facts",
-    "focus",
-    "gists"
+    "focus"
   ],
   "max_included_nodes": 14
 }

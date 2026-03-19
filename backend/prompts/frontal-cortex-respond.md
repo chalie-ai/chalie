@@ -45,10 +45,6 @@ You do NOT:
 
 {{working_memory}}
 
-{{facts}}
-
-{{chat_history}}
-
 {{episodic_memory}}
 
 {{semantic_concepts}}

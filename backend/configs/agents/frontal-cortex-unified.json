@@ -3,9 +3,7 @@
   "temperature": 0.5,
   "timeout": 180,
   "format": "json",
-  "min_gist_confidence": 7,
   "attention_span_minutes": 30,
-  "max_gists": 8,
   "_comment_act_loop": "ACT loop safety limits and cost model",
   "act_cumulative_timeout": 180.0,
   "act_per_action_timeout": 30.0,
@@ -25,8 +23,6 @@
     "recall": {
       "default_layers": [
         "working_memory",
-        "gists",
-        "facts",
         "episodes",
         "concepts"
       ],
