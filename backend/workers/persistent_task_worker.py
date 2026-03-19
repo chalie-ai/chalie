@@ -228,7 +228,7 @@ def _execute_task_act_loop(task: dict) -> dict:
     from services.config_service import ConfigService
     from services import FrontalCortexService
     from services.act_orchestrator_service import ACTOrchestrator
-    from services.innate_skills.registry import PLANNING_SKILLS, SKILL_DESCRIPTIONS
+    from services.innate_skills.registry import COGNITIVE_PRIMITIVES_ORDERED, SKILL_DESCRIPTIONS
     from services.plan_decomposition_service import PlanDecompositionService
 
     # Load config
@@ -265,7 +265,7 @@ def _execute_task_act_loop(task: dict) -> dict:
     # Fill skill/tool/context placeholders
     skills_text = '\n'.join(
         f'- **{name}**: {SKILL_DESCRIPTIONS.get(name, "")}'
-        for name in sorted(PLANNING_SKILLS)
+        for name in COGNITIVE_PRIMITIVES_ORDERED
     )
     tools_text = PlanDecompositionService._get_available_tools()
     task_context['injected_skills'] = skills_text
@@ -279,7 +279,7 @@ def _execute_task_act_loop(task: dict) -> dict:
 
     orchestrator = ACTOrchestrator(
         config=cortex_config,
-        max_iterations=10,
+        max_iterations=50,
         cumulative_timeout=120.0,
         per_action_timeout=15.0,
         critic_enabled=True,

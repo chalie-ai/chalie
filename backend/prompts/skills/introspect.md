@@ -1,15 +1,19 @@
 ## `introspect` — Self-Examination
-Perception directed inward. Returns internal state and metacognitive signals. No parameters needed.
 
-Returns:
-- `context_warmth`, `gist_count`, `fact_count`, `working_memory_depth`, `topic_age` — memory density signals
-- `partial_match_signal`, `recall_failure_rate` — retrieval quality signals
-- `recent_modes`, `skill_stats` — routing history and action trust scores
-- `world_state`, `tool_details` — external state and triage-selected tool details
-- `decision_explanations` — recent routing decisions with mode scores, key signals, confidence level, and tiebreaker info (for "why did you do that?" questions)
-- `recent_autonomous_actions` — proactive events and background tool executions from the last few hours (proactive_sent, cron_tool_executed, plan_proposed)
+Perception directed inward. Returns a comprehensive internal state report. No parameters needed.
 
-Use when:
-- You need to gauge "how much do I know about this?" before deciding what to do
-- The user asks why you responded/acted a certain way — translate `decision_explanations` into plain language using Trigger → Reasoning → Confidence → User control framing
-- The user asks what you've been doing — summarize `recent_autonomous_actions` in conversational terms
+### Usage
+```json
+{"type": "introspect"}
+```
+
+### Scopes Returned
+1. **Memory Health** — episode count, concept count, working memory depth, consolidation recency
+2. **Skill & Tool Usage** — table of all skills and tools with usage count, last used, and last result
+3. **Reasoning State** — active focus, persistent tasks, upcoming reminders, recent autonomous actions
+4. **Identity** — relationship depth, communication style, personality, autobiography recency
+
+### When to use
+- The user asks about your system state, capabilities, or what you've been doing
+- You need to gauge how much context you have before deciding what to do
+- You want to check on background tasks and scheduled items

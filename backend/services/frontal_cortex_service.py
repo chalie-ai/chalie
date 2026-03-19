@@ -787,12 +787,8 @@ class FrontalCortexService:
         if selected_skills and '{{injected_skills}}' not in template:
             logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")
 
-        # Inject skill docs — None means "all skills" (ONNX unavailable), [] means none
-        if selected_skills is None:
-            from services.innate_skills.registry import PLANNING_SKILLS
-            injected_skills = self._get_injected_skills(sorted(PLANNING_SKILLS))
-        else:
-            injected_skills = self._get_injected_skills(selected_skills)
+        # Inject skill docs for the provided list; empty list injects nothing
+        injected_skills = self._get_injected_skills(selected_skills or [])
         result = result.replace('{{injected_skills}}', injected_skills)
 
         # Legacy {{available_skills}} — removed from ACT template; kept as no-op for other templates
@@ -1280,7 +1276,6 @@ class FrontalCortexService:
             Formatted available skills string or empty string
         """
         try:
-            from services.innate_skills.registry import PLANNING_SKILLS
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
             innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read"]

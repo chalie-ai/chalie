@@ -1,6 +1,6 @@
-## `find_tools` — External Tool Discovery
+## `find_tools` — Tool Discovery
 
-Search for external capabilities (tools and interface actions) when you need to interact with the outside world.
+Search for capabilities (tools and interface actions) when you need to interact with systems or services.
 
 ### Actions
 
@@ -20,7 +20,7 @@ Parameters:
 - `tool_name` (required): Name of the tool to inspect
 
 ### When to use
-- You need to do something external (web search, send message, check calendar, etc.)
+- You need to do something via a registered tool (web search, send message, check calendar, etc.)
 - You're unsure which tool handles a specific task
 - You need parameter details before invoking a tool
 

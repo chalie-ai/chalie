@@ -30,6 +30,7 @@ from services.innate_skills.read_skill import handle_read
 from services.innate_skills.reflect_skill import handle_reflect
 from services.innate_skills.notes_skill import handle_notes
 from services.innate_skills.find_tools_skill import handle_find_tools
+from services.innate_skills.find_skills_skill import handle_find_skills
 
 
 _SKILL_HANDLERS = {
@@ -48,6 +49,7 @@ _SKILL_HANDLERS = {
     'reflect': handle_reflect,
     'notes': handle_notes,
     'find_tools': handle_find_tools,
+    'find_skills': handle_find_skills,
 }
 
 
@@ -79,6 +81,7 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["reflect"] = lambda topic, action: handle_reflect(topic, action)
     dispatcher.handlers["notes"] = lambda topic, action: handle_notes(topic, action)
     dispatcher.handlers["find_tools"] = lambda topic, action: handle_find_tools(topic, action)
+    dispatcher.handlers["find_skills"] = lambda topic, action: handle_find_skills(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)
