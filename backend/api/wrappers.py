@@ -92,8 +92,10 @@ def create_wrapper():
     permissions = body.get("permissions") or {}
     metadata = body.get("metadata") or {}
 
-    if not isinstance(capabilities, dict):
-        return jsonify({"error": "capabilities must be a JSON object"}), 400
+    # Accept list or dict for capabilities — stored as JSON metadata only,
+    # never used in permission-checking logic.
+    if not isinstance(capabilities, (dict, list)):
+        return jsonify({"error": "capabilities must be a JSON object or array"}), 400
     if not isinstance(permissions, dict):
         return jsonify({"error": "permissions must be a JSON object"}), 400
     if not isinstance(metadata, dict):
@@ -183,8 +185,8 @@ def update_capabilities(wrapper_id: str):
 
     body = request.get_json(silent=True) or {}
     capabilities = body.get("capabilities")
-    if capabilities is None or not isinstance(capabilities, dict):
-        return jsonify({"error": "capabilities must be a JSON object"}), 400
+    if capabilities is None or not isinstance(capabilities, (dict, list)):
+        return jsonify({"error": "capabilities must be a JSON object or array"}), 400
 
     svc = _get_service()
     updated = svc.update_capabilities(wrapper_id, capabilities)
