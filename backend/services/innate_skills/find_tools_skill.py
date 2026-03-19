@@ -96,18 +96,13 @@ def _search_tools(params: dict) -> str:
         return _fallback_keyword_search(query, limit)
 
     if not rows:
-        # Profiles table may be empty on fresh installs — fall back to registry
-        return _registry_fallback(query, limit)
+        return f"{LOG_PREFIX} No tools found matching '{query}'. No external capabilities are currently registered."
 
     # Filter to only external tools (not innate skills) and check availability
     available_tools = _filter_available(rows)
 
     if not available_tools:
-        # Profiles exist but only matched innate skills — try registry fallback
-        return _registry_fallback(query, limit) or (
-            f"{LOG_PREFIX} No available external tools match '{query}'. "
-            f"Only innate skills matched — those are already at your disposal."
-        )
+        return f"{LOG_PREFIX} No available external tools match '{query}'. Only innate skills matched — those are already at your disposal."
 
     # Cap to requested limit
     available_tools = available_tools[:limit]
@@ -329,65 +324,6 @@ def _get_performance(tool_name: str) -> str:
 
 
 # ── Fallback ──────────────────────────────────────────────────────────────
-
-
-def _registry_fallback(query: str, limit: int) -> str:
-    """Search registered tool manifests directly when the profiles table is empty.
-
-    Used on fresh installs before the 6h profile enrichment cycle has run.
-    Matches against tool name, description, and documentation text.
-    """
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        query_lower = query.lower()
-
-        candidates = []
-        for name, tool_data in registry.tools.items():
-            if not registry._is_ready(name, tool_data):
-                continue
-            if not registry._is_interface_online(tool_data):
-                continue
-            manifest = tool_data['manifest']
-            if manifest.get('trigger', {}).get('type') != 'on_demand':
-                continue
-            search_text = ' '.join([
-                name,
-                manifest.get('description', ''),
-                manifest.get('documentation', ''),
-                manifest.get('category', ''),
-            ]).lower()
-            # Score: exact name match wins, then partial matches
-            score = 2 if query_lower == name else (1 if query_lower in search_text else 0)
-            candidates.append((score, name, manifest))
-
-        # If no keyword match, return all on-demand tools (so LLM knows what exists)
-        if not any(s > 0 for s, _, _ in candidates):
-            candidates = [(0, n, m) for _, n, m in candidates]
-
-        candidates.sort(key=lambda x: -x[0])
-        candidates = candidates[:limit]
-
-        if not candidates:
-            return f"{LOG_PREFIX} No external tools available. Only innate skills are currently loaded."
-
-        lines = [f"{LOG_PREFIX} Found {len(candidates)} tool(s) matching '{query}' (from registry):\n"]
-        for _, name, manifest in candidates:
-            desc = manifest.get('description', name)
-            params = manifest.get('parameters', {})
-            required = [p for p, d in params.items() if d.get('required')]
-            optional = [p for p, d in params.items() if not d.get('required')]
-            param_parts = [f"{p} (required)" for p in required] + [f"{p}?" for p in optional]
-            param_str = f" ({', '.join(param_parts)})" if param_parts else ""
-            lines.append(f"### {name}{param_str}")
-            lines.append(desc)
-            lines.append("")
-
-        lines.append("To invoke a tool: {\"type\": \"<tool_name>\", ...params}")
-        return "\n".join(lines)
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Registry fallback failed: {e}")
-        return ""
 
 
 def _fallback_keyword_search(query: str, limit: int) -> str:
