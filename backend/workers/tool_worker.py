@@ -2,7 +2,7 @@
 Tool Worker — Background ACT loop processing.
 
 Picks up tool work from tool-queue, runs the ACT reasoning loop,
-and enqueues a follow-up on prompt-queue when done.
+and enqueues a RESPOND call on prompt-queue when done.
 
 This decouples heavy tool work from the fast response path.
 """
@@ -256,7 +256,7 @@ def _tool_worker_orchestrator(
     if cycle_service and cycle_id:
         cycle_service.complete_cycle(cycle_id, 'completed')
 
-    # Build act_history_context for followup
+    # Build act_history_context for RESPOND handoff
     from services.act_loop_service import ActLoopService
     # Use a temporary ActLoopService just for get_history_context formatting
     _tmp = ActLoopService.__new__(ActLoopService)
@@ -398,12 +398,12 @@ def _enqueue_followup(
     metadata: dict,
     original_created_at: float,
 ):
-    """Enqueue a follow-up message on prompt-queue for response generation."""
+    """Enqueue a RESPOND call on prompt-queue after background ACT loop completes."""
     try:
         from workers.digest_worker import digest_worker
         from services.prompt_queue import PromptQueue
 
-        followup_metadata = {
+        result_metadata = {
             'type': 'tool_result',
             'topic': topic,
             'original_prompt': text,
@@ -414,17 +414,17 @@ def _enqueue_followup(
             'original_created_at': original_created_at,
             'destination': metadata.get('destination', 'web'),
             'thread_id': metadata.get('thread_id'),
-            'source': 'tool_followup',
-            'uuid': metadata.get('uuid'),   # routes tool result to the waiting SSE connection
+            'source': 'tool_result',
+            'uuid': metadata.get('uuid'),
         }
 
-        followup_queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-        followup_queue.enqueue(
-            f"[TOOL RESULT] Background research completed for: {text[:100]}",
-            followup_metadata,
+        queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+        queue.enqueue(
+            f"[TOOL RESULT] Background ACT loop completed for: {text[:100]}",
+            result_metadata,
         )
 
-        logger.info(f"[TOOL WORKER] Enqueued follow-up on prompt-queue for topic '{topic}'")
+        logger.info(f"[TOOL WORKER] Enqueued RESPOND for topic '{topic}'")
 
     except Exception as e:
-        logger.error(f"[TOOL WORKER] Failed to enqueue follow-up: {e}")
+        logger.error(f"[TOOL WORKER] Failed to enqueue response: {e}")
