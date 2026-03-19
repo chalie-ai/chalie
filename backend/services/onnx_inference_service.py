@@ -502,7 +502,7 @@ class OnnxInferenceService:
             labels = meta["labels"]
             version = meta.get("version", "unknown")
             model_type = meta.get("model_type", "single_label")
-            thresholds = meta.get("thresholds", {})
+            thresholds = meta.get("thresholds") or meta.get("confidence_thresholds", {})
             is_split = meta.get("split", False)
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"{LOG_PREFIX} Invalid classifier_meta.json: {e}")
