@@ -68,7 +68,7 @@ Respond ONLY with valid JSON:
 
 ```json
 {
-  "mode": "RESPOND",
+  "mode": "UNIFIED",
   "response": "Your notification message here",
   "confidence": 0.8,
   "actions": null,

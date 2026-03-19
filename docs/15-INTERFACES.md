@@ -332,7 +332,7 @@ All server messages include a `seq` (monotonic sequence number) for deduplicatio
 | `type` | string | `"message"` |
 | `text` | string | Response text (markdown) |
 | `topic` | string | Conversation topic |
-| `mode` | string | `"RESPOND"`, `"ACT"`, or `"IGNORE"` |
+| `mode` | string | `"UNIFIED"`, `"ACT"`, or `"IGNORE"` |
 | `confidence` | float | Response confidence (0–1) |
 | `exchange_id` | string | Unique exchange identifier |
 | `actions` | array \| null | Optional reply action buttons |

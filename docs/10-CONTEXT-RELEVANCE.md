@@ -20,7 +20,7 @@ None of which the ACKNOWLEDGE template even uses.
 | Mode | I/O Skipped | Token Savings |
 |------|-------------|---------------|
 | ACKNOWLEDGE | 5 MemoryStore reads, 1 sqlite-vec vector search, skill queries | ~1500-3000 |
-| RESPOND (greeting) | 1 PG vector search, focus queries | ~800-2000 |
+| UNIFIED (greeting) | 1 PG vector search, focus queries | ~800-2000 |
 | ACT | Identity/trait lookups | ~300-800 |
 
 **Pre-parser execution**: < 0.5ms (pure dict lookups).
@@ -72,7 +72,7 @@ Static per-mode inclusion decisions. Excludes nodes the template doesn't even re
 ```json
 {
   "template_masks": {
-    "RESPOND": {
+    "UNIFIED": {
       "episodic_memory": true,
       "working_memory": true,
       "facts": true,
@@ -187,7 +187,7 @@ from services.context_relevance_service import ContextRelevanceService
 # Compute inclusion map
 context_relevance_service = ContextRelevanceService()
 inclusion_map = context_relevance_service.compute_inclusion_map(
-    mode='RESPOND',                    # cognitive mode
+    mode='UNIFIED',                    # cognitive mode
     signals=signals,                   # routing signals
     classification=classification,     # topic classification
     returning_from_silence=returning_from_silence,
@@ -235,7 +235,7 @@ def _inject_parameters(self, template, ..., inclusion_map=None):
 Every context relevance computation logs a structured entry:
 
 ```
-[CONTEXT RELEVANCE] mode=RESPOND | excluded_hard=[focus, available_skills, warm_return_hint] |
+[CONTEXT RELEVANCE] mode=UNIFIED | excluded_hard=[focus, available_skills, warm_return_hint] |
 excluded_soft=[episodic_memory] | recovered_soft=[] | deps_added=[] |
 overrides_applied=[urgency] | total_included=9 | est_tokens=2100
 ```
@@ -278,7 +278,7 @@ pytest backend/tests/test_context_relevance_service.py -v
 
 ### Mode-Specific Optimization
 
-The `UNIFIED` mask is used for all user messages (the unified generation path). `RESPOND` and `ACT` masks remain active for background workers (tool_worker, persistent_task_worker, etc.).
+The `UNIFIED` mask is used for all user messages (the unified generation path) and for background workers (tool_worker, persistent_task_worker, etc.).
 
 Adjust template masks per mode to match your mode-specific templates:
 

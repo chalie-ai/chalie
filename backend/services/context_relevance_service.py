@@ -182,7 +182,7 @@ class ContextRelevanceService:
         9. Log structured exclusion report
 
         Args:
-            mode: Cognitive mode (RESPOND, ACT)
+            mode: Cognitive mode (UNIFIED, ACT)
             signals: Routing signals dict (e.g., greeting_pattern, context_warmth, etc.)
             classification: Topic classification dict (includes urgency field)
             returning_from_silence: Whether returning after idle period

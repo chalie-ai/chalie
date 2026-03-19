@@ -153,7 +153,7 @@ Offers perspective and advice when appropriate, supports decision clarity.
 - Ambiguity or tradeoffs require human judgment
 - The user's voice or presence matters
 
-*Maps to: mode router selecting RESPOND, ACT loop requesting clarification as part of its reasoning, persistent task service pausing for user input.*
+*Maps to: mode router selecting UNIFIED, ACT loop requesting clarification as part of its reasoning, persistent task service pausing for user input.*
 
 ---
 

@@ -4,7 +4,7 @@ from typing import Callable, List, Dict, Any
 
 class PathType(Enum):
     """Types of execution paths."""
-    TERMINAL = "terminal"  # Ends conversation flow (RESPOND, IGNORE, etc.)
+    TERMINAL = "terminal"  # Ends conversation flow (UNIFIED, IGNORE, etc.)
     TACTICAL = "tactical"  # Continues processing (ACT)
 
 
@@ -24,7 +24,7 @@ class PathDefinition:
         Initialize a path definition.
 
         Args:
-            name: Path name (e.g., "RESPOND", "ACT")
+            name: Path name (e.g., "UNIFIED", "ACT")
             path_type: Terminal or Tactical
             required_fields: List of required context fields
             validator: Lambda to validate context beyond required fields
@@ -65,7 +65,7 @@ class PathDefinition:
 
 # Validators for each path
 def validate_respond(ctx: Dict[str, Any]) -> bool:
-    """Validate RESPOND path context."""
+    """Validate UNIFIED path context."""
     return bool(ctx.get('response')) and 0 <= ctx.get('confidence', 0) <= 1
 
 
@@ -82,8 +82,8 @@ def validate_ignore(ctx: Dict[str, Any]) -> bool:
 # Orchestrator paths registry
 # Handlers will be set during OrchestratorService initialization
 ORCHESTRATOR_PATHS: Dict[str, PathDefinition] = {
-    "RESPOND": PathDefinition(
-        name="RESPOND",
+    "UNIFIED": PathDefinition(
+        name="UNIFIED",
         path_type=PathType.TERMINAL,
         required_fields=["response", "confidence", "topic", "destination"],
         validator=validate_respond,

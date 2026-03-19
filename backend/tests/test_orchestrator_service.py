@@ -64,7 +64,7 @@ class TestAvailablePaths:
         names = [p['name'] for p in paths]
 
         assert len(paths) == 3
-        assert set(names) == {'RESPOND', 'ACT', 'IGNORE'}
+        assert set(names) == {'UNIFIED', 'ACT', 'IGNORE'}
 
     def test_each_path_has_required_keys(self, service):
         """Every path definition contains name, type, required_fields, and description."""
@@ -78,36 +78,36 @@ class TestAvailablePaths:
             assert isinstance(path['required_fields'], list)
 
 
-# ── RESPOND Path ───────────────────────────────────────────────
+# ── UNIFIED Path ───────────────────────────────────────────────
 
 
 class TestRespondPath:
 
     def test_respond_with_valid_context_succeeds(self, service):
-        """RESPOND with all required fields returns status=success."""
-        result = service.route_path('RESPOND', _respond_context())
+        """UNIFIED with all required fields returns status=success."""
+        result = service.route_path('UNIFIED', _respond_context())
 
         assert result['status'] == 'success'
-        assert result['mode'] == 'RESPOND'
+        assert result['mode'] == 'UNIFIED'
         assert 'result' in result
 
     def test_respond_missing_fields_fails(self, service):
-        """RESPOND without required fields returns status=error."""
-        result = service.route_path('RESPOND', {'topic': 'test'})
+        """UNIFIED without required fields returns status=error."""
+        result = service.route_path('UNIFIED', {'topic': 'test'})
 
         assert result['status'] == 'error'
         assert 'Validation failed' in result['message']
 
     def test_respond_requires_confidence_between_0_and_1(self, service):
-        """RESPOND with confidence outside [0,1] fails validation."""
-        result = service.route_path('RESPOND', _respond_context(confidence=1.5))
+        """UNIFIED with confidence outside [0,1] fails validation."""
+        result = service.route_path('UNIFIED', _respond_context(confidence=1.5))
 
         assert result['status'] == 'error'
         assert 'Validation failed' in result['message']
 
     def test_respond_with_empty_response_fails(self, service):
-        """RESPOND with an empty response string fails validation."""
-        result = service.route_path('RESPOND', _respond_context(response=''))
+        """UNIFIED with an empty response string fails validation."""
+        result = service.route_path('UNIFIED', _respond_context(response=''))
 
         assert result['status'] == 'error'
 
@@ -172,15 +172,15 @@ class TestHandlerException:
 
     def test_handler_exception_returns_error(self, service):
         """When a handler raises, route_path catches it and returns status=error."""
-        # Replace the RESPOND handler with one that explodes
+        # Replace the UNIFIED handler with one that explodes
         mock_handler = MagicMock()
         mock_handler.execute.side_effect = RuntimeError("handler crashed")
-        service.handlers['RESPOND'] = mock_handler
+        service.handlers['UNIFIED'] = mock_handler
 
         # Also update the path definition so it uses the broken handler
-        ORCHESTRATOR_PATHS['RESPOND'].handler = mock_handler
+        ORCHESTRATOR_PATHS['UNIFIED'].handler = mock_handler
 
-        result = service.route_path('RESPOND', _respond_context())
+        result = service.route_path('UNIFIED', _respond_context())
 
         assert result['status'] == 'error'
         assert 'Execution failed' in result['message']
