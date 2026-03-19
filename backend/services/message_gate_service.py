@@ -87,6 +87,11 @@ class MessageGateService:
     def prefilter_skills(self, text: str) -> tuple:
         """Run ONNX skill selector to pre-filter skills and detect tool need.
 
+        NOTE: The skill-selector head (backend/data/models/skill-selector/head.npz)
+        currently has near-zero weights (untrained). It produces ~0.5 confidence for
+        all labels on every input, providing no discriminating signal. The model needs
+        to be retrained before this pre-filter adds value.
+
         Returns:
             (selected_skills: list[str], needs_external_tool: bool)
         """
