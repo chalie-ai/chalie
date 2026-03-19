@@ -2,9 +2,8 @@
  * Moment Search — full-screen recall overlay.
  *
  * Provides a dark overlay with a search input for semantic recall of
- * pinned moments. Results render as MomentCard instances.
+ * pinned moments.
  */
-import { MomentCard } from './cards/moment.js';
 
 export class MomentSearch {
   /**
@@ -101,15 +100,14 @@ export class MomentSearch {
       }
 
       for (const item of items) {
-        const card = new MomentCard(item);
-        const el = card.build();
-        el.addEventListener('click', () => {
-          document.dispatchEvent(new CustomEvent('chalie:show-moment', {
-            detail: { moment: item }
-          }));
-          this.close();
-        });
+        const el = document.createElement('div');
+        el.className = 'moment-search-dialog__item';
+        const title = item.title || item.topic || 'Moment';
+        const text = item.summary || item.message_text || '';
+        el.innerHTML = `<div class="moment-search-dialog__item-title">${this._esc(title)}</div>`
+          + (text ? `<div class="moment-search-dialog__item-text">${this._esc(text)}</div>` : '');
         el.style.cursor = 'pointer';
+        el.addEventListener('click', () => this.close());
         this._results.appendChild(el);
       }
     } catch (err) {
@@ -126,5 +124,11 @@ export class MomentSearch {
   _showLoading() {
     this._results.innerHTML =
       '<div class="moment-search-dialog__shimmer"><div></div><div></div><div></div></div>';
+  }
+
+  _esc(str) {
+    const el = document.createElement('span');
+    el.textContent = str;
+    return el.innerHTML;
   }
 }

@@ -83,7 +83,7 @@ def conversation_recent():
                 "prompt": prompt.get("message", "") if isinstance(prompt, dict) else "",
                 "response": response.get("message", "") if isinstance(response, dict) else "",
                 "topic": ex.get("topic", ""),
-                "timestamp": ex.get("timestamp", ""),
+                "timestamp": prompt.get("time", "") if isinstance(prompt, dict) else "",
                 "in_working_memory": in_working_memory,
             })
 

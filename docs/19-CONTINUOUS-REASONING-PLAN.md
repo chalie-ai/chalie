@@ -176,7 +176,7 @@ WebSocket → signal(user_message) → ReasoningLoop → route to response pipel
 - Candidate detection: queries `interaction_log` for topics with ≥3 conversations, ≥5 messages in 14 days
 - Filters: existing goals (PersistentTaskService duplicate check), routine topics, recently proposed goals
 - LLM validation: names the goal, assigns confidence, explains reasoning
-- Creates PROPOSED persistent task with evidence checkpoint, surfaces via proactive notification
+- Creates persistent task (accepted state) with evidence checkpoint, surfaces via proactive notification
 - `goal_inferred` signal emitted to reasoning loop for further reasoning about the new goal
 - Signal topic tracking: all non-user-message signals accumulate topics in `goal_inference:signal_topics` sorted set (14-day window)
 - Idle-time trigger: goal inference runs during idle handler every 6h (configurable cooldown)

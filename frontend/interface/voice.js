@@ -142,6 +142,8 @@ export class VoiceIO {
 
   /**
    * Speak text via TTS endpoint.
+   * Streams chunked WAV from the server and begins playback as soon as
+   * the first sentence is synthesized — no waiting for the full message.
    * Must be called from a user gesture context (click handler).
    * @param {string} text
    */
@@ -150,47 +152,109 @@ export class VoiceIO {
     if (this._speaking) return;
     this._speaking = true;
 
-    // Stop any current playback
+    // Stop any current playback and reset stream state
     this._stopAudio();
+
+    this._chunkQueue = [];
+    this._chunkIdx = 0;
+    this._streamDone = false;
+    this._cumulativeTime = 0;
+    this._abortCtrl = new AbortController();
+
+    this._els.audioPlayer.classList.remove('hidden');
+    this._updatePlayPauseIcon(false);
 
     try {
       const response = await fetch(_TTS_PATH, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
+        signal: this._abortCtrl.signal,
       });
 
       if (!response.ok) throw new Error(`TTS error: ${response.status}`);
 
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      document.body.appendChild(audio);
+      // Read the streamed length-prefixed WAV chunks
+      const reader = response.body.getReader();
+      let buffer = new Uint8Array(0);
 
-      this._currentAudio = audio;
-      this._els.audioPlayer.classList.remove('hidden');
-      this._updatePlayPauseIcon(false);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      audio.addEventListener('timeupdate', () => {
-        const m = Math.floor(audio.currentTime / 60);
-        const s = Math.floor(audio.currentTime % 60);
-        this._els.audioTime.textContent = `${m}:${s < 10 ? '0' : ''}${s}`;
-      });
+        // Append received bytes
+        const merged = new Uint8Array(buffer.length + value.length);
+        merged.set(buffer);
+        merged.set(value, buffer.length);
+        buffer = merged;
 
-      audio.addEventListener('ended', () => {
-        this._updatePlayPauseIcon(true);
-        this._speaking = false;
-        document.dispatchEvent(new CustomEvent('chalie:speak:done'));
-      });
+        // Extract complete frames: [uint32 BE length][WAV bytes]
+        while (buffer.length >= 4) {
+          const len = new DataView(buffer.buffer, buffer.byteOffset, 4).getUint32(0, false);
+          if (len === 0) { this._streamDone = true; break; }
+          if (buffer.length < 4 + len) break;
 
-      audio.play().catch(err => {
-        this._speaking = false;
-        document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
-      });
-      this._updatePlayPauseIcon(false);
+          const wavData = buffer.slice(4, 4 + len);
+          buffer = buffer.slice(4 + len);
+
+          const blob = new Blob([wavData], { type: 'audio/wav' });
+          this._chunkQueue.push(URL.createObjectURL(blob));
+
+          // Start playback as soon as first chunk arrives
+          if (this._chunkQueue.length === 1) this._playNextChunk();
+        }
+        if (this._streamDone) break;
+      }
+
+      this._streamDone = true;
+      this._checkStreamDone();
     } catch (err) {
+      if (err.name === 'AbortError') return; // user stopped — not an error
+      this._speaking = false;
+      this._els.audioPlayer.classList.add('hidden');
+      document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
+    }
+  }
+
+  /** Play the next queued WAV chunk. */
+  _playNextChunk() {
+    if (this._chunkIdx >= this._chunkQueue.length) {
+      this._checkStreamDone();
+      return;
+    }
+
+    const url = this._chunkQueue[this._chunkIdx];
+    const audio = new Audio(url);
+    document.body.appendChild(audio);
+    this._currentAudio = audio;
+
+    audio.addEventListener('timeupdate', () => {
+      const total = this._cumulativeTime + audio.currentTime;
+      const m = Math.floor(total / 60);
+      const s = Math.floor(total % 60);
+      this._els.audioTime.textContent = `${m}:${s < 10 ? '0' : ''}${s}`;
+    });
+
+    audio.addEventListener('ended', () => {
+      this._cumulativeTime += audio.duration;
+      URL.revokeObjectURL(url);
+      if (audio.parentNode) audio.parentNode.removeChild(audio);
+      this._chunkIdx++;
+      this._playNextChunk();
+    });
+
+    audio.play().catch(err => {
       this._speaking = false;
       document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
+    });
+  }
+
+  /** Fire the done event once the stream is exhausted and all chunks played. */
+  _checkStreamDone() {
+    if (this._streamDone && this._chunkIdx >= this._chunkQueue.length) {
+      this._speaking = false;
+      this._updatePlayPauseIcon(true);
+      document.dispatchEvent(new CustomEvent('chalie:speak:done'));
     }
   }
 
@@ -224,16 +288,26 @@ export class VoiceIO {
   }
 
   _stopAudio() {
+    // Cancel in-flight stream
+    if (this._abortCtrl) { this._abortCtrl.abort(); this._abortCtrl = null; }
+
     if (this._currentAudio) {
       this._currentAudio.pause();
-      if (this._currentAudio.src) {
-        URL.revokeObjectURL(this._currentAudio.src);
-      }
-      if (this._currentAudio.parentNode) {
-        this._currentAudio.parentNode.removeChild(this._currentAudio);
-      }
+      if (this._currentAudio.src) URL.revokeObjectURL(this._currentAudio.src);
+      if (this._currentAudio.parentNode) this._currentAudio.parentNode.removeChild(this._currentAudio);
       this._currentAudio = null;
     }
+
+    // Release any remaining queued blob URLs
+    if (this._chunkQueue) {
+      for (let i = (this._chunkIdx || 0) + 1; i < this._chunkQueue.length; i++) {
+        URL.revokeObjectURL(this._chunkQueue[i]);
+      }
+    }
+    this._chunkQueue = [];
+    this._chunkIdx = 0;
+    this._streamDone = false;
+    this._cumulativeTime = 0;
     this._speaking = false;
     this._els.audioPlayer.classList.add('hidden');
     this._els.audioTime.textContent = '0:00';

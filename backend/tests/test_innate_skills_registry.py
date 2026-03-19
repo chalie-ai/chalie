@@ -49,7 +49,6 @@ class TestSkillRegistry:
         assert COGNITIVE_PRIMITIVES < ALL_SKILL_NAMES
 
     def test_planning_skills_excludes_internal(self):
-        assert 'emit_card' not in PLANNING_SKILLS
         assert 'moment' not in PLANNING_SKILLS
 
     def test_contextual_plus_primitives_equals_planning(self):
@@ -67,8 +66,8 @@ class TestSkillRegistry:
     def test_deterministic_actions_subset_of_all(self):
         assert DETERMINISTIC_ACTIONS <= ALL_SKILL_NAMES
 
-    def test_procedural_memory_skills_equals_primitives(self):
-        assert PROCEDURAL_MEMORY_SKILLS == COGNITIVE_PRIMITIVES
+    def test_procedural_memory_skills_subset_of_primitives(self):
+        assert PROCEDURAL_MEMORY_SKILLS <= COGNITIVE_PRIMITIVES
 
     def test_skill_descriptions_covers_all_skills(self):
         assert set(SKILL_DESCRIPTIONS.keys()) == ALL_SKILL_NAMES

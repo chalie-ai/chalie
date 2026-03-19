@@ -22,8 +22,8 @@ Fail mode: Returns empty list on any failure, never raises
 
 Scans interaction_log for topics recurring across multiple conversations.
 Uses a lightweight LLM call to validate whether a pattern represents a
-genuine goal vs. routine conversation. Creates PROPOSED persistent tasks
-that the user must accept before autonomous pursuit.
+genuine goal vs. routine conversation. Creates persistent tasks that
+start running immediately in accepted state.
 """
 
 import json
@@ -66,7 +66,7 @@ class GoalInferenceService:
     1. SQL query finds topics with >= N conversations in the lookback window
     2. Filter out topics with active tasks, routine topics, and recently-proposed topics
     3. LLM validates the top candidate and generates a goal statement
-    4. Creates a PROPOSED persistent task (user must accept)
+    4. Creates a persistent task (starts immediately in accepted state)
     5. Emits goal_inferred signal to the reasoning loop
     """
 
@@ -331,10 +331,9 @@ Respond with ONLY a JSON object:
 
     def _propose_goal(self, goal_statement: str, topic: str,
                       evidence: Dict, reasoning: str = '') -> bool:
-        """Create a PROPOSED persistent task for the inferred goal.
+        """Create a persistent task for the inferred goal.
 
-        Tasks are created in PROPOSED state by default — the user must explicitly
-        accept before autonomous pursuit begins.
+        Tasks start in accepted state — the worker picks them up immediately.
         """
         try:
             from services.persistent_task_service import PersistentTaskService
@@ -382,26 +381,6 @@ Respond with ONLY a JSON object:
             except Exception:
                 pass  # Non-fatal — task was created successfully
 
-            # Evaluate for autonomous execution gate — may auto-accept the task
-            auto_accepted = False
-            try:
-                from services.autonomous_execution_gate import get_autonomous_execution_gate
-                gate = get_autonomous_execution_gate()
-                evaluation = gate.evaluate(goal_statement, topic, account_id)
-                if evaluation['auto_execute']:
-                    task_service.transition(task_id, 'accepted')
-                    auto_accepted = True
-                    logger.info(
-                        f"{LOG_PREFIX} Goal auto-accepted: {goal_statement!r:.80} "
-                        f"(tier={evaluation['consequence_name']}, "
-                        f"confidence={evaluation['domain_confidence']:.2f})"
-                    )
-            except Exception:
-                logger.debug(
-                    f"{LOG_PREFIX} Autonomy gate unavailable, task stays PROPOSED",
-                    exc_info=True,
-                )
-
             # Emit goal_inferred signal to the reasoning loop
             try:
                 from services.reasoning_loop_service import emit_reasoning_signal, ReasoningSignal
@@ -415,26 +394,24 @@ Respond with ONLY a JSON object:
             except Exception:
                 pass  # Non-fatal
 
-            # Surface to user via proactive notification — skipped for auto-accepted tasks
-            if not auto_accepted:
-                try:
-                    from services.output_service import OutputService
-                    OutputService().enqueue_proactive(
-                        topic=topic,
-                        response=(
-                            f"I've noticed you keep coming back to **{topic}** — "
-                            f"it's appeared in {evidence['conversation_count']} conversations recently. "
-                            f"I think there might be a goal here: *{goal_statement}*\n\n"
-                            f"I've created a proposed task for this. "
-                            f"You can accept, modify, or dismiss it."
-                        ),
-                        source='goal_inference',
-                    )
-                except Exception:
-                    pass  # Non-fatal — task still created
+            # Surface to user — let them know a background task was started
+            try:
+                from services.output_service import OutputService
+                OutputService().enqueue_proactive(
+                    topic=topic,
+                    response=(
+                        f"I've noticed you keep coming back to **{topic}** — "
+                        f"it's appeared in {evidence['conversation_count']} conversations recently. "
+                        f"I think there might be a goal here: *{goal_statement}*\n\n"
+                        f"I've started a background task to work on this."
+                    ),
+                    source='goal_inference',
+                )
+            except Exception:
+                pass  # Non-fatal — task still created
 
             logger.info(
-                f"{LOG_PREFIX} Proposed goal: '{goal_statement}' "
+                f"{LOG_PREFIX} Created goal task: '{goal_statement}' "
                 f"(task={task_id}, topic={topic})"
             )
             return True

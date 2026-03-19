@@ -52,14 +52,6 @@ def _handle_search(service, params: dict, topic: str) -> str:
 
     results = service.search_moments(query, limit=3)
 
-    if results:
-        # Emit best match as card
-        try:
-            from services.moment_card_service import MomentCardService
-            MomentCardService().emit_moment_card(topic, results[0])
-        except Exception as card_err:
-            logger.warning(f"[MOMENT SKILL] Card emit failed (non-fatal): {card_err}")
-
     if not results:
         return "[MOMENT] No matching moments found."
 
@@ -74,13 +66,6 @@ def _handle_search(service, params: dict, topic: str) -> str:
 
 def _handle_list(service, topic: str) -> str:
     moments = service.get_all_moments()
-
-    if moments:
-        try:
-            from services.moment_card_service import MomentCardService
-            MomentCardService().emit_moment_list_card(topic, moments)
-        except Exception as card_err:
-            logger.warning(f"[MOMENT SKILL] Card emit failed (non-fatal): {card_err}")
 
     if not moments:
         return "[MOMENT] No moments found."

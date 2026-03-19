@@ -247,19 +247,6 @@ export class Renderer {
     this._scrollToBottom();
   }
 
-  /** Insert a capability card element into the spine. */
-  insertCard(cardElement) {
-    this._spine.appendChild(cardElement);
-    this._scrollToBottom();
-  }
-
-  /** Append a pre-built tool result card element. */
-  appendToolCard(cardElement) {
-    this._spine.appendChild(cardElement);
-    this._scrollToBottom();
-    return cardElement;
-  }
-
   /**
    * Upgrade a pending (thinking dots) form to a brief placeholder phrase.
    * Called after 2 seconds when the response is still in flight.
@@ -420,6 +407,15 @@ export class Renderer {
     requestAnimationFrame(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
+  }
+
+  /**
+   * Force-scroll to the very bottom, ignoring the _userScrolledUp guard.
+   * Uses instant behavior so it can't race with content appends.
+   */
+  forceScrollToBottom() {
+    this._userScrolledUp = false;
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
   }
 
   _formatTimestamp(ts) {

@@ -12,13 +12,13 @@ register_innate_skills() in __init__.py (currently 15 skills).
 ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
-    'moment', 'persistent_task', 'emit_card', 'document',
-    'read', 'reflect', 'notes',
+    'moment', 'persistent_task', 'document',
+    'read', 'reflect', 'notes', 'find_tools',
 })
 
-# ── LLM-visible for planning: excludes emit_card (internal trigger) and
-#    moment (context read, not a user-facing skill) ──────────────────────────
-PLANNING_SKILLS: frozenset = ALL_SKILL_NAMES - frozenset({'emit_card', 'moment'})
+# ── LLM-visible for planning: excludes moment (context read, not a
+#    user-facing skill) ──────────────────────────────────────────────────────
+PLANNING_SKILLS: frozenset = ALL_SKILL_NAMES - frozenset({'moment'})
 
 # ── Reflection filter: innate skills whose output should NOT go to
 #    experience assimilation (all innate skills are filtered out) ────────────
@@ -27,7 +27,7 @@ REFLECTION_FILTER_SKILLS: frozenset = ALL_SKILL_NAMES
 # ── Cognitive primitives: always injected into ACT mode regardless of
 #    triage selection. These are the foundational memory operations. ─────────
 COGNITIVE_PRIMITIVES: frozenset = frozenset({
-    'recall', 'memorize', 'introspect', 'associate',
+    'recall', 'memorize', 'introspect', 'associate', 'find_tools',
 })
 
 # ── Contextual skills: planning-visible skills minus primitives.
@@ -39,7 +39,7 @@ TRIAGE_VALID_SKILLS: frozenset = PLANNING_SKILLS
 
 # ── Ordered primitives list: used where insertion order matters
 #    (e.g., prepending to skill lists in triage) ───────────────────────────
-COGNITIVE_PRIMITIVES_ORDERED: list = ['recall', 'memorize', 'introspect', 'associate']
+COGNITIVE_PRIMITIVES_ORDERED: list = ['recall', 'memorize', 'introspect', 'associate', 'find_tools']
 
 # ── Skills tracked by procedural memory (skill_outcome_recorder).
 #    Only the 4 core primitives — dynamic tools are tracked separately
@@ -60,11 +60,11 @@ SKILL_DESCRIPTIONS: dict = {
     'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
     'persistent_task': 'Create, manage, track, complete, and update progress on multi-session background tasks with state machine lifecycle',
     'moment': 'Capture and read ambient context snapshots (time, place, energy, device)',
-    'emit_card': 'Render deferred tool cards into the conversation stream (internal trigger)',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
     'notes': 'Query working notes from this session — large tool results and older action history are stored here for on-demand retrieval',
+    'find_tools': 'Search for external tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
@@ -79,11 +79,11 @@ SKILL_EFFORT: dict = {
     'autobiography': 'light',
     'persistent_task': 'deep',
     'moment': 'trivial',
-    'emit_card': 'trivial',
     'document': 'light',
     'read': 'light',
     'reflect': 'light',
     'notes': 'trivial',
+    'find_tools': 'trivial',
 }
 
 # ── Skill categories ───────────────────────────────────────────────────────────
@@ -98,9 +98,9 @@ SKILL_CATEGORIES: dict = {
     'autobiography': 'identity',
     'persistent_task': 'task_management',
     'moment': 'context',
-    'emit_card': 'output',
     'document': 'knowledge',
     'read': 'research',
     'reflect': 'cognition',
     'notes': 'memory',
+    'find_tools': 'cognition',
 }

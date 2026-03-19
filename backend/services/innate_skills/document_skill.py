@@ -267,11 +267,6 @@ def _handle_delete(service, params: dict, topic: str) -> str:
 
     success = service.soft_delete(doc['id'])
     if success:
-        try:
-            from services.document_card_service import DocumentCardService
-            DocumentCardService().emit_delete_card(topic, doc['original_name'])
-        except Exception as card_err:
-            logger.warning(f"[DOCUMENT SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[DOCUMENT] Deleted '{doc['original_name']}'. Can be restored within 30 days."
     return f"[DOCUMENT] Failed to delete '{doc['original_name']}'."
 
@@ -299,11 +294,6 @@ def _handle_restore(service, params: dict, topic: str) -> str:
 
     success = service.restore(doc['id'])
     if success:
-        try:
-            from services.document_card_service import DocumentCardService
-            DocumentCardService().emit_restore_card(topic, doc['original_name'])
-        except Exception as card_err:
-            logger.warning(f"[DOCUMENT SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[DOCUMENT] Restored '{doc['original_name']}'."
     return f"[DOCUMENT] Failed to restore '{doc['original_name']}'."
 
@@ -337,12 +327,6 @@ def _handle_create(service, params: dict, topic: str) -> str:
         # Enqueue for processing (chunking, embedding, etc.)
         from services.document_queue import enqueue_document_processing
         enqueue_document_processing(doc_id)
-
-        try:
-            from services.document_card_service import DocumentCardService
-            DocumentCardService().emit_upload_card(topic, name, 'processing')
-        except Exception as card_err:
-            logger.warning(f"[DOCUMENT SKILL] Card emit failed (non-fatal): {card_err}")
 
         return (
             f"[DOCUMENT] Created '{name}' (id={doc_id}). "

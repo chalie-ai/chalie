@@ -2078,7 +2078,7 @@ async function loadTasksObs() {
         // Persistent tasks
         if (tasks.length > 0) {
             html += '<div class="obs-section-title">Background Tasks</div>';
-            const statusLabels = { proposed: 'Proposed', accepted: 'Accepted', in_progress: 'In Progress', paused: 'Paused' };
+            const statusLabels = { accepted: 'Accepted', in_progress: 'In Progress', paused: 'Paused' };
             for (const t of tasks) {
                 const label = statusLabels[t.status] || t.status;
                 const badgeClass = t.status === 'paused' ? '--paused' : '--active';

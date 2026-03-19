@@ -8,11 +8,7 @@ import { Renderer } from './renderer.js';
 import { VoiceIO } from './voice.js';
 import { ClientHeartbeat } from './heartbeat.js';
 import { AmbientSensor } from './ambient.js';
-import { MemoryCard } from './cards/memory.js';
-import { TimelineCard } from './cards/timeline.js';
-import { ToolResultCard } from './cards/tool_result.js';
 import { MomentSearch } from './moment_search.js';
-import { MomentCard } from './cards/moment.js';
 
 // Safe localStorage wrapper — private browsing on iOS Safari / Firefox throws SecurityError.
 function _lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -48,15 +44,8 @@ class ChalieApp {
     // Populated by _handleImageAttach; cleared by the 'image_ready' WS event or timeout.
     this._pendingImageAnalysis = new Map();
 
-    // Cards
-    this._memoryCard = null;
-    this._timelineCard = null;
     this._momentSearch = null;
 
-    // Scheduler trigger dedup: topic → timestamp of last card event (60s window)
-    this._recentToolCardTopics = new Map();
-    // B10 fix: output_id-based dedup for card events (prevents SSE reconnect replays)
-    this._seenCardIds = new Set();
     // Web Audio context (unlocked on first user gesture)
     this._audioCtx = null;
 
@@ -103,7 +92,6 @@ class ChalieApp {
     this._initPresence();
     this._initRenderer();
     this._initVoice();
-    this._initCards();
     this._initTools();
     this._initApps();
     this._initMoments();
@@ -186,13 +174,19 @@ class ChalieApp {
       const voiceReady = await this.voice.init();
       if (voiceReady.stt) document.getElementById('micBtn')?.classList.remove('hidden');
       this.renderer.setTtsEnabled(voiceReady.tts);
-      this._loadRecentConversation();
+      await this._loadRecentConversation();
       this._loadActiveTasks();
       // Poll every 60s as a safety net for tasks that complete without a drift event
       this._taskStripInterval = setInterval(() => this._loadActiveTasks(), 60_000);
       this._connectWebSocket();
+      // Register scroll-up pagination AFTER initial load is done and scroll
+      // position is at the bottom — prevents cascade of loads on startup.
+      // Only trigger when the user actively scrolls near the top AND the page
+      // is scrollable (scrollHeight > viewport), so short conversations don't
+      // cascade into loading the full 120-exchange history.
       window.addEventListener('scroll', () => {
-        if (window.scrollY < 150 && !this._historyLoading && !this._historyExhausted) {
+        const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
+        if (scrollable && window.scrollY < 150 && !this._historyLoading && !this._historyExhausted) {
           const anchor = document.body.scrollHeight - window.scrollY;
           this._loadRecentConversation().then(() => {
             window.scrollTo(0, document.body.scrollHeight - anchor);
@@ -247,16 +241,6 @@ class ChalieApp {
       audioClose: document.getElementById('audioClose'),
       micError: document.getElementById('micError'),
     });
-  }
-
-  // ---------------------------------------------------------------------------
-  // Cards
-  // ---------------------------------------------------------------------------
-
-  _initCards() {
-    this._memoryCard = new MemoryCard(this.api, this.renderer);
-    this._timelineCard = new TimelineCard(this.api, this.renderer);
-    this._toolResultCard = new ToolResultCard();
   }
 
   // ---------------------------------------------------------------------------
@@ -675,85 +659,6 @@ class ChalieApp {
       }
     });
 
-    // Show moment event (from search overlay click)
-    document.addEventListener('chalie:show-moment', (e) => {
-      const { moment } = e.detail;
-      const card = new MomentCard(moment);
-      this.renderer.appendToolCard(card.build());
-    });
-
-    // Forget moment event (from Forget button on a moment card)
-    document.addEventListener('chalie:forget-moment', (e) => {
-      const { momentId, cardElement } = e.detail;
-
-      // Dim the card to signal pending deletion — don't remove it yet
-      cardElement.classList.add('moment-card--pending-forget');
-
-      // Schedule actual forget after the undo window
-      const forgetTimer = setTimeout(async () => {
-        cardElement.classList.remove('moment-card--pending-forget');
-        cardElement.classList.add('moment-card--forgetting');
-        setTimeout(() => cardElement.remove(), 310);
-
-        try {
-          const base = backendHost ? backendHost.replace(/\/$/, '') : '';
-          await fetch(base + `/moments/${momentId}/forget`, {
-            method: 'POST',
-            credentials: 'same-origin',
-          });
-        } catch (err) {
-          console.warn('Forget moment failed:', err);
-        }
-      }, 10000);
-
-      // Undo — cancel the timer and restore the card
-      this._showToast('Forgotten', () => {
-        clearTimeout(forgetTimer);
-        cardElement.classList.remove('moment-card--pending-forget');
-      }, 10000);
-    });
-
-    // Generic card action handler (tool-agnostic)
-    document.addEventListener('chalie:card-action', async (e) => {
-      const { action, payload, cardEl } = e.detail;
-      const base = this._backendHost ? this._backendHost.replace(/\/$/, '') : '';
-
-      if (action === 'save-document') {
-        try {
-          const res = await fetch(base + '/documents/create-from-conversation', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify(payload),
-          });
-          if (res.ok) {
-            const bodyEl = cardEl.querySelector('.tool-result-card__body');
-            if (bodyEl) {
-              bodyEl.innerHTML =
-                '<div style="padding:12px;color:#34d399;font-size:14px;">Saved! Processing your document\u2026</div>';
-            }
-          } else {
-            this._showToast('Failed to save document');
-          }
-        } catch (err) {
-          console.error('Save document failed:', err);
-          this._showToast('Failed to save document');
-        }
-      } else if (action === 'dismiss-save') {
-        cardEl.style.transition = 'opacity 300ms ease';
-        cardEl.style.opacity = '0';
-        setTimeout(() => cardEl.remove(), 300);
-        try {
-          await fetch(base + '/documents/dismiss-save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify(payload),
-          });
-        } catch { /* silent dismiss */ }
-      }
-    });
-
     // First-use hint (one-time)
     if (!_lsGet('moments_hint_shown')) {
       this._showMomentsHintOnFirstResponse();
@@ -1099,7 +1004,7 @@ class ChalieApp {
     });
 
     // Stop recording button in overlay
-    document.getElementById('stopRecordingBtn').addEventListener('click', async () => {
+    document.getElementById('stopRecordingBtn')?.addEventListener('click', async () => {
       if (this.voice._isRecording) {
         await stopAndTranscribe();
       }
@@ -1191,23 +1096,16 @@ class ChalieApp {
         if (responseText) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          if (pendingForm.isConnected) {
-            // Normal path: pending bubble still in the DOM
-            this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
-          } else {
-            // Card arrived via drift stream first — pending form was already removed.
-            // Append the synthesis as a new message so it isn't silently lost.
-            this.renderer.appendChalieForm(responseText, responseMeta);
-          }
+          this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
             this._notifyBackground(responseText);
           }
         } else {
-          // card-only: keep the pending bubble visible until the card arrives via drift stream
-          this.renderer.upgradePendingText(pendingForm); // no-op if already upgraded
-          // _pendingForm stays set; drift card handler will remove it
+          // No text response — remove the pending bubble
+          pendingForm.remove();
+          this._pendingForm = null;
         }
         this.presence.setState('resting');
         this._isSending = false;
@@ -1250,7 +1148,8 @@ class ChalieApp {
         return;
       }
 
-      if (this._historyOffset === 0) {
+      const isInitialLoad = this._historyOffset === 0;
+      if (isInitialLoad) {
         // Initial load — append in chronological order; use in_working_memory from API
         for (const exchange of exchanges) {
           this._appendExchange(exchange, exchange.in_working_memory !== false);
@@ -1268,6 +1167,12 @@ class ChalieApp {
       if (!data.has_more || this._historyOffset >= this._historyMaxTurns) {
         this._historyExhausted = true;
         this._showHistoryEndPill();
+      }
+
+      // After initial load, force-scroll to show the latest message.
+      // Uses instant scroll to avoid race with smooth scroll + scroll tracking.
+      if (isInitialLoad && exchanges.length > 0) {
+        this.renderer.forceScrollToBottom();
       }
     } catch (err) {
       if (err.message === 'AUTH') {
@@ -1393,32 +1298,6 @@ class ChalieApp {
       return;
     }
 
-    // Tool result card event
-    if (data.type === 'card') {
-      // B10 fix: deduplicate card events on SSE reconnect
-      const cardId = data.output_id
-        || `${data.tool || 'unknown'}:${data.topic || ''}:${Math.floor(Date.now() / 5000)}`;
-      if (this._seenCardIds.has(cardId)) return;
-      this._seenCardIds.add(cardId);
-      // Periodic cleanup (keep set bounded)
-      if (this._seenCardIds.size > 200) {
-        const arr = [...this._seenCardIds];
-        this._seenCardIds = new Set(arr.slice(-100));
-      }
-
-      if (this._pendingForm) {
-        this._pendingForm.remove();
-        this._pendingForm = null;
-      }
-      const cardEl = this._toolResultCard.build(data);
-      this.renderer.appendToolCard(cardEl);
-      // Track this topic so a follow-up reminder/task event doesn't double-render
-      if (data.topic) {
-        this._recentToolCardTopics.set(data.topic, Date.now());
-      }
-      return;
-    }
-
     const content = data.content || '';
     if (!content) return;
 
@@ -1431,10 +1310,10 @@ class ChalieApp {
       this._notifyBackground(content);
     }
 
-    // Scheduler trigger events — show in task strip only, no chat card
+    // Scheduler trigger events — refresh task strip, play sound
     if (data.type === 'notification') {
       this._playScheduleSound();
-      this._loadActiveTasks();  // Refresh strip; fired reminder changes status → drops out
+      this._loadActiveTasks();
       return;
     }
 
@@ -1454,63 +1333,6 @@ class ChalieApp {
     if (data.type === 'escalation') {
       formEl.classList.add('speech-form--escalation');
     }
-  }
-
-  _handleSchedulerTrigger(data) {
-    // Expire stale entries from the tool card topic map (60s window)
-    const now = Date.now();
-    for (const [topic, ts] of this._recentToolCardTopics) {
-      if (now - ts > 60000) this._recentToolCardTopics.delete(topic);
-    }
-
-    const topic = data.topic;
-    const recentCard = topic && this._recentToolCardTopics.has(topic);
-
-    if (recentCard) {
-      // Tool card already visible — render as plain Chalie message to avoid duplication
-      this.renderer.appendChalieForm(data.content, { topic, type: data.type, ts: new Date() });
-      return;
-    }
-
-    // No tool card — render a styled trigger card and play sound
-    const cardEl = this._buildTriggerCard(data);
-    this.renderer.appendToolCard(cardEl);
-    this._playScheduleSound();
-  }
-
-  _buildTriggerCard(data) {
-    const label = 'Notification';
-    const card = document.createElement('div');
-    card.className = 'tool-result-card';
-    card.setAttribute('data-tool', `scheduler_trigger`);
-
-    const body = document.createElement('div');
-    body.className = 'tool-result-card__body scheduler-trigger-card';
-
-    const labelEl = document.createElement('div');
-    labelEl.className = 'scheduler-trigger-card__label';
-
-    const bellSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    bellSvg.setAttribute('width', '12');
-    bellSvg.setAttribute('height', '12');
-    bellSvg.setAttribute('viewBox', '0 0 24 24');
-    bellSvg.setAttribute('fill', '#00F0FF');
-    bellSvg.setAttribute('aria-hidden', 'true');
-    bellSvg.style.cssText = 'flex-shrink:0;opacity:0.85;vertical-align:middle;margin-right:4px;';
-    const bellPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    bellPath.setAttribute('d', 'M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6V11c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z');
-    bellSvg.appendChild(bellPath);
-    labelEl.appendChild(bellSvg);
-    labelEl.appendChild(document.createTextNode(label));
-
-    const textEl = document.createElement('div');
-    textEl.className = 'scheduler-trigger-card__text';
-    textEl.textContent = data.content;
-
-    body.appendChild(labelEl);
-    body.appendChild(textEl);
-    card.appendChild(body);
-    return card;
   }
 
   _playScheduleSound() {
@@ -1633,6 +1455,8 @@ class ChalieApp {
         }
         // Dismiss stale notifications now that the user is back
         this._dismissNotifications();
+        // Scroll to latest message so user sees current state
+        this.renderer.forceScrollToBottom();
       }
     });
   }

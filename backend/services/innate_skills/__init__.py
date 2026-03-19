@@ -25,11 +25,11 @@ from services.innate_skills.focus_skill import handle_focus
 from services.innate_skills.list_skill import handle_list
 from services.innate_skills.moment_skill import handle_moment
 from services.innate_skills.persistent_task_skill import handle_persistent_task
-from services.innate_skills.emit_card_skill import handle_emit_card
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
 from services.innate_skills.reflect_skill import handle_reflect
 from services.innate_skills.notes_skill import handle_notes
+from services.innate_skills.find_tools_skill import handle_find_tools
 
 
 _SKILL_HANDLERS = {
@@ -43,11 +43,11 @@ _SKILL_HANDLERS = {
     'list': handle_list,
     'moment': handle_moment,
     'persistent_task': handle_persistent_task,
-    'emit_card': handle_emit_card,
     'document': handle_document,
     'read': handle_read,
     'reflect': handle_reflect,
     'notes': handle_notes,
+    'find_tools': handle_find_tools,
 }
 
 
@@ -74,11 +74,11 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)
     dispatcher.handlers["moment"] = lambda topic, action: handle_moment(topic, action)
     dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
-    dispatcher.handlers["emit_card"] = lambda topic, action: handle_emit_card(topic, action)
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
     dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)
     dispatcher.handlers["reflect"] = lambda topic, action: handle_reflect(topic, action)
     dispatcher.handlers["notes"] = lambda topic, action: handle_notes(topic, action)
+    dispatcher.handlers["find_tools"] = lambda topic, action: handle_find_tools(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
     dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)

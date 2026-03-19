@@ -68,7 +68,7 @@ def persistent_task_worker(shared_state):
 
 
 def _run_cycle():
-    """Pick one eligible task and run the organic ACT loop."""
+    """Process all eligible tasks, running each to completion."""
     from services.database_service import get_shared_db_service
     from services.persistent_task_service import PersistentTaskService
 
@@ -80,26 +80,30 @@ def _run_cycle():
     if expired:
         logger.info(f"{LOG_PREFIX} Expired {expired} stale tasks")
 
-    # Pick eligible task
-    task = task_service.get_eligible_task()
-    if not task:
-        logger.debug(f"{LOG_PREFIX} No eligible tasks")
-        return
+    # Process eligible tasks one by one
+    processed = set()
+    while True:
+        task = task_service.get_eligible_task()
+        if not task:
+            logger.debug(f"{LOG_PREFIX} No eligible tasks")
+            return
+        if task['id'] in processed:
+            return  # Already ran this task this cycle
 
-    task_id = task['id']
-    logger.info(f"{LOG_PREFIX} Processing task {task_id}: {task['goal'][:80]}")
-
-    _process_task(task_service, task)
+        logger.info(f"{LOG_PREFIX} Processing task {task['id']}: {task['goal'][:80]}")
+        _process_task(task_service, task)
+        processed.add(task['id'])
 
 
 def _process_task(task_service, task):
-    """Run one organic ACT cycle for a task."""
-    task_id = task['id']
+    """Run continuous ACT cycles on a task until complete or naturally stopped.
 
-    # Rate limit check
-    if not task_service.check_rate_limit(task_id):
-        logger.info(f"{LOG_PREFIX} Task {task_id} rate-limited (max 3/hr)")
-        return
+    Steps run back-to-back — each cycle's results feed into the next so the
+    DAG plan can adapt.  The worker only pauses when the ACT loop exits
+    naturally (LLM decided it's done) or on error.
+    """
+    task_id = task['id']
+    MAX_CONTINUOUS_CYCLES = 300  # Safety valve — not a throttle
 
     # Transition to IN_PROGRESS if needed
     if task['status'] == 'accepted':
@@ -108,55 +112,78 @@ def _process_task(task_service, task):
             logger.warning(f"{LOG_PREFIX} Cannot start task {task_id}: {msg}")
             return
 
-    progress = task.get('progress', {}) or {}
-    prev_coverage = progress.get('coverage_estimate', 0.0)
+    for _cycle_num in range(MAX_CONTINUOUS_CYCLES):
+        # Refresh task from DB — may have been completed by innate skill
+        task = task_service.get_task(task_id)
+        if not task or task['status'] not in ('accepted', 'in_progress'):
+            logger.info(
+                f"{LOG_PREFIX} Task {task_id} no longer active "
+                f"(status={task['status'] if task else 'deleted'})"
+            )
+            return
 
-    # Run the organic ACT loop — no pre-planning, no plan-aware routing
-    try:
-        result_data = _execute_task_act_loop(task)
-    except Exception as e:
-        logger.error(f"{LOG_PREFIX} ACT loop failed for task {task_id}: {e}", exc_info=True)
-        # Crash-safe: task stays IN_PROGRESS, checkpoint is NOT updated
-        return
+        progress = task.get('progress', {}) or {}
+        prev_coverage = progress.get('coverage_estimate', 0.0)
 
-    # Merge progress update into existing progress
-    new_progress = dict(progress)
-    new_progress.update(result_data.get('progress_update', {}))
-    cycles_completed = progress.get('cycles_completed', 0) + 1
-    new_progress['cycles_completed'] = cycles_completed
-    new_progress['last_cycle_at'] = utc_now().isoformat()
-    new_progress['cycles_this_hour'] = progress.get('cycles_this_hour', 0) + 1
+        # Run one ACT loop cycle
+        try:
+            result_data = _execute_task_act_loop(task)
+        except Exception as e:
+            logger.error(f"{LOG_PREFIX} ACT loop failed for task {task_id}: {e}", exc_info=True)
+            return  # Crash-safe: task stays IN_PROGRESS
 
-    # Atomic checkpoint
-    task_service.checkpoint(
-        task_id=task_id,
-        progress=new_progress,
-        result_fragment=result_data.get('result_fragment'),
-    )
+        # Merge progress
+        new_progress = dict(progress)
+        new_progress.update(result_data.get('progress_update', {}))
+        cycles_completed = progress.get('cycles_completed', 0) + 1
+        new_progress['cycles_completed'] = cycles_completed
+        new_progress['last_cycle_at'] = utc_now().isoformat()
 
-    # Check if task is complete
-    if result_data.get('task_complete', False):
-        final_result = new_progress.get('last_summary', 'Task completed.')
-        task_service.complete_task(task_id, final_result, result_data.get('artifact'))
-        _surface_completion(task, final_result)
-        logger.info(f"{LOG_PREFIX} Task {task_id} completed!")
-        return
+        # Atomic checkpoint
+        task_service.checkpoint(
+            task_id=task_id,
+            progress=new_progress,
+            result_fragment=result_data.get('result_fragment'),
+        )
 
-    # Adaptive surfacing
-    new_coverage = new_progress.get('coverage_estimate', prev_coverage)
-    coverage_jump = new_coverage - prev_coverage
+        # Check if task is complete
+        if result_data.get('task_complete', False):
+            final_result = new_progress.get('last_summary', 'Task completed.')
+            task_service.complete_task(task_id, final_result, result_data.get('artifact'))
+            _surface_completion(task, final_result)
+            logger.info(f"{LOG_PREFIX} Task {task_id} completed!")
+            return
 
-    should_surface = (
-        (cycles_completed == 2) or
-        (coverage_jump > 0.15)
-    )
+        # Check if completed by innate skill during the ACT loop
+        refreshed = task_service.get_task(task_id)
+        if refreshed and refreshed['status'] in ('completed', 'cancelled'):
+            logger.info(f"{LOG_PREFIX} Task {task_id} {refreshed['status']} during ACT loop")
+            return
 
-    if should_surface:
-        _surface_progress(task, new_progress)
+        # Adaptive surfacing
+        new_coverage = new_progress.get('coverage_estimate', prev_coverage)
+        coverage_jump = new_coverage - prev_coverage
+        if (cycles_completed == 2) or (coverage_jump > 0.15):
+            _surface_progress(task, new_progress)
 
-    logger.info(
-        f"{LOG_PREFIX} Task {task_id} cycle {cycles_completed} complete "
-        f"(coverage: {prev_coverage:.0%} → {new_coverage:.0%})"
+        # Decide whether to continue immediately
+        termination = result_data.get('termination_reason', '')
+        if termination in ('natural_exit', 'no_actions'):
+            # LLM decided it's done for now — stop cycling
+            logger.info(
+                f"{LOG_PREFIX} Task {task_id} cycle {cycles_completed} — "
+                f"natural stop ({termination}), coverage: {new_coverage:.0%}"
+            )
+            return
+
+        # max_iterations or timeout — more work to do, continue immediately
+        logger.info(
+            f"{LOG_PREFIX} Task {task_id} cycle {cycles_completed} "
+            f"(coverage: {prev_coverage:.0%} → {new_coverage:.0%}) — continuing"
+        )
+
+    logger.warning(
+        f"{LOG_PREFIX} Task {task_id} hit safety limit ({MAX_CONTINUOUS_CYCLES} cycles)"
     )
 
 
@@ -259,7 +286,7 @@ def _execute_task_act_loop(task: dict) -> dict:
         smart_repetition=True,
         escalation_hints=False,
         persistent_task_exit=False,
-        deferred_card_context=False,
+        execution_gate=False,  # User already approved the task by creating it
     )
 
     result = orchestrator.run(
@@ -285,9 +312,10 @@ def _execute_task_act_loop(task: dict) -> dict:
 
     return {
         'progress_update': progress_update,
-        'task_complete': False,  # Organic loop — completion determined by task skill or next cycle
+        'task_complete': False,  # Completion determined by task skill or next cycle
         'result_fragment': None,
         'artifact': None,
+        'termination_reason': result.termination_reason,
     }
 
 
