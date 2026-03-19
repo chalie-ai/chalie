@@ -77,7 +77,7 @@ class OutputService:
         # Map source to event type
         source_type_map = {
             'proactive_drift': 'drift',
-            'tool_followup': 'tool_followup',
+            'tool_result': 'response',
             'reminder': 'reminder',
             'task': 'task',
             'persistent_task': 'task',

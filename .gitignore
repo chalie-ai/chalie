@@ -33,4 +33,4 @@ training/
 node_modules/
 frontend/_interfaces
 
-docker-compose.yml
+docker-compose.ymlfrontend/server/data/
