@@ -26,7 +26,7 @@ CYCLE_LIMITS = {
 
 VALID_TYPES = {
     'user_input', 'fast_response', 'tool_work', 'tool_result',
-    'proactive_drift', 'act_followup',
+    'proactive_drift',
 }
 VALID_STATUSES = {'pending', 'processing', 'completed', 'failed', 'cancelled', 'suppressed', 'expired'}
 
@@ -323,7 +323,7 @@ class CycleService:
                 cursor.execute("""
                     SELECT COUNT(*) FROM message_cycles
                     WHERE root_cycle_id = ?
-                    AND cycle_type IN ('tool_result', 'act_followup')
+                    AND cycle_type = 'tool_result'
                 """, (root_id,))
                 followup_count = cursor.fetchone()[0]
 
