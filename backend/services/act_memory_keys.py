@@ -57,17 +57,5 @@ def sse_channel(uuid: str) -> str:
     return f"sse:{uuid}"
 
 
-def sse_pending(uuid: str) -> str:
-    """Return the MemoryStore key for pending SSE events of a session.
-
-    Args:
-        uuid: Session UUID.
-
-    Returns:
-        MemoryStore key string.
-    """
-    return f"sse_pending:{uuid}"
-
-
 TOOL_REFLECTION_QUEUE = "tool_reflection:pending"
 TOOL_REFLECTION_TTL = 86400  # 24 hours

@@ -16,7 +16,7 @@ observations are stored as episodes and flow through the existing semantic
 consolidation pipeline into concepts/relationships.
 
 Flow:
-  tool_worker pushes tool outputs to MemoryStore list (tool_reflection:pending)
+  ACT loop enqueues tool outputs to MemoryStore list (tool_reflection:pending)
   → this service pops items every check_interval seconds
   → novelty gate layer 3: content hash dedup (layers 1+2 happen at enqueue time)
   → LLM reflection: "anything novel & conversationally useful?"

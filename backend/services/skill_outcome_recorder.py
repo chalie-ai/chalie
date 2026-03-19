@@ -1,9 +1,6 @@
 """
 Shared Skill Outcome Recorder — records innate skill outcomes to procedural memory.
 
-Extracted from tool_worker.py so both digest_worker (sync ACT path) and
-tool_worker (background ACT path) share the same recording logic.
-
 Dynamic tools are already recorded by
 ToolRegistryService._log_outcome — skip them here to avoid double recording.
 """
