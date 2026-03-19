@@ -2477,6 +2477,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                     'router_confidence': gate_result.confidence,
                     'routing_source': 'gate',
                     'routing_time_ms': gate_result.gate_time_ms,
+                    'scores': {
+                        'RESPOND': gate_result.confidence,
+                        'ACT': round(1.0 - gate_result.confidence, 4),
+                    },
                 },
                 thread_id=thread_id,
                 returning_from_silence=returning_from_silence,
@@ -2485,24 +2489,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
         # ── ACT pipeline (everything else) ──
         else:
-            # Pre-filter skills via ONNX
-            selected_skills, needs_external_tool = gate_service.prefilter_skills(gate_text)
-
-            if selected_skills:
-                # ONNX model available — ensure cognitive primitives are present
-                _PRIMITIVES = ['recall', 'memorize', 'introspect']
-                for p in _PRIMITIVES:
-                    if p not in selected_skills:
-                        selected_skills.insert(0, p)
-            else:
-                # ONNX model unavailable — inject all skills so the LLM can
-                # pick what it needs (read, schedule, list, document, etc.)
-                selected_skills = None
-                needs_external_tool = True
-
-            # When external tools may be needed, pass None so ACT loop
-            # can discover tools via find_tools skill.
-            selected_tools = None if needs_external_tool else []
+            # Inject only cognitive primitives — contextual skills discovered via find_skills
+            from services.innate_skills.registry import COGNITIVE_PRIMITIVES_ORDERED
+            selected_skills = list(COGNITIVE_PRIMITIVES_ORDERED)
+            selected_tools = None  # Tools discovered via find_tools
 
             # Active tool work dedup
             if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
@@ -2548,6 +2538,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         'router_confidence': gate_result.confidence,
                         'routing_source': 'gate',
                         'routing_time_ms': gate_result.gate_time_ms,
+                        'scores': {
+                            'RESPOND': round(gate_result.confidence, 4),
+                            'ACT': round(1.0 - gate_result.confidence, 4),
+                        },
                     },
                     selected_tools=selected_tools if selected_tools else None,
                     selected_skills=selected_skills if selected_skills else None,

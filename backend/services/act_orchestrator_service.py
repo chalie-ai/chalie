@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 from services.act_loop_service import ActLoopService
-from services.innate_skills.registry import COGNITIVE_PRIMITIVES, CONTEXTUAL_SKILLS
+from services.innate_skills.registry import COGNITIVE_PRIMITIVES
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -213,14 +213,6 @@ class ACTOrchestrator:
         pivot_hint_injected = False
         recent_action_entries = []  # (fingerprint, types_set) for smart repetition
 
-        # ── Skill escalation state ───────────────────────────────────────
-        # Track whether any contextual skill (non-primitive) succeeded.
-        # After _ESCALATION_AFTER iterations of only primitives, inject
-        # the full skill catalog so the LLM can self-correct.
-        _ESCALATION_AFTER = 2
-        _skill_escalated = False
-        _contextual_skill_used = False
-
         # ── Tool health tracking (cross-loop via MemoryStore) ─────────
         from services.tool_health_service import (
             get_potential, record_outcome as _record_health,
@@ -283,11 +275,26 @@ class ACTOrchestrator:
                 context_budget = self.config.get('context_budget_tokens', 32000)
                 _messages = self._prune_messages(_messages, context_budget)
 
-                response_data = cortex_service.generate_response_appended(
-                    system_prompt=_system_prompt,
-                    messages=_messages,
-                    cache_prefix=True,
-                )
+                try:
+                    response_data = cortex_service.generate_response_appended(
+                        system_prompt=_system_prompt,
+                        messages=_messages,
+                        cache_prefix=True,
+                    )
+                except Exception as _gen_err:
+                    logger.error(
+                        f"{LOG_PREFIX} LLM call failed at iteration "
+                        f"{act_loop.iteration_number}: {_gen_err}", exc_info=True
+                    )
+                    termination_reason = 'generation_error'
+                    act_loop.log_iteration(
+                        started_at=iteration_start, completed_at=time.time(),
+                        chosen_mode='ACT', chosen_confidence=0.0,
+                        actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
+                        termination_reason=termination_reason, decision_data={'net_value': 0.0},
+                    )
+                    act_loop.iteration_number += 1
+                    break
 
                 # Append assistant turn for the next iteration
                 raw_response = response_data.get('raw_response', response_data.get('response', ''))
@@ -315,18 +322,33 @@ class ACTOrchestrator:
                     if _lessons_hint:
                         act_history_str += f"\n\n[Cautionary Lessons]\n{_lessons_hint}"
 
-                response_data = cortex_service.generate_response(
-                    system_prompt_template=act_prompt,
-                    original_prompt=text,
-                    classification=classification,
-                    chat_history=chat_history,
-                    act_history=act_history_str,
-                    relevant_tools=relevant_tools,
-                    selected_skills=selected_skills,
-                    selected_tools=selected_tools,
-                    assembled_context=assembled_context,
-                    inclusion_map=inclusion_map,
-                )
+                try:
+                    response_data = cortex_service.generate_response(
+                        system_prompt_template=act_prompt,
+                        original_prompt=text,
+                        classification=classification,
+                        chat_history=chat_history,
+                        act_history=act_history_str,
+                        relevant_tools=relevant_tools,
+                        selected_skills=selected_skills,
+                        selected_tools=selected_tools,
+                        assembled_context=assembled_context,
+                        inclusion_map=inclusion_map,
+                    )
+                except Exception as _gen_err:
+                    logger.error(
+                        f"{LOG_PREFIX} LLM call failed at iteration "
+                        f"{act_loop.iteration_number}: {_gen_err}", exc_info=True
+                    )
+                    termination_reason = 'generation_error'
+                    act_loop.log_iteration(
+                        started_at=iteration_start, completed_at=time.time(),
+                        chosen_mode='ACT', chosen_confidence=0.0,
+                        actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
+                        termination_reason=termination_reason, decision_data={'net_value': 0.0},
+                    )
+                    act_loop.iteration_number += 1
+                    break
 
             actions = response_data.get('actions', [])
 
@@ -500,49 +522,6 @@ class ACTOrchestrator:
                 record_skill_outcomes(actions_executed, topic)
             except Exception:
                 pass
-
-            # ── Skill escalation: unlock full catalog when stuck ──────
-            if not _skill_escalated and not _contextual_skill_used:
-                # Check if any contextual skill succeeded this iteration
-                for r in actions_executed:
-                    atype = r.get('action_type', '')
-                    if atype in CONTEXTUAL_SKILLS and r.get('status') == 'success':
-                        _contextual_skill_used = True
-                        break
-
-                if (
-                    not _contextual_skill_used
-                    and act_loop.iteration_number >= _ESCALATION_AFTER
-                ):
-                    # Build the missing skill docs and inject them
-                    current_skills = set(selected_skills or [])
-                    missing_skills = sorted(CONTEXTUAL_SKILLS - current_skills)
-                    if missing_skills:
-                        extra_docs = cortex_service.get_skill_docs(missing_skills)
-                        if extra_docs:
-                            escalation_msg = (
-                                "[Skill Escalation] The skills you've tried so far "
-                                "haven't resolved the request. Additional skills are "
-                                "now available:\n\n" + extra_docs
-                            )
-                            if append_mode and _messages is not None:
-                                _messages.append({
-                                    "role": "user",
-                                    "content": escalation_msg,
-                                })
-                            else:
-                                act_loop.append_results([{
-                                    'action_type': 'system',
-                                    'status': 'info',
-                                    'execution_time': 0.0,
-                                    'result': escalation_msg,
-                                }])
-                            logger.info(
-                                f"{LOG_PREFIX} Skill escalation triggered at iteration "
-                                f"{act_loop.iteration_number} — injected {len(missing_skills)} "
-                                f"skills: {missing_skills}"
-                            )
-                    _skill_escalated = True
 
             # ── Check timeout/max_iterations if no reason yet ───────────
             if not termination_reason:
