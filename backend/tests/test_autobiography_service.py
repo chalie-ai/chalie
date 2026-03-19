@@ -1,194 +1,308 @@
 """
 Unit tests for AutobiographyService.
 
-Tests autobiography narrative retrieval, synthesis thresholds, and input gathering.
-Mocks database connections.
+Uses a real in-memory SQLite database with the actual schema so all SQL
+queries execute against real tables.  No mocks of the DB layer.
 """
 
+import json
+import sqlite3
+import uuid
+from contextlib import contextmanager
+
 import pytest
-from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch, PropertyMock
+
 from services.autobiography_service import AutobiographyService
+from services.database_service import DatabaseService
 
 
-@pytest.mark.unit
-class TestAutobiographyService:
-    """Test AutobiographyService methods."""
+pytestmark = pytest.mark.unit
 
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database service."""
-        db = Mock()
-        db.get_session = MagicMock()
-        return db
 
-    @pytest.fixture
-    def service(self, mock_db):
-        """Create an AutobiographyService instance with mocked database."""
-        return AutobiographyService(mock_db)
+# ─── Fixtures ─────────────────────────────────────────────────────────────────
 
-    def test_service_initialization(self, mock_db):
-        """Service should initialize without errors."""
-        service = AutobiographyService(mock_db)
-        assert service.db is mock_db
+@pytest.fixture
+def db_service(tmp_path):
+    """DatabaseService backed by a real SQLite file with the full schema."""
+    from tests.test_helpers import load_schema_sql
 
-    def test_get_current_narrative_returns_none_when_empty(self, mock_db, service):
-        """get_current_narrative should return None when no autobiography exists."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
-        mock_session.execute.return_value.fetchone.return_value = None
+    db_path = str(tmp_path / "test_autobiography.db")
+    conn = sqlite3.connect(db_path)
+    conn.executescript(load_schema_sql())
+    conn.commit()
+    conn.close()
 
-        result = service.get_current_narrative()
+    svc = DatabaseService.__new__(DatabaseService)
+    svc.db_path = db_path
 
-        assert result is None
+    @contextmanager
+    def _session():
+        from services.database_service import SessionProxy
+        c = sqlite3.connect(db_path)
+        proxy = SessionProxy(c)
+        try:
+            yield proxy
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
 
-    def test_get_current_narrative_returns_latest_version(self, mock_db, service):
-        """get_current_narrative should return the latest version when it exists."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
+    svc.get_session = _session
 
-        # Mock the row returned from database
-        test_narrative = "Test narrative content"
-        test_created = datetime.now()
-        mock_session.execute.return_value.fetchone.return_value = (
-            "test-id-123",
-            2,  # version
-            test_narrative,
-            test_created,
-            5  # episodes_since
+    @contextmanager
+    def _conn():
+        c = sqlite3.connect(db_path)
+        c.row_factory = sqlite3.Row
+        try:
+            yield c
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
+
+    svc.connection = _conn
+    return svc
+
+
+@pytest.fixture
+def service(db_service):
+    return AutobiographyService(db_service)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _insert_autobiography(db_service, version=1, narrative="Test narrative",
+                          episode_cursor=None, episodes_since=5):
+    """Insert an autobiography row directly."""
+    aid = str(uuid.uuid4())
+    with db_service.connection() as conn:
+        conn.execute(
+            """INSERT INTO autobiography
+               (id, version, narrative, episode_cursor, episodes_since, section_hashes)
+               VALUES (?, ?, ?, ?, ?, '{}')""",
+            (aid, version, narrative, episode_cursor, episodes_since)
         )
+    return aid
+
+
+def _insert_episode(db_service, gist="test episode", salience=5, topic="general",
+                    emotion="{}", outcome="ok", created_at=None,
+                    activation_score=1.0):
+    """Insert a minimal episode row."""
+    eid = str(uuid.uuid4())
+    with db_service.connection() as conn:
+        conn.execute(
+            """INSERT INTO episodes
+               (id, intent, context, action, emotion, outcome, gist,
+                salience, freshness, topic, created_at, activation_score)
+               VALUES (?, '{}', '{}', 'act', ?, ?, ?, ?, 5, ?, ?, ?)""",
+            (eid, emotion, outcome, gist, salience, topic,
+             created_at or "2026-01-15T12:00:00", activation_score)
+        )
+    return eid
+
+
+def _insert_trait(db_service, key="fav_color", value="blue",
+                  category="preference", confidence=0.8):
+    """Insert a user_trait row."""
+    tid = str(uuid.uuid4())
+    with db_service.connection() as conn:
+        conn.execute(
+            """INSERT INTO user_traits (id, trait_key, trait_value, category, confidence)
+               VALUES (?, ?, ?, ?, ?)""",
+            (tid, key, value, category, confidence)
+        )
+    return tid
+
+
+def _insert_concept(db_service, name="Python", ctype="knowledge",
+                    definition="A programming language", domain="tech",
+                    strength=0.9):
+    """Insert a semantic_concept row."""
+    cid = str(uuid.uuid4())
+    with db_service.connection() as conn:
+        conn.execute(
+            """INSERT INTO semantic_concepts
+               (id, concept_name, concept_type, definition, domain, strength)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (cid, name, ctype, definition, domain, strength)
+        )
+    return cid
+
+
+def _insert_relationship(db_service, source_id, target_id, rel_type="uses",
+                          strength=0.85):
+    """Insert a semantic_relationship row."""
+    rid = str(uuid.uuid4())
+    with db_service.connection() as conn:
+        conn.execute(
+            """INSERT INTO semantic_relationships
+               (id, source_concept_id, target_concept_id, relationship_type, strength)
+               VALUES (?, ?, ?, ?, ?)""",
+            (rid, source_id, target_id, rel_type, strength)
+        )
+    return rid
+
+
+# ─── get_current_narrative ────────────────────────────────────────────────────
+
+class TestGetCurrentNarrative:
+
+    def test_returns_none_when_empty(self, service):
+        """Returns None when no autobiography rows exist."""
+        assert service.get_current_narrative() is None
+
+    def test_returns_latest_version(self, db_service, service):
+        """Returns the highest-version row when multiple exist."""
+        _insert_autobiography(db_service, version=1, narrative="First draft")
+        _insert_autobiography(db_service, version=2, narrative="Second draft",
+                              episodes_since=10)
 
         result = service.get_current_narrative()
 
         assert result is not None
         assert result["version"] == 2
-        assert result["narrative"] == test_narrative
-        assert result["episodes_since"] == 5
+        assert result["narrative"] == "Second draft"
+        assert result["episodes_since"] == 10
 
-    def test_build_synthesis_prompt_includes_all_inputs(self, mock_db, service):
-        """_build_synthesis_prompt should format all input data."""
-        inputs = {
-            "episodes": [
-                {"gist": "Test episode", "emotion": "positive", "topic": "work"}
-            ],
-            "traits": [
-                {"key": "trait1", "value": "value1", "confidence": 0.9, "category": "cat1"}
-            ],
-            "concepts": [
-                {"name": "concept1", "definition": "def1", "strength": 0.8, "domain": "dom1"}
-            ],
-            "relationships": []
-        }
+    def test_maps_all_fields(self, db_service, service):
+        """Row tuple is correctly mapped to dict with expected keys."""
+        _insert_autobiography(db_service, version=1, narrative="My story",
+                              episode_cursor="2026-01-15T12:00:00",
+                              episodes_since=7)
 
-        prompt = service._build_synthesis_prompt(inputs, None)
+        result = service.get_current_narrative()
 
-        assert "Test episode" in prompt
-        assert "trait1" in prompt
-        assert "concept1" in prompt
-        assert "positive" in prompt
+        assert set(result.keys()) == {"id", "version", "narrative",
+                                       "created_at", "episodes_since"}
+        assert result["version"] == 1
+        assert result["narrative"] == "My story"
+        assert result["episodes_since"] == 7
+        assert result["created_at"] is not None
 
-    def test_build_synthesis_prompt_includes_current_narrative_for_incremental(self, mock_db, service):
-        """_build_synthesis_prompt should include current narrative for incremental updates."""
-        inputs = {"episodes": [], "traits": [], "concepts": [], "relationships": []}
-        current = {
-            "narrative": "Current narrative text",
-            "version": 1
-        }
 
-        prompt = service._build_synthesis_prompt(inputs, current)
+# ─── should_synthesize ────────────────────────────────────────────────────────
 
-        assert "Current Narrative" in prompt
-        assert "New Episodes" in prompt
+class TestShouldSynthesize:
 
-    def test_gather_synthesis_inputs_returns_structure(self, mock_db, service):
-        """gather_synthesis_inputs should return dict with expected keys."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
+    def test_false_when_no_episodes(self, service):
+        """No autobiography and no episodes -> False."""
+        assert service.should_synthesize() is False
 
-        # Mock all the fetchall() calls for different result sets
-        mock_session.execute.return_value.fetchall.side_effect = [
-            [],  # episodes
-            [],  # traits
-            [],  # concepts
-            [],  # relationships
-            [],  # constraint_episodes
-        ]
+    def test_false_with_fewer_than_5_episodes(self, db_service, service):
+        """No autobiography and <5 episodes -> False."""
+        for i in range(4):
+            _insert_episode(db_service, gist=f"ep {i}")
+
+        assert service.should_synthesize() is False
+
+    def test_true_with_5_episodes_no_autobiography(self, db_service, service):
+        """No autobiography and >=5 episodes -> True."""
+        for i in range(5):
+            _insert_episode(db_service, gist=f"ep {i}")
+
+        assert service.should_synthesize() is True
+
+    def test_true_with_3_new_episodes_since_cursor(self, db_service, service):
+        """Autobiography exists with cursor, 3+ new episodes after cursor -> True."""
+        cursor_ts = "2026-01-10T00:00:00"
+        _insert_autobiography(db_service, version=1, narrative="v1",
+                              episode_cursor=cursor_ts)
+
+        # Insert 3 episodes AFTER the cursor
+        for i in range(3):
+            _insert_episode(db_service, gist=f"new ep {i}",
+                            created_at="2026-01-15T12:00:00")
+
+        assert service.should_synthesize() is True
+
+    def test_false_with_fewer_than_3_new_episodes(self, db_service, service):
+        """Autobiography exists with cursor, <3 new episodes -> False."""
+        cursor_ts = "2026-01-10T00:00:00"
+        _insert_autobiography(db_service, version=1, narrative="v1",
+                              episode_cursor=cursor_ts)
+
+        # Insert 2 episodes AFTER cursor
+        for i in range(2):
+            _insert_episode(db_service, gist=f"new ep {i}",
+                            created_at="2026-01-15T12:00:00")
+
+        assert service.should_synthesize() is False
+
+
+# ─── gather_synthesis_inputs ──────────────────────────────────────────────────
+
+class TestGatherSynthesisInputs:
+
+    def test_empty_db_returns_empty_lists(self, service):
+        """All lists empty when no data exists."""
+        result = service.gather_synthesis_inputs()
+
+        assert result["episodes"] == []
+        assert result["traits"] == []
+        assert result["concepts"] == []
+        assert result["relationships"] == []
+        assert result["constraint_episodes"] == []
+
+    def test_gathers_episodes_sorted_by_salience(self, db_service, service):
+        """Episodes returned in descending salience order."""
+        _insert_episode(db_service, gist="low salience", salience=2)
+        _insert_episode(db_service, gist="high salience", salience=9)
 
         result = service.gather_synthesis_inputs()
 
-        assert "episodes" in result
-        assert "traits" in result
-        assert "concepts" in result
-        assert "relationships" in result
-        assert "constraint_episodes" in result
-        assert isinstance(result["episodes"], list)
+        assert len(result["episodes"]) == 2
+        assert result["episodes"][0]["gist"] == "high salience"
+        assert result["episodes"][1]["gist"] == "low salience"
 
-    def test_gather_synthesis_inputs_truncates_long_gists(self, mock_db, service):
-        """gather_synthesis_inputs should truncate gists to 500 chars."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
-
-        long_gist = "x" * 600  # 600 chars
-        episode_rows = [
-            (long_gist, "action", "outcome", "positive", 0.8, "topic", datetime.now()),
-        ]
-
-        mock_session.execute.return_value.fetchall.side_effect = [
-            episode_rows,
-            [],  # traits
-            [],  # concepts
-            [],  # relationships
-            [],  # constraint_episodes
-        ]
+    def test_truncates_long_gists(self, db_service, service):
+        """Gists over 500 chars are truncated with ellipsis."""
+        long_gist = "x" * 600
+        _insert_episode(db_service, gist=long_gist)
 
         result = service.gather_synthesis_inputs()
 
-        assert len(result["episodes"]) == 1
-        assert len(result["episodes"][0]["gist"]) == 503  # 500 + "..."
-        assert result["episodes"][0]["gist"].endswith("...")
+        gist = result["episodes"][0]["gist"]
+        assert len(gist) == 503
+        assert gist.endswith("...")
 
-    def test_gather_synthesis_inputs_concepts_row_mapping(self, mock_db, service):
-        """Concept rows should map to correct dict keys/values."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
+    def test_gathers_traits_above_confidence_threshold(self, db_service, service):
+        """Only traits with confidence > 0.3 are included."""
+        _insert_trait(db_service, key="visible", value="yes", confidence=0.5)
+        _insert_trait(db_service, key="hidden", value="no", confidence=0.2)
 
-        mock_session.execute.return_value.fetchall.side_effect = [
-            [],  # episodes
-            [],  # traits
-            [("Python", "knowledge", "A programming language", "tech", 0.9)],  # concepts
-            [],  # relationships
-            [],  # constraint_episodes
-        ]
+        result = service.gather_synthesis_inputs()
+
+        assert len(result["traits"]) == 1
+        assert result["traits"][0]["key"] == "visible"
+        assert result["traits"][0]["value"] == "yes"
+        assert result["traits"][0]["category"] == "preference"
+
+    def test_gathers_concepts(self, db_service, service):
+        """Concepts are gathered with correct field mapping."""
+        _insert_concept(db_service, name="Flask", ctype="framework",
+                        definition="A web framework", domain="tech", strength=0.7)
 
         result = service.gather_synthesis_inputs()
 
         assert len(result["concepts"]) == 1
         assert result["concepts"][0] == {
-            "name": "Python",
-            "type": "knowledge",
-            "definition": "A programming language",
+            "name": "Flask",
+            "type": "framework",
+            "definition": "A web framework",
             "domain": "tech",
-            "strength": 0.9,
+            "strength": 0.7,
         }
 
-    def test_gather_synthesis_inputs_relationships_row_mapping(self, mock_db, service):
-        """Relationship rows should map to correct dict keys/values."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
-
-        mock_session.execute.return_value.fetchall.side_effect = [
-            [],  # episodes
-            [],  # traits
-            [],  # concepts
-            [("Python", "Flask", "uses", 0.85)],  # relationships
-            [],  # constraint_episodes
-        ]
+    def test_gathers_relationships(self, db_service, service):
+        """Relationships resolve concept IDs to names via JOIN."""
+        src_id = _insert_concept(db_service, name="Python", strength=0.9)
+        tgt_id = _insert_concept(db_service, name="Flask", strength=0.7)
+        _insert_relationship(db_service, src_id, tgt_id, "uses", 0.85)
 
         result = service.gather_synthesis_inputs()
 
@@ -200,101 +314,216 @@ class TestAutobiographyService:
             "strength": 0.85,
         }
 
-    def test_gather_synthesis_inputs_sql_column_names(self, mock_db, service):
-        """SQL queries must use correct column names from the actual schema."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
-
-        mock_session.execute.return_value.fetchall.side_effect = [
-            [],  # episodes
-            [],  # traits
-            [],  # concepts
-            [],  # relationships
-            [],  # constraint_episodes
-        ]
-
-        service.gather_synthesis_inputs()
-
-        # Capture all SQL strings passed to session.execute()
-        sql_calls = [
-            str(call.args[0]) for call in mock_session.execute.call_args_list
-        ]
-
-        # Find the concepts query (selects from semantic_concepts)
-        concepts_sql = [s for s in sql_calls if 'semantic_concepts' in s and 'JOIN' not in s]
-        assert len(concepts_sql) == 1, "Expected exactly one semantic_concepts query"
-        assert 'concept_type' in concepts_sql[0], "Concepts query must use 'concept_type', not 'type'"
-        assert 'user_id' not in concepts_sql[0], "Concepts query must not reference 'user_id'"
-
-        # Find the relationships query (joins semantic_relationships)
-        rels_sql = [s for s in sql_calls if 'semantic_relationships' in s]
-        assert len(rels_sql) == 1, "Expected exactly one semantic_relationships query"
-        assert 'source_concept_id' in rels_sql[0], "Relationships query must join on 'source_concept_id'"
-        assert 'target_concept_id' in rels_sql[0], "Relationships query must join on 'target_concept_id'"
-        assert 'relationship_type' in rels_sql[0], "Relationships query must select 'relationship_type'"
-        assert 'user_id' not in rels_sql[0], "Relationships query must not reference 'user_id'"
-
-    def test_gather_synthesis_inputs_includes_constraint_episodes(self, mock_db, service):
-        """gather_synthesis_inputs should query constraint_learned episodes."""
-        mock_session = MagicMock()
-        mock_db.get_session.return_value.__enter__.return_value = mock_session
-        mock_db.get_session.return_value.__exit__.return_value = None
-
-        constraint_rows = [
-            ("Attempted communicate 15 times; blocked by timing_gate",
-             "learned constraint: communicate blocked by timing_gate",
-             "2026-03-07T12:00:00+00:00", 3),
-        ]
-
-        mock_session.execute.return_value.fetchall.side_effect = [
-            [],  # episodes
-            [],  # traits
-            [],  # concepts
-            [],  # relationships
-            constraint_rows,  # constraint_episodes
-        ]
+    def test_gathers_constraint_episodes(self, db_service, service):
+        """Episodes with outcome='constraint_learned' are gathered separately."""
+        _insert_episode(db_service, gist="blocked by timing_gate",
+                        outcome="constraint_learned", activation_score=3.0)
+        _insert_episode(db_service, gist="normal episode", outcome="ok")
 
         result = service.gather_synthesis_inputs()
 
-        assert "constraint_episodes" in result
         assert len(result["constraint_episodes"]) == 1
-        assert "communicate" in result["constraint_episodes"][0]["gist"]
-        assert result["constraint_episodes"][0]["activation_score"] == 3
+        assert "timing_gate" in result["constraint_episodes"][0]["gist"]
+        assert result["constraint_episodes"][0]["activation_score"] == 3.0
 
-    def test_build_synthesis_prompt_includes_constraint_episodes(self, mock_db, service):
-        """_build_synthesis_prompt should include constraint episodes when present."""
-        inputs = {
-            "episodes": [],
-            "traits": [],
-            "concepts": [],
-            "relationships": [],
-            "constraint_episodes": [
-                {
-                    "gist": "Attempted communicate 15 times; blocked by timing_gate",
-                    "action": "learned constraint",
-                    "created_at": "2026-03-07T12:00:00",
-                    "activation_score": 3,
-                }
-            ],
-        }
+    def test_respects_since_cursor(self, db_service, service):
+        """When since_cursor is provided, only episodes after it are returned."""
+        _insert_episode(db_service, gist="old", created_at="2026-01-01T00:00:00")
+        _insert_episode(db_service, gist="new", created_at="2026-02-01T00:00:00")
+
+        result = service.gather_synthesis_inputs(
+            since_cursor="2026-01-15T00:00:00"
+        )
+
+        assert len(result["episodes"]) == 1
+        assert result["episodes"][0]["gist"] == "new"
+
+    def test_excludes_deleted_episodes(self, db_service, service):
+        """Soft-deleted episodes are excluded."""
+        eid = _insert_episode(db_service, gist="deleted one")
+        with db_service.connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET deleted_at = '2026-01-20T00:00:00' WHERE id = ?",
+                (eid,)
+            )
+
+        result = service.gather_synthesis_inputs()
+        assert len(result["episodes"]) == 0
+
+    def test_limits_episodes_to_50(self, db_service, service):
+        """At most 50 episodes are returned."""
+        for i in range(55):
+            _insert_episode(db_service, gist=f"ep {i}", salience=5)
+
+        result = service.gather_synthesis_inputs()
+        assert len(result["episodes"]) == 50
+
+
+# ─── _build_synthesis_prompt ──────────────────────────────────────────────────
+
+class TestBuildSynthesisPrompt:
+
+    def test_fresh_synthesis_includes_new_episodes_header(self, service):
+        """First synthesis (no current) uses 'New Episodes' header."""
+        inputs = {"episodes": [{"gist": "first day", "emotion": "excited",
+                                 "topic": "onboarding"}],
+                  "traits": [], "concepts": [], "relationships": [],
+                  "constraint_episodes": []}
 
         prompt = service._build_synthesis_prompt(inputs, None)
 
-        assert "Learned Constraints" in prompt
-        assert "communicate" in prompt
-        assert "timing_gate" in prompt
+        assert "## New Episodes" in prompt
+        assert "Current Narrative" not in prompt
+        assert "first day" in prompt
 
-    def test_build_synthesis_prompt_omits_constraints_when_empty(self, mock_db, service):
-        """_build_synthesis_prompt should omit constraints section when no data."""
+    def test_incremental_synthesis_includes_current_narrative(self, service):
+        """Incremental update includes current narrative and 'Since Last Synthesis' header."""
+        inputs = {"episodes": [{"gist": "latest event", "emotion": "neutral",
+                                 "topic": "work"}],
+                  "traits": [], "concepts": [], "relationships": [],
+                  "constraint_episodes": []}
+        current = {"narrative": "Previously synthesized text", "version": 1}
+
+        prompt = service._build_synthesis_prompt(inputs, current)
+
+        assert "Current Narrative" in prompt
+        assert "Previously synthesized text" in prompt
+        assert "New Episodes Since Last Synthesis" in prompt
+
+    def test_includes_traits_and_concepts(self, service):
+        """Prompt includes formatted traits and concepts sections."""
         inputs = {
-            "episodes": [],
-            "traits": [],
-            "concepts": [],
+            "episodes": [{"gist": "ep", "emotion": "happy", "topic": "t"}],
+            "traits": [{"key": "likes_coffee", "value": "true",
+                        "confidence": 0.95, "category": "preference"}],
+            "concepts": [{"name": "REST", "definition": "API style",
+                          "strength": 0.8, "domain": "tech"}],
             "relationships": [],
             "constraint_episodes": [],
         }
 
         prompt = service._build_synthesis_prompt(inputs, None)
 
-        assert "Learned Constraints" not in prompt
+        assert "## Observed Traits" in prompt
+        assert "likes_coffee" in prompt
+        assert "0.95" in prompt
+        assert "## Key Concepts" in prompt
+        assert "REST" in prompt
+
+    def test_includes_constraint_episodes_when_present(self, service):
+        """Constraint episodes appear under 'Learned Constraints' header."""
+        inputs = {
+            "episodes": [],
+            "traits": [], "concepts": [], "relationships": [],
+            "constraint_episodes": [
+                {"gist": "communicate blocked by timing_gate",
+                 "action": "learned constraint",
+                 "created_at": "2026-03-07T12:00:00",
+                 "activation_score": 3}
+            ],
+        }
+
+        prompt = service._build_synthesis_prompt(inputs, None)
+
+        assert "## Learned Constraints" in prompt
+        assert "communicate blocked by timing_gate" in prompt
+
+    def test_omits_empty_sections(self, service):
+        """Sections with no data are omitted entirely."""
+        inputs = {"episodes": [], "traits": [], "concepts": [],
+                  "relationships": [], "constraint_episodes": []}
+
+        prompt = service._build_synthesis_prompt(inputs, None)
+
+        assert "## Observed Traits" not in prompt
+        assert "## Key Concepts" not in prompt
+        assert "## Learned Constraints" not in prompt
+
+
+# ─── _compute_section_hashes ─────────────────────────────────────────────────
+
+class TestComputeSectionHashes:
+
+    def test_produces_hashes_for_each_section(self, service):
+        """Each ## section gets a truncated SHA-256 hash."""
+        narrative = "## Identity\nI am Chalie.\n\n## Values\nI value attention."
+        hashes = service._compute_section_hashes(narrative)
+
+        assert "identity" in hashes
+        assert "values" in hashes
+        assert len(hashes["identity"]) == 16
+        assert len(hashes["values"]) == 16
+
+    def test_stable_for_same_content(self, service):
+        """Same content produces identical hashes."""
+        narrative = "## Section A\nContent A"
+        h1 = service._compute_section_hashes(narrative)
+        h2 = service._compute_section_hashes(narrative)
+        assert h1 == h2
+
+    def test_different_content_different_hashes(self, service):
+        """Different content produces different hashes."""
+        h1 = service._compute_section_hashes("## Section\nContent A")
+        h2 = service._compute_section_hashes("## Section\nContent B")
+        assert h1["section"] != h2["section"]
+
+
+# ─── _store_narrative ─────────────────────────────────────────────────────────
+
+class TestStoreNarrative:
+
+    def test_inserts_first_version(self, db_service, service):
+        """First call inserts version 1."""
+        with db_service.get_session() as session:
+            service._store_narrative(
+                session, "## Identity\nI am Chalie.",
+                "2026-01-15T12:00:00", 5, 1200
+            )
+
+        # Verify in DB
+        with db_service.connection() as conn:
+            row = conn.execute(
+                "SELECT version, narrative, episodes_since, synthesis_ms "
+                "FROM autobiography ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+
+        assert row["version"] == 1
+        assert row["narrative"] == "## Identity\nI am Chalie."
+        assert row["episodes_since"] == 5
+        assert row["synthesis_ms"] == 1200
+
+    def test_increments_version(self, db_service, service):
+        """Second call auto-increments to version 2."""
+        _insert_autobiography(db_service, version=1, narrative="v1")
+
+        with db_service.get_session() as session:
+            service._store_narrative(
+                session, "v2 narrative",
+                "2026-02-01T00:00:00", 3, 800
+            )
+
+        with db_service.connection() as conn:
+            row = conn.execute(
+                "SELECT version, narrative FROM autobiography "
+                "ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+
+        assert row["version"] == 2
+        assert row["narrative"] == "v2 narrative"
+
+    def test_stores_section_hashes_as_json(self, db_service, service):
+        """Section hashes are stored as JSON in the section_hashes column."""
+        with db_service.get_session() as session:
+            service._store_narrative(
+                session, "## Identity\nChalie\n\n## Values\nAttention",
+                "2026-01-15T00:00:00", 5, 500
+            )
+
+        with db_service.connection() as conn:
+            raw = conn.execute(
+                "SELECT section_hashes FROM autobiography LIMIT 1"
+            ).fetchone()["section_hashes"]
+
+        hashes = json.loads(raw)
+        assert "identity" in hashes
+        assert "values" in hashes

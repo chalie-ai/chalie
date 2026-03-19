@@ -308,7 +308,11 @@ class ChalieApp {
     if (!list) return;
 
     if (!this._apps.length) {
-      list.innerHTML = '<p class="apps-panel__empty">No apps installed</p>';
+      list.textContent = '';
+      const emptyP = document.createElement('p');
+      emptyP.className = 'apps-panel__empty';
+      emptyP.textContent = 'No apps installed';
+      list.appendChild(emptyP);
       return;
     }
 
@@ -318,44 +322,65 @@ class ChalieApp {
       (order[a.status] ?? 3) - (order[b.status] ?? 3)
     );
 
-    list.innerHTML = sorted.map(app => `
-      <div class="app-card" data-app-id="${app.id}" data-status="${app.status}">
-        <span class="app-card__dot app-card__dot--${app.status}"></span>
-        <div class="app-card__info">
-          <div class="app-card__name">${this._esc(app.name)}</div>
-          ${app.description ? `<div class="app-card__desc">${this._esc(app.description)}</div>` : ''}
-        </div>
-        ${app.status === 'pending'
-          ? '<span class="app-card__badge app-card__badge--pending">Needs approval</span>'
-          : `<button class="btn-icon app-card__gear" data-gear="${app.id}" aria-label="Settings">
-               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                 <circle cx="12" cy="12" r="3"></circle>
-                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-               </svg>
-             </button>`
-        }
-      </div>
-    `).join('');
+    const frag = document.createDocumentFragment();
 
-    // Bind click handlers
-    list.querySelectorAll('.app-card').forEach(card => {
+    for (const app of sorted) {
+      const card = document.createElement('div');
+      card.className = 'app-card';
+      card.dataset.appId = app.id;
+      card.dataset.status = app.status;
+
+      const dot = document.createElement('span');
+      dot.className = `app-card__dot app-card__dot--${app.status}`;
+      card.appendChild(dot);
+
+      const info = document.createElement('div');
+      info.className = 'app-card__info';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'app-card__name';
+      nameEl.textContent = app.name;
+      info.appendChild(nameEl);
+      if (app.description) {
+        const descEl = document.createElement('div');
+        descEl.className = 'app-card__desc';
+        descEl.textContent = app.description;
+        info.appendChild(descEl);
+      }
+      card.appendChild(info);
+
+      if (app.status === 'pending') {
+        const badge = document.createElement('span');
+        badge.className = 'app-card__badge app-card__badge--pending';
+        badge.textContent = 'Needs approval';
+        card.appendChild(badge);
+      } else {
+        const gearBtn = document.createElement('button');
+        gearBtn.className = 'btn-icon app-card__gear';
+        gearBtn.dataset.gear = app.id;
+        gearBtn.setAttribute('aria-label', 'Settings');
+        gearBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+        card.appendChild(gearBtn);
+      }
+
+      // Bind click handler inline
       card.addEventListener('click', (e) => {
-        // If gear icon clicked, open detail instead
         if (e.target.closest('[data-gear]')) {
           e.stopPropagation();
-          this._openAppDetail(card.dataset.appId);
+          this._openAppDetail(app.id);
           return;
         }
-        const app = this._apps.find(a => a.id === card.dataset.appId);
-        if (!app) return;
-
         if (app.status === 'pending') {
           this._openScopeApproval(app);
         } else if (app.status === 'online') {
           this._openAppOverlay(app);
         }
       });
-    });
+
+      frag.appendChild(card);
+    }
+
+    list.textContent = '';
+    list.appendChild(frag);
   }
 
   _toggleAppsPanel(forceState) {
@@ -473,7 +498,11 @@ class ChalieApp {
     const content = document.getElementById('appOverlayContent');
 
     title.textContent = app.name;
-    content.innerHTML = '<p style="color:var(--text-tertiary)">Loading...</p>';
+    content.textContent = '';
+    const loadingP = document.createElement('p');
+    loadingP.style.color = 'var(--text-tertiary)';
+    loadingP.textContent = 'Loading...';
+    content.appendChild(loadingP);
     overlay?.classList.remove('hidden');
 
     // Close apps panel
@@ -483,7 +512,7 @@ class ChalieApp {
       const resp = await fetch(`/gw/${app.id}/render`);
       if (resp.ok) {
         const html = await resp.text();
-        // innerHTML doesn't execute <script> tags — parse and re-insert them
+        // Daemon-rendered HTML injected via innerHTML — trusted gateway content
         content.innerHTML = html;
         content.querySelectorAll('script').forEach(old => {
           const s = document.createElement('script');
@@ -493,10 +522,18 @@ class ChalieApp {
         });
         if (window.lucide) lucide.createIcons({ node: content });
       } else {
-        content.innerHTML = '<p style="color:var(--text-secondary)">Could not load app interface.</p>';
+        content.textContent = '';
+        const errP = document.createElement('p');
+        errP.style.color = 'var(--text-secondary)';
+        errP.textContent = 'Could not load app interface.';
+        content.appendChild(errP);
       }
     } catch (_) {
-      content.innerHTML = '<p style="color:var(--text-secondary)">App is not reachable.</p>';
+      content.textContent = '';
+      const errP = document.createElement('p');
+      errP.style.color = 'var(--text-secondary)';
+      errP.textContent = 'App is not reachable.';
+      content.appendChild(errP);
     }
   }
 
@@ -601,15 +638,15 @@ class ChalieApp {
 
       this.ws.sendAction(payload, {
         onMessage: (data) => {
+          const blocks = data.blocks || [];
           const meta = {
             mode: data.mode || 'ACT',
             confidence: data.confidence || 0.95,
-            actions: data.actions || null,
           };
           if (pendingForm.isConnected) {
-            this.renderer.resolvePendingForm(pendingForm, data.text, meta);
+            this.renderer.resolvePendingForm(pendingForm, blocks, meta);
           } else {
-            this.renderer.appendChalieForm(data.text, meta);
+            this.renderer.appendChalieForm(blocks, meta);
           }
         },
         onError: (data) => {
@@ -683,7 +720,9 @@ class ChalieApp {
 
     const toast = document.createElement('div');
     toast.className = 'chalie-toast';
-    toast.innerHTML = `<span>${message}</span>`;
+    const span = document.createElement('span');
+    span.textContent = message;
+    toast.appendChild(span);
 
     if (onUndo) {
       const undoBtn = document.createElement('button');
@@ -795,89 +834,136 @@ class ChalieApp {
       strip.classList.add('--expanded');
     }
 
-    let html = '';
+    const frag = document.createDocumentFragment();
 
     // Render persistent tasks
     for (const t of tasks) {
-      const goal = (t.goal || 'Working…').slice(0, 60);
+      const goal = (t.goal || 'Working\u2026').slice(0, 60);
       const progress = t.progress || {};
       const coverage = Math.round((progress.coverage_estimate || 0) * 100);
       const summary = progress.last_summary || '';
-      const pausedClass = t.status === 'paused' ? ' --paused' : '';
+
+      const item = document.createElement('div');
+      item.className = 'task-strip__item';
+      if (t.status === 'paused') item.classList.add('--paused');
+
+      const dot = document.createElement('span');
+      dot.className = 'task-strip__kind-dot task-strip__kind-dot--task';
+      item.appendChild(dot);
+
+      const goalEl = document.createElement('div');
+      goalEl.className = 'task-strip__goal';
+      goalEl.textContent = goal;
+      item.appendChild(goalEl);
+
+      const bar = document.createElement('div');
+      bar.className = 'task-strip__progress-bar';
+      const fill = document.createElement('div');
+      fill.className = 'task-strip__progress-fill';
+      fill.style.width = `${coverage}%`;
+      bar.appendChild(fill);
+      item.appendChild(bar);
 
       // Step-level progress from plan DAG
       const plan = progress.plan;
-      let stepsHtml = '';
       if (plan && plan.steps && plan.steps.length > 0) {
         const done = plan.steps.filter(s => s.status === 'completed' || s.status === 'skipped').length;
         const total = plan.steps.length;
         const current = plan.steps.find(s => s.status === 'in_progress');
-        stepsHtml = `<div class="task-strip__steps">${done}/${total} steps</div>`;
+
+        const stepsEl = document.createElement('div');
+        stepsEl.className = 'task-strip__steps';
+        stepsEl.textContent = `${done}/${total} steps`;
+        item.appendChild(stepsEl);
+
         if (current) {
-          stepsHtml += `<div class="task-strip__current-step">${this._escHtml(current.description)}</div>`;
+          const curEl = document.createElement('div');
+          curEl.className = 'task-strip__current-step';
+          curEl.textContent = current.description;
+          item.appendChild(curEl);
         }
         if (plan.blocked_on) {
-          stepsHtml += `<div class="task-strip__blocked">Blocked: ${this._escHtml(plan.blocked_reason || 'dependency failed')}</div>`;
+          const blockedEl = document.createElement('div');
+          blockedEl.className = 'task-strip__blocked';
+          blockedEl.textContent = `Blocked: ${plan.blocked_reason || 'dependency failed'}`;
+          item.appendChild(blockedEl);
         }
       }
 
-      html += `<div class="task-strip__item${pausedClass}">
-        <span class="task-strip__kind-dot task-strip__kind-dot--task"></span>
-        <div class="task-strip__goal">${this._escHtml(goal)}</div>
-        <div class="task-strip__progress-bar">
-          <div class="task-strip__progress-fill" style="width:${coverage}%"></div>
-        </div>
-        ${stepsHtml}
-        ${summary ? `<div class="task-strip__summary">${this._escHtml(summary)}</div>` : ''}
-        <button class="task-strip__dismiss" data-dismiss-task="${t.id}" aria-label="Dismiss task">&times;</button>
-      </div>`;
+      if (summary) {
+        const sumEl = document.createElement('div');
+        sumEl.className = 'task-strip__summary';
+        sumEl.textContent = summary;
+        item.appendChild(sumEl);
+      }
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.className = 'task-strip__dismiss';
+      dismissBtn.setAttribute('aria-label', 'Dismiss task');
+      dismissBtn.textContent = '\u00d7';
+      dismissBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await this.api._delete(`/system/observability/tasks/${t.id}`);
+        } catch { /* ignore */ }
+        this._loadActiveTasks();
+      });
+      item.appendChild(dismissBtn);
+
+      frag.appendChild(item);
     }
 
     // Render pending reminders
     for (const r of reminders) {
       const msg = (r.message || '').slice(0, 80);
       const due = r.due_at ? this._relativeTime(r.due_at) : '';
-      const id = r.id;
 
-      html += `<div class="task-strip__item task-strip__item--reminder">
-        <span class="task-strip__kind-dot task-strip__kind-dot--reminder"></span>
-        <span class="task-strip__msg">${this._escHtml(msg)}</span>
-        ${due ? `<span class="task-strip__due">${this._escHtml(due)}</span>` : ''}
-        <button class="task-strip__dismiss" data-dismiss-reminder="${this._escHtml(id)}" aria-label="Dismiss reminder">&times;</button>
-      </div>`;
+      const item = document.createElement('div');
+      item.className = 'task-strip__item task-strip__item--reminder';
+
+      const dot = document.createElement('span');
+      dot.className = 'task-strip__kind-dot task-strip__kind-dot--reminder';
+      item.appendChild(dot);
+
+      const msgEl = document.createElement('span');
+      msgEl.className = 'task-strip__msg';
+      msgEl.textContent = msg;
+      item.appendChild(msgEl);
+
+      if (due) {
+        const dueEl = document.createElement('span');
+        dueEl.className = 'task-strip__due';
+        dueEl.textContent = due;
+        item.appendChild(dueEl);
+      }
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.className = 'task-strip__dismiss';
+      dismissBtn.setAttribute('aria-label', 'Dismiss reminder');
+      dismissBtn.textContent = '\u00d7';
+      dismissBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await this.api._delete(`/scheduler/${r.id}`);
+        } catch { /* ignore */ }
+        this._loadActiveTasks();
+      });
+      item.appendChild(dismissBtn);
+
+      frag.appendChild(item);
     }
 
     // First-time hint
     if (!_lsGet('task_strip_hint_shown')) {
       _lsSet('task_strip_hint_shown', '1');
-      html += '<div class="task-strip__hint">I\'ll show what I\'m working on here.</div>';
+      const hint = document.createElement('div');
+      hint.className = 'task-strip__hint';
+      hint.textContent = 'I\'ll show what I\'m working on here.';
+      frag.appendChild(hint);
     }
 
-    list.innerHTML = html;
-
-    // Wire dismiss buttons — reminders
-    list.querySelectorAll('[data-dismiss-reminder]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const remId = btn.dataset.dismissReminder;
-        try {
-          await this.api._delete(`/scheduler/${remId}`);
-        } catch { /* ignore */ }
-        this._loadActiveTasks();
-      });
-    });
-
-    // Wire dismiss buttons — persistent tasks
-    list.querySelectorAll('[data-dismiss-task]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const taskId = btn.dataset.dismissTask;
-        try {
-          await this.api._delete(`/system/observability/tasks/${taskId}`);
-        } catch { /* ignore */ }
-        this._loadActiveTasks();
-      });
-    });
+    list.textContent = '';
+    list.appendChild(frag);
   }
 
   /** Convert an ISO date string to a short relative label ("in 5m", "in 2h", "tomorrow"). */
@@ -1052,7 +1138,7 @@ class ChalieApp {
       this.renderer.upgradePendingText(pendingForm);
     }, 2000);
 
-    let responseText = '';
+    let responseBlocks = [];
     let responseMeta = {};
 
     this.ws.send(text || '[Image attached]', source, {
@@ -1073,13 +1159,12 @@ class ChalieApp {
       },
       onMessage: (data) => {
         clearTimeout(pendingUpgradeTimer);
-        responseText = data.text;
+        responseBlocks = data.blocks || [];
         responseMeta = {
           topic: data.topic,
           exchange_id: data.exchange_id,
           mode: data.mode || '',
           confidence: data.confidence || 0,
-          actions: data.actions || null,
         };
         this.presence.setState('responding');
       },
@@ -1093,17 +1178,21 @@ class ChalieApp {
       onDone: (data) => {
         clearTimeout(pendingUpgradeTimer);
         if (this._ambientSensor) this._ambientSensor.recordResponse();
-        if (responseText) {
+        if (responseBlocks.length) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          this.renderer.resolvePendingForm(pendingForm, responseText, responseMeta);
+          this.renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
-            this._notifyBackground(responseText);
+            const notifText = responseBlocks
+              .filter(b => b.type === 'text' || b.type === 'header')
+              .map(b => b.content || '')
+              .join(' ');
+            if (notifText) this._notifyBackground(notifText);
           }
         } else {
-          // No text response — remove the pending bubble
+          // No blocks response — remove the pending bubble
           pendingForm.remove();
           this._pendingForm = null;
         }
@@ -1189,8 +1278,8 @@ class ChalieApp {
     if (exchange.prompt) {
       this.renderer.appendUserForm(exchange.prompt, exchange.timestamp, { inWorkingMemory });
     }
-    if (exchange.response) {
-      this.renderer.appendChalieForm(exchange.response, {
+    if (exchange.blocks?.length) {
+      this.renderer.appendChalieForm(exchange.blocks, {
         topic: exchange.topic,
         ts: exchange.timestamp,
         exchange_id: exchange.id,
@@ -1199,8 +1288,8 @@ class ChalieApp {
   }
 
   _prependExchange(exchange, inWorkingMemory) {
-    if (exchange.response) {
-      this.renderer.prependChalieForm(exchange.response, {
+    if (exchange.blocks?.length) {
+      this.renderer.prependChalieForm(exchange.blocks, {
         topic: exchange.topic,
         ts: exchange.timestamp,
         exchange_id: exchange.id,
@@ -1298,8 +1387,8 @@ class ChalieApp {
       return;
     }
 
-    const content = data.content || '';
-    if (!content) return;
+    const blocks = data.blocks || [];
+    if (!blocks.length) return;
 
     // Ignore 'response' events from the drift stream while a /chat SSE request
     // is in flight — the chat SSE already renders the reply via resolvePendingForm.
@@ -1307,7 +1396,11 @@ class ChalieApp {
 
     // System notification + sound when tab is not focused
     if (!document.hasFocus()) {
-      this._notifyBackground(content);
+      const notifText = blocks
+        .filter(b => b.type === 'text' || b.type === 'header')
+        .map(b => b.content || '')
+        .join(' ');
+      if (notifText) this._notifyBackground(notifText);
     }
 
     // Scheduler trigger events — refresh task strip, play sound
@@ -1326,7 +1419,7 @@ class ChalieApp {
     };
 
     // Render in conversation spine as a Chalie message
-    const formEl = this.renderer.appendChalieForm(content, meta);
+    const formEl = this.renderer.appendChalieForm(blocks, meta);
 
 
     // Critic escalation — amber border to signal "needs your attention"
@@ -1575,8 +1668,8 @@ class ChalieApp {
         }
       };
 
-      submitBtn.onclick = doLogin;
-      passwordEl.onkeydown = (e) => { if (e.key === 'Enter') doLogin(); };
+      const form = document.getElementById('loginForm');
+      form.onsubmit = (e) => { e.preventDefault(); doLogin(); };
 
       dialog.showModal();
     });
@@ -2050,43 +2143,78 @@ class ChalieApp {
     const synthesis = meta._synthesis || doc.summary || '';
     const keyFacts = meta._key_facts || [];
     const docType = (meta.document_type || {}).value || '';
-    const name = this._esc(doc.original_name || 'Document');
-    const typeTag = docType && docType !== 'document'
-      ? `<span class="doc-synthesis__tag">${this._esc(docType)}</span>` : '';
-
-    const factsHtml = keyFacts.length
-      ? `<div class="doc-synthesis__facts">${keyFacts.map(f =>
-          `<span class="doc-synthesis__fact">${this._esc(f)}</span>`).join('')}</div>`
-      : '';
 
     const card = document.createElement('div');
     card.className = 'doc-synthesis-card';
     card.dataset.docId = docId;
-    card.innerHTML = `
-      <div class="doc-synthesis__header">
-        <span class="doc-synthesis__name">${name}</span>
-        ${typeTag}
-      </div>
-      <p class="doc-synthesis__text">${this._esc(synthesis)}</p>
-      ${factsHtml}
-      <div class="doc-synthesis__actions">
-        <button class="doc-synthesis__btn doc-synthesis__btn--confirm">Looks good</button>
-        <button class="doc-synthesis__btn doc-synthesis__btn--augment">Add context</button>
-        <button class="doc-synthesis__btn doc-synthesis__btn--discard">Discard</button>
-      </div>
-      <div class="doc-synthesis__augment-area hidden">
-        <textarea class="doc-synthesis__textarea"
-          placeholder="Add context about this document..."></textarea>
-        <button class="doc-synthesis__btn doc-synthesis__btn--submit">Save</button>
-      </div>`;
 
-    // Wire button handlers
-    const confirmBtn = card.querySelector('.doc-synthesis__btn--confirm');
-    const augmentBtn = card.querySelector('.doc-synthesis__btn--augment');
-    const discardBtn = card.querySelector('.doc-synthesis__btn--discard');
-    const augmentArea = card.querySelector('.doc-synthesis__augment-area');
-    const submitBtn = card.querySelector('.doc-synthesis__btn--submit');
-    const textarea = card.querySelector('.doc-synthesis__textarea');
+    // Header
+    const header = document.createElement('div');
+    header.className = 'doc-synthesis__header';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'doc-synthesis__name';
+    nameSpan.textContent = doc.original_name || 'Document';
+    header.appendChild(nameSpan);
+    if (docType && docType !== 'document') {
+      const typeTagSpan = document.createElement('span');
+      typeTagSpan.className = 'doc-synthesis__tag';
+      typeTagSpan.textContent = docType;
+      header.appendChild(typeTagSpan);
+    }
+    card.appendChild(header);
+
+    // Synthesis text
+    const textP = document.createElement('p');
+    textP.className = 'doc-synthesis__text';
+    textP.textContent = synthesis;
+    card.appendChild(textP);
+
+    // Key facts
+    if (keyFacts.length) {
+      const factsDiv = document.createElement('div');
+      factsDiv.className = 'doc-synthesis__facts';
+      for (const f of keyFacts) {
+        const factSpan = document.createElement('span');
+        factSpan.className = 'doc-synthesis__fact';
+        factSpan.textContent = f;
+        factsDiv.appendChild(factSpan);
+      }
+      card.appendChild(factsDiv);
+    }
+
+    // Actions
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'doc-synthesis__actions';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'doc-synthesis__btn doc-synthesis__btn--confirm';
+    confirmBtn.textContent = 'Looks good';
+    actionsDiv.appendChild(confirmBtn);
+
+    const augmentBtn = document.createElement('button');
+    augmentBtn.className = 'doc-synthesis__btn doc-synthesis__btn--augment';
+    augmentBtn.textContent = 'Add context';
+    actionsDiv.appendChild(augmentBtn);
+
+    const discardBtn = document.createElement('button');
+    discardBtn.className = 'doc-synthesis__btn doc-synthesis__btn--discard';
+    discardBtn.textContent = 'Discard';
+    actionsDiv.appendChild(discardBtn);
+
+    card.appendChild(actionsDiv);
+
+    // Augment area
+    const augmentArea = document.createElement('div');
+    augmentArea.className = 'doc-synthesis__augment-area hidden';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'doc-synthesis__textarea';
+    textarea.placeholder = 'Add context about this document...';
+    augmentArea.appendChild(textarea);
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'doc-synthesis__btn doc-synthesis__btn--submit';
+    submitBtn.textContent = 'Save';
+    augmentArea.appendChild(submitBtn);
+    card.appendChild(augmentArea);
 
     confirmBtn.addEventListener('click', async () => {
       confirmBtn.disabled = true;

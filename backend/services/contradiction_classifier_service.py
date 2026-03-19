@@ -664,8 +664,8 @@ class ContradictionClassifierService:
                     cursor.execute("""
                         SELECT sc.id, sc.concept_name, sc.definition, sc.confidence,
                                sc.access_count, sc.reliability, sc.created_at
-                        FROM concepts_vec v
-                        JOIN semantic_concepts sc ON sc.id = v.id
+                        FROM semantic_concepts_vec v
+                        JOIN semantic_concepts sc ON sc.rowid = v.rowid
                         WHERE v.embedding MATCH ? AND k = 5
                           AND sc.deleted_at IS NULL
                         ORDER BY v.distance
@@ -747,7 +747,7 @@ class ContradictionClassifierService:
                            sc.access_count, sc.reliability,
                            v.embedding, sc.created_at
                     FROM semantic_concepts sc
-                    LEFT JOIN concepts_vec v ON v.id = sc.id
+                    LEFT JOIN semantic_concepts_vec v ON v.rowid = sc.rowid
                     WHERE sc.deleted_at IS NULL AND sc.confidence > 0.3
                     ORDER BY sc.access_count DESC, sc.strength DESC
                     LIMIT ?
