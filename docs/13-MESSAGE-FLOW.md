@@ -43,40 +43,33 @@ This document is the single authoritative visual map of how a user message trave
                             ┌──────────▼───────────┐
                             │   PHASE B            │
                             │   Signal Collection  │
-                            │   & Message Gate     │
+                            │   & Unified Path     │
                             │   (see §3)           │
                             └──────────┬───────────┘
                                        │
-                           ┌───────────┴────────────────────┐
-                           │       Message Gate Branch      │
-                           │     (MessageGateService)       │
-                           └──┬─────────────┬───────────────┘
-                              │             │               │
-               ┌──────────────▼──┐  ┌───────▼──────┐  ┌───▼──────────────┐
-               │  PATH A         │  │  PATH B       │  │  PATH C          │
-               │  Fast Exit      │  │  ACT →        │  │  RESPOND /       │
-               │  CANCEL         │  │  Tool Worker  │  │  ACKNOWLEDGE     │
-               │                 │  │  (PromptQueue) │  │                  │
-               └──────┬──────────┘  └──────┬────────┘  └──────┬───────────┘
-                      │                    │                    │
-               ┌──────▼──────────┐  ┌──────▼────────┐  ┌──────▼───────────┐
-               │  Empty response │  │  Background   │  │  Mode Router     │
-               │  + WM append    │  │  execution    │  │  (Deterministic) │
-               │  📤 M   📤 DB   │  │  (see §5)     │  │  → Generation    │
-               └─────────────────┘  └───────────────┘  │  (see §4)        │
-                                                        └──────┬───────────┘
-                                                               │
-                                                        ┌──────▼───────────┐
-                                                        │   PHASE D        │
-                                                        │   Post-Response  │
-                                                        │   Commit (see §6)│
-                                                        └──────┬───────────┘
-                                                               │
-                                                        ┌──────▼───────────┐
-                                                        │  📤 M  pub/sub   │
-                                                        │  output:{id}     │
-                                                        │  WS → Client     │
-                                                        └──────────────────┘
+                           ┌───────────┴──────────────┐
+                           │    Unified Generation    │
+                           │    (unified_generate)    │
+                           └──┬───────────────────────┘
+                              │
+               ┌──────────────▼──────────────────────────────┐
+               │  Single LLM call — LLM decides:             │
+               │  • Respond directly (Format B)               │
+               │  • Invoke skills/tools first (Format A)      │
+               │  • CANCEL / empty → fast exit                │
+               └──────────────────────┬──────────────────────┘
+                                      │
+                               ┌──────▼───────────┐
+                               │   PHASE D        │
+                               │   Post-Response  │
+                               │   Commit (see §6)│
+                               └──────┬───────────┘
+                                      │
+                               ┌──────▼───────────┐
+                               │  📤 M  pub/sub   │
+                               │  output:{id}     │
+                               │  WS → Client     │
+                               └──────────────────┘
 
 BACKGROUND (always running, independent of user messages):
   PATH D  ──  Persistent Task Worker  (30min ± jitter)   (see §7)
@@ -129,9 +122,9 @@ Runs immediately for every message, before any routing decision.
 
 ---
 
-## 3. Phase B — Signal Collection & Message Gate
+## 3. Phase B — Signal Collection & Unified Generation
 
-This phase produces the routing decision via a single deterministic gate. No LLM call is made.
+User messages go through a single unified LLM call. No mode gate, no RESPOND/ACT routing split.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -144,46 +137,31 @@ This phase produces the routing decision via a single deterministic gate. No LLM
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
-│  LAYER 2: Message Gate                            ⚡ DET  ~5ms     │
-│  MessageGateService  (3-step deterministic pipeline)               │
+│  LAYER 2: Unified Generation                      🧠 LLM           │
+│  unified_generate()                                                 │
 │                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Step 2a  Empty Guard                    ⚡ DET  <1ms       │   │
-│  │                                                             │   │
-│  │  Empty / whitespace-only input → CANCEL                     │   │
-│  │  If matched ──► PATH A (Fast Exit)                         │   │
-│  └─────────────────────────┬───────────────────────────────────┘   │
-│                            │ not matched                            │
-│  ┌─────────────────────────▼───────────────────────────────────┐   │
-│  │  Step 2b  CANCEL Detection               ⚡ DET  ~1ms       │   │
-│  │                                                             │   │
-│  │  Cancel / nevermind patterns → CANCEL                       │   │
-│  │  If matched ──► PATH A (Fast Exit)                         │   │
-│  └─────────────────────────┬───────────────────────────────────┘   │
-│                            │ not matched                            │
-│  ┌─────────────────────────▼───────────────────────────────────┐   │
-│  │  Step 2c  ONNX Mode Gate                 ⚡ DET  ~5ms       │   │
-│  │                                                             │   │
-│  │  ONNX classifier: high-confidence conversational → RESPOND  │   │
-│  │  Everything else                                 → ACT      │   │
-│  │                                                             │   │
-│  │  RESPOND ──► PATH C (RESPOND fast-path)                    │   │
-│  │  ACT      ──► PATH B (ACT pipeline)                        │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  Single LLM call with discoverable skills/tools.                   │
+│  The LLM decides whether to:                                        │
+│    • Respond directly (Format B — conversational response)          │
+│    • Invoke skills/tools first (Format A — action + synthesis)      │
+│                                                                     │
+│  Empty input and CANCEL patterns handled inline (fast exit).        │
+│  Context relevance pre-parser selects which context nodes to inject.│
+│                                                                     │
+│  Config: frontal-cortex-unified.json                                │
+│  Prompt: frontal-cortex-unified.md                                  │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
-              ┌────────────────┼───────────────────┐
-              │                │                   │
-          CANCEL            branch=act        branch=respond
-              │                │                   │
-          PATH A           PATH B              PATH C
+                           Phase D  (§6)
 ```
 
 ---
 
-## 4. Path C — RESPOND / ACKNOWLEDGE
+## 4. Mode Router — Non-User Flows (Drift, Proactive, Fallback)
 
 ### 4a. Mode Router (Deterministic)
+
+Used only for non-user flows (cognitive drift, proactive notifications, fallback). User messages bypass this entirely via unified_generate.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -243,7 +221,7 @@ This phase produces the routing decision via a single deterministic gate. No LLM
 
 ### 4b. ACT Mode — The Action Loop
 
-Triggered when `MessageGateService` routes to the ACT pipeline, or when the mode router (secondary, non-user flows) selects ACT.
+Used by background workers (tool_worker, persistent_task_worker, curiosity_pursuit) and when the mode router (non-user flows) selects ACT.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -302,7 +280,7 @@ Triggered when `MessageGateService` routes to the ACT pipeline, or when the mode
 
 ## 5. Path B — ACT → Tool Worker (PromptQueue)
 
-Triggered when `MessageGateService` routes to the ACT pipeline.
+Used by background workers for tool execution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -538,12 +516,12 @@ focus:{thread_id}                  variable   A,E     FocusSessionService
 cognitive_drift_activations        —          E       Drift engine
 cognitive_drift_concept_cooldowns  —          E       Drift engine
 cognitive_drift_state              —          E       Drift engine
-ws_pending:{request_id}            600s       /chat   _handle_act_triage
+ws_pending:{request_id}            600s       /chat   unified_generate
 output:{request_id}                short      /chat   digest_worker, tool_worker
 
 PromptQueues (in-memory, thread-safe):
 prompt-queue                       —          —       run.py → digest_worker
-tool-queue                         —          B       _handle_act_triage
+tool-queue                         —          B       unified_generate
 memory-chunker-queue               —          D       Encode event handler
 episodic-memory-queue              —          D       memory_chunker_worker
 semantic_consolidation_queue       —          D       episodic_memory_worker
@@ -596,7 +574,7 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 **Deterministic paths (zero LLM):**
 - IIP hook (regex)
 - Intent classifier
-- MessageGateService (empty guard, CANCEL detection, ONNX mode gate)
+- Empty guard / CANCEL detection (inline in unified path)
 - Mode router scoring (non-user flows)
 - Fatigue budget check in ACT loop
 - Termination checks
@@ -611,24 +589,21 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 ```
 Path              P50 Latency    Bottleneck
 ────────────────────────────────────────────────────────────
-A — CANCEL Exit   ~10ms          MessageGateService (deterministic)
-B — ACT + Tools   5s – 30s+      Tool execution (external)
-C — RESPOND       1s – 3s        Frontal cortex (primary LLM)
-C — ACT Loop      2s – 30s       N × frontal-cortex-act LLMs
+Unified (user)    1s – 3s        Unified LLM call (primary model)
+Unified + skills  2s – 30s       Skill execution (varies)
+B — ACT + Tools   5s – 30s+      Tool execution (background workers)
 D — Task Worker   30min cycle    Background, no user wait
 E — Drift         300s cycle     Background, no user wait
 
-Component latency breakdown (Path C RESPOND, typical):
+Component latency breakdown (unified path, typical):
   Context assembly     <10ms   ── MemoryStore reads (all cached)
   Intent classify      ~5ms    ── Deterministic
-  Message gate         ~5ms    ── ONNX, no LLM
-  Mode router          ~5ms    ── Math, no LLM (non-user flows only)
-  Frontal cortex LLM   ~800ms  ── Primary model (varies by provider)
+  Unified LLM call     ~800ms  ── Primary model (varies by provider)
   Working memory write <5ms    ── MemoryStore append
   DB event log         ~10ms   ── SQLite WAL write
   WS publish           ~1ms    ── MemoryStore pub/sub
   ─────────────────────────────────────────────────────────
-  Total (typical)      ~0.9s
+  Total (typical)      ~0.85s
 ```
 
 ---
@@ -637,8 +612,8 @@ Component latency breakdown (Path C RESPOND, typical):
 
 | Principle | Where it shows up in the flow |
 |-----------|-------------------------------|
-| **Attention is sacred** | Social filter exits in <1ms — never wastes LLM for greetings; ACT fatigue model prevents runaway tool chains |
-| **Judgment over activity** | Deterministic message gate (ONNX, no LLM) routes user messages; mode router handles non-user flows; neither generates — they classify |
+| **Attention is sacred** | Unified path lets LLM decide when to act vs respond — no wasted routing overhead; ACT fatigue model prevents runaway tool chains |
+| **Judgment over activity** | Single unified LLM call for user messages; mode router handles non-user flows deterministically |
 | **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
 | **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
 | **Single authority** | Router weights are fixed at deployment; no runtime weight mutation, no tug-of-war possible |

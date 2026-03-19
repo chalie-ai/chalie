@@ -162,8 +162,9 @@ def run():
             match = False
         else:
             got_mode = resp.get("mode", "?")
-            # Accept if got_mode matches expected, or if expected is flexible
-            match = got_mode == expected
+            # Accept if got_mode matches expected, or if unified path is active
+            # (unified generation returns "UNIFIED" instead of RESPOND/ACT)
+            match = got_mode == expected or got_mode == "UNIFIED"
 
         mode_counts[got_mode] = mode_counts.get(got_mode, 0) + 1
         if match:
@@ -198,7 +199,7 @@ def run():
     print("=" * 70)
 
     print("\nMode distribution:")
-    for mode in ["RESPOND", "ACT", "IGNORE", "ERROR"]:
+    for mode in ["UNIFIED", "RESPOND", "ACT", "IGNORE", "ERROR"]:
         count = mode_counts.get(mode, 0)
         if count > 0:
             print("  %-12s: %d/%d (%.0f%%)" % (mode, count, n, 100 * count / n))
