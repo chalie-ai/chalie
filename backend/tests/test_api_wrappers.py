@@ -283,12 +283,22 @@ class TestUpdateCapabilities:
             )
         assert resp.status_code == 400
 
-    def test_update_capabilities_not_dict_returns_400(self, cookie_client):
+    def test_update_capabilities_list_accepted(self, cookie_client):
         svc = _make_service_mock()
         with patch("api.wrappers._get_service", return_value=svc):
             resp = cookie_client.put(
                 "/api/wrappers/wrp_abc/capabilities",
-                json={"capabilities": ["list", "not", "dict"]},
+                json={"capabilities": ["weather.current", "email.send"]},
+                content_type="application/json",
+            )
+        assert resp.status_code == 200
+
+    def test_update_capabilities_invalid_type_returns_400(self, cookie_client):
+        svc = _make_service_mock()
+        with patch("api.wrappers._get_service", return_value=svc):
+            resp = cookie_client.put(
+                "/api/wrappers/wrp_abc/capabilities",
+                json={"capabilities": "not-a-list-or-dict"},
                 content_type="application/json",
             )
         assert resp.status_code == 400
