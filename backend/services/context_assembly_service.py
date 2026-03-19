@@ -1,8 +1,8 @@
 """
 Context Assembly Service - Unified multi-memory context retrieval and ranking.
 
-Orchestrates retrieval from all memory types (working memory, facts, gists,
-episodes, concepts), ranks with unified scoring, and produces budget-constrained
+Orchestrates retrieval from all memory types (working memory, episodes,
+concepts), ranks with unified scoring, and produces budget-constrained
 context payload.
 """
 
@@ -39,7 +39,6 @@ class ContextAssemblyService:
                 - context_weights: dict of memory type weights
                 - max_context_tokens: approximate token budget
                 - max_working_memory_turns: turns for working memory
-                - max_gists: max gists to retrieve
         """
         self.config = config
         self.weights = config.get('context_weights', self.DEFAULT_WEIGHTS)
@@ -68,8 +67,6 @@ class ContextAssemblyService:
             Dict with context sections:
             {
                 'working_memory': str,
-                'facts': str,
-                'gists': str,
                 'episodes': str,
                 'concepts': str,
                 'previous_session': str,

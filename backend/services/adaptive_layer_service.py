@@ -252,10 +252,6 @@ class AdaptiveLayerService:
             for pref in pref_lines:
                 lines.append(f"- {pref}")
 
-            lines.append(
-                "When these directives conflict with your identity voice, "
-                "your voice takes priority."
-            )
 
             return "\n".join(lines)
 

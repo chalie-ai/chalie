@@ -695,9 +695,7 @@ class FrontalCortexService:
         _include = lambda node: (inclusion_map or {}).get(node, True)
 
         _ctx = assembled_context or {}
-        formatted_context = _ctx.get('gists', '') if _include('gists') else ''
         episodic_context = _ctx.get('episodes', '') if _include('episodic_memory') else ''
-        facts_context = _ctx.get('facts', '') if _include('facts') else ''
         working_memory_context = _ctx.get('working_memory', '') if _include('working_memory') else ''
         concepts_context = _ctx.get('concepts', '') if _include('concepts') else ''
         _msg_emb = _ctx.get('message_embedding') if _ctx else None
@@ -722,10 +720,13 @@ class FrontalCortexService:
             _current_date = _now.strftime('%A, %Y-%m-%d')
         result = template.replace('{{current_datetime}}', _current_datetime)
         result = result.replace('{{current_date}}', _current_date)
+
+        # Consolidated user state (identity + telemetry) — always injected
+        user_state = self._get_user_state()
+        result = result.replace('{{user_state}}', user_state)
         result = result.replace('{{original_prompt}}', original_prompt)
         result = result.replace('{{topic}}', str(topic))
         result = result.replace('{{confidence}}', str(confidence))
-        result = result.replace('{{chat_history}}', formatted_context)
         result = result.replace('{{world_state}}', world_state if _include('world_state') else '')
         result = result.replace('{{episodic_memory}}', episodic_context if _include('episodic_memory') else '')
 
@@ -744,11 +745,8 @@ class FrontalCortexService:
             result = result.replace('{{situation}}', situation_directive)
         result = result.replace('{{semantic_concepts}}', concepts_context)
         result = result.replace('{{act_history}}', act_history)
-        result = result.replace('{{facts}}', facts_context if _include('facts') else '')
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 
-        # active_goals removed — world state covers persistent tasks with salience scoring
-        result = result.replace('{{active_goals}}', '')
 
         # Phase 3 — Response weaving: inject contradiction context when flagged
         contradiction_ctx = _ctx.get('contradiction_context')
@@ -791,11 +789,6 @@ class FrontalCortexService:
         injected_skills = self._get_injected_skills(selected_skills or [])
         result = result.replace('{{injected_skills}}', injected_skills)
 
-        # Legacy {{available_skills}} — removed from ACT template; kept as no-op for other templates
-        result = result.replace('{{available_skills}}', '')
-
-        # Legacy {{available_tools}} — removed; find_tools is baked into ACT prompt
-        result = result.replace('{{available_tools}}', '')
 
         # Strategy hints from procedural memory (learned action reliability)
         strategy_hints = ''
@@ -822,16 +815,6 @@ class FrontalCortexService:
             identity_modulation = ''
         result = result.replace('{{identity_modulation}}', identity_modulation)
 
-        # Identity context — authoritative, zero-latency (MemoryStore-backed)
-        # Shown when returning from silence OR when context is cold (warmth < 0.3)
-        if _include('identity_context'):
-            identity_context = self._get_identity_context(
-                returning_from_silence=returning_from_silence,
-                context_warmth=classification.get('context_warmth', 1.0),
-            )
-        else:
-            identity_context = ''
-        result = result.replace('{{identity_context}}', identity_context)
 
         # Onboarding nudge — elicit missing identity traits progressively
         if _include('onboarding_nudge'):
@@ -840,23 +823,6 @@ class FrontalCortexService:
             onboarding_nudge = ''
         result = result.replace('{{onboarding_nudge}}', onboarding_nudge)
 
-        # Warm-return hint (returning from silence)
-        if _include('warm_return_hint'):
-            warm_return_hint = ""
-            if returning_from_silence:
-                try:
-                    from services.identity_state_service import IdentityStateService
-                    name_field = IdentityStateService().get_field('name')
-                    if name_field and name_field.get('value'):
-                        warm_return_hint = (
-                            f"\n**Behavioral note:** User is returning after a long absence. "
-                            f"Their name is {name_field['value']}. Address them by name warmly.\n"
-                        )
-                except Exception:
-                    pass
-        else:
-            warm_return_hint = ''
-        result = result.replace('{{warm_return_hint}}', warm_return_hint)
 
         # User traits (known facts about the user)
         # Lower injection threshold when returning from silence to surface more context
@@ -879,8 +845,6 @@ class FrontalCortexService:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
 
-        # active_lists removed — list awareness moved into WorldStateService salience system
-        result = result.replace('{{active_lists}}', '')
 
         # Focus session (current declared or inferred focus)
         if _include('focus'):
@@ -889,19 +853,10 @@ class FrontalCortexService:
             focus_context = ''
         result = result.replace('{{focus}}', focus_context)
 
-        # Client context (timezone, location, locale from frontend heartbeat)
-        if _include('client_context'):
-            client_context = self._get_client_context()
-        else:
-            client_context = ''
-        result = result.replace('{{client_context}}', client_context)
 
-        # Temporal rhythm (learned behavioral patterns from temporal mining)
-        if _include('temporal_rhythm'):
-            temporal_rhythm = self._get_temporal_rhythm()
-        else:
-            temporal_rhythm = ''
-        result = result.replace('{{temporal_rhythm}}', temporal_rhythm)
+        # temporal_rhythm — removed from unified prompt; behavioral traits surface
+        # via salient traits selector instead. Keep no-op for old templates.
+        result = result.replace('{{temporal_rhythm}}', '')
 
         # Self-awareness (interoception — only injected when noteworthy)
         if _include('self_awareness'):
@@ -909,6 +864,11 @@ class FrontalCortexService:
         else:
             self_awareness = ''
         result = result.replace('{{self_awareness}}', self_awareness)
+
+        # Legacy placeholders — still present in old RESPOND/ACT templates used by background workers
+        for legacy in ('{{identity_context}}', '{{client_context}}', '{{available_skills}}',
+                       '{{available_tools}}', '{{active_goals}}', '{{active_lists}}', '{{warm_return_hint}}'):
+            result = result.replace(legacy, '')
 
         return result
 
@@ -978,47 +938,88 @@ class FrontalCortexService:
             logging.debug(f"User traits not available: {e}")
             return ""
 
-    def _get_identity_context(
-        self,
-        returning_from_silence: bool,
-        context_warmth: float,
-    ) -> str:
+    def _get_user_state(self) -> str:
         """
-        Return authoritative identity section from IdentityStateService, or ''
-        when conditions are not met.
+        Consolidated telemetry: time, location, device, energy, attention, mobility.
 
-        Conditions for injection:
-        - returning_from_silence=True (user just came back after 45+ min), OR
-        - context_warmth < 0.3 (cold context — identity may not be in gists/memory)
-
-        Returns:
-            str: Formatted identity section or empty string. Never raises.
+        Pure telemetry — no identity data. Always injected, no gating. ~25 tokens.
         """
-        if not returning_from_silence and context_warmth >= 0.3:
-            return ""
         try:
-            from services.identity_state_service import IdentityStateService
-            state = IdentityStateService().get_all()
-            if not state:
-                return ""
-            lines = ["Known user details:"]
-            for field_name, data in state.items():
-                if field_name.startswith('_'):
-                    continue  # skip internal keys like _onboarding
-                value = data.get('display') or data.get('value', '')
-                if not value:
-                    continue
-                qualifier = "(provisional)" if data.get('provisional') else "(confirmed)"
-                display_key = field_name.replace('_', ' ').title()
-                lines.append(f"- {display_key}: {value} {qualifier}")
-            if len(lines) <= 1:
-                return ""
-            result = "\n".join(lines)
-            logging.debug(f"[FRONTAL CORTEX] Identity context injected ({len(lines)-1} fields)")
-            return result
+            return self._build_user_state_line()
         except Exception as e:
-            logging.debug(f"[FRONTAL CORTEX] Identity context unavailable: {e}")
-            return ""
+            logging.warning(f"[FRONTAL CORTEX] User state failed: {e}")
+            return ''
+
+    def _build_user_state_line(self) -> str:
+        """Build the user state line — pure telemetry, no identity. Raises on failure."""
+        from services.client_context_service import ClientContextService
+        from services.ambient_inference_service import AmbientInferenceService
+        from services.place_learning_service import PlaceLearningService
+        from services.database_service import DatabaseService
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+
+        parts = []
+
+        ctx = ClientContextService().get()
+        if not ctx:
+            return ''
+
+        # Local time
+        if timezone := ctx.get('timezone'):
+            user_dt = datetime.now(ZoneInfo(timezone))
+            day_str = user_dt.strftime('%a %d %b')
+            time_str = user_dt.strftime('%H:%M')
+            tz_abbr = user_dt.strftime('%Z') or timezone.split('/')[-1]
+            parts.append(f"{day_str}, {time_str} {tz_abbr}")
+
+        # Location
+        location_name = ctx.get('location_name', '')
+
+        # Device + battery
+        device = ctx.get('device', {})
+        if device_class := device.get('class'):
+            battery = ctx.get('battery', {})
+            battery_level = battery.get('level') if isinstance(battery, dict) else None
+            if battery_level is not None:
+                parts.append(f"{device_class} {int(battery_level)}%")
+            else:
+                parts.append(device_class)
+
+        # Ambient inferences
+        db = DatabaseService()
+        place_learning = PlaceLearningService(db)
+        inferences = AmbientInferenceService(
+            place_learning_service=place_learning
+        ).infer(ctx)
+
+        place = inferences.get('place')
+        if location_name and place:
+            parts.append(f"{location_name} ({place})")
+        elif location_name:
+            parts.append(location_name)
+        elif place:
+            parts.append(place)
+
+        if energy := inferences.get('energy'):
+            parts.append(f"Energy: {energy}")
+
+        attention_labels = {
+            'deep_focus': 'Focus: deep',
+            'focused': 'Focus: active',
+            'casual': 'Casual',
+            'distracted': 'Distracted',
+            'away': 'Away',
+        }
+        if attention := inferences.get('attention'):
+            if label := attention_labels.get(attention):
+                parts.append(label)
+
+        if mobility := inferences.get('mobility'):
+            if mobility != 'stationary':
+                parts.append(mobility.capitalize())
+
+        return ' \u00b7 '.join(parts) if parts else ''
 
     def _get_onboarding_nudge(
         self,
@@ -1186,19 +1187,6 @@ class FrontalCortexService:
             logging.debug(f"Adaptive directives not available: {e}")
             return ""
 
-    def _get_client_context(self) -> str:
-        """
-        Get client context (timezone, location, locale) from MemoryStore heartbeat.
-
-        Returns:
-            str: Formatted client context or empty string if not available
-        """
-        try:
-            from services.client_context_service import ClientContextService
-            return ClientContextService().format_for_prompt()
-        except Exception as e:
-            logging.debug(f"Client context not available: {e}")
-            return ""
 
     def _get_temporal_rhythm(self) -> str:
         """Get rhythm context from temporal pattern mining.
