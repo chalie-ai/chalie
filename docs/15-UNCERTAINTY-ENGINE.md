@@ -88,7 +88,7 @@ User sends message
          |   New: "works at Y" -> reliable
          |
          +-> Contradicts semantic/trait (non-temporal):
-         |   Flag to response pipeline. Weave into RESPOND naturally:
+         |   Flag to response pipeline. Weave into UNIFIED naturally:
          |   "You mentioned you like Toyota — interesting, I remember
          |    you being a Honda fan. What changed?"
          |
@@ -217,7 +217,7 @@ The heuristic: **anything that made it to semantics or traits is a "belief" — 
 
 ### Conversational Clarification (Interactive)
 - **Trigger:** High-severity contradiction surfaces in relevant conversational context
-- **Action:** Woven into RESPOND naturally (not a separate clarification prompt)
+- **Action:** Woven into UNIFIED naturally (not a separate clarification prompt)
 - **Feedback:** User's response feeds back through ingestion pipeline:
   - Winner: reliability -> `reliable`, reinforcement boosted
   - Loser: reliability -> `superseded` (if temporal) or deleted (if wrong)
@@ -354,7 +354,7 @@ LLM-based classification of detected conflicts.
 - When contradiction flag is present in assembled context:
   - Include both conflicting memories in prompt
   - Instruct LLM to weave the contradiction naturally into the response
-  - Uncertainty surfacing is woven into whatever mode was selected (usually RESPOND)
+  - Uncertainty surfacing is woven into whatever mode was selected (usually UNIFIED)
 
 #### `ACTDispatcherService`
 - Pre-action reliability check: if action depends on unreliable memory, ask for clarification first
@@ -455,7 +455,7 @@ All four phases are **complete and live**.
 
 ### Phase 3: Resolution ✅
 9. Temporal auto-resolution: `_auto_supersede()` in `ReconcileAction`; `temporal_change` classification auto-resolves silently
-10. Response weaving: `{{contradiction_context}}` in `frontal-cortex-respond.md`; `FrontalCortexService._inject_parameters()` builds hint block
+10. Response weaving: `{{contradiction_context}}` in `frontal-cortex-unified.md`; `FrontalCortexService._inject_parameters()` builds hint block
 11. ACT loop pre-action check: `ActDispatcherService._check_source_reliability()` — reduces confidence 40%, annotates `reliability_warning`
 12. Resolution feedback loop: `UserTraitService.correct_trait()` resolves linked uncertainties with `strategy='user_clarified'`
 

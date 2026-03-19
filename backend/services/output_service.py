@@ -41,7 +41,7 @@ class OutputService:
         Args:
             topic: Conversation topic identifier
             response: The response text to deliver
-            mode: Output mode (RESPOND, ACT)
+            mode: Output mode (UNIFIED, ACT)
             confidence: Confidence score of the response
             generation_time: Time taken to generate the response
             original_metadata: Optional original metadata from the request (uuid, source, etc.)
@@ -174,7 +174,7 @@ class OutputService:
         return self.enqueue_text(
             topic=topic,
             response=response,
-            mode='RESPOND',
+            mode='UNIFIED',
             confidence=1.0,
             generation_time=0.0,
             original_metadata=metadata,

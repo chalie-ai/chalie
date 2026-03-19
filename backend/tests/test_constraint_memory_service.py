@@ -177,7 +177,7 @@ class TestFormatForPrompt:
         db, _ = _make_db_mock()
         store = _make_store_mock()
 
-        # Only action_gate_rejected — RESPOND mode should produce nothing
+        # Only action_gate_rejected — UNIFIED mode should produce nothing
         events = [
             _make_rejection_event('action_gate_rejected', {
                 'rejections': [{'action': 'PLAN', 'reason': 'cooldown'}],
@@ -189,7 +189,7 @@ class TestFormatForPrompt:
             service = ConstraintMemoryService(db)
             result = service.format_for_prompt(mode='respond')
 
-        # RESPOND only surfaces triage overrides
+        # UNIFIED only surfaces triage overrides
         assert result == ''
 
     def test_token_budget_truncation(self):

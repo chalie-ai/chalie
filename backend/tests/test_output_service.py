@@ -42,7 +42,7 @@ class TestOutputService:
     def test_enqueue_text_with_sse_uuid_publishes_to_sse_channel(self, service, mock_store):
         """When metadata contains a uuid, text is published to sse:{uuid}."""
         metadata = {"uuid": "abc-123", "source": "user"}
-        service.enqueue_text("topic-1", "Hello", "RESPOND", 0.9, 0.5, metadata)
+        service.enqueue_text("topic-1", "Hello", "UNIFIED", 0.9, 0.5, metadata)
 
         publish_calls = mock_store.publish.call_args_list
         channels = [c[0][0] for c in publish_calls]
@@ -51,7 +51,7 @@ class TestOutputService:
     def test_enqueue_text_with_sse_uuid_does_not_publish_to_output_events(self, service, mock_store):
         """SSE-routed text must NOT also go to output:events (prevents duplicates)."""
         metadata = {"uuid": "abc-123", "source": "user"}
-        service.enqueue_text("topic-1", "Hello", "RESPOND", 0.9, 0.5, metadata)
+        service.enqueue_text("topic-1", "Hello", "UNIFIED", 0.9, 0.5, metadata)
 
         publish_calls = mock_store.publish.call_args_list
         channels = [c[0][0] for c in publish_calls]
@@ -60,7 +60,7 @@ class TestOutputService:
     def test_enqueue_text_without_sse_uuid_publishes_to_output_events(self, service, mock_store):
         """Background text (no SSE channel) is published to output:events."""
         metadata = {"source": "proactive_drift"}
-        service.enqueue_text("topic-1", "Drift thought", "RESPOND", 0.8, 0.3, metadata)
+        service.enqueue_text("topic-1", "Drift thought", "UNIFIED", 0.8, 0.3, metadata)
 
         publish_calls = mock_store.publish.call_args_list
         channels = [c[0][0] for c in publish_calls]
@@ -71,7 +71,7 @@ class TestOutputService:
         metadata = {"source": "proactive_drift"}
 
         with patch('api.push.send_push_to_all'):
-            service.enqueue_text("topic-1", "Drift", "RESPOND", 0.8, 0.3, metadata)
+            service.enqueue_text("topic-1", "Drift", "UNIFIED", 0.8, 0.3, metadata)
 
         rpush_calls = mock_store.rpush.call_args_list
         keys = [c[0][0] for c in rpush_calls]
@@ -80,7 +80,7 @@ class TestOutputService:
     def test_enqueue_text_stores_output_with_setex(self, service, mock_store):
         """Output is persisted in MemoryStore under output:{id} with setex."""
         metadata = {"uuid": "xyz-789"}
-        output_id = service.enqueue_text("t", "msg", "RESPOND", 0.9, 0.1, metadata)
+        output_id = service.enqueue_text("t", "msg", "UNIFIED", 0.9, 0.1, metadata)
 
         setex_calls = mock_store.setex.call_args_list
         assert len(setex_calls) == 1
@@ -93,7 +93,7 @@ class TestOutputService:
 
     def test_enqueue_text_sets_one_hour_ttl(self, service, mock_store):
         """The stored output key has a 3600-second (1 hour) TTL."""
-        output_id = service.enqueue_text("t", "msg", "RESPOND", 0.9, 0.1, {"uuid": "u"})
+        output_id = service.enqueue_text("t", "msg", "UNIFIED", 0.9, 0.1, {"uuid": "u"})
 
         _key, ttl, _data = mock_store.setex.call_args[0]
         assert ttl == 3600
@@ -159,7 +159,7 @@ class TestOutputService:
         """Verify that 'persistent_task' source produces event type 'task' in enqueue_text."""
         metadata = {"source": "persistent_task"}
         with patch('api.push.send_push_to_all'):
-            service.enqueue_text("t", "msg", "RESPOND", 1.0, 0.0, metadata)
+            service.enqueue_text("t", "msg", "UNIFIED", 1.0, 0.0, metadata)
 
         for c in mock_store.publish.call_args_list:
             if c[0][0] == "output:events":
@@ -234,7 +234,7 @@ class TestOutputService:
         metadata = {"source": "proactive_drift"}
 
         with patch('api.push.send_push_to_all'):
-            service.enqueue_text("t", "msg", "RESPOND", 0.8, 0.2, metadata)
+            service.enqueue_text("t", "msg", "UNIFIED", 0.8, 0.2, metadata)
 
         ltrim_calls = mock_store.ltrim.call_args_list
         assert len(ltrim_calls) >= 1

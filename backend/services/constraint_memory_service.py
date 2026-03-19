@@ -257,7 +257,7 @@ class ConstraintMemoryService:
 
     @staticmethod
     def _format_respond(summary: Dict) -> List[str]:
-        """Format constraint context for RESPOND mode (very light)."""
+        """Format constraint context for UNIFIED mode (very light)."""
         counts = summary.get('rejection_counts', {})
         # Only surface if there are capability gaps
         if counts.get('triage_override', 0) > 0:

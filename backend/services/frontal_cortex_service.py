@@ -451,7 +451,7 @@ class FrontalCortexService:
             # Layer 2: extract {…} from prose wrapper
             # Layer 3: fix literal newlines in string values
             # Layer 4: extract "response" from broken JSON
-            # Layer 5: wrap prose as RESPOND
+            # Layer 5: wrap prose as UNIFIED
             response_data = None
 
             # Helper: try raw_decode to extract just the first JSON object
@@ -539,13 +539,13 @@ class FrontalCortexService:
                         )
                         response_data = {"response": extracted, "modifiers": []}
 
-            # Layer 5: pure prose — wrap as RESPOND
+            # Layer 5: pure prose — wrap as UNIFIED
             if response_data is None:
                 prose = stripped.strip() or response_text.strip()
                 if prose:
                     logging.warning(
                         "[FRONTAL CORTEX] LLM returned prose instead of JSON — "
-                        "wrapping as RESPOND (first 80 chars): "
+                        "wrapping as UNIFIED (first 80 chars): "
                         f"{prose[:80]!r}"
                     )
                     response_data = {"response": prose, "modifiers": []}
@@ -568,7 +568,7 @@ class FrontalCortexService:
                     response_data = {"response": str(response_data) if response_data else "", "modifiers": []}
 
             # Extract fields (mode-specific prompts produce simpler output)
-            mode = response_data.get('mode', 'RESPOND')
+            mode = response_data.get('mode', 'UNIFIED')
             modifiers = response_data.get('modifiers', [])
             user_response = response_data.get('response', '')
             # Guard: ensure response is always a string (LLM may return nested object)
@@ -584,10 +584,10 @@ class FrontalCortexService:
                 mode = 'ACT'
 
             # Validate mode
-            valid_modes = ['ACT', 'RESPOND', 'IGNORE']
+            valid_modes = ['ACT', 'UNIFIED', 'IGNORE']
             if mode not in valid_modes:
-                logging.warning(f"Invalid mode '{mode}', defaulting to RESPOND")
-                mode = 'RESPOND'
+                logging.warning(f"Invalid mode '{mode}', defaulting to UNIFIED")
+                mode = 'UNIFIED'
 
             # Validate confidence range
             try:
@@ -610,9 +610,9 @@ class FrontalCortexService:
                     path['expected_confidence'] = 0.5
                 # Validate downstream_mode for ACT paths
                 if mode == 'ACT' and path.get('mode') == 'ACT':
-                    valid_terminal = ['RESPOND', 'IGNORE']
+                    valid_terminal = ['UNIFIED', 'IGNORE']
                     if path.get('downstream_mode') not in valid_terminal:
-                        path['downstream_mode'] = 'RESPOND'
+                        path['downstream_mode'] = 'UNIFIED'
                 validated_alternatives.append(path)
             alternative_paths = validated_alternatives
 
@@ -642,7 +642,7 @@ class FrontalCortexService:
             'actions': actions,
             'confidence': confidence,
             'alternative_paths': alternative_paths,
-            'downstream_mode': response_data.get('downstream_mode', 'RESPOND'),
+            'downstream_mode': response_data.get('downstream_mode', 'UNIFIED'),
         }
 
         # Pass through ACT narration fields (used by ACTOrchestrator for live progress)
@@ -865,7 +865,7 @@ class FrontalCortexService:
             self_awareness = ''
         result = result.replace('{{self_awareness}}', self_awareness)
 
-        # Legacy placeholders — still present in old RESPOND/ACT templates used by background workers
+        # Legacy placeholders — still present in old UNIFIED/ACT templates used by background workers
         for legacy in ('{{identity_context}}', '{{client_context}}', '{{available_skills}}',
                        '{{available_tools}}', '{{active_goals}}', '{{active_lists}}', '{{warm_return_hint}}'):
             result = result.replace(legacy, '')

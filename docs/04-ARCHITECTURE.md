@@ -79,7 +79,7 @@ frontend/
 - **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
 - **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
 - **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
-- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to RESPOND/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
+- **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to UNIFIED/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
 - **`cognitive_reflex_service.py`** — Learned fast path via semantic abstraction; heuristic pre-screen (~1ms) + sqlite-vec cosine search (~5-20ms) bypasses full pipeline for self-contained queries; rolling-average centroids generalize from observed examples; self-correcting per cluster via user corrections and shadow validation
 
 #### Response Generation
@@ -267,7 +267,7 @@ frontend/
 - **Signals**: ~17 observable signals from context + NLP (context warmth, question marks, greeting patterns, etc.)
 - **Scores**: Each mode gets weighted composite score; highest wins
 - **Tie-breaker**: Small LLM (qwen3:4b) for ambiguous cases
-- **Self-leveling**: Router naturally shifts toward RESPOND as memory accumulates
+- **Self-leveling**: Router naturally shifts toward UNIFIED as memory accumulates
 
 ### Single Authority for Weight Mutation
 - **Routing Stability Regulator** is the only service that modifies router weights
@@ -276,7 +276,7 @@ frontend/
 - **Closed-loop control**: Verifies adjustments work before persisting
 
 ### Mode-Specific Prompts
-- Each mode (RESPOND, CLARIFY, ACKNOWLEDGE, ACT) has its own focused prompt template
+- Each mode (UNIFIED, CLARIFY, ACKNOWLEDGE, ACT) has its own focused prompt template
 - Replaces old approach: single combined prompt with mode selection embedded
 - Focused scope prevents elaboration and improves consistency
 

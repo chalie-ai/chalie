@@ -65,9 +65,9 @@ class TestRoutingDecisionServiceTimePersistence:
         """routing_time_ms from the routing result must be written to the DB (not NULL)."""
         svc = RoutingDecisionService(db_service)
         routing_result = {
-            'mode': 'RESPOND',
+            'mode': 'UNIFIED',
             'router_confidence': 0.85,
-            'scores': {'RESPOND': 0.85, 'ACT': 0.15},
+            'scores': {'UNIFIED': 0.85, 'ACT': 0.15},
             'tiebreaker_used': False,
             'tiebreaker_candidates': None,
             'margin': 0.70,
@@ -125,7 +125,7 @@ class TestRoutingDecisionServiceTimePersistence:
         """If routing_time_ms is absent from the result dict, column stays NULL (no crash)."""
         svc = RoutingDecisionService(db_service)
         routing_result = {
-            'mode': 'RESPOND',
+            'mode': 'UNIFIED',
             'router_confidence': 0.7,
             # routing_time_ms intentionally omitted
         }

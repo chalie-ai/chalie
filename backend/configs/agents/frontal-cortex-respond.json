@@ -1,7 +1,0 @@
-{
-  "_comment": "RESPOND mode: Full conversational response with qwen3-coder:30b for quality",
-  "temperature": 0.5,
-  "timeout": 180,
-  "format": "json",
-  "attention_span_minutes": 30
-}

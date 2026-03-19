@@ -209,10 +209,10 @@ class ModeRouterService:
     When top-2 are within margin, invokes small LLM for disambiguation.
     """
 
-    MODES = ['RESPOND', 'ACT', 'IGNORE']
+    MODES = ['UNIFIED', 'ACT', 'IGNORE']
 
     MODE_DESCRIPTIONS = {
-        'RESPOND': 'Answer the user with available context and knowledge',
+        'UNIFIED': 'Answer the user with available context and knowledge',
         'ACT': 'Use tools and skills (web search, memory lookup, research) to gather information before responding',
         'IGNORE': 'No response needed (empty or irrelevant input)',
     }
@@ -227,11 +227,17 @@ class ModeRouterService:
         self.config = config
 
         # Base scores per mode
-        self.bases = config.get('base_scores', {
-            'RESPOND': 0.50,
+        raw_bases = config.get('base_scores', {
+            'UNIFIED': 0.50,
             'ACT': 0.20,
             'IGNORE': -0.50,
         })
+        # Migrate legacy RESPOND key to UNIFIED transparently
+        if 'RESPOND' in raw_bases and 'UNIFIED' not in raw_bases:
+            raw_bases['UNIFIED'] = raw_bases.pop('RESPOND')
+        elif 'RESPOND' in raw_bases:
+            raw_bases.pop('RESPOND')
+        self.bases = raw_bases
 
         # Weight parameters (tunable)
         self.weights = config.get('weights', {})
@@ -372,8 +378,8 @@ class ModeRouterService:
 
         w = self.weights
 
-        # ── RESPOND ──────────────────────────────────────────────
-        respond = self.bases['RESPOND']
+        # ── UNIFIED ──────────────────────────────────────────────
+        respond = self.bases['UNIFIED']
         respond += warmth * w.get('respond.warmth_boost', 0.20)
         if is_question and warmth > 0.4:
             respond += w.get('respond.question_warm', 0.15)
@@ -413,7 +419,7 @@ class ModeRouterService:
             ignore += w.get('ignore.empty_input', 1.00)
 
         scores = {
-            'RESPOND': respond,
+            'UNIFIED': respond,
             'ACT': act,
             'IGNORE': ignore,
         }
@@ -558,15 +564,15 @@ class ModeRouterService:
 
             selected = mode_a if label == "A" else mode_b
 
-            # ACT subsumes RESPOND — ACT can fall back to RESPOND mid-execution,
-            # but RESPOND can't escalate to ACT. On low-confidence ties between
+            # ACT subsumes UNIFIED — ACT can fall back to UNIFIED mid-execution,
+            # but UNIFIED can't escalate to ACT. On low-confidence ties between
             # these two, prefer ACT as the safer default.
             if confidence < 0.65:
                 pair = {mode_a, mode_b}
-                if pair == {'ACT', 'RESPOND'}:
+                if pair == {'ACT', 'UNIFIED'}:
                     logger.info(
                         f"{LOG_PREFIX} ONNX tie-break: ACT (low-confidence "
-                        f"ACT/RESPOND, {confidence:.2f}) — ACT preferred "
+                        f"ACT/UNIFIED, {confidence:.2f}) — ACT preferred "
                         f"as safe default in {elapsed_ms:.1f}ms"
                     )
                     return 'ACT'

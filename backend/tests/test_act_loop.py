@@ -60,9 +60,9 @@ class TestCanContinue:
         """Non-ACT mode → always stops."""
         svc = ActLoopService(_make_config(), cumulative_timeout=60.0)
         svc.start_time = time.time()
-        can, reason = svc.can_continue(mode='RESPOND')
+        can, reason = svc.can_continue(mode='UNIFIED')
         assert can is False
-        assert reason == 'terminal_mode_respond'
+        assert reason == 'terminal_mode_unified'
 
     def test_default_max_iterations_is_30(self):
         """Default hard cap is 30."""

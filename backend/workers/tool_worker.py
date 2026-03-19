@@ -2,7 +2,7 @@
 Tool Worker — Background ACT loop processing.
 
 Picks up tool work from tool-queue, runs the ACT reasoning loop,
-and enqueues a RESPOND call on prompt-queue when done.
+and enqueues a UNIFIED call on prompt-queue when done.
 
 This decouples heavy tool work from the fast response path.
 """
@@ -256,7 +256,7 @@ def _tool_worker_orchestrator(
     if cycle_service and cycle_id:
         cycle_service.complete_cycle(cycle_id, 'completed')
 
-    # Build act_history_context for RESPOND handoff
+    # Build act_history_context for UNIFIED handoff
     from services.act_loop_service import ActLoopService
     # Use a temporary ActLoopService just for get_history_context formatting
     _tmp = ActLoopService.__new__(ActLoopService)
@@ -398,7 +398,7 @@ def _enqueue_followup(
     metadata: dict,
     original_created_at: float,
 ):
-    """Enqueue a RESPOND call on prompt-queue after background ACT loop completes."""
+    """Enqueue a UNIFIED call on prompt-queue after background ACT loop completes."""
     try:
         from workers.digest_worker import digest_worker
         from services.prompt_queue import PromptQueue
@@ -424,7 +424,7 @@ def _enqueue_followup(
             result_metadata,
         )
 
-        logger.info(f"[TOOL WORKER] Enqueued RESPOND for topic '{topic}'")
+        logger.info(f"[TOOL WORKER] Enqueued UNIFIED for topic '{topic}'")
 
     except Exception as e:
         logger.error(f"[TOOL WORKER] Failed to enqueue response: {e}")

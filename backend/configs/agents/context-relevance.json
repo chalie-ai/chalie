@@ -2,26 +2,6 @@
   "enabled": true,
   "log_exclusions": true,
   "template_masks": {
-    "RESPOND": {
-      "identity_context": true,
-      "onboarding_nudge": true,
-      "user_traits": true,
-      "communication_style": true,
-      "adaptive_directives": true,
-      "active_lists": false,
-      "client_context": true,
-      "focus": true,
-      "working_memory": true,
-      "active_goals": false,
-      "episodic_memory": true,
-      "concepts": true,
-      "act_history": true,
-      "available_skills": false,
-      "available_tools": false,
-      "world_state": true,
-      "warm_return_hint": false,
-      "identity_modulation": true
-    },
     "ACT": {
       "identity_context": false,
       "onboarding_nudge": false,

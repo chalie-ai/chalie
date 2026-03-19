@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 def _make_config():
     return {
         'base_scores': {
-            'RESPOND': 0.40, 'ACT': 0.20,
+            'UNIFIED': 0.40, 'ACT': 0.20,
             'IGNORE': -0.50,
         },
         'weights': {},
@@ -52,14 +52,14 @@ class TestAntiOscillation:
 
     def test_suppresses_act_after_act(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'ACT': 0.6, 'IGNORE': -0.5}
+        scores = {'UNIFIED': 0.5, 'ACT': 0.6, 'IGNORE': -0.5}
         adjusted = router._apply_anti_oscillation(scores, previous_mode='ACT')
         assert adjusted['ACT'] == pytest.approx(0.45)  # 0.6 - 0.15
 
     def test_no_change_for_other_modes(self):
         router = ModeRouterService(_make_config())
-        scores = {'RESPOND': 0.5, 'ACT': 0.2, 'IGNORE': -0.5}
-        adjusted = router._apply_anti_oscillation(scores, previous_mode='RESPOND')
+        scores = {'UNIFIED': 0.5, 'ACT': 0.2, 'IGNORE': -0.5}
+        adjusted = router._apply_anti_oscillation(scores, previous_mode='UNIFIED')
         assert adjusted == scores
 
 
@@ -148,11 +148,11 @@ class TestActModeScoring:
         assert result['scores']['ACT'] < 0.20  # below base due to penalty
 
     def test_act_warm_with_dense_facts_suppressed(self):
-        """ACT suppressed when warm context AND high fact density — RESPOND should dominate."""
+        """ACT suppressed when warm context AND high fact density — UNIFIED should dominate."""
         router = ModeRouterService(_make_config())
         signals = _make_signals(context_warmth=0.8, fact_count=8)  # fact_density=0.8 > 0.5
         result = router.route(signals, "Tell me more", skip_tiebreaker=True)
-        assert result['scores']['RESPOND'] > result['scores']['ACT']
+        assert result['scores']['UNIFIED'] > result['scores']['ACT']
 
     def test_act_memory_confidence_very_low_boosts_act_on_question(self):
         """Very low memory confidence (<0.15) + question → ACT boosted to favour external retrieval."""
@@ -191,8 +191,8 @@ class TestIgnoreMode:
         """
         IGNORE wins for zero-token input when warmth is in the cold zone (0.20-0.30).
 
-        At warmth=0.25: IGNORE=0.50, RESPOND=0.49 (cold_boost=(1-0.25)*0.25=0.19).
-        At warmth=0.0:  RESPOND=0.55 (cold_boost=0.25 dominates), so RESPOND beats IGNORE.
+        At warmth=0.25: IGNORE=0.50, UNIFIED=0.49 (cold_boost=(1-0.25)*0.25=0.19).
+        At warmth=0.0:  UNIFIED=0.55 (cold_boost=0.25 dominates), so UNIFIED beats IGNORE.
         The sweet spot is 0.20 < warmth < 0.30 where cold_boost is weak enough.
         """
         router = ModeRouterService(_make_config())
@@ -233,12 +233,12 @@ class TestIgnoreMode:
         assert all(s > ignore_score for s in other_scores)
 
 
-# ── Greeting handling (RESPOND path) ─────────────────────────────────
+# ── Greeting handling (UNIFIED path) ─────────────────────────────────
 
 class TestGreetingHandling:
 
     def test_greeting_selects_respond_not_ignore(self):
-        """Greeting pattern must never produce IGNORE — RESPOND is expected."""
+        """Greeting pattern must never produce IGNORE — UNIFIED is expected."""
         router = ModeRouterService(_make_config())
         result = router.route(_make_signals(greeting_pattern=True, context_warmth=0.0),
                               "Hey!", skip_tiebreaker=True)
@@ -246,14 +246,14 @@ class TestGreetingHandling:
         assert result['mode'] in ModeRouterService.MODES
 
     def test_greeting_with_question_selects_respond(self):
-        """A greeting that contains a question should flow to RESPOND."""
+        """A greeting that contains a question should flow to UNIFIED."""
         router = ModeRouterService(_make_config())
         result = router.route(
             _make_signals(greeting_pattern=True, has_question_mark=True, context_warmth=0.3),
             "Hi, how are you?",
             skip_tiebreaker=True,
         )
-        assert result['mode'] == 'RESPOND'
+        assert result['mode'] == 'UNIFIED'
 
     def test_greeting_cold_context_no_facts_not_act(self):
         """Greeting with zero facts and cold context should not select ACT."""
@@ -318,7 +318,7 @@ class TestHysteresisWidening:
         Inside route(), _track_confidence runs BEFORE _is_low_confidence_streak, so
         we plant 2 values and rely on the route call's own confidence reading to
         complete the streak as the 3rd entry. Signals are tuned to produce confidence≈0.13
-        (RESPOND dominates ACT but margin is narrow) so the route call contributes a low value.
+        (UNIFIED dominates ACT but margin is narrow) so the route call contributes a low value.
 
         After route():
         - Fresh router history: [0.133]          → len < 3, no streak, margin unwidened
@@ -327,7 +327,7 @@ class TestHysteresisWidening:
         Signal tuning (gists and facts removed in Stream 1):
           implicit_reference=True + question + interrog + mem_conf=0.10
           → ACT gets +0.15 (implicit) + 0.20 (question moderate) + 0.10 (mem very low) = +0.45
-          → RESPOND gets base boost but not enough to dominate → confidence ≈ 0.133 < 0.15
+          → UNIFIED gets base boost but not enough to dominate → confidence ≈ 0.133 < 0.15
         """
         topic = 'hysteresis_test'
         low_conf_signals = {

@@ -42,7 +42,7 @@ def mock_config():
     agent_configs = {
         'mode-router': {
             'base_scores': {
-                'RESPOND': 0.40,
+                'UNIFIED': 0.40,
                 'ACT': 0.20,
                 'IGNORE': -0.50,
             },
