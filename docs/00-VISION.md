@@ -121,12 +121,12 @@ Converts direction into completed actions — drafts, sends, schedules, research
 ### 3. Exercises Judgment
 Decides what deserves attention, chooses depth of reasoning based on value, escalates only when user input is necessary.
 
-*Codebase: message gate service (deterministic ONNX mode gate, ~5ms), mode router (deterministic scorer for non-user flows), critic service (post-execution learning signal with EMA confidence calibration), autonomous execution gate (consequence tier + domain confidence).*
+*Codebase: mode router (deterministic scorer for non-user flows), critic service (post-execution learning signal with EMA confidence calibration), autonomous execution gate (consequence tier + domain confidence).*
 
 ### 4. Maintains Continuity
 Remembers context and priorities, understands recurring patterns, avoids requiring users to repeat themselves.
 
-*Codebase: memory hierarchy (working → gist → episode → concept), decay engine, autobiography service, user traits.*
+*Codebase: memory hierarchy (working → episode → concept), decay engine, autobiography service, user traits.*
 
 ### 5. Provides Reflective Intelligence
 Offers perspective and advice when appropriate, supports decision clarity.
