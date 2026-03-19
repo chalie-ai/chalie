@@ -1518,42 +1518,39 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
 def _handle_tool_result(text: str, metadata: dict) -> str:
     """
-    Handle follow-up from tool_worker after background ACT loop completes.
+    Handle response generation after background ACT loop completes.
 
-    Shortened pipeline (no classification, no user turn append, no reward eval):
-    - No classification, no user turn append, no reward eval
-    - Generates follow-up response via RESPOND mode with follow-up prompt
-    - Routes through orchestrator for delivery
-    - Includes stale suppression and delivery deferral
+    Funnels through the standard RESPOND mode (same path as synchronous ACT),
+    with stale suppression to avoid delivering results for abandoned topics.
     """
     configs = load_configs()
     cortex_config = configs['cortex']['config']
+    cortex_prompt_map = configs['cortex']['prompt_map']
 
     topic = metadata.get('topic', 'general')
     original_prompt = metadata.get('original_prompt', '')
     act_history_context = metadata.get('act_history_context', '(none)')
     root_cycle_id = metadata.get('root_cycle_id', '')
-    tool_cycle_id = metadata.get('tool_cycle_id', '')
     destination = metadata.get('destination', 'web')
     original_created_at = metadata.get('original_created_at', 0)
-    # Resolve thread for this tool result
+
+    # Resolve thread
     thread_conv_service = get_thread_conv_service()
     thread_id = metadata.get('thread_id')
     if not thread_id:
         platform = metadata.get('source', 'unknown')
-        resolution = get_thread_service().resolve_thread('default',platform)
+        resolution = get_thread_service().resolve_thread('default', platform)
         thread_id = resolution.thread_id
 
     working_memory = WorkingMemoryService(
         max_turns=cortex_config.get('max_working_memory_turns', 10)
     )
 
-    # ── Stale follow-up suppression ──────────────────────────
+    # ── Stale result suppression ─────────────────────────────
     # If the user changed topic since the original question, suppress
     recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
     current_topic = recent_topic_service.get_recent_topic()
     if current_topic and current_topic != topic:
-        # Check semantic similarity before suppressing
         try:
             from services.embedding_service import get_embedding_service
             import numpy as np
@@ -1567,41 +1564,14 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
             ))
 
             if similarity < 0.45:
-                _log_cycle_event('followup_suppressed', {'reason': 'stale', 'similarity': similarity}, topic)
-                logging.info(f"[TOOL RESULT] Suppressed stale follow-up (topic drift, similarity={similarity:.2f})")
+                _log_cycle_event('tool_result_suppressed', {'reason': 'stale', 'similarity': similarity}, topic)
+                logging.info(f"[TOOL RESULT] Suppressed stale result (topic drift, similarity={similarity:.2f})")
                 return f"Topic '{topic}' | SUPPRESSED: topic changed to '{current_topic}'"
         except Exception as e:
             logging.debug(f"[TOOL RESULT] Stale check failed: {e}")
 
-    # ── Delivery deferral ────────────────────────────────────
-    # If user is mid-conversation, defer
-    defer_result = _should_deliver_followup(tool_cycle_id)
-    if defer_result == 'suppress':
-        _log_cycle_event('followup_suppressed', {'reason': 'deferred_max'}, topic)
-        return f"Topic '{topic}' | SUPPRESSED: max deferrals reached"
-
-    # ── Generate follow-up response ──────────────────────────
-    # Use the followup prompt template
+    # ── Generate response via standard RESPOND mode ──────────
     try:
-        from services.config_service import ConfigService
-
-        soul_prompt = ConfigService.get_agent_prompt("soul")
-        identity_prompt = ConfigService.get_agent_prompt("identity-core")
-        followup_template = ConfigService.get_agent_prompt("frontal-cortex-followup")
-        followup_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + followup_template
-
-        # Calculate latency tone
-        elapsed = time.time() - original_created_at if original_created_at else 0
-        if elapsed < 5:
-            latency_tone = ""
-        elif elapsed < 30:
-            latency_tone = "Brief wait acknowledged — be direct with findings."
-        else:
-            latency_tone = "Significant delay — lead with 'I dug deeper into this' framing."
-
-        followup_prompt = followup_prompt.replace('{{latency_tone}}', latency_tone)
-        followup_prompt = followup_prompt.replace('{{original_prompt}}', original_prompt)
-
         classification = {
             'topic': topic,
             'confidence': 10,
@@ -1609,40 +1579,11 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
             'topic_update': '',
         }
 
-        # Load mode-specific config
-        try:
-            config = ConfigService.resolve_agent_config("frontal-cortex-respond")
-        except Exception:
-            config = cortex_config
-
-        inclusion_map = None
-        try:
-            inclusion_map = get_context_relevance_service().compute_inclusion_map(
-                mode='RESPOND', signals={}, classification=classification,
-            )
-        except Exception as e:
-            logging.warning(f"[TOOL RESULT] Context relevance failed: {e}")
-
-        assembled_context = None
-        try:
-            assembled_context = get_context_assembly_service().assemble(
-                prompt=original_prompt, topic=topic, thread_id=thread_id,
-            )
-        except Exception as e:
-            logging.warning(f"[TOOL RESULT] Context assembly failed: {e}")
-
-        cortex_service = FrontalCortexService(config)
-        chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
-
-        response_data = cortex_service.generate_response(
-            system_prompt_template=followup_prompt,
-            original_prompt=original_prompt,
-            classification=classification,
-            chat_history=chat_history,
-            act_history=act_history_context,
+        response_data = generate_for_mode(
+            topic, original_prompt, 'RESPOND', classification,
+            thread_conv_service, cortex_config, cortex_prompt_map, metadata,
+            act_history_context=act_history_context,
             thread_id=thread_id,
-            inclusion_map=inclusion_map,
-            assembled_context=assembled_context,
         )
 
         if not response_data.get('response', '').strip():
@@ -1657,7 +1598,6 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         # Route through orchestrator
         try:
             orchestrator = get_orchestrator()
-
             context = {
                 'topic': topic,
                 'response': response_data['response'],
@@ -1671,50 +1611,25 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         except Exception as e:
             logging.error(f"[TOOL RESULT] Orchestrator failed: {e}")
 
-
-        _log_cycle_event('followup_delivered', {
+        elapsed = time.time() - original_created_at if original_created_at else 0
+        _log_cycle_event('tool_result_delivered', {
             'root_cycle_id': root_cycle_id,
             'latency_ms': int(elapsed * 1000) if elapsed else 0,
         }, topic)
 
         logging.info(
-            f"[TOOL RESULT] Follow-up delivered for topic '{topic}': "
+            f"[TOOL RESULT] Response delivered for topic '{topic}': "
             f"'{response_data['response'][:80]}...'"
         )
 
         return (
-            f"Topic '{topic}' | Mode: TOOL_RESULT_FOLLOWUP | "
+            f"Topic '{topic}' | Mode: TOOL_RESULT_RESPOND | "
             f"Response generated in {response_data.get('generation_time', 0):.2f}s"
         )
 
     except Exception as e:
         logging.error(f"[TOOL RESULT] Failed: {e}", exc_info=True)
         return f"Topic '{topic}' | ERROR: tool result - {e}"
-
-
-def _should_deliver_followup(cycle_id: str) -> str:
-    """
-    Check if a follow-up should be delivered now.
-
-    Returns 'deliver', or 'suppress' (after max deferrals).
-    Note: 'defer' with re-enqueue is complex with RQ so we simplify
-    to a quick check — if user sent a message very recently, we still deliver
-    since the follow-up anchoring makes it coherent.
-    """
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-
-        # Check defer count
-        defer_key = f"followup_defer:{cycle_id}"
-        defer_count = int(store.get(defer_key) or 0)
-
-        if defer_count >= 3:
-            return 'suppress'
-
-        return 'deliver'
-    except Exception:
-        return 'deliver'
 
 
 def _check_active_tool_work(text: str, topic: str) -> str:
@@ -2585,8 +2500,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                 selected_skills = None
                 needs_external_tool = True
 
-            # When external tools may be needed, pass None so _get_available_tools
-            # injects the full tool registry instead of an empty list.
+            # When external tools may be needed, pass None so ACT loop
+            # can discover tools via find_tools skill.
             selected_tools = None if needs_external_tool else []
 
             # Active tool work dedup
