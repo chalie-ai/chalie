@@ -4,7 +4,7 @@ Create, list, or cancel scheduled notifications and prompts stored in Chalie's o
 Parameters:
 - `action` (required): `"create"`, `"list"`, or `"cancel"`
 - `message` (required for create; optional for cancel): What to remind or prompt (max 1000 chars). For cancel, used as a fuzzy content match when `item_id` is unknown.
-- `due_at` (required for create): ISO 8601 with timezone (e.g. `"2026-02-21T09:00:00+01:00"`)
+- `due_at` (required for create): ISO 8601 UTC (e.g. `"2026-03-20T09:00:00+00:00"`)
 - `item_type` (optional, create): `"notification"` (default) or `"prompt"`
   - `"notification"` — text is surfaced directly as a timed reminder (the message appears as-is)
   - `"prompt"` — text is fed to Chalie as a conversational turn at the scheduled time (Chalie thinks about it and responds)
@@ -15,6 +15,8 @@ Parameters:
 
 Use when: User asks to be reminded of something, schedule a recurring check, or manage reminders.
 For time-scoped queries ("what's on today?", "what's coming up?"), always set `time_range` to the appropriate value.
+**CRITICAL — Date computation**: The current date and time is shown at the top of this prompt as `Current date and time: ...`. You MUST use that injected date as your anchor for all relative date expressions. Do NOT use your training-time knowledge of what today's date is — it is stale and wrong. "Tomorrow" = injected date + 1 day. Always output `due_at` as a UTC ISO 8601 timestamp (e.g., `2026-03-20T18:00:00+00:00`).
+
 Always normalise natural time expressions to ISO 8601 before calling create. `due_at` must be in the future.
 For "every hour between 09:00 and 17:00": use `recurrence: "hourly"`, `window_start: "09:00"`, `window_end: "17:00"`, `due_at` set to today's window_start.
 For "every 30 minutes" / "every X minutes": use `recurrence: "interval:30"` (replace 30 with the desired number of minutes, 1–1440). No window support for interval.
