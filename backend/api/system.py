@@ -185,47 +185,6 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-@system_bp.route('/system/observability/routing', methods=['GET'])
-@require_session
-def observability_routing():
-    """Mode router decision distribution and recent activity."""
-    try:
-        from services.routing_decision_service import RoutingDecisionService
-        from services.database_service import get_shared_db_service
-
-        svc = RoutingDecisionService(get_shared_db_service())
-        distribution = svc.get_mode_distribution(168)
-        tiebreaker_rate = svc.get_tiebreaker_rate(24)
-        recent = svc.get_recent_decisions(24, 20)
-
-        # Compute 24h totals and avg confidence from recent decisions
-        total_24h = len(recent)
-        avg_confidence = 0.0
-        if total_24h:
-            avg_confidence = sum(d.get('router_confidence', 0) or 0 for d in recent) / total_24h
-
-        # Compact recent: mode, confidence, topic, created_at only
-        compact_recent = []
-        for d in recent:
-            compact_recent.append({
-                'mode': d.get('selected_mode', ''),
-                'confidence': round(d.get('router_confidence', 0) or 0, 3),
-                'topic': d.get('topic', ''),
-                'created_at': str(d['created_at']) if d.get('created_at') else None,
-            })
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            'distribution': distribution,
-            'tiebreaker_rate_24h': round(tiebreaker_rate, 4),
-            'avg_confidence_24h': round(avg_confidence, 3),
-            'total_decisions_24h': total_24h,
-            'recent': compact_recent,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/routing error: {e}")
-        return jsonify({"error": "Failed to retrieve routing data"}), 500
-
 
 @system_bp.route('/system/observability/memory', methods=['GET'])
 @require_session

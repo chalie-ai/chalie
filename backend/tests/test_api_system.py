@@ -193,42 +193,6 @@ class TestSystemAPI:
         assert 'memory_store_error' in data
 
     # ────────────────────────────────────────────
-    # GET /system/observability/routing
-    # ────────────────────────────────────────────
-
-    def test_observability_routing_returns_distribution(self, client):
-        """GET /system/observability/routing returns distribution, tiebreaker_rate, etc."""
-        mock_svc = MagicMock()
-        mock_svc.get_mode_distribution.return_value = {'UNIFIED': 75, 'ACT': 25}
-        mock_svc.get_tiebreaker_rate.return_value = 0.1234
-        mock_svc.get_recent_decisions.return_value = [
-            {'selected_mode': 'UNIFIED', 'router_confidence': 0.95, 'topic': 'chat', 'created_at': datetime(2026, 2, 26)},
-            {'selected_mode': 'ACT', 'router_confidence': 0.80, 'topic': 'task', 'created_at': datetime(2026, 2, 26)},
-        ]
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc):
-            resp = client.get('/system/observability/routing')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['distribution'] == {'UNIFIED': 75, 'ACT': 25}
-        assert data['tiebreaker_rate_24h'] == 0.1234
-        assert data['total_decisions_24h'] == 2
-        assert data['avg_confidence_24h'] == 0.875
-        assert len(data['recent']) == 2
-        assert data['recent'][0]['mode'] == 'UNIFIED'
-        assert 'generated_at' in data
-
-    def test_observability_routing_returns_500_on_error(self, client):
-        """GET /system/observability/routing returns 500 when service fails."""
-        with patch('services.routing_decision_service.RoutingDecisionService', side_effect=RuntimeError('boom')):
-            resp = client.get('/system/observability/routing')
-
-        assert resp.status_code == 500
-        data = resp.get_json()
-        assert 'error' in data
-
-    # ────────────────────────────────────────────
     # GET /system/observability/memory
     # ────────────────────────────────────────────
 
@@ -519,22 +483,6 @@ class TestSystemAPI:
     # (regression guards against missing arg 500s)
     # ────────────────────────────────────────────
 
-    def test_observability_routing_passes_db_to_service(self, client):
-        """RoutingDecisionService must be constructed with get_shared_db_service()."""
-        mock_db = MagicMock()
-        mock_svc = MagicMock()
-        mock_svc.get_mode_distribution.return_value = {}
-        mock_svc.get_tiebreaker_rate.return_value = 0.0
-        mock_svc.get_recent_decisions.return_value = []
-        mock_cls = MagicMock(return_value=mock_svc)
-
-        with patch('services.routing_decision_service.RoutingDecisionService', mock_cls), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            resp = client.get('/system/observability/routing')
-
-        assert resp.status_code == 200
-        mock_cls.assert_called_once_with(mock_db)
-
     def test_observability_identity_passes_db_to_service(self, client):
         """IdentityService must be constructed with get_shared_db_service()."""
         mock_db = MagicMock()
@@ -616,16 +564,6 @@ class TestSystemAPI:
 
     @pytest.mark.parametrize('path,patches', [
         (
-            '/system/observability/routing',
-            {'services.routing_decision_service.RoutingDecisionService': MagicMock(
-                return_value=MagicMock(
-                    get_mode_distribution=MagicMock(return_value={}),
-                    get_tiebreaker_rate=MagicMock(return_value=0.0),
-                    get_recent_decisions=MagicMock(return_value=[]),
-                )
-            )},
-        ),
-        (
             '/system/observability/tools',
             {
                 'services.tool_performance_service.ToolPerformanceService': MagicMock(
@@ -645,7 +583,7 @@ class TestSystemAPI:
                 return_value=MagicMock(get_vectors=MagicMock(return_value={}))
             )},
         ),
-    ], ids=['routing', 'tools', 'identity'])
+    ], ids=['tools', 'identity'])
     def test_observability_endpoints_include_generated_at(self, client, path, patches):
         """All observability endpoints include a generated_at ISO timestamp."""
         from contextlib import ExitStack

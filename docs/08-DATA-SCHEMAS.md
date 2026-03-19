@@ -197,17 +197,6 @@ CREATE TABLE autobiography (
 );
 ```
 
-### Routing Decisions (Audit Trail)
-```sql
-CREATE TABLE routing_decisions (
-    id TEXT PRIMARY KEY,
-    selected_mode TEXT NOT NULL,
-    scores JSONB NOT NULL,
-    signals JSONB NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
 ### Semantic Concepts & Relationships
 ```sql
 CREATE TABLE semantic_concepts (

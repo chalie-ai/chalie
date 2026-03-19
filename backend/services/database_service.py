@@ -549,8 +549,6 @@ class DatabaseService:
                 ("documents", "meta_locked", "INTEGER DEFAULT 0", None),
                 ("tool_capability_profiles", "effort", "TEXT DEFAULT 'moderate'", None),
                 ("tool_capability_profiles", "skill_category", "TEXT", None),
-                # Migration 005 — reasoning annotation from triage effort tagging
-                ("routing_decisions", "reasoning", "TEXT", None),
                 # Uncertainty Engine Phase 1 — reliability columns on durable memory stores
                 ("user_traits",       "reliability", "TEXT DEFAULT 'reliable'", None),
                 ("episodes",          "reliability", "TEXT DEFAULT 'reliable'", None),

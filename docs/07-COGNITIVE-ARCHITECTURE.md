@@ -256,65 +256,7 @@ After generation, detect router misclassification using user behavior signals fr
 | Negative reward after ACKNOWLEDGE | Should have been UNIFIED | misroute (under_engagement) |
 | Positive reward after any mode | Routing was correct | correct_route |
 
-Feedback is stored in `routing_decisions.feedback` (JSONB).
-
-### Routing Reflection (Idle-Time Peer Review)
-
-Strong LLM (qwen3:14b) reviews past routing decisions as a **consultant, not authority**:
-
-1. During idle periods (all queues empty), dequeues from `reflection-queue`
-2. Analyzes ambiguity dimensions (memory_availability, intent_clarity, tone_ambiguity, etc.)
-3. Produces structured insight about WHERE ambiguity exists, not just WHAT to change
-4. Stratified sampling: 50% low-confidence, 20% high-confidence, 30% tie-breaker decisions
-
-**Anti-authority safeguards:**
-- Confidence gate: only count disagreements with LLM confidence > 0.70
-- User override: trust positive user feedback over LLM disagreement
-- Sustained pattern required: >25% disagreement rate over 7 days to generate pressure
-- Dimensional causality check: flagged dimensions must correlate with signal patterns
-
 ---
-
-## Mode Entropy Monitoring
-
-Healthy mode distribution ranges:
-
-| Mode | Healthy Range | Red Flag |
-|------|--------------|----------|
-| UNIFIED | 50-75% | >85% (overconfident) or <40% (under-committing) |
-| ACT | 5-15% | <2% (ACT death) or >25% (over-processing) |
-| ACKNOWLEDGE | 3-12% | <1% (ignoring social cues) or >20% (trivializing) |
-| IGNORE | <2% | >5% (dropping messages) |
-
----
-
-## Logging & Observability
-
-### Routing Decision Audit Trail
-
-Every routing decision is logged to `routing_decisions` table:
-
-```sql
-CREATE TABLE routing_decisions (
-    id UUID PRIMARY KEY,
-    topic TEXT NOT NULL,
-    exchange_id TEXT,
-    selected_mode TEXT NOT NULL,
-    router_confidence FLOAT,
-    scores JSONB NOT NULL,          -- all mode scores
-    tiebreaker_used BOOLEAN,
-    tiebreaker_candidates JSONB,
-    margin FLOAT,
-    effective_margin FLOAT,
-    signal_snapshot JSONB NOT NULL,  -- full signal vector
-    weight_snapshot JSONB,
-    routing_time_ms FLOAT,
-    feedback JSONB,                 -- filled post-exchange
-    reflection JSONB,               -- filled during idle
-    previous_mode TEXT,
-    created_at TIMESTAMP
-);
-```
 
 ### ACT Loop Iteration Logging
 

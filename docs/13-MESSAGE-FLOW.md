@@ -186,9 +186,6 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
 │  │  Input:   mode descriptions + context summary               │   │
 │  │  Output:  JSON → pick mode A or B                           │   │
 │  └─────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  📤 DB  routing_decisions table                                     │
-│    Fields: mode, scores, tiebreaker_used, margin, signal_snapshot  │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
           ┌────────────────────┬───────────────────┐
@@ -532,7 +529,6 @@ semantic_consolidation_queue       —          D       episodic_memory_worker
 ```
 Table                      When Written                    When Read
 ──────────────────────────────────────────────────────────────────────
-routing_decisions          Phase C (every message)         routing_reflection_service
 interaction_log            Phase D (every message)         observability endpoints
 cortex_iterations          ACT loop, Path B                observability endpoints
 episodes                   memory_chunker (async)          frontal_cortex, drift engine

@@ -52,8 +52,7 @@ The application processes user prompts through a pipeline of workers, queues, an
    - Stores the resulting episode in SQLite through `EpisodicStorageService`.
 6. **Experience Assimilation Service** – Converts tool results into episodic memory. Runs on 60s poll cycle.
 7. **Cognitive Drift Engine** (`services/cognitive_drift_engine.py`) – Default Mode Network service. During idle periods (all queues empty), generates spontaneous thoughts via spreading activation and LLM synthesis. Stores as drift gists that surface in frontal cortex context.
-8. **Routing Reflection Service** (`services/routing_reflection_service.py`) – Idle-time peer review of routing decisions via strong LLM. Feeds dimensional analysis into pressure signals.
-9. **Scheduler Service** – Fires due reminders and scheduled tasks. Runs on 60s poll cycle.
+8. **Scheduler Service** – Fires due reminders and scheduled tasks. Runs on 60s poll cycle.
 10. **Thread Expiry Service** – Expires stale conversation threads. Runs on 5min poll cycle.
 11. **Autobiography Synthesis Service** – Synthesizes user narrative from interactions. Runs on 6h cycle.
 12. **Triage Calibration Service** – Scores triage/routing correctness. Runs on 24h cycle.
@@ -124,6 +123,4 @@ The `/chat` endpoint uses Server-Sent Events for real-time streaming:
     |--(episode_job)----> [Episodic Memory Queue] → [Episodic Memory Worker] →
         SQLite Episodes Table
 
-[Routing Reflection Service] ← reads reflection-queue (idle-time)
-    → writes routing_decisions.reflection
 ```

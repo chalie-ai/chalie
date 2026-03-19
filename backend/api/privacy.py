@@ -96,7 +96,7 @@ def export_data():
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
         "place_fingerprints", "curiosity_threads",
-        "interaction_log", "cortex_iterations", "routing_decisions",
+        "interaction_log", "cortex_iterations",
         "procedural_memory", "topics", "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
     ]
@@ -270,7 +270,6 @@ def delete_all():
 
             # Topic & routing
             "recent_topic:*", "recent_topic",
-            "routing_reflection_last_batch",
 
             # Output & notifications
             "notifications:recent",
@@ -331,7 +330,6 @@ def delete_all():
                 "interaction_log",
                 "cortex_iterations",
                 "message_cycles",
-                "routing_decisions",
                 "procedural_memory",
                 "topics",
                 "tool_performance_metrics",
