@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class RespondHandler:
-    """Handler for RESPOND path - queues response to output-queue."""
+    """Handler for UNIFIED path - queues response to output-queue."""
 
     def __init__(self, output_service):
         """
@@ -21,7 +21,7 @@ class RespondHandler:
 
     def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute RESPOND path.
+        Execute UNIFIED path.
 
         Args:
             context: Must contain response, topic, destination, metadata
@@ -33,14 +33,14 @@ class RespondHandler:
         output_id = self.output_service.enqueue_text(
             topic=context['topic'],
             response=context['response'],
-            mode='RESPOND',
+            mode='UNIFIED',
             confidence=context.get('confidence', 0.0),
             generation_time=context.get('generation_time', 0.0),
             original_metadata=context.get('metadata'),
             reply_actions=context.get('reply_actions'),
         )
 
-        logger.info(f"[RESPOND] Queued response {output_id} for topic '{context['topic']}' to output-queue")
+        logger.info(f"[UNIFIED] Queued response {output_id} for topic '{context['topic']}' to output-queue")
 
         return {'status': 'success', 'queued': True, 'output_id': output_id}
 

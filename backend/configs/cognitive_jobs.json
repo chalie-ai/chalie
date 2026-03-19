@@ -25,12 +25,6 @@
       "caps": { "reasoning": "high", "structured": "high", "creativity": "medium", "classification": "none" }
     },
     {
-      "id": "frontal-cortex-respond",
-      "name": "Respond Mode",
-      "desc": "Primary conversational voice of Chalie in normal conversation.",
-      "caps": { "reasoning": "high", "structured": "medium", "creativity": "high", "classification": "none" }
-    },
-    {
       "id": "cognitive-drift",
       "name": "Cognitive Drift (DMN)",
       "desc": "Generates spontaneous thoughts during idle windows (Default Mode Network).",

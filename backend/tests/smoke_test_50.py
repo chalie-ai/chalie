@@ -27,73 +27,73 @@ TIMEOUT = 300
 # Multiple UUIDs to test both cold starts and warm context accumulation
 PROMPTS = [
     # --- Session A: greetings + small talk (cold start) ---
-    ("smoke-a", "Hey there!", "RESPOND", "greeting"),
-    ("smoke-a", "How's it going?", "RESPOND", "question"),
-    ("smoke-a", "Not bad, just hanging out", "RESPOND", "feedback"),
-    ("smoke-a", "What do you think about music?", "RESPOND", "question"),
-    ("smoke-a", "Cool, thanks!", "RESPOND", "feedback"),
+    ("smoke-a", "Hey there!", "UNIFIED", "greeting"),
+    ("smoke-a", "How's it going?", "UNIFIED", "question"),
+    ("smoke-a", "Not bad, just hanging out", "UNIFIED", "feedback"),
+    ("smoke-a", "What do you think about music?", "UNIFIED", "question"),
+    ("smoke-a", "Cool, thanks!", "UNIFIED", "feedback"),
 
     # --- Session B: knowledge questions (cold start) ---
-    ("smoke-b", "Hello", "RESPOND", "greeting"),
-    ("smoke-b", "What is photosynthesis?", "RESPOND", "question"),
-    ("smoke-b", "Can you explain that in simpler terms?", "RESPOND", "question"),
-    ("smoke-b", "Got it, makes sense", "RESPOND", "feedback"),
-    ("smoke-b", "What about cellular respiration?", "RESPOND", "question"),
+    ("smoke-b", "Hello", "UNIFIED", "greeting"),
+    ("smoke-b", "What is photosynthesis?", "UNIFIED", "question"),
+    ("smoke-b", "Can you explain that in simpler terms?", "UNIFIED", "question"),
+    ("smoke-b", "Got it, makes sense", "UNIFIED", "feedback"),
+    ("smoke-b", "What about cellular respiration?", "UNIFIED", "question"),
 
     # --- Session C: memory probing (cold start) ---
-    ("smoke-c", "Hi!", "RESPOND", "greeting"),
-    ("smoke-c", "Do you remember my name?", "RESPOND", "memory"),
+    ("smoke-c", "Hi!", "UNIFIED", "greeting"),
+    ("smoke-c", "Do you remember my name?", "UNIFIED", "memory"),
     ("smoke-c", "What did we talk about yesterday?", "ACT", "memory"),
     ("smoke-c", "You mentioned something about weather last time", "ACT", "memory"),
-    ("smoke-c", "Interesting", "RESPOND", "feedback"),
+    ("smoke-c", "Interesting", "UNIFIED", "feedback"),
 
     # --- Session D: mixed intent (cold start) ---
-    ("smoke-d", "Good evening!", "RESPOND", "greeting"),
-    ("smoke-d", "I've been thinking about learning to code", "RESPOND", "statement"),
-    ("smoke-d", "Where should I start?", "RESPOND", "question"),
-    ("smoke-d", "That's helpful, thank you", "RESPOND", "feedback"),
-    ("smoke-d", "What programming language do you recommend?", "RESPOND", "question"),
+    ("smoke-d", "Good evening!", "UNIFIED", "greeting"),
+    ("smoke-d", "I've been thinking about learning to code", "UNIFIED", "statement"),
+    ("smoke-d", "Where should I start?", "UNIFIED", "question"),
+    ("smoke-d", "That's helpful, thank you", "UNIFIED", "feedback"),
+    ("smoke-d", "What programming language do you recommend?", "UNIFIED", "question"),
 
     # --- Session E: short/terse messages (cold start) ---
-    ("smoke-e", "yo", "RESPOND", "greeting"),
-    ("smoke-e", "sup", "RESPOND", "greeting"),
-    ("smoke-e", "ok", "RESPOND", "feedback"),
-    ("smoke-e", "why?", "RESPOND", "question"),
-    ("smoke-e", "hmm", "RESPOND", "feedback"),
+    ("smoke-e", "yo", "UNIFIED", "greeting"),
+    ("smoke-e", "sup", "UNIFIED", "greeting"),
+    ("smoke-e", "ok", "UNIFIED", "feedback"),
+    ("smoke-e", "why?", "UNIFIED", "question"),
+    ("smoke-e", "hmm", "UNIFIED", "feedback"),
 
     # --- Session F: emotional/feedback heavy (cold start) ---
-    ("smoke-f", "Hey!", "RESPOND", "greeting"),
-    ("smoke-f", "That was amazing!", "RESPOND", "feedback"),
-    ("smoke-f", "You're really good at this", "RESPOND", "feedback"),
-    ("smoke-f", "I appreciate the help", "RESPOND", "feedback"),
-    ("smoke-f", "Can you help me with something else?", "RESPOND", "question"),
+    ("smoke-f", "Hey!", "UNIFIED", "greeting"),
+    ("smoke-f", "That was amazing!", "UNIFIED", "feedback"),
+    ("smoke-f", "You're really good at this", "UNIFIED", "feedback"),
+    ("smoke-f", "I appreciate the help", "UNIFIED", "feedback"),
+    ("smoke-f", "Can you help me with something else?", "UNIFIED", "question"),
 
     # --- Session G: complex questions (cold start) ---
-    ("smoke-g", "Hi there", "RESPOND", "greeting"),
-    ("smoke-g", "How does quantum computing work?", "RESPOND", "question"),
-    ("smoke-g", "What are its practical applications?", "RESPOND", "question"),
+    ("smoke-g", "Hi there", "UNIFIED", "greeting"),
+    ("smoke-g", "How does quantum computing work?", "UNIFIED", "question"),
+    ("smoke-g", "What are its practical applications?", "UNIFIED", "question"),
     ("smoke-g", "Do you remember what we discussed about AI?", "ACT", "memory"),
-    ("smoke-g", "Perfect, that clarifies things", "RESPOND", "feedback"),
+    ("smoke-g", "Perfect, that clarifies things", "UNIFIED", "feedback"),
 
     # --- Session H: longer conversation (warm context buildup) ---
-    ("smoke-h", "Good morning!", "RESPOND", "greeting"),
-    ("smoke-h", "I want to talk about cooking", "RESPOND", "statement"),
-    ("smoke-h", "What's a good recipe for beginners?", "RESPOND", "question"),
-    ("smoke-h", "Nice, any tips for seasoning?", "RESPOND", "question"),
-    ("smoke-h", "What about baking?", "RESPOND", "question"),
-    ("smoke-h", "ok thanks for all the info", "RESPOND", "feedback"),
+    ("smoke-h", "Good morning!", "UNIFIED", "greeting"),
+    ("smoke-h", "I want to talk about cooking", "UNIFIED", "statement"),
+    ("smoke-h", "What's a good recipe for beginners?", "UNIFIED", "question"),
+    ("smoke-h", "Nice, any tips for seasoning?", "UNIFIED", "question"),
+    ("smoke-h", "What about baking?", "UNIFIED", "question"),
+    ("smoke-h", "ok thanks for all the info", "UNIFIED", "feedback"),
     ("smoke-h", "You mentioned something earlier about herbs", "ACT", "memory"),
-    ("smoke-h", "Great, goodbye!", "RESPOND", "greeting"),
+    ("smoke-h", "Great, goodbye!", "UNIFIED", "greeting"),
 
     # --- Session I: edge cases ---
-    ("smoke-i", "Greetings", "RESPOND", "greeting"),
-    ("smoke-i", "Tell me something interesting", "RESPOND", "question"),
-    ("smoke-i", "Go on", "RESPOND", "statement"),
-    ("smoke-i", "That's not what I meant", "RESPOND", "feedback"),
-    ("smoke-i", "Never mind, thanks anyway", "RESPOND", "feedback"),
+    ("smoke-i", "Greetings", "UNIFIED", "greeting"),
+    ("smoke-i", "Tell me something interesting", "UNIFIED", "question"),
+    ("smoke-i", "Go on", "UNIFIED", "statement"),
+    ("smoke-i", "That's not what I meant", "UNIFIED", "feedback"),
+    ("smoke-i", "Never mind, thanks anyway", "UNIFIED", "feedback"),
 
     # --- Session J: rapid fire (same uuid, context accumulates) ---
-    ("smoke-j", "Hiya!", "RESPOND", "greeting"),
+    ("smoke-j", "Hiya!", "UNIFIED", "greeting"),
 ]
 
 
@@ -163,7 +163,7 @@ def run():
         else:
             got_mode = resp.get("mode", "?")
             # Accept if got_mode matches expected, or if unified path is active
-            # (unified generation returns "UNIFIED" instead of RESPOND/ACT)
+            # (unified generation returns "UNIFIED" instead of ACT)
             match = got_mode == expected or got_mode == "UNIFIED"
 
         mode_counts[got_mode] = mode_counts.get(got_mode, 0) + 1
@@ -199,7 +199,7 @@ def run():
     print("=" * 70)
 
     print("\nMode distribution:")
-    for mode in ["UNIFIED", "RESPOND", "ACT", "IGNORE", "ERROR"]:
+    for mode in ["UNIFIED", "UNIFIED", "ACT", "IGNORE", "ERROR"]:
         count = mode_counts.get(mode, 0)
         if count > 0:
             print("  %-12s: %d/%d (%.0f%%)" % (mode, count, n, 100 * count / n))

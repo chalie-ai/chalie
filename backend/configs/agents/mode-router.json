@@ -1,6 +1,6 @@
 {
   "base_scores": {
-    "RESPOND": 0.40,
+    "UNIFIED": 0.40,
     "ACT": 0.20,
     "IGNORE": -0.50
   },
@@ -29,7 +29,7 @@
 
   "_comment": "Stability bands for mode entropy monitoring (informational only)",
   "healthy_ranges": {
-    "RESPOND": [0.50, 0.75],
+    "UNIFIED": [0.50, 0.75],
     "ACT": [0.05, 0.15],
     "IGNORE": [0.00, 0.02]
   }

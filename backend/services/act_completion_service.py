@@ -2,7 +2,7 @@
 ACT Completion Service — Detects when expected tools were not invoked.
 
 Injects a [NO_ACTION_TAKEN] signal into the act_history_context so the
-RESPOND prompt knows the action failed and won't hallucinate completion.
+UNIFIED prompt knows the action failed and won't hallucinate completion.
 """
 
 import logging
@@ -35,13 +35,13 @@ def inject_no_action_signal(
     Inspects ``relevant_tools_list`` for non-ephemeral tool entries and checks
     whether any of those tools recorded a successful result in ``act_history``.
     When action tools were expected but none succeeded, a ``[NO_ACTION_TAKEN]``
-    sentinel is prepended to the context string so the RESPOND LLM prompt
+    sentinel is prepended to the context string so the UNIFIED LLM prompt
     knows not to claim the action was performed.
 
     Args:
         act_history: List of action result dicts from the ACT loop.
         act_history_context: Formatted context string to be injected into the
-            RESPOND prompt.
+            UNIFIED prompt.
         relevant_tools_list: List of tool spec dicts (type, name) that were
             offered to the dispatcher.
 

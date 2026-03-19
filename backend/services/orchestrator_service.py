@@ -30,7 +30,7 @@ class OrchestratorService:
 
         # Initialize handlers
         self.handlers = {
-            'RESPOND': RespondHandler(self.output_service),
+            'UNIFIED': RespondHandler(self.output_service),
             'ACT': ActHandler(self.act_dispatcher_service),
             'IGNORE': IgnoreHandler(),
         }
@@ -64,7 +64,7 @@ class OrchestratorService:
         Validate and execute a path.
 
         Args:
-            mode: Path name (e.g., "RESPOND", "ACT")
+            mode: Path name (e.g., "UNIFIED", "ACT")
             context: Execution context with required fields
 
         Returns:

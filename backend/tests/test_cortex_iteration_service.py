@@ -84,7 +84,7 @@ def _make_iteration(n: int = 1) -> dict:
         'started_at': now,
         'completed_at': now,
         'execution_time_ms': 250.0,
-        'chosen_mode': 'RESPOND',
+        'chosen_mode': 'UNIFIED',
     }
 
 

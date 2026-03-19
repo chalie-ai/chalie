@@ -29,8 +29,8 @@ This separation eliminates:
 ### 2. Self-Leveling via Context Warmth
 
 The router naturally shifts behavior as memory accumulates:
-- Cold context (new topic, no facts) → favors RESPOND (ACT loop handles clarification)
-- Warm context (established topic, facts present) → favors RESPOND
+- Cold context (new topic, no facts) → favors UNIFIED (ACT loop handles clarification)
+- Warm context (established topic, facts present) → favors UNIFIED
 - This happens through signal-weighted scoring, not explicit rules
 
 ---
@@ -46,10 +46,10 @@ The router naturally shifts behavior as memory accumulates:
 - **LLM Model:** qwen3:8b
 - **After completion:** Re-routes through router (excluding ACT) → terminal mode
 
-#### RESPOND (Give Answer)
+#### UNIFIED (Give Answer)
 - **Type:** Terminal mode
 - **Purpose:** Provide substantive answer to user
-- **Prompt:** `frontal-cortex-respond.md` + `soul.md`
+- **Prompt:** `frontal-cortex-unified.md` + `soul.md`
 - **LLM Model:** qwen3:8b
 
 #### ACKNOWLEDGE (Brief Acknowledgment)
@@ -169,7 +169,7 @@ Each mode gets a weighted composite score:
 
 | Mode | Base | Primary Boosters | Primary Penalties |
 |------|------|-----------------|-------------------|
-| RESPOND | 0.50 | context_warmth, memory_density, question+context | cold start |
+| UNIFIED | 0.50 | context_warmth, memory_density, question+context | cold start |
 | ACT | 0.20 | question+moderate_context, interrogative+context_gap, implicit_reference | very cold, very warm+context |
 | ACKNOWLEDGE | 0.10 | greeting_pattern (+0.60), positive_feedback (+0.40) | has_question (-0.30) |
 | IGNORE | -0.50 | empty_input only (+1.0) | everything else |
@@ -252,8 +252,8 @@ After generation, detect router misclassification using user behavior signals fr
 
 | Signal | Indicates | Logged As |
 |--------|-----------|-----------|
-| User asks memory-related follow-up | RESPOND was wrong → should be ACT | misroute (missed_act) |
-| Negative reward after ACKNOWLEDGE | Should have been RESPOND | misroute (under_engagement) |
+| User asks memory-related follow-up | UNIFIED was wrong → should be ACT | misroute (missed_act) |
+| Negative reward after ACKNOWLEDGE | Should have been UNIFIED | misroute (under_engagement) |
 | Positive reward after any mode | Routing was correct | correct_route |
 
 Feedback is stored in `routing_decisions.feedback` (JSONB).
@@ -281,7 +281,7 @@ Healthy mode distribution ranges:
 
 | Mode | Healthy Range | Red Flag |
 |------|--------------|----------|
-| RESPOND | 50-75% | >85% (overconfident) or <40% (under-committing) |
+| UNIFIED | 50-75% | >85% (overconfident) or <40% (under-committing) |
 | ACT | 5-15% | <2% (ACT death) or >25% (over-processing) |
 | ACKNOWLEDGE | 3-12% | <1% (ignoring social cues) or >20% (trivializing) |
 | IGNORE | <2% | >5% (dropping messages) |
@@ -323,10 +323,10 @@ ACT loop iterations continue to log to `cortex_iterations` table for backward co
 ### Log Prefixes
 
 ```
-[ROUTER] Mode selected: RESPOND (confidence: 0.85, 2.3ms)
-[ROUTER] Tie-breaker invoked: RESPOND vs ACT → RESPOND
+[ROUTER] Mode selected: UNIFIED (confidence: 0.85, 2.3ms)
+[ROUTER] Tie-breaker invoked: UNIFIED vs ACT → UNIFIED
 [MODE:ACT] [ACT LOOP] Iteration 0: executing 2 actions
-[MODE:RESPOND] Generating response via frontal-cortex-respond.md
+[MODE:UNIFIED] Generating response via frontal-cortex-unified.md
 ```
 
 ---
@@ -393,7 +393,7 @@ Shift from complete-turn encoding to per-message encoding where each message tri
 
 ## Adaptive Layer
 
-The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in RESPOND and ACKNOWLEDGE prompts.
+The **Adaptive Layer** (`services/adaptive_layer_service.py`) sits between the context assembly step and the LLM call. It translates the user's detected communication style into concrete, behavioral response directives that are injected as `{{adaptive_directives}}` in UNIFIED and ACKNOWLEDGE prompts.
 
 ### Style Detection (5 dimensions)
 
@@ -441,7 +441,7 @@ All adaptive directives carry a trailing line: *"When these directives conflict 
 - **Effective Margin:** Dynamic threshold for tie-breaker invocation (narrows with context warmth)
 - **Router Confidence:** Normalized gap between top 2 scores — measures routing certainty
 - **Pressure Signal:** Metric logged by monitors, consumed by the single regulator
-- **Terminal Mode:** Mode that produces a user-facing response (RESPOND, ACKNOWLEDGE, IGNORE)
+- **Terminal Mode:** Mode that produces a user-facing response (UNIFIED, ACKNOWLEDGE, IGNORE)
 - **Continuation Mode:** Mode that triggers internal actions before re-routing (ACT only)
 - **Context Warmth:** Signal (0.0-1.0) measuring how much context is available for the current topic
 - **Anti-Oscillation Guard:** Per-request ephemeral score adjustment to prevent mode flip-flopping

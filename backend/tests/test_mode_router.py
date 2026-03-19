@@ -11,7 +11,7 @@ pytestmark = pytest.mark.unit
 def _make_config():
     return {
         'base_scores': {
-            'RESPOND': 0.40,
+            'UNIFIED': 0.40,
             'ACT': 0.20,
             'IGNORE': -0.50,
         },
@@ -59,15 +59,15 @@ def _make_signals(**overrides):
 
 class TestModeRouter:
 
-    def test_high_warmth_selects_respond(self):
-        """High context warmth (>0.6) should favour RESPOND."""
+    def test_high_warmth_selects_unified(self):
+        """High context warmth (>0.6) should favour UNIFIED."""
         router = ModeRouterService(_make_config())
         signals = _make_signals(context_warmth=0.8, gist_count=4, fact_count=5)
         result = router.route(signals, "Tell me about X")
-        assert result['mode'] == 'RESPOND'
+        assert result['mode'] == 'UNIFIED'
 
-    def test_greeting_selects_respond(self):
-        """Greeting pattern should flow to RESPOND (ACKNOWLEDGE removed)."""
+    def test_greeting_selects_unified(self):
+        """Greeting pattern should flow to UNIFIED (ACKNOWLEDGE removed)."""
         router = ModeRouterService(_make_config())
         signals = _make_signals(greeting_pattern=True)
         result = router.route(signals, "Hey")
@@ -78,9 +78,9 @@ class TestModeRouter:
         """When top-2 scores are within margin, tie-breaker should be invoked."""
         router = ModeRouterService(_make_config())
 
-        # Mock the full tiebreaker pipeline (ONNX → LLM) to return RESPOND
-        with patch.object(router, '_invoke_tiebreaker', return_value='RESPOND') as mock_tb:
-            # Craft signals where RESPOND and ACT are very close
+        # Mock the full tiebreaker pipeline (ONNX → LLM) to return UNIFIED
+        with patch.object(router, '_invoke_tiebreaker', return_value='UNIFIED') as mock_tb:
+            # Craft signals where UNIFIED and ACT are very close
             signals = _make_signals(
                 context_warmth=0.35,
                 has_question_mark=True,

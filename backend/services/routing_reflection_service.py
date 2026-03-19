@@ -233,7 +233,7 @@ class RoutingReflectionService:
 
         # Find runner-up
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        runner_up_mode = sorted_scores[1][0] if len(sorted_scores) > 1 else 'RESPOND'
+        runner_up_mode = sorted_scores[1][0] if len(sorted_scores) > 1 else 'UNIFIED'
         margin = decision.get('margin', 0)
 
         # Build prompt

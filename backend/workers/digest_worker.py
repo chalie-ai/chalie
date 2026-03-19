@@ -333,7 +333,6 @@ def load_configs():
 
     # Mode-specific prompts: soul → identity → mode prompt (instincts + context + contract)
     # Ordering: values first, then voice, then behavioral nudges closest to generation
-    respond_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-respond")
     # ACT does NOT get identity — reasoning stays pure
     act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
     unified_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-unified")
@@ -342,7 +341,6 @@ def load_configs():
         'cortex': {
             'config': cortex_config,
             'prompt_map': {
-                'RESPOND': respond_prompt,
                 'ACT': act_prompt,
                 'UNIFIED': unified_prompt,
             }
@@ -413,7 +411,7 @@ def _format_visual_context(image_contexts: list) -> str:
 
 def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None, message_embedding=None):
     """
-    Generate response for a terminal mode (RESPOND).
+    Generate response for a terminal mode.
 
     Single LLM call with mode-specific prompt. No decision gate, no alternative paths.
 
@@ -428,7 +426,7 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     """
     from services.config_service import ConfigService
 
-    prompt = cortex_prompt_map.get(mode, cortex_prompt_map['RESPOND'])
+    prompt = cortex_prompt_map.get(mode, cortex_prompt_map['UNIFIED'])
 
     # Load mode-specific config
     config_name = f"frontal-cortex-{mode.lower()}"
@@ -443,8 +441,9 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     inclusion_map = None
     try:
         context_relevance_service = get_context_relevance_service()
+        relevance_mode = mode
         inclusion_map = context_relevance_service.compute_inclusion_map(
-            mode=mode,
+            mode=relevance_mode,
             signals=signals or {},
             classification=classification,
             returning_from_silence=returning_from_silence,
@@ -465,8 +464,8 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
 
     # Phase 2 — Ingestion detection: run contradiction check in parallel with
     # context assembly. Time-boxed to 600ms — skip if slow.
-    # Only runs for RESPOND mode (has conversational context to weave into).
-    if mode == 'RESPOND' and assembled_context is not None:
+    # Runs for UNIFIED mode (has conversational context to weave into).
+    if mode == 'UNIFIED' and assembled_context is not None:
         try:
             from services.contradiction_classifier_service import ContradictionClassifierService
             from services.uncertainty_service import UncertaintyService
@@ -690,7 +689,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
     )
 
     routing_result = {
-        'mode': 'RESPOND',
+        'mode': 'UNIFIED',
         'router_confidence': 1.0,
         'routing_source': 'unified',
         'routing_time_ms': 0.0,
@@ -700,7 +699,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
     # Check if the model wants to invoke skills/tools (Format A: non-empty actions list)
     if not first_response.get('actions'):
         # Format B — direct response, no ACT loop needed
-        first_response['mode'] = 'RESPOND'
+        first_response['mode'] = 'UNIFIED'
         if not first_response.get('response', '').strip():
             first_response['response'] = "I understand. Let me think about that."
         return first_response, routing_result
@@ -714,7 +713,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
     max_act_iterations = config.get('max_act_iterations', cortex_config.get('max_act_iterations', 5))
 
     # Reuse the inclusion_map and assembled_context from the initial call —
-    # UNIFIED mask is already the union of RESPOND and ACT, no need to recompute
+    # UNIFIED mask is already the union of all modes, no need to recompute
 
     orchestrator = ACTOrchestrator(
         config=cortex_config,
@@ -829,9 +828,9 @@ def unified_generate(topic, text, classification, thread_conv_service,
             'confidence': 1.0,
         }
     else:
-        # Synthesis call — use RESPOND mode for synthesis (RESPOND prompt handles act_history well)
+        # Synthesis call — use UNIFIED mode for synthesis (unified prompt handles act_history well)
         terminal_response = generate_for_mode(
-            topic, text, 'RESPOND', classification,
+            topic, text, 'UNIFIED', classification,
             thread_conv_service, cortex_config, cortex_prompt_map, metadata,
             act_history_context=act_history_for_respond,
             thread_id=thread_id,
@@ -857,7 +856,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
             terminal_response['reply_actions'] = entry['reply_actions']
             break
 
-    routing_result['mode'] = terminal_response.get('mode', 'RESPOND')
+    routing_result['mode'] = terminal_response.get('mode', 'UNIFIED')
     return terminal_response, routing_result
 
 
@@ -921,7 +920,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
                 'reply_actions': response_data.get('reply_actions'),
             }
 
-            mode = response_data.get('mode', 'RESPOND')
+            mode = response_data.get('mode', 'UNIFIED')
             logging.info(f"[FRONTAL CORTEX] Routing through orchestrator: {mode}")
 
             orchestrator_result = orchestrator.route_path(mode=mode, context=context)
@@ -933,7 +932,7 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
                     OutputService().enqueue_text(
                         topic=topic,
                         response=response_data.get('response') or "I ran into an issue. Please try again.",
-                        mode='RESPOND',
+                        mode='UNIFIED',
                         confidence=response_data.get('confidence', 0.0),
                         generation_time=response_data.get('generation_time', 0.0),
                         original_metadata=metadata,
@@ -1136,7 +1135,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         inclusion_map = None
         try:
             inclusion_map = get_context_relevance_service().compute_inclusion_map(
-                mode='RESPOND', signals={}, classification=_cron_classification,
+                mode='UNIFIED', signals={}, classification=_cron_classification,
             )
         except Exception as e:
             logging.warning(f"[CRON TOOL] Context relevance failed: {e}")
@@ -1162,12 +1161,12 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
             assembled_context=assembled_context,
         )
 
-        # Always RESPOND mode for scheduled tools (bypass mode routing)
-        response_data['mode'] = 'RESPOND'
+        # Always UNIFIED mode for scheduled tools (bypass mode routing)
+        response_data['mode'] = 'UNIFIED'
 
         if not response_data.get('response', '').strip():
             logging.info(f"[CRON TOOL] {tool_name}: Empty response generated — skipping delivery")
-            return f"Tool '{tool_name}' | Mode: RESPOND | Empty response (no updates)"
+            return f"Tool '{tool_name}' | Mode: UNIFIED | Empty response (no updates)"
 
         # Append assistant turn to working memory
         working_memory.append_turn(thread_id or f'cron_tool:{tool_name}', 'assistant', response_data['response'])
@@ -1191,7 +1190,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
                 'metadata': metadata,
                 'actions': [],
             }
-            orchestrator.route_path(mode='RESPOND', context=context)
+            orchestrator.route_path(mode='UNIFIED', context=context)
         except Exception as e:
             logging.error(f"[CRON TOOL] {tool_name}: Orchestrator failed: {e}")
 
@@ -1234,7 +1233,7 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
         )
 
         return (
-            f"Tool '{tool_name}' | Mode: RESPOND | "
+            f"Tool '{tool_name}' | Mode: UNIFIED | "
             f"Response generated in {response_data.get('generation_time', 0):.2f}s"
         )
 
@@ -1333,9 +1332,9 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             f"(confidence={routing_result.get('router_confidence', 0):.3f})"
         )
     except Exception as e:
-        logging.warning(f"[PROACTIVE] Routing failed, defaulting to RESPOND: {e}")
-        selected_mode = 'RESPOND'
-        routing_result = {'mode': 'RESPOND', 'router_confidence': 0.5, 'routing_time_ms': 0.0}
+        logging.warning(f"[PROACTIVE] Routing failed, defaulting to UNIFIED: {e}")
+        selected_mode = 'UNIFIED'
+        routing_result = {'mode': 'UNIFIED', 'router_confidence': 0.5, 'routing_time_ms': 0.0}
 
     # If router says IGNORE, respect it — the thought wasn't worth sharing
     if selected_mode == 'IGNORE':
@@ -1349,9 +1348,9 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             pass
         return f"Topic '{topic}' | Mode: PROACTIVE_IGNORED | Router filtered thought"
 
-    # ACT mode doesn't make sense for proactive thoughts — fall back to RESPOND
+    # ACT mode doesn't make sense for proactive thoughts — fall back to UNIFIED
     if selected_mode == 'ACT':
-        selected_mode = 'RESPOND'
+        selected_mode = 'UNIFIED'
 
     # Generate proactive outreach using dedicated prompt template
     try:
@@ -1368,7 +1367,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         inclusion_map = None
         try:
             inclusion_map = get_context_relevance_service().compute_inclusion_map(
-                mode='RESPOND', signals={}, classification=classification,
+                mode='UNIFIED', signals={}, classification=classification,
             )
         except Exception as e:
             logging.warning(f"[PROACTIVE] Context relevance failed: {e}")
@@ -1394,9 +1393,9 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             assembled_context=assembled_context,
         )
 
-        # Proactive messages always deliver as RESPOND
-        response_data['mode'] = 'RESPOND'
-        selected_mode = 'RESPOND'
+        # Proactive messages always deliver as UNIFIED
+        response_data['mode'] = 'UNIFIED'
+        selected_mode = 'UNIFIED'
 
         if not response_data.get('response', '').strip():
             logging.info(f"[PROACTIVE] Empty response generated — skipping delivery")
@@ -1482,7 +1481,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
     """
     Handle response generation after background ACT loop completes.
 
-    Funnels through the standard RESPOND mode (same path as synchronous ACT),
+    Funnels through the standard UNIFIED mode (same path as synchronous ACT),
     with stale suppression to avoid delivering results for abandoned topics.
     """
     configs = load_configs()
@@ -1532,7 +1531,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         except Exception as e:
             logging.debug(f"[TOOL RESULT] Stale check failed: {e}")
 
-    # ── Generate response via standard RESPOND mode ──────────
+    # ── Generate response via standard UNIFIED mode ──────────
     try:
         classification = {
             'topic': topic,
@@ -1542,7 +1541,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         }
 
         response_data = generate_for_mode(
-            topic, original_prompt, 'RESPOND', classification,
+            topic, original_prompt, 'UNIFIED', classification,
             thread_conv_service, cortex_config, cortex_prompt_map, metadata,
             act_history_context=act_history_context,
             thread_id=thread_id,
@@ -1569,7 +1568,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
                 'metadata': metadata,
                 'actions': [],
             }
-            orchestrator.route_path(mode='RESPOND', context=context)
+            orchestrator.route_path(mode='UNIFIED', context=context)
         except Exception as e:
             logging.error(f"[TOOL RESULT] Orchestrator failed: {e}")
 
@@ -1585,7 +1584,7 @@ def _handle_tool_result(text: str, metadata: dict) -> str:
         )
 
         return (
-            f"Topic '{topic}' | Mode: TOOL_RESULT_RESPOND | "
+            f"Topic '{topic}' | Mode: TOOL_RESULT_UNIFIED | "
             f"Response generated in {response_data.get('generation_time', 0):.2f}s"
         )
 
@@ -2330,7 +2329,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             dedup_response = _check_active_tool_work(text, topic)
             if dedup_response:
                 orchestrator = get_orchestrator()
-                orchestrator.route_path('RESPOND', {
+                orchestrator.route_path('UNIFIED', {
                     'response': dedup_response,
                     'confidence': 0.8,
                     'topic': topic,
@@ -2353,9 +2352,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     except Exception as _gen_ex:
         logging.error(f"[DIGEST] Unified generation failed: {_gen_ex}", exc_info=True)
-        # Fallback: minimal RESPOND
+        # Fallback: minimal UNIFIED
         response_data = {
-            'mode': 'RESPOND',
+            'mode': 'UNIFIED',
             'modifiers': [],
             'response': "I ran into an issue processing that. Could you try again?",
             'generation_time': 0.0,
@@ -2363,7 +2362,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'confidence': 0.0,
         }
         routing_result = {
-            'mode': 'RESPOND',
+            'mode': 'UNIFIED',
             'router_confidence': 0.0,
             'routing_source': 'fallback',
             'routing_time_ms': 0.0,
@@ -2400,7 +2399,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             event_type='system_response',
             payload={
                 'message': response_data['response'],
-                'mode': response_data.get('mode', 'RESPOND'),
+                'mode': response_data.get('mode', 'UNIFIED'),
                 'confidence': response_data.get('confidence', 0.0),
                 'generation_time': response_data.get('generation_time', 0.0)
             },

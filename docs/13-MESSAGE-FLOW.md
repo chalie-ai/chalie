@@ -124,7 +124,7 @@ Runs immediately for every message, before any routing decision.
 
 ## 3. Phase B — Signal Collection & Unified Generation
 
-User messages go through a single unified LLM call. No mode gate, no RESPOND/ACT routing split.
+User messages go through a single unified LLM call. No mode gate, no UNIFIED/ACT routing split.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -193,7 +193,7 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
                                │
           ┌────────────────────┬───────────────────┐
           │                                        │
-       RESPOND                               ACKNOWLEDGE
+       UNIFIED                               ACKNOWLEDGE
           │                                        │
           └────────────────────────────────────────┘
                                │
@@ -210,7 +210,7 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
 │    • Context relevance inclusion map (computed dynamically)         │
 │                                                                     │
 │  Config files:                                                      │
-│    RESPOND      → frontal-cortex-respond.json                      │
+│    UNIFIED      → frontal-cortex.json (base, uses unified prompt)   │
 │    ACKNOWLEDGE  → frontal-cortex.json (base)                       │
 │                                                                     │
 │  Output: { response: str, confidence: float, mode: str }           │
@@ -269,7 +269,7 @@ Used by background workers (tool_worker, persistent_task_worker, curiosity_pursu
 │  After loop terminates:                                             │
 │  1. Re-route → terminal mode (force previous_mode='ACT')           │
 │     Mode router (deterministic, skip_tiebreaker=True)              │
-│     Typically selects RESPOND                                       │
+│     Typically selects UNIFIED                                       │
 │  2. Generate terminal response (FrontalCortex)   🧠 LLM           │
 │     act_history passed as context                                   │
 │     All-card actions → skip text (mode='IGNORE')                   │
@@ -558,7 +558,7 @@ Service                      Model            Prompt                   Latency  
 ────────────────────────────────────────────────────────────────────────────────────────────────
 TopicClassifierService       lightweight      topic-classifier.md      ~100ms    Every message
 ModeRouterService (tiebreaker) qwen3:4b       mode-tiebreaker.md       ~100ms    Non-user flows only
-FrontalCortex (RESPOND)      primary model    soul + respond.md        ~500ms-2s Path C
+FrontalCortex (UNIFIED)      primary model    soul + unified.md        ~500ms-2s Path C
 FrontalCortex (ACKNOWLEDGE)  primary model    soul + acknowledge.md    ~500ms-2s Path C
 FrontalCortex (ACT plan)     primary model    frontal-cortex-act.md    ~500ms-2s Path C ACT loop
 FrontalCortex (terminal)     primary model    mode-specific            ~500ms-2s After ACT loop
