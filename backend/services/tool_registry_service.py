@@ -647,6 +647,22 @@ class ToolRegistryService:
         trigger_type = manifest.get("trigger", {}).get("type", "unknown")
         logger.info(f"[TOOL REGISTRY] Loaded tool '{tool_name}' (trigger={trigger_type})")
 
+        # Immediately kick off profile enrichment so the tool is discoverable
+        # via find_tools as soon as it is registered — no waiting for the 6h cycle.
+        _manifest_snapshot = dict(manifest)
+        _tool_name_snapshot = tool_name
+
+        def _build_profile():
+            try:
+                from services.tool_profile_service import ToolProfileService
+                ToolProfileService().build_profile(_tool_name_snapshot, _manifest_snapshot)
+                logger.info(f"[TOOL REGISTRY] Profile built for '{_tool_name_snapshot}'")
+            except Exception as _e:
+                logger.warning(f"[TOOL REGISTRY] Profile build failed for '{_tool_name_snapshot}': {_e}")
+
+        threading.Thread(target=_build_profile, daemon=True,
+                         name=f"profile-build-{tool_name}").start()
+
     def _validate_manifest(self, manifest: dict, dir_name: str):
         """Validate manifest has required fields and correct structure."""
         missing = self.REQUIRED_MANIFEST_FIELDS - set(manifest.keys())
@@ -1160,12 +1176,21 @@ class ToolRegistryService:
 
         logger.info(f"[TOOL REGISTRY] Registered interface tool: {name} (interface={interface_id})")
 
-        # Trigger profile build so the tool is discoverable via find_tools semantic search
-        try:
-            from services.tool_profile_service import ToolProfileService
-            ToolProfileService().build_profile(name, tool_entry['manifest'])
-        except Exception as e:
-            logger.warning(f"[TOOL REGISTRY] Profile build failed for interface tool {name}: {e}")
+        # Immediately kick off profile enrichment so the tool is discoverable
+        # via find_tools as soon as the interface is detected — no waiting for the 6h cycle.
+        _iface_name = name
+        _iface_manifest = dict(tool_entry['manifest'])
+
+        def _build_iface_profile():
+            try:
+                from services.tool_profile_service import ToolProfileService
+                ToolProfileService().build_profile(_iface_name, _iface_manifest)
+                logger.info(f"[TOOL REGISTRY] Profile built for interface tool '{_iface_name}'")
+            except Exception as _e:
+                logger.warning(f"[TOOL REGISTRY] Profile build failed for interface tool '{_iface_name}': {_e}")
+
+        threading.Thread(target=_build_iface_profile, daemon=True,
+                         name=f"profile-build-{name}").start()
 
     def remove_interface_tools(self, interface_id: str):
         """Remove all tools that belong to a specific interface."""
