@@ -1,7 +1,7 @@
 /**
  * Conversation spine DOM renderer.
  */
-import { parseMarkdown } from './markdown.js';
+import { BlockRenderer } from './blocks.js';
 
 const SPEAK_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
   <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
@@ -20,6 +20,7 @@ export class Renderer {
    */
   constructor(spine) {
     this._spine = spine;
+    this._blockRenderer = new BlockRenderer();
     this._userScrolledUp = false;
     this._ttsEnabled = false;
     this._activeForm = null;
@@ -104,22 +105,18 @@ export class Renderer {
 
   /**
    * Append a Chalie speech form.
-   * @param {string} text
-   * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
+   * @param {Array} blocks — block protocol array
+   * @param {{topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
-  appendChalieForm(text, meta = {}, { inWorkingMemory = true } = {}) {
+  appendChalieForm(blocks, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.innerHTML = parseMarkdown(text);
+    textEl.appendChild(this._blockRenderer.render(blocks));
     el.appendChild(textEl);
 
-    if (meta.actions?.length) {
-      el.appendChild(this._buildActionButtons(meta.actions));
-    }
-
-    const metaRow = this._buildMetaRow(text, meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
     el.appendChild(metaRow);
 
     // Collapse any narration bubbles before appending the response
@@ -133,22 +130,18 @@ export class Renderer {
 
   /**
    * Prepend a Chalie speech form (for scroll-up pagination).
-   * @param {string} text
-   * @param {{topic?: string, duration_ms?: number, actions?: Array}} [meta]
+   * @param {Array} blocks — block protocol array
+   * @param {{topic?: string, duration_ms?: number}} [meta]
    * @param {{inWorkingMemory?: boolean}} [options]
    */
-  prependChalieForm(text, meta = {}, { inWorkingMemory = true } = {}) {
+  prependChalieForm(blocks, meta = {}, { inWorkingMemory = true } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--chalie');
     if (!inWorkingMemory) el.classList.add('message--faded');
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.innerHTML = parseMarkdown(text);
+    textEl.appendChild(this._blockRenderer.render(blocks));
     el.appendChild(textEl);
 
-    if (meta.actions?.length) {
-      el.appendChild(this._buildActionButtons(meta.actions));
-    }
-
-    const metaRow = this._buildMetaRow(text, meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
     el.appendChild(metaRow);
 
     this._spine.prepend(el);
@@ -210,20 +203,16 @@ export class Renderer {
   /**
    * Replace a pending form's thinking dots with actual content.
    * @param {HTMLElement} form
-   * @param {string} text
+   * @param {Array} blocks — block protocol array
    * @param {{topic?: string, duration_ms?: number}} [meta]
    */
-  resolvePendingForm(form, text, meta = {}) {
+  resolvePendingForm(form, blocks, meta = {}) {
     form.innerHTML = '';
     const textEl = this._createEl('div', 'speech-form__text');
-    textEl.innerHTML = parseMarkdown(text);
+    textEl.appendChild(this._blockRenderer.render(blocks));
     form.appendChild(textEl);
 
-    if (meta.actions?.length) {
-      form.appendChild(this._buildActionButtons(meta.actions));
-    }
-
-    const metaRow = this._buildMetaRow(text, meta);
+    const metaRow = this._buildMetaRow(this._extractPlainText(blocks), meta);
     form.appendChild(metaRow);
 
     // Collapse narration bubbles into an expandable group
@@ -297,27 +286,6 @@ export class Renderer {
     }
   }
 
-  _buildActionButtons(actions) {
-    const row = this._createEl('div', 'speech-form__actions');
-    for (const action of actions) {
-      const btn = this._createEl('button', 'speech-form__action-btn');
-      btn.textContent = action.label;
-      btn.addEventListener('click', () => {
-        // Disable all buttons in this row (one-time use)
-        for (const b of row.querySelectorAll('button')) {
-          b.disabled = true;
-          b.classList.add('speech-form__action-btn--used');
-        }
-        btn.classList.add('speech-form__action-btn--selected');
-        document.dispatchEvent(new CustomEvent('chalie:action', {
-          detail: { payload: action.payload },
-        }));
-      });
-      row.appendChild(btn);
-    }
-    return row;
-  }
-
   _buildMetaRow(text, meta) {
     const MODE_LABELS = { ACT: 'acting', CLARIFY: 'clarifying', ACKNOWLEDGE: 'noting' };
 
@@ -387,6 +355,14 @@ export class Renderer {
     metaRow.appendChild(rememberBtn);
 
     return metaRow;
+  }
+
+  _extractPlainText(blocks) {
+    if (!Array.isArray(blocks)) return '';
+    return blocks
+      .filter(b => b.type === 'text' || b.type === 'header' || b.type === 'code')
+      .map(b => b.content || '')
+      .join('\n');
   }
 
   _createEl(tag, className) {

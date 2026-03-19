@@ -8,6 +8,9 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
+from services.blocks_render_service import BlocksRenderService
+
+_blocks_svc = BlocksRenderService()
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +81,11 @@ def conversation_recent():
             distance_from_end = total - (offset + i + 1)
             in_working_memory = (not from_expired) and (distance_from_end < WORKING_MEMORY_SIZE)
 
+            response_text = response.get("message", "") if isinstance(response, dict) else ""
             formatted.append({
                 "id": ex.get("id", ""),
                 "prompt": prompt.get("message", "") if isinstance(prompt, dict) else "",
-                "response": response.get("message", "") if isinstance(response, dict) else "",
+                "blocks": _blocks_svc.from_markdown(response_text) if response_text else [],
                 "topic": ex.get("topic", ""),
                 "timestamp": prompt.get("time", "") if isinstance(prompt, dict) else "",
                 "in_working_memory": in_working_memory,

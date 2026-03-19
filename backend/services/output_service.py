@@ -6,7 +6,9 @@ from typing import Dict, Any, Optional, List
 from .memory_client import MemoryClientService
 from .config_service import ConfigService
 from .time_utils import utc_now
+from .blocks_render_service import BlocksRenderService
 
+_blocks_svc = BlocksRenderService()
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,12 @@ class OutputService:
         if reply_actions:
             metadata_dict["reply_actions"] = reply_actions
 
+        # Convert response to blocks — the sole output format for all clients
+        blocks = _blocks_svc.from_markdown(response)
+        if reply_actions:
+            blocks.extend(_blocks_svc.from_actions(reply_actions))
+        metadata_dict["blocks"] = blocks
+
         output = {
             "id": output_id,
             "type": "TEXT",
@@ -91,7 +99,7 @@ class OutputService:
             'output_id': output_id,
             'type': event_type,
             'topic': topic,
-            'content': response,
+            'blocks': blocks,
             'mode': mode,
             'confidence': confidence,
             'generated_at': output['created_at'],
