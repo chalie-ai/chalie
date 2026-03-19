@@ -38,7 +38,7 @@ def tool_worker(job_data: dict) -> str:
             - intent: Classified intent metadata
             - context_snapshot: Context state at time of spawn
             - metadata: Original request metadata
-            - tool_hints: Suggested tools (from MessageGateService)
+            - tool_hints: Suggested tools (from caller context)
 
     Returns:
         str: Status message

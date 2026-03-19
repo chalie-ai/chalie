@@ -24,7 +24,7 @@ Before building anything new, recognize what's already operational:
 |---|---|---|
 | **PERCEIVE** | AmbientInference, ClientContext, EventBridge, WebSocket handler | Good — deterministic, fast |
 | **UPDATE** | GistStorage, WorkingMemory, FactExtraction | Good — runs inline with perception |
-| **REASON** | MessageGateService (user msgs), ModeRouter (non-user), DriftEngine (idle) | Fragmented — three separate reasoning paths |
+| **REASON** | UnifiedGenerate (user msgs), ModeRouter (non-user), DriftEngine (idle) | Unified path for user messages; ModeRouter for non-user flows |
 | **ACT** | DigestWorker (respond), ToolWorker (tools), PersistentTaskWorker (background) | Good — but triggered separately per path |
 | **REFLECT** | CriticService, ExperienceAssimilation, ReflectAction | Good — but only post-ACT, not continuous |
 
