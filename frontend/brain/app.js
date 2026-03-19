@@ -1795,7 +1795,6 @@ function loadCognitionSubtab(subtab) {
     if (obsLoaded[subtab]) return; // Already cached
 
     const loaders = {
-        routing: loadRoutingObs,
         memory: loadMemoryObs,
         tools: loadToolsObs,
         identity: loadIdentityObs,
@@ -1830,69 +1829,6 @@ function obsSetTimestamp(isoStr) {
 
 function obsPct(n) {
     return Math.round((n || 0) * 100);
-}
-
-// ── Thinking (Routing) ──
-
-async function loadRoutingObs() {
-    const el = document.getElementById('routingContent');
-    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(80) + obsSkeletonBlock(120);
-
-    try {
-        const res = await apiFetch('/system/observability/routing');
-        if (!res.ok) throw new Error('Failed to load');
-        const data = await res.json();
-        obsData.routing = data;
-        obsLoaded.routing = true;
-        obsSetTimestamp(data.generated_at);
-
-        const dist = data.distribution || {};
-        const respondPct = obsPct(dist['RESPOND']);
-        const actPct = obsPct(dist['ACT']);
-
-        let html = `<p class="obs-summary">Over the past week, Chalie chose to respond directly ${respondPct}% of the time and took action ${actPct}% of the time.</p>`;
-
-        // Stat cards
-        html += '<div class="obs-stats">';
-        html += obsStatCard('Decisions (24h)', data.total_decisions_24h || 0);
-        html += obsStatCard('Avg Confidence', ((data.avg_confidence_24h || 0) * 100).toFixed(1) + '%');
-        html += obsStatCard('Tiebreaker Rate', ((data.tiebreaker_rate_24h || 0) * 100).toFixed(1) + '%', 'ONNX or LLM tie-break');
-        html += '</div>';
-
-        // Mode distribution bar chart
-        html += '<div class="obs-section-title">Mode Distribution (7 days)</div>';
-        html += '<div class="obs-bar-chart">';
-        const modeColors = { RESPOND: '--accent', ACT: '--cyan', CLARIFY: '--warning', ACKNOWLEDGE: '--success', IGNORE: '--error' };
-        const sortedModes = Object.entries(dist).sort((a, b) => b[1] - a[1]);
-        for (const [mode, pct] of sortedModes) {
-            const colorClass = modeColors[mode] || '--accent';
-            html += `<div class="obs-bar-row">
-                <span class="obs-bar-row__label">${escapeHtml(mode)}</span>
-                <div class="obs-bar-row__track"><div class="obs-bar-row__fill ${colorClass}" style="width:${obsPct(pct)}%"></div></div>
-                <span class="obs-bar-row__value">${obsPct(pct)}%</span>
-            </div>`;
-        }
-        html += '</div>';
-
-        // Recent decisions
-        const recent = data.recent || [];
-        if (recent.length > 0) {
-            html += `<div class="obs-section-title">Recent Decisions (${recent.length})</div>`;
-            html += '<div class="obs-recent-list">';
-            for (const d of recent.slice(0, 15)) {
-                html += `<div class="obs-recent-item">
-                    <span class="obs-recent-item__mode">${escapeHtml(d.mode)}</span>
-                    <span class="obs-recent-item__topic">${escapeHtml(d.topic || 'general')}</span>
-                    <span class="obs-recent-item__confidence">${(d.confidence * 100).toFixed(0)}%</span>
-                </div>`;
-            }
-            html += '</div>';
-        }
-
-        el.innerHTML = html;
-    } catch (e) {
-        el.innerHTML = '<div class="obs-empty">Could not load thinking data.</div>';
-    }
 }
 
 // ── Memory ──

@@ -26,7 +26,6 @@ DATA_TABLES = [
     'semantic_concepts',
     'semantic_relationships',
     'interaction_log',
-    'routing_decisions',
     'user_traits',
     'procedural_memory',
     'topics',

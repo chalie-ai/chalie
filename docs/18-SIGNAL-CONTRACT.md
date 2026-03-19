@@ -246,7 +246,6 @@ def run_signal_loop(self):
 | GrowthPatternService | 30min timer | — | Could react to trait-change signals |
 | AutobiographySynthesis | 6h timer | Low | Long cycle, timer is fine for now |
 | PersistentTaskWorker | 30min timer | — | Could react to plan-ready signals |
-| RoutingReflectionService | 5min timer | — | Could react to low-confidence routing signals |
 | ProfileEnrichmentService | 6h timer | Low | Long cycle, timer is fine |
 | TemporalPatternService | 6h timer | Low | Long cycle, timer is fine |
 | ToolUpdateChecker | 6h timer | Low | Infrastructure, timer is fine |
