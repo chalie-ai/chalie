@@ -1,4 +1,4 @@
-faster-whisper>=1.1.0
-kittentts @ https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl
+moonshine-voice>=0.0.51
+kokoro-onnx>=0.5.0
 soundfile>=0.13.0
 numpy>=1.24.0

@@ -1,7 +1,7 @@
 """
-Voice blueprint — native STT (faster-whisper) + TTS (KittenTTS).
+Voice blueprint — native STT (Moonshine Voice) + TTS (Kokoro).
 
-Auto-detects voice dependencies at import time. If faster-whisper or kittentts
+Auto-detects voice dependencies at import time. If moonshine_voice or kokoro_onnx
 are not installed, all routes return {"status": "unavailable"} / 503.
 No Docker required — voice runs in-process.
 
@@ -11,6 +11,7 @@ the Flask server while large models download.
 
 import io
 import logging
+import os
 import re
 import struct
 import tempfile
@@ -24,20 +25,26 @@ voice_bp = Blueprint("voice", __name__)
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
-WHISPER_MODEL = "base"
-KITTEN_VOICE = "Jasper"
-KITTEN_MODEL = "KittenML/kitten-tts-mini-0.8"
+MOONSHINE_LANG = "en"
+KOKORO_VOICE = "af_heart"
 MAX_AUDIO_SECONDS = 60
-MAX_TTS_CHARS = 5000
 STT_CONCURRENCY = 1
 TTS_CONCURRENCY = 2
+
+# Kokoro model files — downloaded lazily into backend/data/models/kokoro/
+_KOKORO_MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "models", "kokoro",
+)
+_KOKORO_MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+_KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
 # ── Dependency detection ────────────────────────────────────────────────────
 
 _VOICE_AVAILABLE = False
 try:
-    import faster_whisper  # noqa: F401
-    import kittentts  # noqa: F401
+    import moonshine_voice  # noqa: F401
+    import kokoro_onnx  # noqa: F401
     import soundfile  # noqa: F401
     import numpy  # noqa: F401
     _VOICE_AVAILABLE = True
@@ -53,6 +60,32 @@ _tts_sem = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
+
+
+def _download_kokoro_models():
+    """Download Kokoro model files if not present."""
+    import requests
+
+    os.makedirs(_KOKORO_MODEL_DIR, exist_ok=True)
+
+    model_path = os.path.join(_KOKORO_MODEL_DIR, "kokoro-v1.0.onnx")
+    voices_path = os.path.join(_KOKORO_MODEL_DIR, "voices-v1.0.bin")
+
+    for url, path in [(_KOKORO_MODEL_URL, model_path), (_KOKORO_VOICES_URL, voices_path)]:
+        if os.path.exists(path):
+            continue
+        fname = os.path.basename(path)
+        logger.info("[Voice] Downloading %s …", fname)
+        resp = requests.get(url, stream=True, timeout=120)
+        resp.raise_for_status()
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                f.write(chunk)
+        os.rename(tmp_path, path)
+        logger.info("[Voice] Downloaded %s (%.1f MB)", fname, os.path.getsize(path) / 1e6)
+
+    return model_path, voices_path
 
 
 def _ensure_models():
@@ -72,13 +105,16 @@ def _ensure_models():
 
     # Load outside the lock to avoid blocking other routes
     try:
-        logger.info("[Voice] Loading STT model: %s", WHISPER_MODEL)
-        from faster_whisper import WhisperModel
-        stt = WhisperModel(WHISPER_MODEL, compute_type="int8")
+        import moonshine_voice as mv
 
-        logger.info("[Voice] Loading TTS model: %s (voice=%s)", KITTEN_MODEL, KITTEN_VOICE)
-        from kittentts import KittenTTS
-        tts = KittenTTS(KITTEN_MODEL)
+        logger.info("[Voice] Loading STT model (Moonshine, lang=%s)", MOONSHINE_LANG)
+        model_path, model_arch = mv.get_model_for_language(MOONSHINE_LANG)
+        stt = mv.Transcriber(model_path=model_path, model_arch=model_arch)
+
+        logger.info("[Voice] Loading TTS model (Kokoro, voice=%s)", KOKORO_VOICE)
+        model_file, voices_file = _download_kokoro_models()
+        from kokoro_onnx import Kokoro
+        tts = Kokoro(model_file, voices_file)
 
         with _load_lock:
             _stt_model = stt
@@ -98,7 +134,7 @@ def _ensure_models():
         return False
 
 
-# ── Helpers (ported from voice/app.py) ──────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _wav_duration_seconds(data: bytes) -> float:
     """Parse WAV header to get duration without decoding the full file."""
@@ -124,26 +160,117 @@ def _wav_duration_seconds(data: bytes) -> float:
 
 
 def _clean_for_tts(text: str) -> str:
-    """Strip markdown / symbols that confuse the phonemizer."""
-    # Remove code blocks
-    text = re.sub(r"```[\s\S]*?```", " ", text)
+    """Convert markdown to natural spoken text for TTS synthesis.
+
+    Transforms structured markdown into fluid speech while preserving meaning:
+    - Code blocks  → "See code in chat message."
+    - Numbered lists → kept numbered as sentences
+    - Bullet lists  → individual sentences
+    - Tables        → row-by-row natural reading
+    - Headers       → spoken as topic sentences
+    - Links         → label only, URLs dropped
+    """
+    # ── Phase 1: Block-level replacements (before line processing) ──────
+
+    # Code blocks → spoken placeholder
+    text = re.sub(r"```[\s\S]*?```", "\nSee code in chat message.\n", text)
+
+    # Inline code — keep the content, drop backticks
     text = re.sub(r"`([^`]*)`", r"\1", text)
-    # Remove markdown emphasis
+
+    # Remove markdown emphasis — keep the content
     text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
     text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
-    # Remove markdown headers
-    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
-    # Remove blockquotes
-    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
-    # Remove markdown links — keep the label
+
+    # Markdown links — keep the label
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    # Remove list bullets / numbered prefixes
-    text = re.sub(r"^[\s]*[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^[\s]*\d+\.\s+", "", text, flags=re.MULTILINE)
-    # Remove horizontal rules
+
+    # Bare URLs — not speakable
+    text = re.sub(r"https?://\S+", "", text)
+
+    # Horizontal rules
     text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
-    # Collapse whitespace (newlines → spaces, multi-space → single)
-    text = re.sub(r"\s+", " ", text).strip()
+
+    # ── Phase 2: Tables → natural row reading ───────────────────────────
+
+    def _speak_table(match: re.Match) -> str:
+        """Convert a markdown table to speakable row descriptions."""
+        table_text = match.group(0)
+        rows = [r.strip() for r in table_text.strip().split("\n") if r.strip()]
+        # Extract header row
+        headers = [c.strip() for c in rows[0].strip("|").split("|")] if rows else []
+        # Skip separator row (---|---) and process data rows
+        spoken = []
+        for row in rows[1:]:
+            if re.match(r"^\|?[\s:|-]+\|?$", row):
+                continue  # separator row
+            cells = [c.strip() for c in row.strip("|").split("|")]
+            parts = []
+            for i, cell in enumerate(cells):
+                if not cell:
+                    continue
+                if i < len(headers) and headers[i]:
+                    parts.append(f"{headers[i]}: {cell}")
+                else:
+                    parts.append(cell)
+            if parts:
+                spoken.append(", ".join(parts) + ".")
+        return "\n".join(spoken) if spoken else ""
+
+    text = re.sub(
+        r"(?:^\|.+\|$\n?){2,}",
+        _speak_table,
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # ── Phase 3: Line-by-line processing ────────────────────────────────
+
+    lines = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Headers → spoken as topic intro
+        header_match = re.match(r"^#{1,6}\s+(.+)$", line)
+        if header_match:
+            content = header_match.group(1).rstrip(".!?")
+            lines.append(content + ".")
+            continue
+
+        # Blockquote markers — strip, keep content
+        line = re.sub(r"^>\s?", "", line)
+
+        # Numbered list items — keep the number, ensure sentence ending
+        num_match = re.match(r"^(\d+)[.)]\s+(.+)$", line)
+        if num_match:
+            num, content = num_match.group(1), num_match.group(2)
+            content = content.rstrip(".!?,;:")
+            lines.append(f"{num}, {content}.")
+            continue
+
+        # Bullet list items — convert to sentence
+        bullet_match = re.match(r"^[-*+]\s+(.+)$", line)
+        if bullet_match:
+            content = bullet_match.group(1)
+            if content and content[-1] not in ".!?":
+                content += "."
+            lines.append(content)
+            continue
+
+        # Regular line — ensure sentence ending
+        if line and line[-1] not in ".!?,;:":
+            line += "."
+        lines.append(line)
+
+    text = " ".join(lines)
+
+    # ── Phase 4: Final cleanup ──────────────────────────────────────────
+
+    text = re.sub(r"\.{2,}", ".", text)           # repeated periods
+    text = re.sub(r"\s+([.!?,;:])", r"\1", text)  # space before punctuation
+    text = re.sub(r"\s+", " ", text).strip()       # collapse whitespace
     return text
 
 
@@ -177,12 +304,15 @@ def _audio_to_wav_bytes(audio_array, sample_rate: int = 24000) -> bytes:
 
 
 def _transcribe_sync(data: bytes) -> str:
-    """Run faster-whisper transcription on raw WAV bytes (blocking)."""
+    """Run Moonshine transcription on raw WAV bytes (blocking)."""
+    import moonshine_voice as mv
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         tmp.write(data)
         tmp.flush()
-        segments, _ = _stt_model.transcribe(tmp.name)
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        audio_data, sample_rate = mv.load_wav_file(tmp.name)
+        transcript = _stt_model.transcribe_without_streaming(audio_data, sample_rate=sample_rate)
+        return " ".join(line.text.strip() for line in transcript.lines).strip()
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -225,11 +355,8 @@ def voice_synthesize():
 
     if not text:
         return jsonify({"error": "Text is required"}), 400
-    if len(text) > MAX_TTS_CHARS:
-        return jsonify({"error": f"Text exceeds {MAX_TTS_CHARS} character limit"}), 400
 
-    # Clean markdown / symbols and split into sentence chunks so the
-    # phonemizer + ONNX model don't choke on long or decorated input.
+    # Clean markdown → natural spoken text
     text = _clean_for_tts(text)
     if not text:
         return jsonify({"error": "Text is required"}), 400
@@ -246,11 +373,13 @@ def voice_synthesize():
         try:
             for i, chunk in enumerate(chunks):
                 try:
-                    part = _tts_model.generate(chunk, voice=KITTEN_VOICE)
+                    samples, _sr = _tts_model.create(
+                        chunk, voice=KOKORO_VOICE, lang="en-us"
+                    )
                     # Inter-sentence pause (skip on last chunk)
                     if i < len(chunks) - 1:
-                        part = np.concatenate([part, silence])
-                    wav_bytes = _audio_to_wav_bytes(part)
+                        samples = np.concatenate([samples, silence])
+                    wav_bytes = _audio_to_wav_bytes(samples)
                     yield struct.pack(">I", len(wav_bytes)) + wav_bytes
                 except Exception as chunk_err:
                     logger.warning("[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
