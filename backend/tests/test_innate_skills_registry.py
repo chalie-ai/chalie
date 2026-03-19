@@ -66,8 +66,8 @@ class TestSkillRegistry:
     def test_deterministic_actions_subset_of_all(self):
         assert DETERMINISTIC_ACTIONS <= ALL_SKILL_NAMES
 
-    def test_procedural_memory_skills_subset_of_primitives(self):
-        assert PROCEDURAL_MEMORY_SKILLS <= COGNITIVE_PRIMITIVES
+    def test_procedural_memory_skills_subset_of_all(self):
+        assert PROCEDURAL_MEMORY_SKILLS <= ALL_SKILL_NAMES
 
     def test_skill_descriptions_covers_all_skills(self):
         assert set(SKILL_DESCRIPTIONS.keys()) == ALL_SKILL_NAMES

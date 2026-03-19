@@ -37,10 +37,36 @@ backend/
 Frontend applications located separately:
 ```
 frontend/
-├── interface/         # Main chat UI (HTML/CSS/JS, Radiant design system)
+├── interface/         # Main chat UI (ES6 modules, Radiant design system)
+│   ├── app.js         # Thin orchestrator — boot, wiring, small glue (~680 lines)
+│   ├── utils.js       # Shared utilities (escHtml, lsGet/lsSet, toast, relativeTime)
+│   ├── auth.js        # Authentication & login dialog
+│   ├── chat.js        # Message sending orchestration & conversation history
+│   ├── image_attach.js    # Image upload, preview strip, analysis tracking
+│   ├── document_upload.js # Document upload dialog, processing, synthesis
+│   ├── task_strip.js      # Persistent task strip display & polling
+│   ├── apps_panel.js      # Interface daemon panel, scope approval, app overlay
+│   ├── event_router.js    # WebSocket drift/push event dispatcher
+│   ├── notifications.js   # Audio chime, system notifications, push subscription
+│   ├── update_system.js   # Update banner & dialog
+│   ├── ambient_canvas.js  # Animated background gradient orbs
+│   ├── api.js         # REST client
+│   ├── ws.js          # WebSocket client
+│   ├── renderer.js    # Conversation spine DOM renderer
+│   ├── presence.js    # Presence dot state machine
+│   ├── voice.js       # Voice I/O (STT + TTS)
+│   ├── heartbeat.js   # Client context telemetry
+│   ├── ambient.js     # Behavioral sensor (passive)
+│   ├── moment_search.js   # Recall search overlay
+│   ├── markdown.js    # Markdown parser (XSS-safe)
+│   └── sw.js          # Service worker (caching, push, share target)
 ├── brain/             # Admin/cognitive dashboard
 └── on-boarding/       # Account setup wizard
 ```
+
+**Module communication**: Constructor injection for shared services, callback registration for cross-module events, custom DOM events (`chalie:action`, `chalie:speak`, `chalie:pin-moment`) for loose coupling. Modules never reference each other directly — `app.js` wires all connections.
+
+**Asset versioning**: Flask injects a `<script type="importmap">` into `index.html` at serve time, mapping all module imports to `?v=VERSION` URLs. The `VERSION` file is the single source of truth. Service worker uses network-first for JS/CSS (localhost = 0ms latency) with cache fallback for offline/PWA.
 
 **IMPORTANT**: UI code must exist under `/interface/`, `/brain/`, or `/on-boarding/` only.
 
@@ -143,10 +169,10 @@ frontend/
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)
 
-14 built-in cognitive skills for the ACT loop:
+16 built-in cognitive skills for the ACT loop:
 - **`recall_skill.py`** — Unified retrieval across ALL memory layers including user traits (<500ms); supports "what do you know about me?" via `user_traits` layer with broad/specific query modes and confidence labels
 - **`memorize_skill.py`** — Store gists and facts (<50ms)
-- **`introspect_skill.py`** — Raw state snapshot: context warmth, FOK signal, stats, decision explanations, recent autonomous actions (<100ms); supports "why did you do that?" via routing audit trail and autonomous action history
+- **`introspect_skill.py`** — Comprehensive internal state report: 4 natural-language scopes (memory health, skill/tool usage, reasoning state, identity); supports "why did you do that?" via routing audit trail and autonomous action history
 - **`associate_skill.py`** — Spreading activation through semantic graph (<500ms)
 - **`scheduler_skill.py`** — Create/list/cancel reminders and scheduled tasks (<100ms)
 - **`autobiography_skill.py`** — Retrieve synthesized user narrative with optional section extraction (<500ms)
@@ -157,7 +183,8 @@ frontend/
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
-- **`find_tools_skill.py`** — Discover external tools via semantic search against tool capability profiles
+- **`find_tools_skill.py`** — Discover registered tools via semantic search against tool capability profiles
+- **`find_skills_skill.py`** — Discover innate cognitive skills via semantic search against tool capability profiles
 - **`notes_skill.py`** — Query working notes from this session for on-demand retrieval of older action history
 
 ## Worker Processes (`backend/workers/`)
