@@ -185,39 +185,6 @@ def generate_webhook_key(tool_name: str):
         return jsonify({"error": "Failed to generate webhook key"}), 500
 
 
-@tools_bp.route("/tools/catalog", methods=["GET"])
-@require_session
-def list_tools_catalog():
-    """List all discovered tools with metadata, including non-installed ones.
-
-    Unlike GET /tools (installed+ready only), this returns every tool Chalie
-    has discovered from its tools directory, with an ``installed`` flag.
-
-    Returns:
-        200 with ``{"catalog": [{name, installed, category, description,
-                                  documentation, icon, version, parameters}]}``
-    """
-    from services.tool_registry_service import ToolRegistryService
-    registry = ToolRegistryService()
-    catalog = []
-    for name, tool_data in registry.tools.items():
-        manifest = tool_data.get('manifest', {})
-        entry = {
-            'name': name,
-            'installed': registry._is_ready(name, tool_data),
-            'category': manifest.get('category', 'general'),
-            'description': manifest.get('description', ''),
-            'documentation': manifest.get('documentation', ''),
-            'icon': manifest.get('icon', ''),
-            'version': manifest.get('version', ''),
-            'parameters': manifest.get('parameters', {}),
-            'trigger': manifest.get('trigger', {}),
-        }
-        catalog.append(entry)
-    catalog.sort(key=lambda x: x['name'])
-    return jsonify({'catalog': catalog})
-
-
 @tools_bp.route("/tools", methods=["GET"])
 @require_session
 def list_tools():
