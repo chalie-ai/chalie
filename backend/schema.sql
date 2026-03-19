@@ -213,34 +213,6 @@ CREATE INDEX IF NOT EXISTS idx_topics_name ON topics(name);
 CREATE INDEX IF NOT EXISTS idx_topics_last_updated ON topics(last_updated DESC);
 
 -- ────────────────────────────────────────────────────────────────
--- ROUTING DECISIONS — mode router audit trail
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS routing_decisions (
-    id TEXT PRIMARY KEY,
-    topic TEXT NOT NULL,
-    exchange_id TEXT,
-    selected_mode TEXT NOT NULL,
-    router_confidence REAL,
-    scores TEXT NOT NULL,                     -- JSONB
-    tiebreaker_used INTEGER DEFAULT 0,       -- BOOLEAN
-    tiebreaker_candidates TEXT,              -- JSONB
-    margin REAL,
-    effective_margin REAL,
-    signal_snapshot TEXT NOT NULL,            -- JSONB
-    weight_snapshot TEXT,                     -- JSONB
-    routing_time_ms REAL,
-    feedback TEXT,                            -- JSONB
-    reflection TEXT,                          -- JSONB
-    reasoning TEXT,                           -- e.g. "[effort:trivial]"
-    previous_mode TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_routing_decisions_topic ON routing_decisions(topic, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_routing_decisions_mode ON routing_decisions(selected_mode, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_routing_decisions_unreflected ON routing_decisions(created_at) WHERE reflection IS NULL;
-
--- ────────────────────────────────────────────────────────────────
 -- IDENTITY VECTORS — 6 personality dimensions
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS identity_vectors (

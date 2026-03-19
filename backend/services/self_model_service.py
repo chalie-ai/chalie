@@ -231,7 +231,6 @@ class SelfModelService:
             "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
             "topic_age": self._get_topic_age(),
-            "recent_modes": self._get_recent_modes(),
             "focus_active": self._get_focus_active(topic),
             "skill_reliability": self._get_skill_reliability(),
         }
@@ -291,17 +290,6 @@ class SelfModelService:
             return "unknown"
         except Exception:
             return "unknown"
-
-    def _get_recent_modes(self) -> list:
-        """Last 5 mode selections from routing decisions."""
-        try:
-            from services.routing_decision_service import RoutingDecisionService
-            db = self._get_db()
-            service = RoutingDecisionService(db)
-            decisions = service.get_recent_decisions(hours=1, limit=5)
-            return [d["selected_mode"] for d in decisions]
-        except Exception:
-            return []
 
     def _get_focus_active(self, topic: str) -> bool:
         try:

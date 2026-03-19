@@ -76,9 +76,7 @@ frontend/
 
 #### Routing & Decision Making
 - **`mode_router_service.py`** — Deterministic mode routing (~5ms) with signal collection + tie-breaker
-- **`routing_decision_service.py`** — Routing decision audit trail (SQLite)
 - **`routing_stability_regulator_service.py`** — Single authority for router weight mutation (24h cycle, ±0.02/day max)
-- **`routing_reflection_service.py`** — Idle-time peer review of routing decisions via strong LLM
 - **`cognitive_triage_service.py`** — LLM-based 4-step triage (social filter → LLM → self-eval → dispatch); routes to UNIFIED/ACT/CLARIFY/ACKNOWLEDGE; defers tool selection to ACT loop when tools exist but none named
 - **`cognitive_reflex_service.py`** — Learned fast path via semantic abstraction; heuristic pre-screen (~1ms) + sqlite-vec cosine search (~5-20ms) bypasses full pipeline for self-contained queries; rolling-average centroids generalize from observed examples; self-correcting per cluster via user corrections and shadow validation
 
@@ -243,11 +241,8 @@ frontend/
 
 ### Background Processes
 ```
-[Routing Stability Regulator] ← reads routing_decisions (24h cycle)
+[Routing Stability Regulator] ← 24h cycle
     → adjusts configs/generated/mode_router_config.json
-
-[Routing Reflection Service] ← reads reflection-queue (idle-time)
-    → writes routing_decisions.reflection → feeds pressure to regulator
 
 [Decay Engine] → runs every 1800s (30min)
     ├─ Episodic decay (salience-weighted)

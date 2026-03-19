@@ -5,10 +5,8 @@ Primary role (new): post-loop learning signal via reflect_on_execution().
   Runs once after the full loop completes. Produces a structured reflection
   that feeds procedural memory. Never blocks output.
 
-Legacy role (kept): per-action evaluate() for callers that still use it
-  directly (e.g. routing_reflection_service). The per-action critic path
-  in ACTOrchestrator has been removed — evaluate() is dead code in that
-  context but remains for external callers.
+Legacy role (kept): per-action evaluate() for external callers.
+  The per-action critic path in ACTOrchestrator has been removed.
 
 Supervised autonomy (legacy):
   - Safe actions (recall, memorize, introspect, associate): silent correction

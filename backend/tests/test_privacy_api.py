@@ -106,7 +106,7 @@ class TestDeleteAll:
             'user_traits', 'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
             'interaction_log', 'cortex_iterations',
-            'routing_decisions', 'procedural_memory', 'curiosity_threads',
+            'procedural_memory', 'curiosity_threads',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in delete_all truncation list"
