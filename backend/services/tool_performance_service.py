@@ -52,7 +52,7 @@ class ToolPerformanceService:
         latency_ms: float,
         cost: float = 0.0,
     ) -> None:
-        """Called from tool_worker after each tool execution."""
+        """Called after each tool execution to record performance metrics."""
         db = self._get_db()
         try:
             # Insert performance metric

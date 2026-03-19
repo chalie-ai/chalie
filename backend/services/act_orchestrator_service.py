@@ -9,10 +9,9 @@ All ACT loop execution MUST go through ACTOrchestrator.run().
 If you need different behavior, add a parameter to the constructor.
 
 Historical context: Before this service existed, the ACT loop was
-duplicated in tool_worker, digest_worker, and persistent_task_worker.
-Features silently diverged across copies (critic only in tool_worker,
-budget safety net only in digest_worker, etc.) causing reliability
-gaps. This unification was done to prevent that class of bug.
+duplicated across multiple workers. Features silently diverged across
+copies causing reliability gaps. This unification prevents that class
+of bug.
 
 If you believe you need a separate ACT loop, discuss with the team
 first. The cost of duplication is always higher than parameterization.
@@ -58,9 +57,8 @@ class ACTOrchestrator:
     """
     Unified ACT loop runner with parameterized behavior.
 
-    Replaces the three divergent loops in tool_worker, digest_worker,
-    and persistent_task_worker. Each caller configures the behavior it
-    needs via constructor parameters.
+    Single parameterized ACT loop. Each caller configures the behavior
+    it needs via constructor parameters.
     """
 
     def __init__(

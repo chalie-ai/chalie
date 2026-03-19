@@ -447,22 +447,6 @@ def _handle_chat(ws, store, msg, active_request=None):
 
         # Fallback: background thread done but no pub/sub arrived
         if bg_done.is_set() and not message_received:
-            # ACT triage sets sse_pending flag when a tool_worker job is pending
-            sse_pending_value = store.get(f"sse_pending:{request_id}")
-            if sse_pending_value:
-                # Maximum pending wait of 300s (tool_worker hard timeout)
-                if time.time() - start_time > 300:
-                    seq = _next_seq()
-                    err = {"type": "error", "message": "Tool execution exceeded maximum wait time", "recoverable": True, "seq": seq}
-                    _buffer_event(err)
-                    _send_json(ws, err)
-                    seq = _next_seq()
-                    done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-                    _buffer_event(done_evt)
-                    _send_json(ws, done_evt)
-                    break
-                continue
-
             time.sleep(0.5)  # Brief grace period
             output_key = f"output:{request_id}"
             fallback_data = store.get(output_key)

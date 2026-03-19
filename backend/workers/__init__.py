@@ -11,13 +11,11 @@ Exported workers:
     - ``episodic_memory_worker``: Episodic memory consolidation pipeline.
     - ``semantic_consolidation_worker``: Semantic vector consolidation pipeline.
     - ``rest_api_worker``: REST API request handler worker.
-    - ``tool_worker``: On-demand tool execution worker.
 """
 
 from .digest_worker import digest_worker
 from .episodic_memory_worker import episodic_memory_worker
 from .semantic_consolidation_worker import semantic_consolidation_worker
 from .rest_api_worker import rest_api_worker
-from .tool_worker import tool_worker
 
-__all__ = ['digest_worker', 'episodic_memory_worker', 'semantic_consolidation_worker', 'rest_api_worker', 'tool_worker']
+__all__ = ['digest_worker', 'episodic_memory_worker', 'semantic_consolidation_worker', 'rest_api_worker']
