@@ -798,14 +798,8 @@ class FrontalCortexService:
         # Legacy {{available_skills}} — removed from ACT template; kept as no-op for other templates
         result = result.replace('{{available_skills}}', '')
 
-        # Available tools (dynamic, from tool registry — filtered when selected_tools or relevant_tools provided)
-        if _include('available_tools'):
-            available_tools = self._get_available_tools(selected_tools=selected_tools, relevant_tools=relevant_tools)
-            if available_tools:
-                logging.info(f"[CORTEX] Injected available_tools ({len(available_tools)} chars): {available_tools[:200]}...")
-        else:
-            available_tools = ''
-        result = result.replace('{{available_tools}}', available_tools)
+        # Legacy {{available_tools}} — removed; find_tools is baked into ACT prompt
+        result = result.replace('{{available_tools}}', '')
 
         # Strategy hints from procedural memory (learned action reliability)
         strategy_hints = ''
@@ -1279,8 +1273,8 @@ class FrontalCortexService:
         """
         Get available innate skills from the dispatcher for prompt injection.
 
-        Returns innate skills list only. Dynamic tools are injected separately
-        via {{available_tools}} placeholder to keep concerns separated.
+        Returns innate skills list only. External tools are discovered
+        dynamically via the find_tools innate skill during ACT execution.
 
         Returns:
             Formatted available skills string or empty string
@@ -1361,64 +1355,5 @@ class FrontalCortexService:
         except Exception:
             return ''
 
-    def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
-        """
-        Get tool profiles for ACT prompt injection.
-
-        When selected_tools is provided (from MessageGateService), injects
-        full profiles for those specific tools from tool_capability_profiles table.
-        Falls back to manifest-based summaries if profiles unavailable.
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-
-            # Prefer triage-selected tools (Wave 2)
-            tool_names = None
-            if selected_tools:
-                tool_names = [t for t in selected_tools if t in registry.tools]
-            elif relevant_tools:
-                tool_names = [
-                    item['name'] for item in relevant_tools
-                    if item.get('type') == 'tool' and item['name'] in registry.tools
-                ][:5]
-
-            if tool_names:
-                # Try to get rich profiles first (inject full_profile for triage-selected tools)
-                try:
-                    from services.tool_profile_service import ToolProfileService
-                    profiles = ToolProfileService().get_profiles_for_tools(tool_names)
-                    if profiles:
-                        lines = []
-                        for p in profiles:
-                            name = p.get('tool_name', '')
-                            full_profile = p.get('full_profile', '') or p.get('short_summary', '')
-                            perf_hint = self._get_performance_hint(name)
-                            suffix = f"\n{perf_hint}" if perf_hint else ''
-                            lines.append(f"### {name}\n{full_profile}{suffix}")
-                        return "\n\n".join(lines)
-                except Exception:
-                    pass
-
-                # Fallback to manifest-based summaries
-                lines = []
-                for name in tool_names:
-                    manifest = registry.tools[name]['manifest']
-                    desc = manifest.get('description', name)
-                    params = manifest.get('parameters', {})
-                    param_str = f" ({', '.join(list(params.keys()))})" if params else ""
-                    perf_hint = self._get_performance_hint(name)
-                    suffix = f" {perf_hint}" if perf_hint else ''
-                    lines.append(f"- {name}{param_str}: {desc}{suffix}")
-                return "\n".join(lines)
-
-            # No pre-selected tools — Chalie discovers tools on demand via find_tools skill
-            count = len(registry.get_on_demand_tools())
-            if count > 0:
-                return f"({count} external tool(s) available — use the `find_tools` skill to discover and inspect them)"
-            return "(no external tools loaded)"
-        except Exception as e:
-            logging.debug(f"Tool registry not available for prompt: {e}")
-            return "(no tools loaded)"
 
 

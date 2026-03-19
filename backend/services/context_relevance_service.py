@@ -52,7 +52,6 @@ class ContextRelevanceService:
         'communication_style': 100,
         'client_context': 200,
         'available_skills': 200,
-        'available_tools': 200,
         'identity_modulation': 100,
         'onboarding_nudge': 80,
         'warm_return_hint': 80,

@@ -61,8 +61,8 @@ class TestContextRelevanceService:
         """Test that template masks exclude nodes not in the RESPOND template."""
         result = service.compute_inclusion_map(mode='RESPOND')
 
-        # RESPOND should exclude available_tools
-        assert result.get('available_tools') is False
+        # available_tools was removed — no longer in the weight map
+        assert 'available_tools' not in result
 
         # RESPOND should include identity_context, communication_style
         assert result.get('identity_context') is True
@@ -76,8 +76,8 @@ class TestContextRelevanceService:
         # RESPOND does not include available_skills (dead placeholder, removed)
         assert respond_result.get('available_skills') is False
 
-        # ACT includes available_tools
-        assert act_result.get('available_tools') is True
+        # available_tools was removed — find_tools is baked into ACT prompt
+        assert 'available_tools' not in act_result
 
     def test_signal_rule_soft_exclusion(self, service):
         """Test that soft-excluded nodes can be recovered with budget."""

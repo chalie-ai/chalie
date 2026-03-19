@@ -55,7 +55,6 @@ All context nodes supported:
 - `episodic_memory`
 - `act_history`
 - `available_skills`
-- `available_tools`
 - `world_state`
 - `warm_return_hint`
 - `identity_modulation`
@@ -130,7 +129,6 @@ Dependency graph; if a child is included, parents auto-include:
 {
   "dependencies": {
     "episodic_memory": ["gists"],
-    "available_tools": ["available_skills"],
     "onboarding_nudge": ["identity_context"],
     "warm_return_hint": ["identity_context"]
   }
@@ -237,7 +235,7 @@ def _inject_parameters(self, template, ..., inclusion_map=None):
 Every context relevance computation logs a structured entry:
 
 ```
-[CONTEXT RELEVANCE] mode=RESPOND | excluded_hard=[focus, available_skills, available_tools, warm_return_hint] |
+[CONTEXT RELEVANCE] mode=RESPOND | excluded_hard=[focus, available_skills, warm_return_hint] |
 excluded_soft=[episodic_memory] | recovered_soft=[] | deps_added=[] |
 overrides_applied=[urgency] | total_included=9 | est_tokens=2100
 ```
