@@ -1,369 +1,563 @@
 """
-Introspect Skill — Thin view on the Self-Model Service.
+Introspect Skill — Comprehensive internal state report.
 
-Delegates to SelfModelService for the always-fresh snapshot, then overlays
-topic-specific signals (FOK, recall failure rate) that require the current
-conversation topic. Falls back to legacy standalone gathering if the
-self-model is unavailable.
-
-Perception directed inward. All computed, no LLM.
+Returns four natural-language scopes covering memory health, skill and tool
+usage, reasoning state, and identity snapshot. All deterministic — no LLM
+calls. Every scope is wrapped in try/except so one failure cannot take down
+the others.
 """
 
 import logging
-from typing import Dict
+from typing import Optional
+
+from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
+
+# Identity dimension labels and their natural-language descriptions
+_DIMENSION_LABELS = {
+    'curiosity': 'curious',
+    'warmth': 'warm',
+    'assertiveness': 'assertive',
+    'skepticism': 'skeptical',
+    'playfulness': 'playful',
+    'uncertainty_tolerance': 'uncertainty-tolerant',
+}
+
+# Communication style dimension humanisation
+_VERBOSITY_LABELS = [(8, 'very verbose'), (6, 'verbose'), (5, 'balanced'),
+                     (3, 'concise'), (1, 'terse')]
+_DIRECTNESS_LABELS = [(8, 'very direct'), (6, 'direct'), (5, 'balanced'),
+                      (3, 'indirect'), (1, 'very indirect')]
+_FORMALITY_LABELS = [(8, 'formal'), (6, 'semi-formal'), (5, 'neutral'),
+                     (3, 'casual'), (1, 'very casual')]
 
 
 def handle_introspect(topic: str, params: dict) -> str:
     """
-    Gather and report internal state + metacognitive signals.
+    Return a comprehensive natural-language internal state report.
 
     Args:
-        topic: Current conversation topic
+        topic: Current conversation topic (unused — all scopes are global)
         params: {} (no parameters required)
 
     Returns:
-        Structured state report
+        Multi-section natural language report covering memory, skills,
+        reasoning state, and identity.
     """
+    sections = [
+        ('[INTROSPECT]', ''),
+        ('## Memory Health', _scope_memory_health()),
+        ('## Skill & Tool Usage', _scope_skill_tool_usage()),
+        ('## Reasoning State', _scope_reasoning_state()),
+        ('## Identity', _scope_identity_snapshot()),
+    ]
+
+    parts = []
+    for header, body in sections:
+        if header == '[INTROSPECT]':
+            parts.append(header)
+        else:
+            parts.append(f'\n{header}\n{body}')
+
+    return '\n'.join(parts)
+
+
+# ── Scope 1: Memory Health ───────────────────────────────────────
+
+
+def _scope_memory_health() -> str:
     try:
         from services.self_model_service import SelfModelService
-        service = SelfModelService()
-        snapshot = service.get_snapshot()
+        from services.database_service import get_shared_db_service
 
-        # Overlay topic-specific signals not in the base snapshot
-        # (base snapshot uses whatever topic was active at refresh time;
-        #  the introspect skill is called with the specific current topic)
-        ep = snapshot.get("epistemic", {})
-        ep["partial_match_signal"] = _get_fok_signal(topic)
-        ep["recall_failure_rate"] = _get_recall_failure_rate(topic)
-        ep["current_topic"] = topic
+        db = get_shared_db_service()
+        snapshot = SelfModelService(db).get_snapshot()
+        pressure = snapshot.get('operational', {}).get('memory_pressure', {})
+        epistemic = snapshot.get('epistemic', {})
 
-        # Gather signals not in self-model (topic-bound, user-facing only)
-        extra = {}
-        extra["world_state"] = _get_world_state(topic)
-        extra["communication_style"] = _get_communication_style()
-        extra["decision_explanations"] = _get_recent_decision_explanations()
-        extra["recent_autonomous_actions"] = _get_recent_autonomous_actions()
-        extra["skill_stats"] = _get_skill_stats(topic)
+        episode_count = pressure.get('episode_count', 0)
+        concept_count = pressure.get('concept_count', 0)
+        wm_depth = epistemic.get('working_memory_depth', 0)
 
-        # Triage-filtered tool details (context-dependent)
-        triage_tools = params.get('triage_tools', [])
-        if triage_tools:
-            extra["tool_details"] = _get_filtered_tool_details(triage_tools)
+        # Health label based on episode count
+        if episode_count >= 200:
+            health_label = 'healthy'
+        elif episode_count >= 50:
+            health_label = 'developing'
+        else:
+            health_label = 'sparse'
 
-        return _format_snapshot(snapshot, extra, topic)
+        # Last consolidation timestamp
+        last_consolidation = _query_last_consolidation(db)
 
+        return (
+            f'Memory: {health_label} — {episode_count:,} episodes, '
+            f'{concept_count:,} concepts, {wm_depth}/12 working memory slots'
+            f'{last_consolidation}.'
+        )
     except Exception as e:
-        logger.warning(f"[INTROSPECT] Self-model unavailable, falling back: {e}")
-        return _legacy_handle_introspect(topic, params)
+        logger.debug(f'[INTROSPECT] memory_health scope failed: {e}')
+        return 'Memory: unavailable.'
 
 
-# ── Topic-specific signal helpers (kept here, not in self-model) ────
-
-
-def _get_fok_signal(topic: str) -> int:
-    """Read Feeling-of-Knowing signal from last recall operation."""
+def _query_last_consolidation(db) -> str:
     try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        value = store.get(f"fok:{topic}")
-        return int(value) if value else 0
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT MAX(updated_at) FROM episodes')
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            rel = _relative_time(row[0])
+            return f', last consolidation {rel}'
+        return ''
     except Exception:
-        return 0
+        return ''
 
 
-def _get_recall_failure_rate(topic: str) -> float:
-    """Per-topic recall failure rate from procedural memory."""
+# ── Scope 2: Skill & Tool Usage ──────────────────────────────────
+
+
+def _scope_skill_tool_usage() -> str:
+    rows = []
+
+    # Innate skills via ProceduralMemoryService
+    rows.extend(_innate_skill_rows())
+
+    # External tools via user_tool_preferences
+    rows.extend(_external_tool_rows())
+
+    if not rows:
+        return 'No usage data recorded yet.'
+
+    header = (
+        '| Name            | Summary                                           '
+        '| Uses | Last Used     | Last Result |\n'
+        '|-----------------|---------------------------------------------------|'
+        '------|---------------|-------------|'
+    )
+    table_rows = '\n'.join(rows)
+    return f'{header}\n{table_rows}'
+
+
+def _innate_skill_rows() -> list:
     try:
         from services.procedural_memory_service import ProceduralMemoryService
         from services.database_service import get_shared_db_service
-        db_service = get_shared_db_service()
-        service = ProceduralMemoryService(db_service)
-        action_stats = service.get_action_stats("recall")
-        context_stats = (action_stats or {}).get("context_stats") or {}
-        if context_stats and topic in context_stats:
-            topic_stats = context_stats[topic]
-            total = topic_stats.get("total", 0)
-            failures = topic_stats.get("failures", 0)
-            if total > 0:
-                return round(failures / total, 3)
-        return 0.0
-    except Exception:
-        return 0.0
+        from services.innate_skills.registry import ALL_SKILL_NAMES, SKILL_DESCRIPTIONS
 
+        db = get_shared_db_service()
+        service = ProceduralMemoryService(db)
+        rows = []
 
-def _get_world_state(topic: str) -> str:
-    try:
-        from services.world_state_service import WorldStateService
-        return WorldStateService().get_world_state(topic)
-    except Exception:
-        return "(unavailable)"
+        for skill_name in sorted(ALL_SKILL_NAMES):
+            stats = service.get_action_stats(skill_name)
+            if not stats:
+                continue
+            attempts = stats.get('total_attempts', 0)
+            if attempts == 0:
+                continue
 
+            successes = stats.get('total_successes', 0)
+            updated_at = stats.get('updated_at', '')
+            last_used = _relative_time(updated_at) if updated_at else 'never'
+            last_result = 'success' if successes >= attempts * 0.5 else 'failed'
+            summary = SKILL_DESCRIPTIONS.get(skill_name, '')[:50]
 
-def _get_communication_style() -> dict:
-    try:
-        from services.user_trait_service import UserTraitService
-        from services.database_service import get_shared_db_service
-        return UserTraitService(get_shared_db_service()).get_communication_style()
-    except Exception:
-        return {}
-
-
-def _get_recent_decision_explanations(limit: int = 3) -> list:
-    """Full decision context for recent routing decisions."""
-    try:
-        from services.routing_decision_service import RoutingDecisionService
-        from services.database_service import get_shared_db_service
-        service = RoutingDecisionService(get_shared_db_service())
-        decisions = service.get_recent_decisions(hours=1, limit=limit)
-
-        explanations = []
-        for d in decisions:
-            scores = d.get('scores') or {}
-            signals = d.get('signal_snapshot') or {}
-            key_signals = {}
-            if signals.get('context_warmth') is not None:
-                key_signals['context_warmth'] = round(signals['context_warmth'], 2)
-            if signals.get('has_question_mark'):
-                key_signals['question_detected'] = True
-            if signals.get('greeting_pattern'):
-                key_signals['greeting_detected'] = True
-            if signals.get('explicit_feedback'):
-                key_signals['user_feedback'] = signals['explicit_feedback']
-            if signals.get('memory_confidence') is not None:
-                key_signals['memory_confidence'] = round(signals['memory_confidence'], 2)
-            if signals.get('is_new_topic'):
-                key_signals['new_topic'] = True
-
-            explanations.append({
-                'mode': d.get('selected_mode'),
-                'confidence': round(d.get('router_confidence', 0), 3),
-                'scores': {k: round(v, 3) for k, v in scores.items()} if scores else {},
-                'tiebreaker_used': d.get('tiebreaker_used', False),
-                'tiebreaker_candidates': d.get('tiebreaker_candidates'),
-                'key_signals': key_signals,
-                'margin': round(d.get('margin', 0), 3),
-            })
-        return explanations
-    except Exception:
+            rows.append(
+                f'| {skill_name:<15} | {summary:<50}| {attempts:<4} | {last_used:<13} | {last_result:<11} |'
+            )
+        return rows
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] innate_skill_rows failed: {e}')
         return []
 
 
-def _get_recent_autonomous_actions(limit: int = 5) -> list:
-    """Recent autonomous actions from interaction_log."""
-    RELEVANT_TYPES = ('proactive_sent', 'cron_tool_executed', 'plan_proposed')
+def _external_tool_rows() -> list:
     try:
         from services.database_service import get_shared_db_service
-        db_service = get_shared_db_service()
-        placeholders = ','.join(['?'] * len(RELEVANT_TYPES))
-        with db_service.connection() as conn:
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT event_type, payload, created_at "
-                f"FROM interaction_log "
-                f"WHERE event_type IN ({placeholders}) "
-                f"ORDER BY created_at DESC LIMIT ?",
-                (*RELEVANT_TYPES, limit)
+                'SELECT tool_name, usage_count, success_count, last_used_at '
+                'FROM user_tool_preferences '
+                'WHERE usage_count > 0 '
+                'ORDER BY last_used_at DESC'
+            )
+            tool_rows = cursor.fetchall()
+            cursor.close()
+
+        rows = []
+        for row in tool_rows:
+            tool_name = row[0]
+            usage_count = row[1] or 0
+            success_count = row[2] or 0
+            last_used_at = row[3] or ''
+            last_used = _relative_time(last_used_at) if last_used_at else 'never'
+            last_result = 'success' if success_count >= usage_count * 0.5 else 'failed'
+            summary = _tool_summary(tool_name)[:50]
+
+            rows.append(
+                f'| {tool_name:<15} | {summary:<50}| {usage_count:<4} | {last_used:<13} | {last_result:<11} |'
+            )
+        return rows
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] external_tool_rows failed: {e}')
+        return []
+
+
+def _tool_summary(tool_name: str) -> str:
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT short_summary FROM tool_capability_profiles WHERE tool_name = ? LIMIT 1',
+                (tool_name,)
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+    return ''
+
+
+# ── Scope 3: Reasoning State ─────────────────────────────────────
+
+
+def _scope_reasoning_state() -> str:
+    parts = []
+
+    # Focus session
+    focus_line = _reasoning_focus()
+    if focus_line:
+        parts.append(focus_line)
+
+    # Persistent tasks
+    task_line = _reasoning_persistent_tasks()
+    if task_line:
+        parts.append(task_line)
+
+    # Upcoming reminders
+    reminder_line = _reasoning_upcoming_reminders()
+    if reminder_line:
+        parts.append(reminder_line)
+
+    # Recent autonomous actions
+    action_line = _reasoning_recent_actions()
+    if action_line:
+        parts.append(action_line)
+
+    if not parts:
+        return 'No active reasoning state.'
+    return '\n'.join(parts)
+
+
+def _reasoning_focus() -> str:
+    try:
+        from services.focus_session_service import FocusSessionService
+        from services.memory_client import MemoryClientService
+
+        # Try to find the most recent active focus session by scanning known threads
+        store = MemoryClientService.create_connection()
+        thread_id = store.get('recent_thread_id') or ''
+
+        if thread_id:
+            session = FocusSessionService().get_focus(thread_id)
+            if session:
+                desc = session.get('description', '').strip()
+                if desc:
+                    return f"Currently focused on '{desc}'."
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] reasoning_focus failed: {e}')
+    return ''
+
+
+def _reasoning_persistent_tasks() -> str:
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT goal, status, iterations_used "
+                "FROM persistent_tasks "
+                "WHERE status IN ('accepted', 'in_progress', 'paused') "
+                "ORDER BY updated_at DESC LIMIT 5"
             )
             rows = cursor.fetchall()
             cursor.close()
-        return [
-            {'event_type': r[0], 'payload_summary': str(r[1] if isinstance(r[1], dict) else {})[:200], 'created_at': str(r[2])}
-            for r in rows
-        ]
-    except Exception:
-        return []
+
+        if not rows:
+            return ''
+
+        count = len(rows)
+        summaries = []
+        for row in rows:
+            goal = (row[0] or '').strip()[:40]
+            status = row[1] or ''
+            summaries.append(f"'{goal}' ({status})")
+
+        label = 'persistent task' if count == 1 else 'persistent tasks'
+        return f'{count} {label}: {", ".join(summaries)}.'
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] reasoning_persistent_tasks failed: {e}')
+        return ''
 
 
-def _get_skill_stats(topic: str) -> dict:
-    """Full skill stats (weight, successes, failures, reliability) for all actions."""
+def _reasoning_upcoming_reminders() -> str:
     try:
-        from services.procedural_memory_service import ProceduralMemoryService
         from services.database_service import get_shared_db_service
-        service = ProceduralMemoryService(get_shared_db_service())
-        stats = {}
-        for action_name in service.get_all_policy_weights():
-            action_stats = service.get_action_stats(action_name)
-            if action_stats:
-                attempts = action_stats.get('total_attempts', 0)
-                successes = action_stats.get('total_successes', 0)
-                avg_reward = action_stats.get('avg_reward', 0) or 0
-                smoothed = (successes + 1) / (attempts + 2) if attempts > 0 else 0.5
-                stats[action_name] = {
-                    "weight": round(action_stats.get('weight', 1.0), 3),
-                    "successes": successes,
-                    "failures": attempts - successes,
-                    "avg_reward": round(avg_reward, 2),
-                    "reliability": round(smoothed, 3),
-                }
-        return stats
-    except Exception:
-        return {}
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT message, due_at FROM scheduled_items "
+                "WHERE status = 'pending' AND due_at > datetime('now') "
+                "ORDER BY due_at ASC LIMIT 5"
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+
+        if not rows:
+            return ''
+
+        count = len(rows)
+        next_msg = (rows[0][0] or '').strip()[:40]
+        next_due = _relative_time(rows[0][1]) if rows[0][1] else 'soon'
+        label = 'upcoming reminder' if count == 1 else 'upcoming reminders'
+        return f"{count} {label} (next: '{next_msg}' in {next_due})."
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] reasoning_upcoming_reminders failed: {e}')
+        return ''
 
 
-def _get_tool_details() -> dict:
-    """Full manifest details for all loaded tools."""
+def _reasoning_recent_actions() -> str:
+    RELEVANT_TYPES = ('proactive_sent', 'cron_tool_executed', 'plan_proposed')
     try:
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        details = {}
-        for tool_name in registry.get_tool_names():
-            manifest = registry.get_tool_full_description(tool_name)
-            if manifest:
-                details[tool_name] = {
-                    "description": manifest.get("description", ""),
-                    "tips": manifest.get("tips", []),
-                    "examples": manifest.get("examples", []),
-                    "constraints": manifest.get("constraints", {}),
-                }
-        return details
-    except Exception:
-        return {}
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        placeholders = ','.join(['?'] * len(RELEVANT_TYPES))
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f'SELECT event_type, payload, created_at '
+                f'FROM interaction_log '
+                f'WHERE event_type IN ({placeholders}) '
+                f'ORDER BY created_at DESC LIMIT 3',
+                RELEVANT_TYPES
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+
+        if not rows:
+            return ''
+
+        summaries = []
+        for row in rows:
+            event_type = row[0] or ''
+            created_at = row[2] or ''
+            when = _relative_time(created_at) if created_at else 'recently'
+            label = _action_label(event_type)
+            summaries.append(f'{label} {when}')
+
+        return 'Recent: ' + ', '.join(summaries) + '.'
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] reasoning_recent_actions failed: {e}')
+        return ''
 
 
-def _get_filtered_tool_details(tool_names: list) -> dict:
-    """Get manifest details for specific tools only (triage-selected)."""
-    all_details = _get_tool_details()
-    return {k: v for k, v in all_details.items() if k in tool_names}
+def _action_label(event_type: str) -> str:
+    labels = {
+        'proactive_sent': 'sent proactive message',
+        'cron_tool_executed': 'ran scheduled tool',
+        'plan_proposed': 'proposed plan',
+    }
+    return labels.get(event_type, event_type.replace('_', ' '))
 
 
-# ── Formatting ──────────────────────────────────────────────────
+# ── Scope 4: Identity Snapshot ───────────────────────────────────
 
 
-def _format_snapshot(snapshot: dict, extra: dict, topic: str) -> str:
-    """Format self-model snapshot + topic extras as structured report."""
-    ep = snapshot.get("epistemic", {})
-    op = snapshot.get("operational", {})
-    cap = snapshot.get("capability", {})
-    noteworthy = snapshot.get("noteworthy", [])
+def _scope_identity_snapshot() -> str:
+    parts = []
 
-    lines = [f"[INTROSPECT] Internal state for topic '{topic}':"]
-
-    # Epistemic
-    lines.append(f"  context_warmth: {ep.get('context_warmth', 0)}")
-    lines.append(f"  working_memory_depth: {ep.get('working_memory_depth', 0)}")
-    lines.append(f"  topic_age: {ep.get('topic_age', 'unknown')}")
-    lines.append(f"  partial_match_signal: {ep.get('partial_match_signal', 0)}")
-    lines.append(f"  recall_failure_rate: {ep.get('recall_failure_rate', 0)}")
-    lines.append(f"  focus_active: {ep.get('focus_active', False)}")
+    # Relationship depth from interaction count
+    interaction_label = _identity_relationship_depth()
+    if interaction_label:
+        parts.append(interaction_label)
 
     # Communication style
-    comm_style = extra.get('communication_style', {})
-    if comm_style:
-        style_str = ", ".join(f"{k}={v}" for k, v in comm_style.items())
-        lines.append(f"  communication_style: {{{style_str}}}")
-    else:
-        lines.append("  communication_style: (not detected yet)")
+    style_line = _identity_communication_style()
+    if style_line:
+        parts.append(style_line)
 
-    # Recent modes
-    modes = ep.get('recent_modes', [])
-    lines.append(f"  recent_modes: {modes}" if modes else "  recent_modes: (none)")
+    # Personality from identity vectors
+    personality_line = _identity_personality()
+    if personality_line:
+        parts.append(personality_line)
 
-    # Skill stats (full detail from extra, not condensed)
-    skill_stats = extra.get('skill_stats', {})
-    if skill_stats:
-        lines.append("  skill_stats:")
-        for skill, stats in skill_stats.items():
-            lines.append(f"    {skill}: {stats}")
-    else:
-        lines.append("  skill_stats: (no data yet)")
+    # Autobiography recency
+    auto_line = _identity_autobiography()
+    if auto_line:
+        parts.append(auto_line)
 
-    # World state
-    ws = extra.get('world_state', '')
-    lines.append(f"  world_state: {ws.strip()}" if ws and ws.strip() else "  world_state: (empty)")
-
-    # Operational awareness (NEW — from self-model)
-    if noteworthy:
-        lines.append("  noteworthy_state:")
-        for item in noteworthy:
-            lines.append(f"    - [{item['severity']:.1f}] {item['signal']}")
-    else:
-        lines.append("  noteworthy_state: (all systems nominal)")
-
-    # Capability summary
-    lines.append(f"  tool_count: {cap.get('tool_count', 0)}")
-    cats = cap.get('capability_categories', {})
-    if cats:
-        lines.append("  capabilities: " + "; ".join(f"{c}: {', '.join(t)}" for c, t in cats.items()))
-
-    # Decision explanations
-    decision_exps = extra.get('decision_explanations', [])
-    if decision_exps:
-        lines.append("  recent_decision_explanations:")
-        for i, exp in enumerate(decision_exps):
-            lines.append(f"    [{i+1}] mode={exp['mode']}, confidence={exp['confidence']}, margin={exp['margin']}")
-            if exp.get('scores'):
-                lines.append(f"        scores: {exp['scores']}")
-            if exp.get('key_signals'):
-                lines.append(f"        key_signals: {exp['key_signals']}")
-            if exp.get('tiebreaker_used'):
-                lines.append(f"        tiebreaker between: {exp.get('tiebreaker_candidates')}")
-    else:
-        lines.append("  recent_decision_explanations: (none in last hour)")
-
-    # Autonomous actions
-    auto_actions = extra.get('recent_autonomous_actions', [])
-    if auto_actions:
-        lines.append("  recent_autonomous_actions:")
-        for a in auto_actions:
-            lines.append(f"    - {a['event_type']} at {a['created_at']}: {a['payload_summary'][:100]}")
-    else:
-        lines.append("  recent_autonomous_actions: (none recently)")
-
-    # Tool details (triage-selected)
-    tool_details = extra.get('tool_details')
-    if tool_details:
-        lines.append("  tool_details (triage-selected):")
-        for tname, tinfo in tool_details.items():
-            lines.append(f"    {tname}:")
-            if tinfo.get('tips'):
-                lines.append(f"      tips: {tinfo['tips']}")
-            if tinfo.get('constraints'):
-                lines.append(f"      constraints: {tinfo['constraints']}")
-            if tinfo.get('examples'):
-                examples_short = [str(e)[:120] for e in tinfo['examples'][:3]]
-                lines.append(f"      examples: {examples_short}")
-
-    return "\n".join(lines)
+    if not parts:
+        return 'Identity data unavailable.'
+    return ' '.join(parts)
 
 
-# ── Legacy fallback ─────────────────────────────────────────────
+def _identity_relationship_depth() -> str:
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM interaction_log')
+            row = cursor.fetchone()
+            cursor.close()
+
+        count = row[0] if row else 0
+
+        if count < 50:
+            depth = 'new'
+        elif count < 500:
+            depth = 'developing'
+        elif count < 2000:
+            depth = 'established'
+        else:
+            depth = 'deep'
+
+        return f'Relationship: {depth} (~{count:,} interactions).'
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] identity_relationship_depth failed: {e}')
+        return ''
 
 
-def _legacy_handle_introspect(topic: str, params: dict) -> str:
-    """Standalone introspect without self-model (fallback)."""
-    from services.memory_client import MemoryClientService
-    store = MemoryClientService.create_connection()
+def _identity_communication_style() -> str:
+    try:
+        from services.user_trait_service import UserTraitService
+        from services.database_service import get_shared_db_service
 
-    state = {}
-    state["working_memory_depth"] = store.llen(f"working_memory:{topic}")
+        db = get_shared_db_service()
+        style = UserTraitService(db).get_communication_style()
+        if not style:
+            return ''
 
-    wm_score = min(1.0, state["working_memory_depth"] / 4.0)
-    state["context_warmth"] = round(wm_score, 3)
-    state["partial_match_signal"] = _get_fok_signal(topic)
-    state["recall_failure_rate"] = _get_recall_failure_rate(topic)
-    state["world_state"] = _get_world_state(topic)
-    state["topic_age"] = "unknown"
-    state["recent_modes"] = []
-    state["skill_stats"] = _get_skill_stats(topic)
-    state["focus_active"] = False
-    state["communication_style"] = _get_communication_style()
-    state["decision_explanations"] = _get_recent_decision_explanations()
-    state["recent_autonomous_actions"] = _get_recent_autonomous_actions()
+        descriptors = []
 
-    triage_tools = params.get('triage_tools', [])
-    if triage_tools:
-        state["tool_details"] = _get_filtered_tool_details(triage_tools)
+        verbosity = style.get('verbosity')
+        if verbosity is not None:
+            for threshold, label in _VERBOSITY_LABELS:
+                if verbosity >= threshold:
+                    descriptors.append(label)
+                    break
 
-    return _legacy_format(state, topic)
+        directness = style.get('directness')
+        if directness is not None:
+            for threshold, label in _DIRECTNESS_LABELS:
+                if directness >= threshold:
+                    descriptors.append(label)
+                    break
+
+        formality = style.get('formality')
+        if formality is not None:
+            for threshold, label in _FORMALITY_LABELS:
+                if formality >= threshold:
+                    descriptors.append(label)
+                    break
+
+        if not descriptors:
+            return ''
+        return f'Communication style: {", ".join(descriptors)}.'
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] identity_communication_style failed: {e}')
+        return ''
 
 
-def _legacy_format(state: Dict, topic: str) -> str:
-    """Format state dict in legacy format."""
-    lines = [f"[INTROSPECT] Internal state for topic '{topic}':"]
-    for key in ['context_warmth', 'working_memory_depth', 'topic_age',
-                'partial_match_signal', 'recall_failure_rate']:
-        lines.append(f"  {key}: {state.get(key, 'N/A')}")
-    lines.append(f"  focus_active: {state.get('focus_active', False)}")
-    return "\n".join(lines)
+def _identity_personality() -> str:
+    try:
+        from services.identity_service import IdentityService
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        vectors = IdentityService(db).get_vectors()
+        if not vectors:
+            return ''
+
+        # Pick top dimensions by current_activation, threshold > 0.6
+        scored = []
+        for dim_name, data in vectors.items():
+            activation = data.get('current_activation', 0.0)
+            if activation > 0.6 and dim_name in _DIMENSION_LABELS:
+                scored.append((activation, _DIMENSION_LABELS[dim_name]))
+
+        scored.sort(reverse=True)
+        top = [label for _, label in scored[:3]]
+        if not top:
+            return ''
+        return f'Personality leans toward {" and ".join(top)}.'
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] identity_personality failed: {e}')
+        return ''
+
+
+def _identity_autobiography() -> str:
+    try:
+        from services.autobiography_service import AutobiographyService
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        narrative = AutobiographyService(db).get_current_narrative()
+        if not narrative:
+            return 'No self-narrative synthesized yet.'
+
+        created_at = narrative.get('created_at', '')
+        if created_at:
+            when = _relative_time(created_at)
+            return f'Self-narrative last updated {when}.'
+        return 'Self-narrative exists.'
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] identity_autobiography failed: {e}')
+        return ''
+
+
+# ── Time helpers ─────────────────────────────────────────────────
+
+
+def _relative_time(dt_value) -> str:
+    """Convert a datetime string or object to a human-readable relative string."""
+    try:
+        dt = parse_utc(dt_value)
+        now = utc_now()
+        delta = now - dt
+        seconds = int(delta.total_seconds())
+
+        if seconds < 0:
+            return 'in the future'
+        if seconds < 60:
+            return 'just now'
+        if seconds < 3600:
+            mins = seconds // 60
+            unit = 'min' if mins == 1 else 'min'
+            return f'{mins} {unit} ago'
+        if seconds < 86400:
+            hours = seconds // 3600
+            unit = 'hour' if hours == 1 else 'hours'
+            return f'{hours} {unit} ago'
+        days = seconds // 86400
+        unit = 'day' if days == 1 else 'days'
+        return f'{days} {unit} ago'
+    except Exception:
+        return 'unknown'

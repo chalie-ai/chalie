@@ -1,8 +1,8 @@
 """
-Find Tools Skill — On-demand external tool discovery.
+Find Tools Skill — On-demand tool discovery.
 
 Cognitive primitive: always available in ACT mode. Lets Chalie search for
-external capabilities (tools and interface actions) by semantic query instead
+capabilities (tools and interface actions) by semantic query instead
 of having all tool descriptions pre-injected into the prompt.
 
 Search queries `tool_capability_profiles_vec` (same embeddings used by triage).
@@ -23,7 +23,7 @@ LOG_PREFIX = "[FIND_TOOLS]"
 
 def handle_find_tools(topic: str, params: dict) -> str:
     """
-    Discover external tools by semantic search or get invocation details.
+    Discover tools by semantic search or get invocation details.
 
     Args:
         topic: Current conversation topic (unused, present for handler contract)
@@ -96,13 +96,13 @@ def _search_tools(params: dict) -> str:
         return _fallback_keyword_search(query, limit)
 
     if not rows:
-        return f"{LOG_PREFIX} No tools found matching '{query}'. No external capabilities are currently registered."
+        return f"{LOG_PREFIX} No tools found matching '{query}'. No capabilities are currently registered."
 
-    # Filter to only external tools (not innate skills) and check availability
+    # Filter to only registered tools (not innate skills) and check availability
     available_tools = _filter_available(rows)
 
     if not available_tools:
-        return f"{LOG_PREFIX} No available external tools match '{query}'. Only innate skills matched — those are already at your disposal."
+        return f"{LOG_PREFIX} No available tools match '{query}'. Only innate skills matched — those are already at your disposal."
 
     # Cap to requested limit
     available_tools = available_tools[:limit]
@@ -111,7 +111,7 @@ def _search_tools(params: dict) -> str:
 
 
 def _filter_available(rows: list) -> List[Dict]:
-    """Filter vec search results to only available, ready external tools."""
+    """Filter vec search results to available, ready tools."""
     try:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()

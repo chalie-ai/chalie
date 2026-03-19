@@ -67,14 +67,23 @@ The router naturally shifts behavior as memory accumulates:
 
 ## Innate Skills (Action Types)
 
-The ACT loop uses 8 innate cognitive skills. All are non-LLM operations (fast, sub-cortical).
+The ACT loop uses cognitive primitives (always available) and contextual skills (discovered on-demand via `find_skills`). All are non-LLM operations (fast, sub-cortical).
+
+**Cognitive Primitives** (always injected into every ACT prompt):
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
 | `recall` | memory | <500ms | Unified retrieval across ALL memory layers (working memory, episodes, concepts, user_traits) |
 | `memorize` | memory | <50ms | Explicit memory encoding |
-| `introspect` | perception | <100ms | Self-examination: context_warmth, FOK signal, recall_failure_rate, skill stats, world state, decision explanations (routing audit), recent autonomous actions |
 | `associate` | cognition | <500ms | Spreading activation from seed concepts through semantic graph |
+| `find_tools` | discovery | <100ms | Discover registered tools via semantic search against tool capability profiles |
+| `find_skills` | discovery | <100ms | Discover innate cognitive skills by describing what you need |
+
+**Contextual Skills** (discovered on-demand via `find_skills`):
+
+| Skill | Category | Speed | Purpose |
+|---|---|---|---|
+| `introspect` | perception | <100ms | 4-scope natural-language internal state report (memory health, skill/tool usage, reasoning state, identity); supports "why did you do that?" via routing audit trail and autonomous action history |
 | `schedule` | scheduling | <100ms | Create/list/cancel reminders and tasks stored in Chalie's own memory |
 | `autobiography` | narrative | <500ms | Retrieve synthesized user narrative covering identity, relationship arc, values, patterns, active threads |
 | `list` | lists | <50ms | Create and manage deterministic lists (shopping, to-do, chores); add/remove/check items, view, history |
@@ -203,24 +212,20 @@ Used for: offline tuning, detecting unstable routing regions, hysteresis trigger
 
 The ACT loop executes internal actions with safety limits. No decision gate or net value evaluation — the router already decided this is an ACT situation.
 
-### Triage-Driven Skill Injection
+### Skill Injection
 
-The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder. The ONNX skill-selector pre-filter decides which of the 14 innate skills to inject into each ACT prompt — only the relevant skill docs are included, reducing prompt size significantly.
+The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder.
 
-**Cognitive primitives** (`recall`, `memorize`, `introspect`) are always injected for ACT regardless of triage output. Up to 3 contextual skills are added based on triage reasoning.
+**Cognitive primitives** (`recall`, `memorize`, `associate`, `find_tools`, `find_skills`) are always injected into every ACT prompt. Contextual skills are not pre-injected — the LLM discovers them on-demand by calling `find_skills` during the ACT loop.
 
-**Skill doc files** live in `backend/prompts/skills/{skill}.md` — one file per skill. `FrontalCortexService._get_injected_skills()` loads only the selected files at call time.
-
-**Skill selection output** is validated through a whitelist (`_VALID_SKILLS`), deduplicated, primitives enforced, and contextual skills sorted and capped at `MAX_CONTEXTUAL_SKILLS = 3`. The result flows from `MessageGateService.prefilter_skills()` → `selected_skills` → `context_snapshot['triage_selected_skills']` → `tool_worker` / `generate_with_act_loop` → `FrontalCortexService.generate_response(selected_skills=...)`.
-
-**Token impact:** ACT static template ~300 tokens (was ~2,787). Typical ACT call injects ~300–550 tokens of skill docs (4 files) vs. ~1,200 tokens always before.
+**Skill doc files** live in `backend/prompts/skills/{skill}.md` — one file per skill. `FrontalCortexService._get_injected_skills()` loads only the primitive skill files at call time.
 
 ### Flow
 1. Router selects ACT mode
-2. Triage selects skills (primitives + contextual); injected into `frontal-cortex-act.md` via `{{injected_skills}}`
+2. Cognitive primitives injected into `frontal-cortex-act.md` via `{{injected_skills}}`
 3. LLM generates actions via `frontal-cortex-act.md` (action planning only)
 4. Execute actions, append results to history
-5. Check continuation: timeout or max_iterations (default 5) → stop
+5. Check continuation: timeout or max_iterations (from config, default 50) → stop
 6. Otherwise loop (LLM re-plans with action results in context)
 7. After loop ends → **re-route** through router (excluding ACT) → terminal mode
 8. Generate terminal response via `generate_for_mode()`
@@ -229,7 +234,7 @@ The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{inject
 ```python
 def can_continue(self):
     if elapsed >= cumulative_timeout: return False, 'timeout'      # 60s default
-    if iteration_number >= max_iterations: return False, 'max_iterations'  # 5 default
+    if iteration_number >= max_iterations: return False, 'max_iterations'  # config default (50)
     return True, None
 ```
 

@@ -166,10 +166,9 @@ This phase produces the routing decision via a single deterministic gate. No LLM
 │  │                                                             │   │
 │  │  ONNX classifier: high-confidence conversational → RESPOND  │   │
 │  │  Everything else                                 → ACT      │   │
-│  │  ONNX skill pre-filter: predicts required skills for ACT    │   │
 │  │                                                             │   │
 │  │  RESPOND ──► PATH C (RESPOND fast-path)                    │   │
-│  │  ACT      ──► PATH B (ACT pipeline + ONNX skill pre-filter) │   │
+│  │  ACT      ──► PATH B (ACT pipeline)                        │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
@@ -271,8 +270,10 @@ Triggered when `MessageGateService` routes to the ACT pipeline, or when the mode
 │  │     ActDispatcherService                                     │  │
 │  │     Chains outputs: result[N] → input[N+1]                  │  │
 │  │     Action types:                                            │  │
-│  │       recall, memorize, introspect, associate               │  │
+│  │       recall, memorize, associate, find_tools, find_skills  │  │
+│  │       (cognitive primitives, always available)              │  │
 │  │       schedule, list, focus, persistent_task                │  │
+│  │       (contextual, discovered via find_skills)              │  │
 │  │       (+ external tools via tool_worker thread)             │  │
 │  │                                                              │  │
 │  │  4. Accumulate fatigue               ⚡ DET                 │  │
@@ -301,7 +302,7 @@ Triggered when `MessageGateService` routes to the ACT pipeline, or when the mode
 
 ## 5. Path B — ACT → Tool Worker (PromptQueue)
 
-Triggered when `MessageGateService` routes to the ACT pipeline and the ONNX skill pre-filter identifies specific tools.
+Triggered when `MessageGateService` routes to the ACT pipeline.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -596,7 +597,6 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 - IIP hook (regex)
 - Intent classifier
 - MessageGateService (empty guard, CANCEL detection, ONNX mode gate)
-- ONNX skill pre-filter
 - Mode router scoring (non-user flows)
 - Fatigue budget check in ACT loop
 - Termination checks
