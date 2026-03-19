@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document defines the cognitive architecture for mode routing and response generation. User input flows through classification, **deterministic mode routing** (~5ms), and mode-specific LLM generation.
+This document defines the cognitive architecture for mode routing and response generation. User messages now use a **unified generation path** (single LLM call, no routing split). The deterministic mode router described below remains active for **non-user flows** (cognitive drift, proactive notifications, fallback paths).
 
 Mode selection is decoupled from response generation. A mathematical router selects the engagement mode using observable signals, then a mode-specific prompt drives the LLM to generate the response. A small LLM tie-breaker handles ambiguous cases.
 

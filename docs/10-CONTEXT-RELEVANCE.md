@@ -278,6 +278,8 @@ pytest backend/tests/test_context_relevance_service.py -v
 
 ### Mode-Specific Optimization
 
+The `UNIFIED` mask is used for all user messages (the unified generation path). `RESPOND` and `ACT` masks remain active for background workers (tool_worker, persistent_task_worker, etc.).
+
 Adjust template masks per mode to match your mode-specific templates:
 
 ```json
