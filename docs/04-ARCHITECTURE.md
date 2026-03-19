@@ -110,7 +110,7 @@ frontend/
 - **`tool_subprocess_service.py`** — Subprocess execution for tools; IPC contract: base64 JSON in, JSON out; runs as a Python subprocess
 - **`tool_config_service.py`** — Tool configuration persistence; webhook key generation (HMAC-SHA256 + replay protection via X-Chalie-Signature/X-Chalie-Timestamp)
 - **`tool_performance_service.py`** — Performance metrics tracking; correctness-biased ranking (50% success_rate, 15% speed, 15% reliability, 10% cost, 10% preference); post-triage tool reranking; user correction propagation; 30-day preference decay
-- **`tool_profile_service.py`** — LLM-generated tool capability profiles with `triage_triggers` (short action verbs injected into triage prompt for vocabulary bridging), `short_summary`, `full_profile`, and `usage_scenarios`; MemoryStore-cached triage summaries (5min TTL)
+- **`tool_profile_service.py`** — LLM-generated tool capability profiles with `short_summary`, `full_profile`, `triage_triggers`, and `usage_scenarios`; profiles power the `find_tools` innate skill (semantic search against capability embeddings in `tool_capability_profiles_vec`)
 - **Webhook endpoint** (`/api/tools/webhook/<name>`) — External tool triggers with HMAC-SHA256 or simple token auth, 30 req/min rate limit, 512KB payload cap
 
 #### Identity & Learning
