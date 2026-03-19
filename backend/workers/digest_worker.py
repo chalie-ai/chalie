@@ -810,19 +810,319 @@ def _generate_with_act_orchestrator(
     return terminal_response
 
 
+def unified_generate(topic, text, classification, thread_conv_service,
+                     cortex_config, cortex_prompt_map, signals,
+                     metadata=None, thread_id=None,
+                     returning_from_silence=False, message_embedding=None):
+    """
+    Unified generation — single LLM call with skills discoverable via find_skills/find_tools.
+
+    The LLM decides whether to respond directly (Format B) or invoke
+    skills/tools first (Format A). No mode routing.
+
+    Returns:
+        tuple: (response_data dict, routing_result dict)
+    """
+    from services.config_service import ConfigService
+
+    prompt = cortex_prompt_map['UNIFIED']
+
+    # Load unified config
+    try:
+        config = ConfigService.resolve_agent_config("frontal-cortex-unified")
+        logging.info(f"[UNIFIED] Using config frontal-cortex-unified.json with model {config.get('model')}")
+    except Exception as e:
+        logging.warning(f"[UNIFIED] Config frontal-cortex-unified.json not found, using base config: {e}")
+        config = cortex_config
+
+    # Compute context inclusion map
+    inclusion_map = None
+    try:
+        context_relevance_service = get_context_relevance_service()
+        inclusion_map = context_relevance_service.compute_inclusion_map(
+            mode='UNIFIED',
+            signals=signals or {},
+            classification=classification,
+            returning_from_silence=returning_from_silence,
+        )
+    except Exception as e:
+        logging.warning(f"[UNIFIED] Context relevance computation failed: {e}, proceeding without inclusion_map")
+
+    # Assemble context
+    assembled_context = None
+    try:
+        assembled_context = get_context_assembly_service().assemble(
+            prompt=text,
+            topic=topic,
+            thread_id=thread_id,
+            message_embedding=message_embedding,
+        )
+    except Exception as e:
+        logging.warning(f"[UNIFIED] Context assembly failed: {e}")
+
+    # Contradiction detection — always run for unified (every message may be conversational)
+    if assembled_context is not None:
+        try:
+            from services.contradiction_classifier_service import ContradictionClassifierService
+            from services.uncertainty_service import UncertaintyService
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            classifier = ContradictionClassifierService(db_service=db)
+            conflict = classifier.check_ingestion(text)
+            if conflict:
+                conflict_type = conflict.get('classification')
+                mem_a = conflict.get('memory_a', {})
+                mem_b = conflict.get('memory_b', {})
+                unc_svc = UncertaintyService(db)
+
+                if conflict_type == 'temporal_change' and conflict.get('temporal_signal'):
+                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
+                        unc_id = unc_svc.create_uncertainty(
+                            memory_a_type=mem_b['type'],
+                            memory_a_id=mem_b['id'],
+                            uncertainty_type='contradiction',
+                            detection_context='ingestion',
+                            reasoning=conflict.get('reasoning'),
+                            temporal_signal=True,
+                        )
+                        unc_svc.resolve_uncertainty(
+                            uncertainty_id=unc_id,
+                            strategy='temporal_supersede',
+                            detail=conflict.get('reasoning', ''),
+                        )
+                elif conflict_type in ('true_contradiction', 'context_dependent'):
+                    assembled_context['contradiction_context'] = {
+                        'classification': conflict_type,
+                        'memory_a_text': mem_a.get('text', ''),
+                        'memory_b_text': mem_b.get('text', ''),
+                        'reasoning': conflict.get('reasoning', ''),
+                        'surface_context': conflict.get('surface_context', ''),
+                    }
+                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
+                        unc_svc.create_uncertainty(
+                            memory_a_type=mem_b['type'],
+                            memory_a_id=mem_b['id'],
+                            uncertainty_type='contradiction',
+                            detection_context='ingestion',
+                            reasoning=conflict.get('reasoning'),
+                            temporal_signal=False,
+                            surface_context=conflict.get('surface_context'),
+                        )
+        except Exception as e:
+            logging.debug(f"[UNIFIED] Ingestion contradiction check skipped: {e}")
+
+    # Inject visual context from attached images
+    image_contexts = (metadata or {}).get('image_contexts', [])
+    if image_contexts:
+        if assembled_context is None:
+            assembled_context = {}
+        assembled_context['visual_context'] = _format_visual_context(image_contexts)
+
+    # Propagate message embedding for WorldStateService semantic scoring
+    if message_embedding is not None:
+        if assembled_context is None:
+            assembled_context = {}
+        assembled_context['message_embedding'] = message_embedding
+
+    cortex_service = FrontalCortexService(config)
+    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
+
+    # First LLM call — let the model decide: Format A (actions) or Format B (direct)
+    first_response = cortex_service.generate_response(
+        system_prompt_template=prompt,
+        original_prompt=text,
+        classification=classification,
+        chat_history=chat_history,
+        act_history="(none)",
+        thread_id=thread_id,
+        returning_from_silence=returning_from_silence,
+        inclusion_map=inclusion_map,
+        assembled_context=assembled_context,
+    )
+
+    routing_result = {
+        'mode': 'RESPOND',
+        'router_confidence': 1.0,
+        'routing_source': 'unified',
+        'routing_time_ms': 0.0,
+        'scores': {'UNIFIED': 1.0},
+    }
+
+    # Check if the model wants to invoke skills/tools (Format A: non-empty actions list)
+    if not first_response.get('actions'):
+        # Format B — direct response, no ACT loop needed
+        first_response['mode'] = 'RESPOND'
+        if not first_response.get('response', '').strip():
+            first_response['response'] = "I understand. Let me think about that."
+        return first_response, routing_result
+
+    # Format A — enter ACT loop with unified prompt
+    from services.act_orchestrator_service import ACTOrchestrator
+    from services.act_loop_service import ActLoopService
+
+    act_cumulative_timeout = config.get('act_cumulative_timeout', cortex_config.get('act_cumulative_timeout', 60.0))
+    act_per_action_timeout = config.get('act_per_action_timeout', cortex_config.get('act_per_action_timeout', 10.0))
+    max_act_iterations = config.get('max_act_iterations', cortex_config.get('max_act_iterations', 5))
+
+    # Reuse the inclusion_map and assembled_context from the initial call —
+    # UNIFIED mask is already the union of RESPOND and ACT, no need to recompute
+
+    orchestrator = ACTOrchestrator(
+        config=cortex_config,
+        max_iterations=max_act_iterations,
+        cumulative_timeout=act_cumulative_timeout,
+        per_action_timeout=act_per_action_timeout,
+        critic_enabled=True,
+        smart_repetition=True,
+        escalation_hints=True,
+        persistent_task_exit=True,
+        execution_gate=False,  # User explicitly requested this action — skip autonomous gate
+    )
+
+    # Narration callback: stream progress to user via WebSocket
+    request_uuid = (metadata or {}).get('uuid', '')
+
+    def _narration_callback(narration_text, step):
+        """Publish narration to the per-request SSE channel."""
+        logging.info(f"[UNIFIED] Narration callback fired: step={step}, text={narration_text[:60]}")
+        if not request_uuid:
+            logging.warning("[UNIFIED] Narration skipped — no request_uuid")
+            return
+        try:
+            import json as _json
+            from uuid import uuid4
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            narration_id = f"narr_{uuid4().hex[:12]}"
+            store.set(f"output:{narration_id}", _json.dumps({
+                'type': 'act_narration',
+                'text': narration_text,
+                'step': step,
+            }), ex=300)
+            store.publish(f"sse:{request_uuid}", narration_id)
+            logging.info(f"[UNIFIED] Narration published: {narration_id} → sse:{request_uuid[:12]}...")
+
+            # Emit show_narration intent for wrapper contract
+            try:
+                from services.intent_service import IntentService, CognitiveIntent, _make_intent_id
+                intent = CognitiveIntent(
+                    intent_id=_make_intent_id(),
+                    intent_type='show_narration',
+                    target_wrapper='__chat_ui__',
+                    payload={
+                        'request_id': request_uuid,
+                        'text': narration_text,
+                        'step': step,
+                    },
+                )
+                IntentService().emit(intent)
+            except Exception:
+                pass  # Non-critical — sse delivery is primary
+
+        except Exception as _e:
+            logging.error(f"[UNIFIED] Narration publish failed: {_e}", exc_info=True)
+
+    result = orchestrator.run(
+        topic=topic,
+        text=text,
+        cortex_service=cortex_service,
+        act_prompt=prompt,  # Unified prompt (not ACT-specific)
+        classification=classification,
+        chat_history=chat_history,
+        relevant_tools=None,
+        selected_skills=['find_skills', 'find_tools'],  # Only discovery tools
+        selected_tools=None,
+        assembled_context=assembled_context,
+        inclusion_map=inclusion_map,
+        on_narration=_narration_callback,
+        session_id='digest_unified',
+        exchange_id=(metadata or {}).get('exchange_id', 'unknown'),
+        request_id=request_uuid,
+    )
+
+    # Format act_history for synthesis call
+    _tmp = ActLoopService.__new__(ActLoopService)
+    _tmp.act_history = result.act_history
+    act_history_for_respond = _tmp.get_history_context()
+    logging.info(
+        f"[UNIFIED] Passing act_history to synthesis "
+        f"({len(act_history_for_respond)} chars, {len(result.act_history)} actions)"
+    )
+
+    # Card-only detection
+    _history = result.act_history
+
+    def _is_card_result(r):
+        rt = r.get('result')
+        return rt == '__CARD_ONLY__' or (isinstance(rt, str) and rt.startswith('__CARD_EMITTED__\n'))
+
+    _all_card_only = (
+        bool(_history)
+        and all(r.get('status') == 'success' for r in _history)
+        and all(_is_card_result(r) for r in _history)
+    )
+
+    _has_card_text = any(
+        isinstance(r.get('result'), str) and r['result'].startswith('__CARD_EMITTED__\n')
+        for r in _history
+    ) if _all_card_only else False
+
+    if _all_card_only and not _has_card_text:
+        logging.info(
+            "[UNIFIED] All actions emitted cards (no text) — skipping text response"
+        )
+        terminal_response = {
+            'mode': 'IGNORE',
+            'modifiers': [],
+            'response': '',
+            'generation_time': 0.0,
+            'actions': None,
+            'confidence': 1.0,
+        }
+    else:
+        # Synthesis call — use RESPOND mode for synthesis (RESPOND prompt handles act_history well)
+        terminal_response = generate_for_mode(
+            topic, text, 'RESPOND', classification,
+            thread_conv_service, cortex_config, cortex_prompt_map, metadata,
+            act_history_context=act_history_for_respond,
+            thread_id=thread_id,
+            signals=signals,
+        )
+
+    # Enqueue tool reflection
+    try:
+        from services.act_reflection_service import enqueue_tool_reflection
+        enqueue_tool_reflection(result.act_history, topic, text)
+    except Exception as _e:
+        logging.debug(f"[UNIFIED] Reflection enqueue skipped: {_e}")
+
+    # Carry over action history
+    terminal_response['actions'] = [
+        {'type': r['action_type'], 'status': r['status'], 'result': r['result']}
+        for r in result.act_history
+    ] if result.act_history else None
+
+    # Extract reply_actions from the last successful skill result (for UI buttons)
+    for entry in reversed(result.act_history):
+        if entry.get('status') == 'success' and entry.get('reply_actions'):
+            terminal_response['reply_actions'] = entry['reply_actions']
+            break
+
+    routing_result['mode'] = terminal_response.get('mode', 'RESPOND')
+    return terminal_response, routing_result
+
+
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, metadata=None, context_warmth=1.0,
                        pre_routing_result=None, relevant_tools=None, selected_tools=None,
                        selected_skills=None, thread_id=None, returning_from_silence=False,
                        message_embedding=None):
     """
-    Main routing + generation function.
+    Thin wrapper around unified_generate() — kept for backward compatibility.
 
-    Phase C: collect signals → route → generate for selected mode.
-
-    Args:
-        pre_routing_result: Optional pre-computed routing result from fast-path check.
-            When provided, skips the mode_router.route() call to avoid double routing.
+    Called by process_tool_dialog() and _handle_proactive_drift().
+    The mode_router and pre_routing_result parameters are accepted but unused —
+    unified_generate() handles routing internally.
 
     Returns:
         tuple: (response_data dict, routing_result dict)
@@ -834,100 +1134,19 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
         thread_id=thread_id,
     )
 
-    if pre_routing_result:
-        # Use pre-computed routing result — skip mode router and DB query entirely
-        routing_result = pre_routing_result
-        routing_result.setdefault('routing_source', 'triage')
-        selected_mode = routing_result['mode']
-        previous_mode = None
-        logging.info(f"[DIGEST] Using pre-routed mode: {selected_mode} (confidence={routing_result['router_confidence']:.3f}, source={routing_result.get('routing_source', 'triage')})")
-    else:
-        # Full mode router path — only used for proactive/drift and fallback callers
-        routing_decision_service = None
-        try:
-            from services.routing_decision_service import RoutingDecisionService
-            from services.database_service import get_shared_db_service
-            db_service = get_shared_db_service()
-            routing_decision_service = RoutingDecisionService(db_service)
-        except Exception as e:
-            logging.warning(f"[DIGEST] Routing decision logging not available: {e}")
-
-        # Get previous mode for anti-oscillation
-        previous_mode = None
-        if routing_decision_service:
-            previous_mode = routing_decision_service.get_previous_mode(topic)
-
-        # Store prompt text in signals for reflection service
-        signals['_prompt_text'] = text
-
-        # Route
-        routing_result = mode_router.route(signals, text, previous_mode=previous_mode)
-        routing_result['routing_source'] = 'mode_router'
-        selected_mode = routing_result['mode']
-
-        logging.info(f"[DIGEST] Mode router selected: {selected_mode} (confidence={routing_result['router_confidence']:.3f}, source=mode_router)")
-
-    # Log routing decision (all paths)
-    try:
-        exchange_id = thread_conv_service.get_latest_exchange_id(thread_id) if thread_id else "unknown"
-    except Exception:
-        exchange_id = "unknown"
-
-    routing_decision_service = None
-    try:
-        from services.routing_decision_service import RoutingDecisionService
-        from services.database_service import get_shared_db_service
-        db_service = get_shared_db_service()
-        routing_decision_service = RoutingDecisionService(db_service)
-    except Exception:
-        pass
-
-    # Generate based on selected mode
-    if selected_mode == 'ACT':
-        response_data = generate_with_act_loop(
-            topic, text, classification, thread_conv_service,
-            cortex_config, cortex_prompt_map, mode_router, signals,
-            metadata=metadata, context_warmth=context_warmth,
-            relevant_tools=relevant_tools,
-            selected_tools=selected_tools,
-            selected_skills=selected_skills,
-            thread_id=thread_id,
-        )
-    elif selected_mode == 'IGNORE':
-        response_data = {
-            'mode': 'IGNORE',
-            'modifiers': [],
-            'response': '',
-            'generation_time': 0.0,
-            'actions': None,
-            'confidence': 1.0,
-        }
-    else:
-        response_data = generate_for_mode(
-            topic, text, selected_mode, classification,
-            thread_conv_service, cortex_config, cortex_prompt_map, metadata,
-            thread_id=thread_id,
-            returning_from_silence=returning_from_silence,
-            signals=signals,
-            message_embedding=message_embedding,
-        )
-
-    # Log the routing decision AFTER generation so the recorded mode reflects the
-    # terminal mode (ACT loops may re-route to RESPOND after execution).
-    if routing_decision_service:
-        try:
-            terminal_routing = dict(routing_result)
-            terminal_mode = response_data.get('mode') or selected_mode
-            if terminal_mode and terminal_mode != terminal_routing.get('mode'):
-                terminal_routing['mode'] = terminal_mode
-            routing_decision_service.log_decision(
-                topic=topic,
-                exchange_id=exchange_id,
-                routing_result=terminal_routing,
-                previous_mode=previous_mode,
-            )
-        except Exception as e:
-            logging.warning(f"[DIGEST] Failed to log routing decision: {e}")
+    response_data, routing_result = unified_generate(
+        topic=topic,
+        text=text,
+        classification=classification,
+        thread_conv_service=thread_conv_service,
+        cortex_config=cortex_config,
+        cortex_prompt_map=cortex_prompt_map,
+        signals=signals,
+        metadata=metadata,
+        thread_id=thread_id,
+        returning_from_silence=returning_from_silence,
+        message_embedding=message_embedding,
+    )
 
     # Store response
     thread_conv_service.add_response(
@@ -960,8 +1179,6 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
 
             if orchestrator_result['status'] == 'error':
                 logging.error(f"[ORCHESTRATOR] Error: {orchestrator_result['message']}")
-                # Handler never ran — deliver the response directly so the WebSocket
-                # doesn't hang waiting for output that will never arrive.
                 try:
                     from services.output_service import OutputService
                     OutputService().enqueue_text(
@@ -980,12 +1197,6 @@ def route_and_generate(topic, text, classification, thread_conv_service, cortex_
             logging.error(f"[ORCHESTRATOR] Failed: {e}")
 
     # Signal completion for IGNORE/card-only mode on sync WebSocket channels.
-    # RESPOND handlers call OutputService.enqueue_text() which signals
-    # the WebSocket handler directly. For card-only ACT results that resolve to
-    # IGNORE, we also call enqueue_text() with an empty response so the frontend
-    # receives a proper `message` event (carrying exchange_id, topic, mode, etc.)
-    # before the `done` event — instead of jumping straight to a bare close signal
-    # that would leave responseMeta unpopulated on the client.
     if response_data.get('mode') == 'IGNORE' and metadata and metadata.get('uuid'):
         try:
             from services.output_service import OutputService
@@ -2420,155 +2631,11 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         f"complexity={intent['complexity']}, confidence={intent['confidence']:.2f}"
     )
 
-    # Step 10: Message Gate + Skill Pre-filter
-    is_fast_path_ack = False
+    # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None
     try:
-        from services.message_gate_service import MessageGateService
-        from services.tool_profile_service import ToolProfileService
-
-        gate_service = MessageGateService()
-
-        # WS3a: Image context for gate input
-        _triage_image_contexts = (metadata or {}).get('image_contexts', [])
-        gate_text = text
-        if _triage_image_contexts and (not text or text == '[Image attached]'):
-            _descs = [
-                ctx.get('description', '')
-                for ctx in _triage_image_contexts
-                if ctx.get('description')
-            ]
-            if _descs:
-                gate_text = f"[User sent image: {_descs[0][:200]}]"
-            else:
-                gate_text = "[User sent an image for analysis]"
-
-        gate_result = gate_service.gate(gate_text)
-
-        logging.info(
-            f"[DIGEST] Gate: route={gate_result.route}, "
-            f"confidence={gate_result.confidence:.2f}, "
-            f"time={gate_result.gate_time_ms:.1f}ms"
-        )
-
-        # ── RESPOND fast-path (high-confidence conversational) ──
-        if gate_result.route == 'respond' and gate_result.confidence >= 0.85:
-            # Cost optimisation: skip tool context for clear conversational messages
-            _nlp = compute_nlp_signals(text, intent)
-            _respond_signals = {
-                'context_warmth': context_warmth,
-                'working_memory_turns': working_memory_turns,
-                'gist_count': 0,
-                'fact_count': 0,
-                'fact_keys': [],
-                'world_state_present': bool(world_state and world_state.strip()),
-                'topic_confidence': classification_result.get('confidence', 0.5),
-                'is_new_topic': classification_result.get('is_new_topic', False),
-                'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
-                'memory_confidence': memory_confidence,
-            }
-            _respond_signals.update(_nlp)
-            _respond_signals['_prompt_text'] = text
-            _store_adaptive_signals(thread_id, text, signals=_respond_signals)
-            response_data, routing_result = route_and_generate(
-                topic, text, classification, thread_conv_service,
-                cortex_config, cortex_prompt_map, mode_router, _respond_signals,
-                metadata=metadata, context_warmth=context_warmth,
-                pre_routing_result={
-                    'mode': 'RESPOND',
-                    'router_confidence': gate_result.confidence,
-                    'routing_source': 'gate',
-                    'routing_time_ms': gate_result.gate_time_ms,
-                    'scores': {
-                        'RESPOND': gate_result.confidence,
-                        'ACT': round(1.0 - gate_result.confidence, 4),
-                    },
-                },
-                thread_id=thread_id,
-                returning_from_silence=returning_from_silence,
-                message_embedding=msg_embedding,
-            )
-
-        # ── ACT pipeline (everything else) ──
-        else:
-            # Inject only cognitive primitives — contextual skills discovered via find_skills
-            from services.innate_skills.registry import COGNITIVE_PRIMITIVES_ORDERED
-            selected_skills = list(COGNITIVE_PRIMITIVES_ORDERED)
-            selected_tools = None  # Tools discovered via find_tools
-
-            # Active tool work dedup
-            if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
-                dedup_response = _check_active_tool_work(text, topic)
-                if dedup_response:
-                    orchestrator = get_orchestrator()
-                    orchestrator.route_path('RESPOND', {
-                        'response': dedup_response,
-                        'confidence': 0.8,
-                        'topic': topic,
-                        'destination': metadata.get('destination', 'web'),
-                        'metadata': metadata,
-                    })
-                    working_memory.append_turn(thread_id, 'assistant', dedup_response)
-                    _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
-                    return f"Topic '{topic}' | DEDUP: active tool work in progress"
-
-            # Route through ACT
-            _act_nlp = compute_nlp_signals(text, intent)
-            _act_signals = {
-                'context_warmth': context_warmth,
-                'working_memory_turns': working_memory_turns,
-                'gist_count': 0,
-                'fact_count': 0,
-                'fact_keys': [],
-                'world_state_present': bool(world_state and world_state.strip()),
-                'topic_confidence': classification_result.get('confidence', 0.5),
-                'is_new_topic': classification_result.get('is_new_topic', False),
-                'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
-                'memory_confidence': memory_confidence,
-            }
-            _act_signals.update(_act_nlp)
-            _act_signals['_prompt_text'] = text
-
-            _use_unified = os.environ.get('UNIFIED_ACT_EXECUTION', 'true').lower() == 'true'
-            if _use_unified:
-                response_data, routing_result = route_and_generate(
-                    topic, text, classification, thread_conv_service,
-                    cortex_config, cortex_prompt_map, mode_router, _act_signals,
-                    metadata=metadata, context_warmth=context_warmth,
-                    pre_routing_result={
-                        'mode': 'ACT',
-                        'router_confidence': gate_result.confidence,
-                        'routing_source': 'gate',
-                        'routing_time_ms': gate_result.gate_time_ms,
-                        'scores': {
-                            'RESPOND': round(gate_result.confidence, 4),
-                            'ACT': round(1.0 - gate_result.confidence, 4),
-                        },
-                    },
-                    selected_tools=selected_tools if selected_tools else None,
-                    selected_skills=selected_skills if selected_skills else None,
-                    thread_id=thread_id,
-                )
-            else:
-                # Legacy async path
-                response_data = _handle_act_legacy(
-                    selected_tools, selected_skills, text, topic, thread_id, metadata,
-                    intent, working_memory, thread_conv_service,
-                    context_warmth, exchange_id,
-                )
-                routing_result = {
-                    'mode': 'ACT',
-                    'router_confidence': gate_result.confidence,
-                    'routing_source': 'gate',
-                    'routing_time_ms': gate_result.gate_time_ms,
-                }
-            is_fast_path_ack = True
-
-    except Exception as _gate_ex:
-        logging.error(f"[DIGEST] Gate dispatch failed: {_gate_ex}", exc_info=True)
-        # Fallback: route through RESPOND
-        _fb_nlp = compute_nlp_signals(text, intent)
-        _fallback_signals = {
+        _nlp = compute_nlp_signals(text, intent)
+        _signals = {
             'context_warmth': context_warmth,
             'working_memory_turns': working_memory_turns,
             'gist_count': 0,
@@ -2580,18 +2647,53 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'session_exchange_count': getattr(session_service, 'topic_exchange_count', 0) if session_service else 0,
             'memory_confidence': memory_confidence,
         }
-        _fallback_signals.update(_fb_nlp)
-        _fallback_signals['_prompt_text'] = text
-        response_data, routing_result = route_and_generate(
+        _signals.update(_nlp)
+        _signals['_prompt_text'] = text
+
+        # Active tool work dedup (preserved from ACT path)
+        if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
+            dedup_response = _check_active_tool_work(text, topic)
+            if dedup_response:
+                orchestrator = get_orchestrator()
+                orchestrator.route_path('RESPOND', {
+                    'response': dedup_response,
+                    'confidence': 0.8,
+                    'topic': topic,
+                    'destination': metadata.get('destination', 'web'),
+                    'metadata': metadata,
+                })
+                working_memory.append_turn(thread_id, 'assistant', dedup_response)
+                _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
+                return f"Topic '{topic}' | DEDUP: active tool work in progress"
+
+        _store_adaptive_signals(thread_id, text, signals=_signals)
+
+        response_data, routing_result = unified_generate(
             topic, text, classification, thread_conv_service,
-            cortex_config, cortex_prompt_map, mode_router, _fallback_signals,
-            metadata=metadata, context_warmth=context_warmth,
-            thread_id=thread_id,
+            cortex_config, cortex_prompt_map, _signals,
+            metadata=metadata, thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             message_embedding=msg_embedding,
         )
-        if routing_result:
-            routing_result.setdefault('routing_source', 'fallback')
+
+    except Exception as _gen_ex:
+        logging.error(f"[DIGEST] Unified generation failed: {_gen_ex}", exc_info=True)
+        # Fallback: minimal RESPOND
+        response_data = {
+            'mode': 'RESPOND',
+            'modifiers': [],
+            'response': "I ran into an issue processing that. Could you try again?",
+            'generation_time': 0.0,
+            'actions': None,
+            'confidence': 0.0,
+        }
+        routing_result = {
+            'mode': 'RESPOND',
+            'router_confidence': 0.0,
+            'routing_source': 'fallback',
+            'routing_time_ms': 0.0,
+            'scores': {},
+        }
 
     # Add response to exchange data
     exchange_data['response'] = {'message': response_data['response']}
@@ -2636,26 +2738,25 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
 
     # Step 11e: Detect saveable content in response
-    if not is_fast_path_ack:
-        try:
-            from services.save_suggestion_service import SaveSuggestionService
-            _save_svc = SaveSuggestionService()
-            # Text-heavy images (receipt, document photo) → trigger save suggestion
-            _image_ctxs_save = (metadata or {}).get('image_contexts', [])
-            _image_saveable = None
-            for _ictx in _image_ctxs_save:
-                if _ictx.get('has_text') and len(_ictx.get('ocr_text', '')) > 200:
-                    _image_saveable = {'content_type': 'image_document', 'topic': 'Captured document'}
-                    break
-            _saveable = _image_saveable or _save_svc.detect_saveable_content(
-                response_data['response'], topic, thread_id,
+    try:
+        from services.save_suggestion_service import SaveSuggestionService
+        _save_svc = SaveSuggestionService()
+        # Text-heavy images (receipt, document photo) → trigger save suggestion
+        _image_ctxs_save = (metadata or {}).get('image_contexts', [])
+        _image_saveable = None
+        for _ictx in _image_ctxs_save:
+            if _ictx.get('has_text') and len(_ictx.get('ocr_text', '')) > 200:
+                _image_saveable = {'content_type': 'image_document', 'topic': 'Captured document'}
+                break
+        _saveable = _image_saveable or _save_svc.detect_saveable_content(
+            response_data['response'], topic, thread_id,
+        )
+        if _saveable:
+            _save_svc.flag_saveable(
+                thread_id, topic, _saveable['content_type'], exchange_id,
             )
-            if _saveable:
-                _save_svc.flag_saveable(
-                    thread_id, topic, _saveable['content_type'], exchange_id,
-                )
-        except Exception as _save_e:
-            logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
+    except Exception as _save_e:
+        logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
 
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP
