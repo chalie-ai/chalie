@@ -336,6 +336,7 @@ def load_configs():
     respond_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-respond")
     # ACT does NOT get identity — reasoning stays pure
     act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
+    unified_prompt = soul_prompt + "\n\n" + identity_prompt + "\n\n" + ConfigService.get_agent_prompt("frontal-cortex-unified")
 
     return {
         'cortex': {
@@ -343,6 +344,7 @@ def load_configs():
             'prompt_map': {
                 'RESPOND': respond_prompt,
                 'ACT': act_prompt,
+                'UNIFIED': unified_prompt,
             }
         },
     }
