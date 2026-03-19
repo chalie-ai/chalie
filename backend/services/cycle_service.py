@@ -25,7 +25,7 @@ CYCLE_LIMITS = {
 }
 
 VALID_TYPES = {
-    'user_input', 'fast_response', 'tool_work', 'tool_result',
+    'user_input', 'fast_response', 'tool_result',
     'proactive_drift',
 }
 VALID_STATUSES = {'pending', 'processing', 'completed', 'failed', 'cancelled', 'suppressed', 'expired'}
@@ -59,7 +59,7 @@ class CycleService:
             content: Message content
             topic: Topic name
             cycle_type: One of VALID_TYPES
-            source: Origin ('user', 'system', 'tool_worker', 'drift_engine')
+            source: Origin ('user', 'system', 'drift_engine')
             parent_cycle_id: Parent cycle UUID (None for root cycles)
             intent: Classified intent metadata
             metadata: Additional metadata
@@ -332,18 +332,7 @@ class CycleService:
                     cursor.close()
                     return False
 
-                # Active background cycle count
-                cursor.execute("""
-                    SELECT COUNT(*) FROM message_cycles
-                    WHERE status = 'processing'
-                    AND cycle_type IN ('tool_work')
-                """)
-                active_bg = cursor.fetchone()[0]
                 cursor.close()
-
-                if active_bg >= CYCLE_LIMITS['max_active_background_cycles']:
-                    logger.info(f"[CYCLE] Spawn blocked: {active_bg} active bg cycles >= max {CYCLE_LIMITS['max_active_background_cycles']}")
-                    return False
 
             return True
 

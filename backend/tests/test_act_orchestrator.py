@@ -481,14 +481,6 @@ class TestConstructorParams:
         assert o.persistent_task_exit is True
         assert o.repetition_sim_threshold == 0.9
 
-    def test_tool_worker_profile(self):
-        """tool_worker uses: critic=True, smart_rep=True."""
-        o = ACTOrchestrator(
-            config={}, critic_enabled=True, smart_repetition=True,
-        )
-        assert o.critic_enabled
-        assert o.smart_repetition
-
     def test_digest_worker_profile(self):
         """digest_worker uses: critic=True, escalation_hints=True, PT exit=True."""
         o = ACTOrchestrator(

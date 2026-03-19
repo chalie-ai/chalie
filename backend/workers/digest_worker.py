@@ -1477,170 +1477,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         return f"Topic '{topic}' | ERROR: proactive - {e}"
 
 
-def _handle_tool_result(text: str, metadata: dict) -> str:
-    """
-    Handle response generation after background ACT loop completes.
-
-    Funnels through the standard UNIFIED mode (same path as synchronous ACT),
-    with stale suppression to avoid delivering results for abandoned topics.
-    """
-    configs = load_configs()
-    cortex_config = configs['cortex']['config']
-    cortex_prompt_map = configs['cortex']['prompt_map']
-
-    topic = metadata.get('topic', 'general')
-    original_prompt = metadata.get('original_prompt', '')
-    act_history_context = metadata.get('act_history_context', '(none)')
-    root_cycle_id = metadata.get('root_cycle_id', '')
-    destination = metadata.get('destination', 'web')
-    original_created_at = metadata.get('original_created_at', 0)
-
-    # Resolve thread
-    thread_conv_service = get_thread_conv_service()
-    thread_id = metadata.get('thread_id')
-    if not thread_id:
-        platform = metadata.get('source', 'unknown')
-        resolution = get_thread_service().resolve_thread('default', platform)
-        thread_id = resolution.thread_id
-
-    working_memory = WorkingMemoryService(
-        max_turns=cortex_config.get('max_working_memory_turns', 10)
-    )
-
-    # ── Stale result suppression ─────────────────────────────
-    # If the user changed topic since the original question, suppress
-    recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
-    current_topic = recent_topic_service.get_recent_topic()
-    if current_topic and current_topic != topic:
-        try:
-            from services.embedding_service import get_embedding_service
-            import numpy as np
-
-            emb_service = get_embedding_service()
-            current_emb = emb_service.generate_embedding(current_topic)
-            original_emb = emb_service.generate_embedding(topic)
-
-            similarity = float(np.dot(current_emb, original_emb) / (
-                np.linalg.norm(current_emb) * np.linalg.norm(original_emb) + 1e-8
-            ))
-
-            if similarity < 0.45:
-                _log_cycle_event('tool_result_suppressed', {'reason': 'stale', 'similarity': similarity}, topic)
-                logging.info(f"[TOOL RESULT] Suppressed stale result (topic drift, similarity={similarity:.2f})")
-                return f"Topic '{topic}' | SUPPRESSED: topic changed to '{current_topic}'"
-        except Exception as e:
-            logging.debug(f"[TOOL RESULT] Stale check failed: {e}")
-
-    # ── Generate response via standard UNIFIED mode ──────────
-    try:
-        classification = {
-            'topic': topic,
-            'confidence': 10,
-            'similar_topic': '',
-            'topic_update': '',
-        }
-
-        response_data = generate_for_mode(
-            topic, original_prompt, 'UNIFIED', classification,
-            thread_conv_service, cortex_config, cortex_prompt_map, metadata,
-            act_history_context=act_history_context,
-            thread_id=thread_id,
-        )
-
-        if not response_data.get('response', '').strip():
-            response_data['response'] = "I looked into that, but couldn't find anything conclusive."
-
-        # Append assistant turn
-        working_memory.append_turn(thread_id or topic, 'assistant', response_data['response'])
-        thread_conv_service.add_response(
-            thread_id, response_data['response'], response_data['generation_time']
-        )
-
-        # Route through orchestrator
-        try:
-            orchestrator = get_orchestrator()
-            context = {
-                'topic': topic,
-                'response': response_data['response'],
-                'confidence': response_data.get('confidence', 0.7),
-                'generation_time': response_data.get('generation_time', 0.0),
-                'destination': destination,
-                'metadata': metadata,
-                'actions': [],
-            }
-            orchestrator.route_path(mode='UNIFIED', context=context)
-        except Exception as e:
-            logging.error(f"[TOOL RESULT] Orchestrator failed: {e}")
-
-        elapsed = time.time() - original_created_at if original_created_at else 0
-        _log_cycle_event('tool_result_delivered', {
-            'root_cycle_id': root_cycle_id,
-            'latency_ms': int(elapsed * 1000) if elapsed else 0,
-        }, topic)
-
-        logging.info(
-            f"[TOOL RESULT] Response delivered for topic '{topic}': "
-            f"'{response_data['response'][:80]}...'"
-        )
-
-        return (
-            f"Topic '{topic}' | Mode: TOOL_RESULT_UNIFIED | "
-            f"Response generated in {response_data.get('generation_time', 0):.2f}s"
-        )
-
-    except Exception as e:
-        logging.error(f"[TOOL RESULT] Failed: {e}", exc_info=True)
-        return f"Topic '{topic}' | ERROR: tool result - {e}"
-
-
-def _check_active_tool_work(text: str, topic: str) -> str:
-    """
-    If a similar question already has active tool work, respond with progress
-    instead of spawning new work.
-
-    Returns progress message string, or None if no match.
-    """
-    try:
-        from services.cycle_service import CycleService
-        from services.database_service import get_shared_db_service
-        from services.embedding_service import EmbeddingService
-        import numpy as np
-
-        db_service = get_shared_db_service()
-        cycle_service = CycleService(db_service)
-        active_cycles = cycle_service.get_active_cycles(
-            topic=topic, cycle_type='tool_work', status='processing'
-        )
-        if not active_cycles:
-            return None
-
-        emb_service = get_embedding_service()
-        prompt_embedding = emb_service.generate_embedding(text)
-
-        for cycle in active_cycles:
-            root = cycle_service.get_cycle(cycle['root_cycle_id'])
-            if not root or not root.get('content'):
-                continue
-            root_embedding = emb_service.generate_embedding(root['content'])
-            similarity = float(np.dot(prompt_embedding, root_embedding) / (
-                np.linalg.norm(prompt_embedding) * np.linalg.norm(root_embedding) + 1e-8
-            ))
-
-            if similarity > 0.65:
-                elapsed = time.time() - cycle['created_at'].timestamp()
-                if elapsed < 10:
-                    return "Just started looking into that — I'll update you shortly."
-                elif elapsed < 30:
-                    return "Still working on it — pulling the latest info now."
-                else:
-                    return "Digging deeper into this — I'll share what I find soon."
-
-        return None
-    except Exception as e:
-        logging.debug(f"[DIGEST] Active tool work check failed: {e}")
-        return None
-
-
 def _log_cycle_event(event_type: str, payload: dict, topic: str):
     """Log a cycle-related event to interaction_log."""
     try:
@@ -1920,10 +1756,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     Proactive drift messages go through full routing but skip user input logging.
     """
     metadata = metadata or {}
-
-    # Tool result shortcut: follow-up from background tool_worker
-    if metadata.get('type') == 'tool_result':
-        return _handle_tool_result(text, metadata)
 
     # Proactive drift shortcut: system-initiated outreach from cognitive drift engine
     if metadata.get('type') == 'proactive_drift':
@@ -2323,22 +2155,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         }
         _signals.update(_nlp)
         _signals['_prompt_text'] = text
-
-        # Active tool work dedup (preserved from ACT path)
-        if not intent.get('is_cancel') and not intent.get('is_self_resolved'):
-            dedup_response = _check_active_tool_work(text, topic)
-            if dedup_response:
-                orchestrator = get_orchestrator()
-                orchestrator.route_path('UNIFIED', {
-                    'response': dedup_response,
-                    'confidence': 0.8,
-                    'topic': topic,
-                    'destination': metadata.get('destination', 'web'),
-                    'metadata': metadata,
-                })
-                working_memory.append_turn(thread_id, 'assistant', dedup_response)
-                _log_cycle_event('duplicate_detected', {'response': dedup_response}, topic)
-                return f"Topic '{topic}' | DEDUP: active tool work in progress"
 
         _store_adaptive_signals(thread_id, text, signals=_signals)
 

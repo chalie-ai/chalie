@@ -1,9 +1,6 @@
 """
 ACT Reflection Service — Enqueues tool outputs for background experience assimilation.
 
-Extracted from tool_worker.py to break the circular import between
-tool_worker and digest_worker (P8).
-
 Applies novelty gate layers 1 (ephemeral tool) and 2 (output size).
 Layer 3 (content hash dedup) runs in the assimilation service.
 """
