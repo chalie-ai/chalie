@@ -20,7 +20,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -45,8 +44,8 @@ class _CronToolWorker:
         """Initialise a cron worker from a resolved tool configuration dict.
 
         Unpacks all fields required for scheduled execution: scheduling interval,
-        prompt template, runner path, OAuth auth config, card output settings,
-        and per-invocation timeout.
+        prompt template, runner path, OAuth auth config, and per-invocation
+        timeout.
 
         Args:
             tool_config: Resolved tool config dict produced by
@@ -60,9 +59,6 @@ class _CronToolWorker:
         self.runner_path = tool_config.get("runner_path")
         manifest = tool_config.get("manifest", {})
         self._auth = manifest.get("auth", {})
-        output_config = manifest.get("output", {})
-        self.card_enabled = output_config.get("card", {}).get("enabled", False)
-        self.card_config = output_config.get("card", {}) if self.card_enabled else None
         self.tool_dir = tool_config["dir"]
         self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 
@@ -78,8 +74,8 @@ class _CronToolWorker:
         5. Dispatches the tool via subprocess.
         6. Persists any returned ``_state`` back to MemoryStore with a 7-day TTL.
         7. Routes output according to the formalized output-type contract
-           (``card``, ``prompt``, or ``tool``); falls back to legacy routing
-           when no ``output`` field is present.
+           (``prompt`` or ``tool``); falls back to legacy routing when no
+           ``output`` field is present.
 
         The loop runs until a ``KeyboardInterrupt`` is received.  Any other
         exception is logged and the loop retries after a 60-second cooldown.
@@ -216,23 +212,7 @@ class _CronToolWorker:
 
                 if output_type is not None:
                     # New contract: route by output field
-                    if output_type == "card":
-                        result_html = result.get("html")
-                        result_title = result.get("title")
-                        if result_html:
-                            try:
-                                from services.card_renderer_service import CardRendererService
-                                from services.output_service import OutputService
-                                card_cfg = result.get("card_config") or {}
-                                card_data = CardRendererService().render_tool_html(
-                                    self.tool_name, result_html,
-                                    result_title or card_cfg.get("title", self.tool_name), card_cfg
-                                )
-                                if card_data:
-                                    OutputService().enqueue_card("cron", card_data, {})
-                            except Exception as e:
-                                _log.warning(f"[TOOL CRON] {self.tool_name}: card render failed: {e}")
-                    elif output_type == "prompt":
+                    if output_type == "prompt":
                         from services.text_extractor import extract_html as _extract_html
                         result_text = result.get("text", "")
                         result_html_cron = result.get("html")
@@ -273,26 +253,6 @@ class _CronToolWorker:
                 else:
                     result_text = str(result) if result else ""
 
-                skip_text_followup = False
-                if self.card_enabled and result_html:
-                    try:
-                        from services.card_renderer_service import CardRendererService
-                        from services.output_service import OutputService
-                        card_data = CardRendererService().render_tool_html(
-                            self.tool_name, result_html, result_title or self.card_config.get("title", self.tool_name),
-                            self.card_config
-                        )
-                        if card_data:
-                            OutputService().enqueue_card("cron", card_data, {})
-                            # Check if synthesize is False → skip text followup
-                            if not self.card_config.get("synthesize", True):
-                                skip_text_followup = True
-                    except Exception as e:
-                        _log.warning(f"[TOOL CRON] Card render failed for {self.tool_name}: {e}")
-
-                if skip_text_followup:
-                    _log.info(f"[TOOL CRON] {self.tool_name} executed with card (response suppressed)")
-                    continue
                 from services.text_extractor import extract_html as _extract_html
                 if result_text and "<" in result_text:
                     result_text = _extract_html(result_text)
@@ -879,31 +839,6 @@ class ToolRegistryService:
                 f"(cost: {elapsed_ms}ms) [/TOOL]"
             )
 
-        # Cache raw result for card rendering (5-min TTL).
-        # Per-invocation key (tool_card_cache:{topic}:{invocation_id}) prevents
-        # data from different tool calls in the same ACT loop from colliding.
-        invocation_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
-        if isinstance(result, dict):
-            try:
-                from services.memory_client import MemoryClientService
-                store = MemoryClientService.create_connection()
-                from services import act_memory_keys
-                # Per-invocation cache entry
-                store.set(
-                    act_memory_keys.tool_card_cache(topic, invocation_id, exchange_id),
-                    json.dumps({"tool": tool_name, "data": result, "invocation_id": invocation_id}),
-                    ex=300,
-                )
-                # Legacy flat list — kept for backwards compatibility with _enqueue_tool_cards
-                _raw_key = act_memory_keys.tool_raw_cache(topic, exchange_id)
-                store.rpush(
-                    _raw_key,
-                    json.dumps({"tool": tool_name, "data": result})
-                )
-                store.expire(_raw_key, 300)
-            except Exception as e:
-                logger.debug(f"[TOOL REGISTRY] Raw result cache failed for {tool_name}: {e}")
-
         elapsed_ms = int((time.time() - start_time) * 1000)
 
         # Extract text and html from formalized contract output
@@ -945,90 +880,7 @@ class ToolRegistryService:
         if len(result_text) > self.MAX_OUTPUT_CHARS:
             result_text = result_text[:self.MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
-        # Read manifest output config
-        output_config = manifest.get("output", {})
-        synthesize = output_config.get("synthesize", True)
-        card_config = output_config.get("card", {})
-        card_enabled = card_config.get("enabled", False)
-        card_mode = card_config.get("mode", "immediate")  # "immediate" or "deferred"
-
-        # Deferred card mode: don't render the card now.
-        # Cache a metadata entry so the tool_worker can inject a structured
-        # card offer into the ACT loop context (separate from tool output text).
-        # The LLM then decides whether to call emit_card.
-        if card_enabled and card_mode == "deferred" and isinstance(result, dict):
-            try:
-                from services.memory_client import MemoryClientService as _RC
-                _r = _RC.create_connection()
-                meta = result.get("_meta", {})
-                deferred_info = {
-                    "invocation_id": invocation_id,
-                    "tool_name": tool_name,
-                    "has_images": bool(meta.get("has_images") or result.get("images")),
-                    "source_count": meta.get("source_count", result.get("count", 0)),
-                    "unique_domains": meta.get("unique_domains", 0),
-                }
-                _deferred_key = act_memory_keys.deferred_cards(topic, exchange_id)
-                _r.rpush(_deferred_key, json.dumps(deferred_info))
-                _r.expire(_deferred_key, 300)
-            except Exception as _de:
-                logger.debug(f"[TOOL REGISTRY] Deferred card metadata cache failed: {_de}")
-            # Fall through to normal text output — no hint injection into result_text
-
-        # If card is enabled (immediate mode), render and enqueue it.
-        # Path A: tool returned inline HTML → render_tool_html()
-        # Path B: tool returned a dict with no HTML → template-based render()
-        #
-        # For synthesize=false tools: render the card NOW so it arrives before any
-        # text follow-up, then return early to suppress the text response.
-        # For synthesize=true tools: skip inline card emission. The ACT loop may call
-        # the tool multiple times (retries); emitting on each invocation produces
-        # duplicate cards. _enqueue_tool_cards() handles exactly-once delivery after
-        # the loop completes using the last cached result.
-        elif card_enabled and card_mode != "deferred" and result_html:
-            if not synthesize:
-                try:
-                    from services.card_renderer_service import CardRendererService
-                    from services.output_service import OutputService
-                    card_data = CardRendererService().render_tool_html(
-                        tool_name, result_html, result_title or card_config.get("title", tool_name), card_config
-                    )
-                    if card_data:
-                        OutputService().enqueue_card(topic, card_data, {})
-                        self._log_outcome(tool_name, success, topic, elapsed_ms)
-                        token_estimate = len(result_text) // 4
-                        return (
-                            f"__CARD_EMITTED__\n"
-                            f"[TOOL:{tool_name}] {result_text}\n"
-                            f"(cost: {elapsed_ms}ms, ~{token_estimate} tokens)"
-                            f" [/TOOL]"
-                        )
-                except Exception as e:
-                    logger.warning(f"[TOOL REGISTRY] Card render failed for {tool_name}: {e}")
-        elif card_enabled and card_mode != "deferred" and not result_html and isinstance(result, dict):
-            # Template-based rendering: loads card/template.html + card/styles.css
-            # and compiles Mustache against the raw result dict.
-            if not synthesize:
-                try:
-                    from services.card_renderer_service import CardRendererService
-                    from services.output_service import OutputService
-                    card_data = CardRendererService().render(
-                        tool_name, result, card_config, tool["dir"]
-                    )
-                    if card_data:
-                        OutputService().enqueue_card(topic, card_data, {})
-                        self._log_outcome(tool_name, success, topic, elapsed_ms)
-                        token_estimate = len(result_text) // 4
-                        return (
-                            f"__CARD_EMITTED__\n"
-                            f"[TOOL:{tool_name}] {result_text}\n"
-                            f"(cost: {elapsed_ms}ms, ~{token_estimate} tokens)"
-                            f" [/TOOL]"
-                        )
-                except Exception as e:
-                    logger.warning(f"[TOOL REGISTRY] Template card render failed for {tool_name}: {e}")
-
-        # Otherwise, return text response (possibly synthesized by frontal cortex)
+        # Return text response (possibly synthesized by frontal cortex)
         token_estimate = len(result_text) // 4
         output = (
             f"[TOOL:{tool_name}] {result_text}\n"
@@ -1307,6 +1159,13 @@ class ToolRegistryService:
             self._deps_ready.add(name)
 
         logger.info(f"[TOOL REGISTRY] Registered interface tool: {name} (interface={interface_id})")
+
+        # Trigger profile build so the tool is discoverable via find_tools semantic search
+        try:
+            from services.tool_profile_service import ToolProfileService
+            ToolProfileService().build_profile(name, tool_entry['manifest'])
+        except Exception as e:
+            logger.warning(f"[TOOL REGISTRY] Profile build failed for interface tool {name}: {e}")
 
     def remove_interface_tools(self, interface_id: str):
         """Remove all tools that belong to a specific interface."""

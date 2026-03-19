@@ -142,16 +142,6 @@ def _create(topic: str, params: dict) -> str:
                 conn.commit()
                 existing_id = existing[0]
                 logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
-                # Emit card for the existing item so the user sees feedback
-                try:
-                    from services.scheduler_card_service import SchedulerCardService
-                    SchedulerCardService().emit_create_card(topic, {
-                        "id": existing_id, "item_type": item_type,
-                        "message": message, "due_at": due_at,
-                        "recurrence": recurrence, "status": "pending",
-                    })
-                except Exception:
-                    pass
                 return f"Schedule already exists [id:{existing_id}]"
 
             cursor.execute("""
@@ -175,22 +165,8 @@ def _create(topic: str, params: dict) -> str:
         except Exception as emb_err:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
-        # Emit card (non-fatal if it fails)
-        try:
-            from services.scheduler_card_service import SchedulerCardService
-            SchedulerCardService().emit_create_card(topic, {
-                "id": item_id,
-                "item_type": item_type,
-                "message": message,
-                "due_at": due_at,
-                "recurrence": recurrence,
-                "status": "pending",
-            })
-        except Exception as card_err:
-            logger.warning(f"{LOG_PREFIX} Card emit failed (non-fatal): {card_err}")
-
         logger.info(f"{LOG_PREFIX} Created {item_type}: {item_id}")
-        return "__CARD_ONLY__"
+        return f"Scheduled {item_type} [id:{item_id}]: {message}"
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
@@ -227,30 +203,17 @@ def _list(topic: str, params: dict) -> str:
                 """)
             rows = cursor.fetchall()
 
-        items = []
         lines = []
         for row in rows:
             item_id, item_type, message, due_at, recurrence, status = row
-            items.append({
-                "id": item_id,
-                "item_type": item_type,
-                "message": message,
-                "due_at": due_at,
-                "recurrence": recurrence,
-                "status": status,
-            })
             due_str = due_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(due_at, 'strftime') else str(due_at)
             recur_str = f" ({recurrence})" if recurrence else ""
             lines.append(f"  * [{item_id}] {message} -- {due_str}{recur_str}")
 
-        # Emit query card (non-fatal if it fails)
-        try:
-            from services.scheduler_card_service import SchedulerCardService
-            SchedulerCardService().emit_query_card(topic, items, card_label)
-        except Exception as card_err:
-            logger.warning(f"{LOG_PREFIX} Card emit failed (non-fatal): {card_err}")
+        if not lines:
+            return f"No scheduled items found ({card_label})."
 
-        return "__CARD_ONLY__"
+        return f"{card_label}:\n" + "\n".join(lines)
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} List failed: {e}", exc_info=True)
@@ -323,23 +286,12 @@ def _cancel(topic: str, params: dict) -> str:
             return "Error: item_id or message is required to cancel"
 
         db = get_shared_db_service()
-        item_data = None
 
         with db.connection() as conn:
             cursor = conn.cursor()
 
             if item_id:
                 # Exact lookup by ID
-                cursor.execute(
-                    "SELECT id, item_type, message, due_at, recurrence FROM scheduled_items WHERE id=?",
-                    (item_id,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    item_data = {
-                        "id": row[0], "item_type": row[1], "message": row[2],
-                        "due_at": row[3], "recurrence": row[4], "status": "cancelled",
-                    }
                 cursor.execute(
                     "UPDATE scheduled_items SET status='cancelled' WHERE id=? AND status='pending'",
                     (item_id,)
@@ -371,12 +323,7 @@ def _cancel(topic: str, params: dict) -> str:
                         f"Use item_id to cancel the specific one."
                     )
 
-                row = matches[0]
-                item_id = row[0]
-                item_data = {
-                    "id": row[0], "item_type": row[1], "message": row[2],
-                    "due_at": row[3], "recurrence": row[4], "status": "cancelled",
-                }
+                item_id = matches[0][0]
                 cursor.execute(
                     "UPDATE scheduled_items SET status='cancelled' WHERE id=? AND status='pending'",
                     (item_id,)
@@ -388,16 +335,8 @@ def _cancel(topic: str, params: dict) -> str:
         if affected == 0:
             return f"Error: item {item_id} not found or already fired/cancelled"
 
-        # Emit cancel card (non-fatal if it fails)
-        if item_data:
-            try:
-                from services.scheduler_card_service import SchedulerCardService
-                SchedulerCardService().emit_cancel_card(topic, item_data)
-            except Exception as card_err:
-                logger.warning(f"{LOG_PREFIX} Card emit failed (non-fatal): {card_err}")
-
         logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
-        return "__CARD_ONLY__"
+        return f"Cancelled scheduled item [id:{item_id}]"
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Cancel failed: {e}", exc_info=True)

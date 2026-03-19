@@ -37,8 +37,6 @@ def handle_persistent_task(topic: str, params: dict) -> str:
 
     if action == "create":
         return _create(topic, params)
-    elif action == "confirm":
-        return _confirm(topic, params)
     elif action == "status":
         return _status(topic, params)
     elif action == "pause":
@@ -85,12 +83,7 @@ def _get_account_id() -> int:
 
 
 def _create(topic: str, params: dict) -> str:
-    """Create a new persistent task.
-
-    Routing by origin:
-    - origin='system' (cognitive drift, curiosity): auto-accept, periodic execution
-    - origin='user' (default): stays proposed, ask user "now or deep dive?"
-    """
+    """Create a new persistent task (starts immediately in accepted state)."""
     goal = params.get("goal", params.get("query", params.get("text", "")))
     if not goal:
         return "No goal specified for the persistent task."
@@ -109,7 +102,6 @@ def _create(topic: str, params: dict) -> str:
 
     scope = params.get("scope")
     priority = int(params.get("priority", 5))
-    origin = params.get("origin", "user")
 
     task = service.create_task(
         account_id=account_id,
@@ -119,72 +111,7 @@ def _create(topic: str, params: dict) -> str:
     )
     task_id = task['id']
 
-    if origin == "system":
-        # System-originated: auto-accept, deferred periodic execution
-        ok, msg = service.transition(task_id, 'accepted')
-        if not ok:
-            logger.warning(f"{LOG_PREFIX} Could not auto-accept task {task_id}: {msg}")
-            return f"Task created but could not start: {msg}"
-        logger.info(f"{LOG_PREFIX} System task {task_id} auto-accepted (periodic)")
-        return f"Background task created: \"{goal[:80]}\" — running on periodic schedule."
-
-    # User-originated: stay proposed, let user choose execution mode
-    scope_line = f"\nScope: {scope}" if scope else ""
-    return {
-        "text": (
-            f"I've identified this as a deeper task: \"{goal[:80]}\"{scope_line}\n"
-            f"Task #{task_id} ready. Should I handle this quickly now, "
-            f"or do a thorough deep dive and get back to you later?"
-        ),
-        "reply_actions": [
-            {
-                "label": "Quick Research",
-                "payload": {"skill": "persistent_task", "action": "confirm",
-                            "task_id": task_id, "mode": "now"},
-            },
-            {
-                "label": "Deep Dive",
-                "payload": {"skill": "persistent_task", "action": "confirm",
-                            "task_id": task_id, "mode": "later"},
-            },
-        ],
-    }
-
-
-def _confirm(topic: str, params: dict) -> str:
-    """Confirm a proposed task and choose execution mode.
-
-    mode='now': immediate execution — all steps run in one shot
-    mode='later': periodic execution — 30-min cycles, thorough deep dive
-    """
-    service = _get_service()
-    task_id = _resolve_task_id(params)
-    if not task_id:
-        # Try to find the most recent proposed task
-        account_id = _get_account_id()
-        active = service.get_active_tasks(account_id)
-        proposed = [t for t in active if t['status'] == 'proposed']
-        if proposed:
-            task_id = proposed[-1]['id']  # Most recent
-        else:
-            return "No pending task to confirm."
-
-    task = service.get_task(task_id)
-    if not task:
-        return f"Task {task_id} not found."
-    if task['status'] != 'proposed':
-        return f"Task {task_id} is already {task['status']}."
-
-    ok, msg = service.transition(task_id, 'accepted')
-    if not ok:
-        return f"Cannot start task: {msg}"
-
-    # The transition to 'accepted' pushes a signal to `persistent_task:execute`,
-    # waking the worker immediately — no separate enqueue needed.
-    return (
-        f"On it — starting \"{task['goal'][:60]}\" now. "
-        f"I'll let you know when I have results."
-    )
+    return f"Background task created: \"{goal[:80]}\" (#{task_id}) — running now."
 
 
 def _status(topic: str, params: dict) -> str:

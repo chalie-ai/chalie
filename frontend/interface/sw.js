@@ -14,8 +14,6 @@ const SHELL_ASSETS = [
   '/markdown.js', '/lib/marked.esm.js',
   '/ambient.js',
   '/icons/icon.png',
-  '/cards/base.js', '/cards/memory.js', '/cards/timeline.js',
-  '/cards/reminders.js', '/cards/weather.js', '/cards/digest.js',
 ];
 
 const NETWORK_ONLY_PATHS = [

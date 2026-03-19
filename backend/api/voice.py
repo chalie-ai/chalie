@@ -205,7 +205,15 @@ def voice_health():
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Generate speech from text. Returns binary audio/wav."""
+    """Generate speech from text.
+
+    Streams length-prefixed WAV chunks so the client can start playback as
+    soon as the first sentence is synthesized instead of waiting for the
+    entire message.  Wire format::
+
+        [uint32 BE length][WAV bytes]   ← one per sentence chunk
+        [uint32 BE 0]                   ← end-of-stream marker
+    """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
 
@@ -231,30 +239,29 @@ def voice_synthesize():
     if not _tts_sem.acquire(blocking=False):
         return jsonify({"error": "TTS busy — try again shortly"}), 503
 
-    try:
+    def _stream_chunks():
+        """Yield length-prefixed WAV frames, one per sentence chunk."""
         import numpy as np
-        parts: list = []
         silence = np.zeros(int(24000 * 0.3), dtype=np.float32)
-        for chunk in chunks:
-            try:
-                part = _tts_model.generate(chunk, voice=KITTEN_VOICE)
-                parts.append(part)
-                parts.append(silence)
-            except Exception as chunk_err:
-                logger.warning("[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
-                               len(chunk), chunk_err, chunk)
-                # Skip this chunk rather than failing the whole request
-                continue
-        if not parts:
-            return jsonify({"error": "TTS generation failed for all chunks"}), 500
-        audio = np.concatenate(parts)
-        wav_bytes = _audio_to_wav_bytes(audio)
-        return Response(wav_bytes, mimetype="audio/wav")
-    except Exception as e:
-        logger.error("[Voice] TTS error: %s — text: %.120s", e, text)
-        return jsonify({"error": "TTS generation failed"}), 500
-    finally:
-        _tts_sem.release()
+        try:
+            for i, chunk in enumerate(chunks):
+                try:
+                    part = _tts_model.generate(chunk, voice=KITTEN_VOICE)
+                    # Inter-sentence pause (skip on last chunk)
+                    if i < len(chunks) - 1:
+                        part = np.concatenate([part, silence])
+                    wav_bytes = _audio_to_wav_bytes(part)
+                    yield struct.pack(">I", len(wav_bytes)) + wav_bytes
+                except Exception as chunk_err:
+                    logger.warning("[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
+                                   len(chunk), chunk_err, chunk)
+                    continue
+            # End-of-stream marker
+            yield struct.pack(">I", 0)
+        finally:
+            _tts_sem.release()
+
+    return Response(_stream_chunks(), mimetype="application/octet-stream")
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])

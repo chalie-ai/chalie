@@ -94,7 +94,6 @@ def _make_search_result(
 _P_DB = "services.database_service.get_shared_db_service"
 _P_DOC_SVC = "services.document_service.DocumentService"
 _P_EMB = "services.embedding_service.get_embedding_service"
-_P_CARD = "services.document_card_service.DocumentCardService"
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +145,7 @@ class TestSearchAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_EMB) as mock_emb, \
-             patch(_P_CARD):
+             patch(_P_EMB) as mock_emb:
             mock_emb_svc = MagicMock()
             mock_emb_svc.generate_embedding.return_value = [0.1] * 768
             mock_emb.return_value = mock_emb_svc
@@ -254,8 +252,7 @@ class TestViewAction:
         mock_svc.get_chunks_for_document.return_value = [_make_chunk()]
 
         with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_CARD):
+             patch(_P_DOC_SVC, return_value=mock_svc):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "view", "name": "warranty"})
 
@@ -272,8 +269,7 @@ class TestDeleteAction:
         mock_svc.soft_delete.return_value = True
 
         with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_CARD):
+             patch(_P_DOC_SVC, return_value=mock_svc):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "delete", "id": "doc00001"})
 
@@ -315,8 +311,7 @@ class TestRestoreAction:
         mock_svc.restore.return_value = True
 
         with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_CARD):
+             patch(_P_DOC_SVC, return_value=mock_svc):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "restore", "id": "doc00001"})
 
@@ -347,8 +342,7 @@ class TestRestoreAction:
         mock_svc.restore.return_value = True
 
         with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_CARD):
+             patch(_P_DOC_SVC, return_value=mock_svc):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {"action": "restore", "name": "warranty"})
 
@@ -369,8 +363,7 @@ class TestCreateAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_DOC_QUEUE) as mock_queue, \
-             patch(_P_CARD):
+             patch(_P_DOC_QUEUE) as mock_queue:
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {
                 "action": "create",
@@ -412,8 +405,7 @@ class TestCreateAction:
 
         with patch(_P_DB), \
              patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_DOC_QUEUE), \
-             patch(_P_CARD):
+             patch(_P_DOC_QUEUE):
             from services.innate_skills.document_skill import handle_document
             result = handle_document("topic", {
                 "action": "create",

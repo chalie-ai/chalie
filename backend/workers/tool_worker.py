@@ -17,7 +17,6 @@ from services.innate_skills.registry import REFLECTION_FILTER_SKILLS as INNATE_S
 
 
 from services.act_reflection_service import enqueue_tool_reflection as _enqueue_tool_reflection
-from services.tool_card_enqueue_service import enqueue_tool_cards as _enqueue_tool_cards
 from services.act_completion_service import inject_no_action_signal as _inject_no_action_signal
 
 
@@ -119,12 +118,6 @@ def tool_worker(job_data: dict) -> str:
         # Triage-selected innate skills (passed from digest_worker via context_snapshot)
         selected_skills = context_snapshot.get('triage_selected_skills', None) or None
 
-        # Always inject emit_card when external tools are active so Chalie can
-        # decide whether to render a deferred visual card. Generic — no tool names.
-        triage_selected_tools = context_snapshot.get('triage_selected_tools', [])
-        if relevant_tools or triage_selected_tools:
-            selected_skills = list(selected_skills or []) + ['emit_card']
-
         return _tool_worker_orchestrator(
             cortex_config=cortex_config,
             act_config=act_config,
@@ -188,7 +181,7 @@ def _tool_worker_orchestrator(
         smart_repetition=True,
         escalation_hints=False,
         persistent_task_exit=False,
-        deferred_card_context=True,
+        execution_gate=False,  # User-initiated — the user already asked for this
     )
 
     # Heartbeat + cancellation callback
@@ -279,27 +272,16 @@ def _tool_worker_orchestrator(
     # Enqueue tool reflection
     _enqueue_tool_reflection(result.act_history, topic, text)
 
-    # Render and deliver cards
-    card_replaces = _enqueue_tool_cards(result.act_history, topic, metadata, cycle_id=cycle_id, exchange_id=exchange_id)
-
-    # Suppress follow-up when emit_card was called
-    if not card_replaces:
-        card_replaces = any(
-            isinstance(r.get('result'), dict) and r['result'].get('card_emitted') is True
-            for r in result.act_history
-        )
-
-    if not card_replaces:
-        _enqueue_followup(
-            topic=topic,
-            text=text,
-            act_history_context=act_history_context,
-            cycle_id=cycle_id,
-            parent_cycle_id=parent_cycle_id,
-            root_cycle_id=root_cycle_id,
-            metadata=metadata,
-            original_created_at=job_data.get('created_at', time.time()),
-        )
+    _enqueue_followup(
+        topic=topic,
+        text=text,
+        act_history_context=act_history_context,
+        cycle_id=cycle_id,
+        parent_cycle_id=parent_cycle_id,
+        root_cycle_id=root_cycle_id,
+        metadata=metadata,
+        original_created_at=job_data.get('created_at', time.time()),
+    )
 
     logger.info(
         f"[TOOL WORKER] ACT loop complete (orchestrator): {result.iterations_used} iterations, "
@@ -366,93 +348,6 @@ def _notify_sse_error(metadata: dict, error_message: str):
         store.delete(f"sse_pending:{ws_uuid}")
     except Exception as e:
         logger.warning(f"[TOOL WORKER] Failed to notify WebSocket of error: {e}")
-
-
-def _enqueue_tool_cards(act_history: list, topic: str, metadata: dict, cycle_id: str = None, exchange_id: str = '') -> bool:
-    """Render and enqueue cards for card-enabled tools. Returns True if any synthesize=false
-    tool was found (suppresses the text follow-up since the card was already rendered inline).
-
-    synthesize=false tools: invoke() already rendered the card. Here we just close the WebSocket response.
-    synthesize=true tools: invoke() deferred card emission here. We render exactly once per
-    tool (using the last cached result) even if the tool was called multiple times in the
-    ACT loop (deduplication via rendered_tools set).
-    """
-    any_synthesize_false = False
-    try:
-        from services.memory_client import MemoryClientService
-        from services.tool_registry_service import ToolRegistryService
-        from services.card_renderer_service import CardRendererService
-        from services.output_service import OutputService
-
-        store = MemoryClientService.create_connection()
-        from services import act_memory_keys as _amk
-        raw_items = store.lrange(_amk.tool_raw_cache(topic, exchange_id), 0, -1)
-        store.delete(_amk.tool_raw_cache(topic, exchange_id))
-
-        # Build {tool_name: raw_result} map (last result per tool wins)
-        raw_map = {}
-        for item in raw_items:
-            entry = json.loads(item)
-            raw_map[entry['tool']] = entry['data']
-
-        registry = ToolRegistryService()
-        renderer = CardRendererService()
-        output_svc = OutputService()
-
-        # Track tools whose cards have already been enqueued to prevent duplicates.
-        # The ACT loop may invoke the same tool multiple times (e.g. retries on empty
-        # results) — each invocation appends to act_history, but we only want one card.
-        rendered_tools: set = set()
-
-        for action in act_history:
-            if action.get('status') != 'success':
-                continue
-            tool_name = action.get('action_type', '')
-            tool = registry.tools.get(tool_name)
-            if not tool:
-                continue
-            output_config = tool['manifest'].get('output', {})
-            card_config = output_config.get('card', {})
-            if not card_config or not card_config.get('enabled'):
-                continue
-
-            # If synthesize is false, invoke() already rendered the card inline.
-            # Suppress the text follow-up and close the waiting SSE connection.
-            if not output_config.get('synthesize', True):
-                any_synthesize_false = True
-                sse_uuid = metadata.get('uuid')
-                if sse_uuid:
-                    try:
-                        output_svc.enqueue_close_signal(sse_uuid)
-                    except Exception as _re:
-                        logger.warning(f"[TOOL WORKER] Failed to send close signal: {_re}")
-                continue
-
-            # synthesize=true: render exactly once per tool name.
-            if tool_name in rendered_tools:
-                continue
-
-            raw = raw_map.get(tool_name)
-            if not raw:
-                continue
-
-            # Path A: tool returned inline HTML (formalized contract) — use render_tool_html()
-            result_html = raw.get('html') if isinstance(raw, dict) else None
-            if result_html:
-                result_title = raw.get('title') or card_config.get('title', tool_name)
-                card_data = renderer.render_tool_html(tool_name, result_html, result_title, card_config)
-            else:
-                # Path B: no inline HTML — fall back to template-based render()
-                card_data = renderer.render(tool_name, raw, card_config, tool['dir'])
-
-            if card_data:
-                output_svc.enqueue_card(topic, card_data, metadata)
-                rendered_tools.add(tool_name)
-
-    except Exception as e:
-        logger.warning(f"[TOOL WORKER] Card enqueue failed: {e}")
-
-    return any_synthesize_false
 
 
 def _action_fingerprint(actions: list) -> str:

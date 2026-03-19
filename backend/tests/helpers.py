@@ -24,7 +24,7 @@ def make_task_row(
     thread_id=None,
     goal="Test background task",
     scope=None,
-    status="proposed",
+    status="accepted",
     priority=5,
     progress=None,
     result=None,

@@ -73,7 +73,7 @@ class ACTOrchestrator:
         smart_repetition: bool = True,
         escalation_hints: bool = False,
         persistent_task_exit: bool = False,
-        deferred_card_context: bool = False,
+        execution_gate: bool = True,
     ):
         """
         Args:
@@ -86,7 +86,9 @@ class ACTOrchestrator:
             smart_repetition: Embedding-based semantic repetition detection
             escalation_hints: Inject pivot hints on type-based repetition
             persistent_task_exit: Exit loop when a persistent_task is dispatched
-            deferred_card_context: Inject deferred card offers into act_history
+            execution_gate: Whether to apply the autonomous execution gate to
+                non-safe actions. False for user-initiated ACT loops (the user
+                already asked for this), True for autonomous/background execution.
         """
         self.config = config
         self.max_iterations = max_iterations
@@ -96,7 +98,7 @@ class ACTOrchestrator:
         self.smart_repetition = smart_repetition
         self.escalation_hints = escalation_hints
         self.persistent_task_exit = persistent_task_exit
-        self.deferred_card_context = deferred_card_context
+        self.execution_gate = execution_gate
 
         # Repetition similarity threshold (configurable)
         self.repetition_sim_threshold = config.get(
@@ -159,6 +161,7 @@ class ACTOrchestrator:
             cumulative_timeout=self.cumulative_timeout,
             per_action_timeout=self.per_action_timeout,
             max_iterations=self.max_iterations,
+            execution_gate=self.execution_gate,
         )
 
         if context_extras:
@@ -267,10 +270,6 @@ class ACTOrchestrator:
 
                 # ACT history delta (results from the last iteration's actions)
                 act_history_str = act_loop.get_history_context()
-                if self.deferred_card_context:
-                    act_history_str = self._inject_deferred_card_context(
-                        act_history_str, topic, exchange_id
-                    )
                 if act_history_str and act_history_str != "(none)":
                     context_updates.append(act_history_str)
 
@@ -298,10 +297,6 @@ class ACTOrchestrator:
             else:
                 # ── Legacy mode: rebuild full prompt each iteration ────────
                 act_history_str = act_loop.get_history_context()
-                if self.deferred_card_context:
-                    act_history_str = self._inject_deferred_card_context(
-                        act_history_str, topic, exchange_id
-                    )
 
                 # Inject user steering input (if any)
                 if self._request_id:
@@ -998,46 +993,6 @@ class ACTOrchestrator:
             pass
         return None
 
-    @staticmethod
-    def _inject_deferred_card_context(
-        act_history_str: str, topic: str, exchange_id: str = ''
-    ) -> str:
-        """Append deferred card offers to act_history context string."""
-        try:
-            from services.memory_client import MemoryClientService as _RCS
-            from services import act_memory_keys
-            _store_dc = _RCS.create_connection()
-            _deferred_items = _store_dc.lrange(
-                act_memory_keys.deferred_cards(topic, exchange_id), 0, -1
-            )
-            if _deferred_items:
-                _cards = [json.loads(i) for i in _deferred_items]
-                _lines = ["\n## Available Card Offers"]
-                for _card in _cards:
-                    _media = []
-                    if _card.get("has_images"):
-                        _media.append("images")
-                    _media_str = (
-                        f" ({', '.join(_media)})" if _media else ""
-                    )
-                    _lines.append(
-                        f"- {_card['tool_name']} "
-                        f"(id: {_card['invocation_id']}, "
-                        f"{_card['source_count']} sources, "
-                        f"{_card['unique_domains']} domains{_media_str})"
-                    )
-                _lines.append(
-                    "\nUse emit_card with the invocation_id above to "
-                    "display a visual card, or return empty actions to "
-                    "respond with text."
-                )
-                act_history_str += "\n".join(_lines)
-        except Exception as _dc_err:
-            logger.debug(
-                f"{LOG_PREFIX} Deferred card context injection failed: "
-                f"{_dc_err}"
-            )
-        return act_history_str
 
 
 # ── Auto-reflection (post-loop, fire-and-forget) ────────────────────

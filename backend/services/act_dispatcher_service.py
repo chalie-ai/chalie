@@ -74,14 +74,18 @@ def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) ->
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
 
-    def __init__(self, timeout: float = 10.0):
+    def __init__(self, timeout: float = 10.0, execution_gate: bool = True):
         """
         Initialize dispatcher with innate skills.
 
         Args:
             timeout: Maximum execution time per action (seconds)
+            execution_gate: Whether to apply the autonomous execution gate.
+                Set to False for user-initiated ACT loops (the user already
+                asked for this), True for autonomous/background execution.
         """
         self.timeout = timeout
+        self.execution_gate = execution_gate
         self.handlers = {}
 
         # Register innate skills (new system + backward-compat aliases)
@@ -143,13 +147,11 @@ class ActDispatcherService:
             }
 
         # Pre-execution gate — evaluates consequence tier and domain confidence.
-        # Tier 3 (COMMIT / irreversible) is always blocked.
-        # Lower tiers are blocked when domain confidence is below threshold.
-        # Safe innate skills (recall, memorize, introspect, etc.) bypass the
-        # gate entirely — they are internal cognitive operations with no
-        # irreversible side effects.
+        # Only applies for autonomous/background execution (execution_gate=True).
+        # User-initiated ACT loops skip this — the user already asked for it.
+        # Safe innate skills always bypass the gate regardless.
         from services.act_action_categories import SAFE_ACTIONS as _SAFE_ACTIONS
-        if action_type not in _SAFE_ACTIONS:
+        if self.execution_gate and action_type not in _SAFE_ACTIONS:
             try:
                 from services.autonomous_execution_gate import get_autonomous_execution_gate
                 gate = get_autonomous_execution_gate()

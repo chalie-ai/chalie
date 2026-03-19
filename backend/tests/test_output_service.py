@@ -2,8 +2,7 @@
 Tests for backend/services/output_service.py
 
 OutputService manages the output queue and delivery via MemoryStore pub/sub,
-routing text responses through SSE channels or the drift stream, and
-cards always through the drift stream.
+routing text responses through SSE channels or the drift stream.
 """
 
 import json
@@ -168,61 +167,6 @@ class TestOutputService:
                 assert payload["type"] == "task"
                 return
         pytest.fail("No publish to output:events found")
-
-    # ------------------------------------------------------------------ #
-    # enqueue_card — always drift stream
-    # ------------------------------------------------------------------ #
-
-    def test_enqueue_card_publishes_to_output_events(self, service, mock_store):
-        """Card output always goes to output:events (drift stream)."""
-        card_data = {
-            "html": "<div>card</div>",
-            "css": "",
-            "scope_id": "s1",
-            "title": "Test",
-            "tool_name": "weather",
-        }
-        service.enqueue_card("topic-2", card_data)
-
-        publish_calls = mock_store.publish.call_args_list
-        channels = [c[0][0] for c in publish_calls]
-        assert "output:events" in channels
-
-        # Verify the published payload contains card type
-        for c in publish_calls:
-            if c[0][0] == "output:events":
-                payload = json.loads(c[0][1])
-                assert payload["type"] == "card"
-                assert payload["html"] == "<div>card</div>"
-                break
-
-    def test_enqueue_card_buffers_to_notifications(self, service, mock_store):
-        """Card output is buffered to notifications:recent for reconnect catch-up."""
-        card_data = {"html": "<p>hi</p>", "css": "", "scope_id": "s", "title": "T", "tool_name": "t"}
-        service.enqueue_card("topic-2", card_data)
-
-        rpush_calls = mock_store.rpush.call_args_list
-        keys = [c[0][0] for c in rpush_calls]
-        assert "notifications:recent" in keys
-
-    # ------------------------------------------------------------------ #
-    # enqueue_close_signal
-    # ------------------------------------------------------------------ #
-
-    def test_enqueue_close_signal_publishes_close_to_sse_channel(self, service, mock_store):
-        """Close signal publishes {"type": "close"} to the correct SSE channel."""
-        service.enqueue_close_signal("close-uuid-99")
-
-        mock_store.publish.assert_called_once()
-        channel, payload = mock_store.publish.call_args[0]
-        assert channel == "sse:close-uuid-99"
-        assert json.loads(payload) == {"type": "close"}
-
-    def test_enqueue_close_signal_noop_for_empty_uuid(self, service, mock_store):
-        """Empty or falsy sse_uuid is a no-op (no publish)."""
-        service.enqueue_close_signal("")
-        service.enqueue_close_signal(None)
-        mock_store.publish.assert_not_called()
 
     # ------------------------------------------------------------------ #
     # dequeue

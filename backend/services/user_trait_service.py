@@ -129,7 +129,7 @@ CONFIDENCE_LABELS = {
 # Category-specific decay configuration
 # base_decay: per decay cycle (30min), floor: minimum confidence before deletion eligibility
 CATEGORY_DECAY = {
-    'core':       {'base_decay': 0.01, 'floor': 0.25},
+    'core':       {'base_decay': 0.0, 'floor': 0.40},  # No decay — corrected via store_trait/correct_trait
     'preference': {'base_decay': 0.02, 'floor': 0.10},
     'behavioral': {'base_decay': 0.005, 'floor': 0.20},
 }

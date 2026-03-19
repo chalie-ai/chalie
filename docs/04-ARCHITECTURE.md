@@ -97,7 +97,7 @@ frontend/
 - **`critic_service.py`** — Post-action verification: evaluates each action result for correctness via lightweight LLM (reuses `cognitive-triage` agent config); safe actions get silent correction, consequential actions pause; EMA-based confidence calibration
 - **`act_completion_service.py`** — Detects when expected tools were not invoked; injects `[NO_ACTION_TAKEN]` signal
 - **`act_reflection_service.py`** — Enqueues tool outputs for background experience assimilation
-- **`persistent_task_service.py`** — Multi-session background task management with state machine (PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
+- **`persistent_task_service.py`** — Multi-session background task management with state machine (ACCEPTED → IN_PROGRESS → COMPLETED/PAUSED/CANCELLED/EXPIRED); duplicate detection via Jaccard similarity; rate limiting (3 cycles/hr, 5 active tasks max)
 - **`plan_decomposition_service.py`** — LLM-powered goal → step DAG decomposition; validates DAG (Kahn's cycle detection), step quality (4–30 word descriptions, Jaccard dedup), and cost classification (cheap/expensive); plans stored in `persistent_tasks.progress` JSON (stored as TEXT in SQLite); ready-step ordering (shallowest depth, cheapest first)
 
 #### Constants & Registries
@@ -124,7 +124,6 @@ frontend/
 - **`config_service.py`** — JSON file config loader (agent configs, connection names); runtime config (port, host) managed by `runtime_config.py` via CLI args
 - **`output_service.py`** — Output queue management for responses
 - **`event_bus_service.py`** — Pub/sub event routing
-- **`card_renderer_service.py`** — Card system rendering engine
 
 #### Topic Classification
 - **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
@@ -158,7 +157,8 @@ frontend/
 - **`document_skill.py`** — Document search and management via ACT loop: search (hybrid semantic via sqlite-vec + FTS5 + keyword retrieval), list, view, delete, restore; documents are reference material retrieved via skill, not context assembly; search results include `[Source: document_id=...]` markers for frontal cortex citation
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
-- **`emit_card_skill.py`** — Render deferred tool cards into conversation stream (internal trigger)
+- **`find_tools_skill.py`** — Discover external tools via semantic search against tool capability profiles
+- **`notes_skill.py`** — Query working notes from this session for on-demand retrieval of older action history
 
 ## Worker Processes (`backend/workers/`)
 
