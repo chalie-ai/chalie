@@ -45,6 +45,28 @@
       "world_state": true,
       "warm_return_hint": false,
       "identity_modulation": false
+    },
+    "UNIFIED": {
+      "identity_context": true,
+      "onboarding_nudge": true,
+      "user_traits": true,
+      "communication_style": true,
+      "adaptive_directives": true,
+      "active_lists": false,
+      "client_context": true,
+      "focus": true,
+      "working_memory": true,
+      "facts": true,
+      "active_goals": false,
+      "gists": true,
+      "episodic_memory": true,
+      "concepts": true,
+      "act_history": true,
+      "available_skills": true,
+      "available_tools": true,
+      "world_state": true,
+      "warm_return_hint": false,
+      "identity_modulation": true
     }
   },
   "dependencies": {

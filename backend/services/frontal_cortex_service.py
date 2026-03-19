@@ -1238,6 +1238,25 @@ class FrontalCortexService:
         """
         return self._get_injected_skills(skills)
 
+    def _get_discovery_tools_docs(self) -> str:
+        """Load find_skills + find_tools documentation for unified prompt injection.
+
+        Returns only the two discovery tool docs (~100 tokens total) instead of
+        full skill documentation. All other skills are discovered at runtime via
+        find_skills.
+        """
+        import os
+        skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts', 'skills')
+        parts = []
+        for skill_name in ('find_skills', 'find_tools'):
+            path = os.path.join(skills_dir, f'{skill_name}.md')
+            try:
+                with open(path) as f:
+                    parts.append(f.read().strip())
+            except FileNotFoundError:
+                logging.warning(f"[FRONTAL CORTEX] Missing discovery tool doc: {path}")
+        return '\n\n'.join(parts)
+
     def _get_injected_skills(self, skills: list) -> str:
         """
         Load skill doc files for the selected skills and concatenate them.
