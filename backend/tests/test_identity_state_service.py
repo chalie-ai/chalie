@@ -284,27 +284,19 @@ class TestIdentityStateServiceOnboardingState:
         assert written['_onboarding'] == onboarding
         assert written['name']['display'] == 'Dylan'
 
-    def test_identity_context_renders_confirmed(self):
-        """_get_identity_context renders 'Known user details' with (confirmed) qualifier."""
-        blob = {
-            'name': {'value': 'Dylan', 'normalized': 'dylan', 'display': 'Dylan',
-                     'confidence': 0.95, 'updated_at': 0.0, 'provisional': False,
-                     'previous': []},
-        }
-        # Patch MemoryClientService where IdentityStateService uses it
-        with patch('services.identity_state_service.MemoryClientService') as mock_cls2:
-            mock_store = MagicMock()
-            mock_cls2.create_connection.return_value = mock_store
-            mock_store.get.return_value = json.dumps(blob)
+    def test_user_state_is_pure_telemetry(self):
+        """_get_user_state returns telemetry only, no identity data."""
+        with patch('services.client_context_service.ClientContextService') as mock_cc:
+            mock_cc.return_value.get.return_value = {
+                'timezone': 'Europe/Malta',
+                'location_name': 'Malta',
+                'device': {'class': 'iPhone'},
+            }
 
             from services.frontal_cortex_service import FrontalCortexService
 
             svc = object.__new__(FrontalCortexService)
-            result = svc._get_identity_context(
-                returning_from_silence=True,
-                context_warmth=1.0,
-            )
+            result = svc._get_user_state()
 
-        assert 'Known user details' in result
-        assert 'Dylan' in result
-        assert '(confirmed)' in result
+        assert 'Malta' in result
+        assert 'iPhone' in result

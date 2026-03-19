@@ -10,7 +10,7 @@ This document defines what Chalie is, why it exists, and how every design decisi
 
 Intelligence emerges not from a single powerful model, but from the **vertical stacking** of specialized models through a persistent reasoning loop — perceive, update, reason, act, reflect — that runs continuously, not per-message.
 
-### Four Invariants
+### Invariants
 
 1. **Reasoning is primary, communication is output.** Chalie reasons continuously. Responding to a user is one possible action, not the default. Goals, plans, and world state persist across sessions and evolve autonomously.
 
@@ -21,6 +21,8 @@ Intelligence emerges not from a single powerful model, but from the **vertical s
 4. **Determinism bounds probabilism.** Every probabilistic output flows through deterministic validation. Gates, budgets, reliability scores, and verification prevent runaway reasoning. The system knows what it doesn't know.
 
 5. **Plan once, execute cheaply, verify independently.** Never loop an LLM through plan-execute-observe-replan cycles. Reasoning produces a plan. Execution follows the plan mechanically. A separate model verifies results against success criteria. If the plan needs revision, that is a new reasoning event — not another iteration of the same loop. Agent loops degrade cognition and inflate tokens quadratically; structured pipelines preserve both.
+
+6. **Every token earns its place.** Context is finite and expensive. Every injected parameter, every prompt section, every telemetry field must justify its token cost against the alternative of not including it. Duplicate information across injection points is a bug. If data appears in one slot, it must not appear in another. Prose wrappers around structured data waste tokens — use the most compact representation that preserves meaning. When in doubt, cut.
 
 ### Value Proposition
 

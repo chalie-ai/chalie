@@ -20,8 +20,6 @@ This is the raw internal thought. Do NOT reproduce it verbatim or echo its diary
 
 {{working_memory}}
 
-{{chat_history}}
-
 ────────────────────────────────
 
 ## Your Task

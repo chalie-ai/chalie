@@ -105,16 +105,13 @@ class WorldStateService:
             items.extend(self._get_salient_tasks(message_embedding))
             items.extend(self._get_salient_lists(message_embedding))
 
-        # 5. Ambient context (place, attention, energy, mobility, tempo)
-        items.extend(self._get_ambient_context())
-
-        # 6. Active conversation topics
+        # 5. Active conversation topics
         items.extend(self._get_active_topics())
 
-        # 7. Reasoning focus (what Chalie is currently thinking about)
+        # 6. Reasoning focus (what Chalie is currently thinking about)
         items.extend(self._get_reasoning_focus())
 
-        # 8. External signals (from paired interfaces — zero LLM)
+        # 7. External signals (from paired interfaces — zero LLM)
         items.extend(self._get_external_signals(message_embedding))
 
         if not items:
@@ -762,60 +759,6 @@ class WorldStateService:
         return items
 
     # ── Ambient / Loop Context Collectors ────────────────────────────────────
-
-    def _get_ambient_context(self) -> list:
-        """
-        Surface ambient context (place, attention, energy, mobility, tempo) from
-        the most recent AmbientInferenceService inference stored in MemoryStore.
-
-        Returns:
-            list: Zero or one item of type 'ambient' if interesting signals found.
-        """
-        try:
-            store = self._get_store()
-            raw = store.get('ambient:prev_inferences')
-            if not raw:
-                return []
-
-            inferences = json.loads(raw) if isinstance(raw, str) else raw
-            if not isinstance(inferences, dict):
-                return []
-
-            # Collect non-default, non-null signals
-            signals = []
-
-            place = inferences.get('place')
-            if place and place not in ('unknown', 'home', None):
-                signals.append(f"at {place}")
-
-            attention = inferences.get('attention')
-            if attention and attention not in ('normal', 'unknown', None):
-                signals.append(f"attention: {attention}")
-
-            energy = inferences.get('energy')
-            if energy and energy not in ('normal', 'medium', 'unknown', None):
-                signals.append(f"energy: {energy}")
-
-            mobility = inferences.get('mobility')
-            if mobility and mobility not in ('stationary', 'unknown', None):
-                signals.append(f"mobility: {mobility}")
-
-            tempo = inferences.get('tempo')
-            if tempo and tempo not in ('normal', 'medium', 'unknown', None):
-                signals.append(f"tempo: {tempo}")
-
-            if not signals:
-                return []
-
-            label = "[AMBIENT] " + ", ".join(signals)
-            return [{
-                'type': 'ambient',
-                'label': label,
-                'salience': 0.2,  # Fixed salience — informational context
-            }]
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} _get_ambient_context failed (non-fatal): {e}")
-            return []
 
     def _get_active_topics(self) -> list:
         """

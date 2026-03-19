@@ -10,10 +10,4 @@ Parameters:
 - `query` (required): Natural language description of what you want to do
 - `limit` (optional): Max results (default 3, max 5)
 
-### When to use
-- You need a capability beyond recall/memorize/associate (the always-available primitives)
-- You're unsure which skill handles a specific task
-- You want to check what's available before choosing an approach
-
-### Output
-Returns full skill documentation for the best matches, ready for immediate use.
+Use when you need further capability or are unsure what's available. Returns full skill documentation ready for immediate use.
