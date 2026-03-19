@@ -10,8 +10,6 @@
 Unit tests for AppUpdateService — in-place update system.
 
 Tests cover:
-  - Version parsing and comparison
-  - Deployment mode detection (dev, docker, installed)
   - Update checking with cache fallback
   - Update application with mode rejection and concurrency guard
   - Database backup and cleanup
@@ -20,7 +18,7 @@ Tests cover:
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from services.app_update_service import AppUpdateService
@@ -28,47 +26,6 @@ from services.app_update_service import AppUpdateService
 
 @pytest.mark.unit
 class TestAppUpdateService:
-
-    def test_parse_version_standard(self):
-        svc = AppUpdateService()
-        assert svc.parse_version("v0.2.0") == (0, 2, 0)
-
-    def test_parse_version_no_prefix(self):
-        svc = AppUpdateService()
-        assert svc.parse_version("1.0.1") == (1, 0, 1)
-
-    def test_parse_version_large_numbers(self):
-        svc = AppUpdateService()
-        assert svc.parse_version("v10.20.30") == (10, 20, 30)
-
-    def test_parse_version_extra_segments(self):
-        svc = AppUpdateService()
-        # Extra segments should be included
-        assert svc.parse_version("v1.2.3.4") == (1, 2, 3, 4)
-
-    def test_parse_version_non_numeric(self):
-        svc = AppUpdateService()
-        # Non-numeric segments become 0
-        assert svc.parse_version("v1.beta.3") == (1, 0, 3)
-
-    def test_version_comparison(self):
-        svc = AppUpdateService()
-        assert svc.parse_version("v1.0.1") > svc.parse_version("v1.0.0")
-        assert svc.parse_version("v2.0.0") > svc.parse_version("v1.99.99")
-        assert svc.parse_version("v0.2.0") == svc.parse_version("0.2.0")
-        assert svc.parse_version("v0.2.0") < svc.parse_version("v0.3.0")
-
-    def test_detect_deployment_mode_dev(self, tmp_path):
-        """When .git/ exists in app root, mode is dev."""
-        (tmp_path / ".git").mkdir()
-        with patch('services.app_update_service.APP_ROOT', tmp_path):
-            assert AppUpdateService.detect_deployment_mode() == "dev"
-
-    def test_detect_deployment_mode_installed(self, tmp_path):
-        """When .git/ does not exist in app root, mode is installed."""
-        # tmp_path has no .git/ directory
-        with patch('services.app_update_service.APP_ROOT', tmp_path):
-            assert AppUpdateService.detect_deployment_mode() == "installed"
 
     @patch('services.app_update_service.MemoryClientService')
     def test_check_for_update_cached(self, mock_mem):

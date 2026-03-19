@@ -11,7 +11,6 @@ const SHELL_ASSETS = [
   '/', '/index.html', '/manifest.json',
   '/app.js', '/api.js', '/ws.js', '/renderer.js',
   '/presence.js', '/voice.js', '/tools.js', '/style.css',
-  '/markdown.js', '/lib/marked.esm.js',
   '/ambient.js',
   '/icons/icon.png',
 ];

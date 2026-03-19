@@ -71,7 +71,11 @@ class TestConversationAPI:
             assert data["thread_id"] == "thread-123"
             assert len(data["exchanges"]) == 1
             assert data["exchanges"][0]["prompt"] == "hello"
-            assert data["exchanges"][0]["response"] == "hi there"
+            assert "blocks" in data["exchanges"][0]
+            assert isinstance(data["exchanges"][0]["blocks"], list)
+            assert len(data["exchanges"][0]["blocks"]) > 0
+            assert data["exchanges"][0]["blocks"][0]["type"] == "text"
+            assert "hi there" in data["exchanges"][0]["blocks"][0]["content"]
 
     def test_recent_no_thread_returns_empty(self, client):
         """GET /conversation/recent with no active thread returns empty exchanges."""

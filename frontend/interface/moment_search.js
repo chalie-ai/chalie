@@ -91,11 +91,13 @@ export class MomentSearch {
       const data = await res.json();
       const items = data.items || [];
 
-      this._results.innerHTML = '';
+      this._results.textContent = '';
 
       if (items.length === 0) {
-        this._results.innerHTML =
-          '<div class="moment-search-dialog__empty">I couldn\'t recall anything like that yet.</div>';
+        const empty = document.createElement('div');
+        empty.className = 'moment-search-dialog__empty';
+        empty.textContent = 'I couldn\'t recall anything like that yet.';
+        this._results.appendChild(empty);
         return;
       }
 
@@ -104,31 +106,47 @@ export class MomentSearch {
         el.className = 'moment-search-dialog__item';
         const title = item.title || item.topic || 'Moment';
         const text = item.summary || item.message_text || '';
-        el.innerHTML = `<div class="moment-search-dialog__item-title">${this._esc(title)}</div>`
-          + (text ? `<div class="moment-search-dialog__item-text">${this._esc(text)}</div>` : '');
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'moment-search-dialog__item-title';
+        titleEl.textContent = title;
+        el.appendChild(titleEl);
+
+        if (text) {
+          const textEl = document.createElement('div');
+          textEl.className = 'moment-search-dialog__item-text';
+          textEl.textContent = text;
+          el.appendChild(textEl);
+        }
+
         el.style.cursor = 'pointer';
         el.addEventListener('click', () => this.close());
         this._results.appendChild(el);
       }
     } catch (err) {
-      this._results.innerHTML =
-        '<div class="moment-search-dialog__empty">Something went wrong. Try again.</div>';
+      this._results.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'moment-search-dialog__empty';
+      errEl.textContent = 'Something went wrong. Try again.';
+      this._results.appendChild(errEl);
     }
   }
 
   _showEmpty() {
-    this._results.innerHTML =
-      '<div class="moment-search-dialog__empty">Your remembered answers will appear here.</div>';
+    this._results.textContent = '';
+    const empty = document.createElement('div');
+    empty.className = 'moment-search-dialog__empty';
+    empty.textContent = 'Your remembered answers will appear here.';
+    this._results.appendChild(empty);
   }
 
   _showLoading() {
-    this._results.innerHTML =
-      '<div class="moment-search-dialog__shimmer"><div></div><div></div><div></div></div>';
-  }
-
-  _esc(str) {
-    const el = document.createElement('span');
-    el.textContent = str;
-    return el.innerHTML;
+    this._results.textContent = '';
+    const shimmer = document.createElement('div');
+    shimmer.className = 'moment-search-dialog__shimmer';
+    for (let i = 0; i < 3; i++) {
+      shimmer.appendChild(document.createElement('div'));
+    }
+    this._results.appendChild(shimmer);
   }
 }

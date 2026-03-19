@@ -7,9 +7,8 @@ Protocol:
   → Client sends:  {"type": "act_steer", "text": "..."}
   → Client sends:  {"type": "resume", "last_seq": N}
   ← Server sends:  {"type": "status", "stage": "...", "seq": N}
-  ← Server sends:  {"type": "message", "text": "...", "actions?": [...], ..., "seq": N}
+  ← Server sends:  {"type": "message", "blocks": [...], ..., "seq": N}
   ← Server sends:  {"type": "act_narration", "text": "...", "step": N, "seq": N}
-  ← Server sends:  {"type": "card", "html": "...", ..., "seq": N}
   ← Server sends:  {"type": "done", "duration_ms": N, "seq": N}
   ← Server sends:  {"type": "drift|task|reminder|escalation|notification", ..., "seq": N}
   ← Server sends:  {"type": "ping"}
@@ -21,6 +20,9 @@ import uuid
 import logging
 import threading
 from collections import deque
+
+from services.blocks_render_service import BlocksRenderService
+_blocks_svc = BlocksRenderService()
 
 logger = logging.getLogger(__name__)
 
@@ -234,18 +236,21 @@ def _handle_action(ws, store, msg):
 
         elapsed_ms = int((time.time() - start) * 1000)
 
+        # Convert to blocks — sole output format
+        blocks = _blocks_svc.from_markdown(result or "Done.")
+        if reply_actions:
+            blocks.extend(_blocks_svc.from_actions(reply_actions))
+
         seq = _next_seq()
         message_evt = {
             "type": "message",
-            "text": result or "Done.",
+            "blocks": blocks,
             "topic": "",
             "mode": "ACT",
             "confidence": 0.95,
             "exchange_id": "",
             "seq": seq,
         }
-        if reply_actions:
-            message_evt["actions"] = reply_actions
         _buffer_event(message_evt)
         _send_json(ws, message_evt)
 
@@ -419,16 +424,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "text": metadata.get("response", ""),
+                    "blocks": metadata.get("blocks", []),
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
-                # Include reply actions (UI buttons) — sync chat only, never drift
-                if metadata.get("reply_actions"):
-                    message_evt["actions"] = metadata["reply_actions"]
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
                 message_received = True
@@ -471,15 +473,13 @@ def _handle_chat(ws, store, msg, active_request=None):
                 seq = _next_seq()
                 message_evt = {
                     "type": "message",
-                    "text": metadata.get("response", ""),
+                    "blocks": metadata.get("blocks", []),
                     "topic": output.get("topic", ""),
                     "mode": metadata.get("mode", ""),
                     "confidence": metadata.get("confidence", 0),
                     "exchange_id": original_meta.get("exchange_id", ""),
                     "seq": seq,
                 }
-                if metadata.get("reply_actions"):
-                    message_evt["actions"] = metadata["reply_actions"]
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
             elif bg_error:

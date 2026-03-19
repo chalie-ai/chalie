@@ -2609,6 +2609,7 @@ body.has-task-strip .conversation-spine {
   flex: 1;
   overflow: auto;
   padding: var(--space-lg);
+  color: var(--text-primary);
 }
 
 /* --------------------------------------------------------------------------
