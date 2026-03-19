@@ -1,415 +1,706 @@
 """
-Tests for introspect_skill — covering the Plan 07 additions:
-- _get_recent_decision_explanations(): pulls routing decision data with scores/signals
-- _get_recent_autonomous_actions(): filters interaction_log to user-relevant event types
+Tests for services/innate_skills/introspect_skill.py
 
-Both functions import their services inside the function body (lazy imports), so
-patches target the source modules rather than the using module.
+All tests are unit-level: no database, no external services, no LLM calls.
+Every external dependency is patched via unittest.mock.patch.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, call
-from contextlib import contextmanager
+from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, patch
 
 
-def _make_decision(**overrides):
-    """Build a mock routing decision dict with sensible defaults."""
-    base = {
-        'selected_mode': 'RESPOND',
-        'router_confidence': 0.82,
-        'scores': {'RESPOND': 0.82, 'ACT': 0.54, 'IGNORE': -0.50},
-        'tiebreaker_used': False,
-        'tiebreaker_candidates': None,
-        'margin': 0.28,
-        'signal_snapshot': {
-            'context_warmth': 0.65,
-            'has_question_mark': False,
-            'greeting_pattern': False,
-            'explicit_feedback': None,
-            'memory_confidence': 0.70,
-            'is_new_topic': False,
-        },
-    }
-    base.update(overrides)
-    return base
+# ── Patch target constants ────────────────────────────────────────────────────
+
+_SELF_MODEL  = 'services.self_model_service.SelfModelService'
+_DB          = 'services.database_service.get_shared_db_service'
+_PROCEDURAL  = 'services.procedural_memory_service.ProceduralMemoryService'
+_FOCUS_SVC   = 'services.focus_session_service.FocusSessionService'
+_MEMORY_CLI  = 'services.memory_client.MemoryClientService'
+_IDENTITY    = 'services.identity_service.IdentityService'
+_TRAIT_SVC   = 'services.user_trait_service.UserTraitService'
+_AUTO_SVC    = 'services.autobiography_service.AutobiographyService'
+_UTC_NOW     = 'services.innate_skills.introspect_skill.utc_now'
+
+# A fixed "now" for deterministic relative-time assertions.
+_FIXED_NOW = datetime(2026, 3, 19, 12, 0, 0, tzinfo=timezone.utc)
 
 
-@pytest.mark.unit
-class TestGetRecentDecisionExplanations:
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-    def _mock_service(self, decisions):
-        mock_svc = MagicMock()
-        mock_svc.get_recent_decisions.return_value = decisions
-        return mock_svc
+def _mock_db(rows_by_query=None):
+    """
+    Build a mock DB service whose cursor returns different row sets per query.
 
-    def test_returns_list_of_explanations(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        mock_svc = self._mock_service([_make_decision()])
-        mock_db = MagicMock()
+    rows_by_query maps a query substring to the list of rows that fetchone()
+    or fetchall() should return for that query.  If None all cursor calls
+    return empty results.
+    """
+    mock_db   = MagicMock()
+    mock_conn = MagicMock()
+    mock_db.connection.return_value.__enter__ = lambda s: mock_conn
+    mock_db.connection.return_value.__exit__  = MagicMock(return_value=False)
 
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations(limit=3)
+    rows_by_query = rows_by_query or {}
+    call_count = [0]
 
-        assert isinstance(result, list)
-        assert len(result) == 1
+    def _cursor_factory():
+        mock_cursor = MagicMock()
 
-    def test_explanation_contains_required_fields(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        mock_svc = self._mock_service([_make_decision()])
-        mock_db = MagicMock()
+        def _execute(sql, *args, **kwargs):
+            mock_cursor._last_sql = sql
 
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
+        def _fetchone():
+            sql = getattr(mock_cursor, '_last_sql', '')
+            for key, rows in rows_by_query.items():
+                if key in sql and rows:
+                    # fetchone returns first item
+                    val = rows[0] if isinstance(rows[0], tuple) else (rows[0],)
+                    return val
+            return None
 
-        exp = result[0]
-        assert 'mode' in exp
-        assert 'confidence' in exp
-        assert 'scores' in exp
-        assert 'tiebreaker_used' in exp
-        assert 'key_signals' in exp
-        assert 'margin' in exp
+        def _fetchall():
+            sql = getattr(mock_cursor, '_last_sql', '')
+            for key, rows in rows_by_query.items():
+                if key in sql:
+                    return rows
+            return []
 
-    def test_mode_mapped_correctly(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        mock_svc = self._mock_service([_make_decision(selected_mode='ACT')])
-        mock_db = MagicMock()
+        mock_cursor.execute   = MagicMock(side_effect=_execute)
+        mock_cursor.fetchone  = MagicMock(side_effect=_fetchone)
+        mock_cursor.fetchall  = MagicMock(side_effect=_fetchall)
+        mock_cursor.close     = MagicMock()
+        return mock_cursor
 
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
+    mock_conn.cursor = MagicMock(side_effect=_cursor_factory)
+    return mock_db
 
-        assert result[0]['mode'] == 'ACT'
 
-    def test_confidence_rounded_to_3_places(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        mock_svc = self._mock_service([_make_decision(router_confidence=0.8215678)])
-        mock_db = MagicMock()
+def _invoke(topic='test', params=None):
+    from services.innate_skills.introspect_skill import handle_introspect
+    return handle_introspect(topic, params or {})
 
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
 
-        # Should be rounded to 3 decimal places
-        assert result[0]['confidence'] == round(0.8215678, 3)
-
-    def test_key_signals_context_warmth_extracted(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decision = _make_decision(signal_snapshot={'context_warmth': 0.753})
-        mock_svc = self._mock_service([decision])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        assert result[0]['key_signals']['context_warmth'] == round(0.753, 2)
-
-    def test_key_signals_question_detected(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decision = _make_decision(signal_snapshot={'has_question_mark': True, 'context_warmth': 0.5})
-        mock_svc = self._mock_service([decision])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        assert result[0]['key_signals'].get('question_detected') is True
-
-    def test_key_signals_false_question_not_included(self):
-        """When has_question_mark is False, question_detected should be absent (not False)."""
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decision = _make_decision(signal_snapshot={'has_question_mark': False})
-        mock_svc = self._mock_service([decision])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        assert 'question_detected' not in result[0]['key_signals']
-
-    def test_tiebreaker_info_included_when_used(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decision = _make_decision(
-            tiebreaker_used=True,
-            tiebreaker_candidates=['RESPOND', 'ACT'],
-            signal_snapshot={},
-        )
-        mock_svc = self._mock_service([decision])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        assert result[0]['tiebreaker_used'] is True
-        assert result[0]['tiebreaker_candidates'] == ['RESPOND', 'ACT']
-
-    def test_empty_decisions_returns_empty_list(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        mock_svc = self._mock_service([])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        assert result == []
-
-    def test_error_returns_empty_list(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception("db down")):
-            result = _get_recent_decision_explanations()
-
-        assert result == []
-
-    def test_scores_rounded(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decision = _make_decision(scores={'RESPOND': 0.8212345, 'ACT': 0.3456789})
-        mock_svc = self._mock_service([decision])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        scores = result[0]['scores']
-        assert scores['RESPOND'] == round(0.8212345, 3)
-        assert scores['ACT'] == round(0.3456789, 3)
-
-    def test_none_scores_becomes_empty_dict(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decision = _make_decision(scores=None, signal_snapshot={})
-        mock_svc = self._mock_service([decision])
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations()
-
-        assert result[0]['scores'] == {}
-
-    def test_multiple_decisions_all_returned(self):
-        from services.innate_skills.introspect_skill import _get_recent_decision_explanations
-        decisions = [
-            _make_decision(selected_mode='RESPOND'),
-            _make_decision(selected_mode='ACT'),
-            _make_decision(selected_mode='IGNORE'),
-        ]
-        mock_svc = self._mock_service(decisions)
-        mock_db = MagicMock()
-
-        with patch('services.routing_decision_service.RoutingDecisionService', return_value=mock_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = _get_recent_decision_explanations(limit=3)
-
-        assert len(result) == 3
-        assert [r['mode'] for r in result] == ['RESPOND', 'ACT', 'IGNORE']
-
+# ── Tests: top-level output structure ────────────────────────────────────────
 
 @pytest.mark.unit
-class TestGetRecentAutonomousActions:
+class TestOutputStructure:
 
-    def _make_cursor(self, rows):
-        """Build a mock cursor that returns given rows."""
-        cursor = MagicMock()
-        cursor.fetchall.return_value = rows
-        return cursor
+    def test_starts_with_introspect_prefix(self):
+        result = _invoke()
+        assert result.startswith('[INTROSPECT]')
 
-    def _make_db_service(self, rows):
-        """Build a mock db_service whose connection() yields a mock conn."""
-        cursor = self._make_cursor(rows)
-        conn = MagicMock()
-        conn.cursor.return_value = cursor
+    def test_returns_all_four_scope_headers(self):
+        result = _invoke()
+        assert '## Memory Health'      in result
+        assert '## Skill & Tool Usage' in result
+        assert '## Reasoning State'    in result
+        assert '## Identity'           in result
 
-        db_service = MagicMock()
-        db_service.connection.return_value.__enter__ = MagicMock(return_value=conn)
-        db_service.connection.return_value.__exit__ = MagicMock(return_value=False)
-        return db_service, conn, cursor
-
-    def test_returns_list(self):
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        db_service, _, _ = self._make_db_service([])
-
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            result = _get_recent_autonomous_actions()
-
-        assert isinstance(result, list)
-
-    def test_formats_rows_correctly(self):
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        rows = [
-            ('proactive_sent', {'message': 'hello'}, '2024-01-01 10:00:00'),
+    def test_sections_appear_in_order(self):
+        result = _invoke()
+        positions = [
+            result.index('## Memory Health'),
+            result.index('## Skill & Tool Usage'),
+            result.index('## Reasoning State'),
+            result.index('## Identity'),
         ]
-        db_service, _, _ = self._make_db_service(rows)
+        assert positions == sorted(positions)
 
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            result = _get_recent_autonomous_actions()
+    def test_result_is_string(self):
+        result = _invoke()
+        assert isinstance(result, str)
 
-        assert len(result) == 1
-        assert result[0]['event_type'] == 'proactive_sent'
-        assert 'payload_summary' in result[0]
-        assert 'created_at' in result[0]
 
-    def test_payload_summary_truncated_to_200(self):
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        long_payload = {'data': 'x' * 500}
-        rows = [('cron_tool_executed', long_payload, '2024-01-01 10:00:00')]
-        db_service, _, _ = self._make_db_service(rows)
-
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            result = _get_recent_autonomous_actions()
-
-        assert len(result[0]['payload_summary']) <= 200
-
-    def test_non_dict_payload_handled(self):
-        """Non-dict payload (e.g. string or None from db) should not crash."""
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        rows = [('plan_proposed', None, '2024-01-01 10:00:00')]
-        db_service, _, _ = self._make_db_service(rows)
-
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            result = _get_recent_autonomous_actions()
-
-        # Should not raise, and payload_summary should be the str({}) representation
-        assert result[0]['payload_summary'] == '{}'
-
-    def test_empty_rows_returns_empty_list(self):
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        db_service, _, _ = self._make_db_service([])
-
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            result = _get_recent_autonomous_actions()
-
-        assert result == []
-
-    def test_error_returns_empty_list(self):
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        with patch('services.database_service.get_shared_db_service', side_effect=Exception("db down")):
-            result = _get_recent_autonomous_actions()
-
-        assert result == []
-
-    def test_query_filters_only_relevant_types(self):
-        """The SQL query should only request proactive_sent, cron_tool_executed, plan_proposed."""
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        db_service, conn, cursor = self._make_db_service([])
-
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            _get_recent_autonomous_actions()
-
-        # Verify the execute call was made and contained the right event types
-        assert cursor.execute.called
-        sql_call = cursor.execute.call_args
-        sql, params = sql_call[0]
-
-        assert 'proactive_sent' in params
-        assert 'cron_tool_executed' in params
-        assert 'plan_proposed' in params
-
-    def test_multiple_rows_returned(self):
-        from services.innate_skills.introspect_skill import _get_recent_autonomous_actions
-        rows = [
-            ('proactive_sent', {'msg': 'a'}, '2024-01-02 09:00:00'),
-            ('cron_tool_executed', {'tool': 'search'}, '2024-01-01 20:00:00'),
-            ('plan_proposed', {'goal': 'organise'}, '2024-01-01 15:00:00'),
-        ]
-        db_service, _, _ = self._make_db_service(rows)
-
-        with patch('services.database_service.get_shared_db_service', return_value=db_service):
-            result = _get_recent_autonomous_actions(limit=5)
-
-        assert len(result) == 3
-        assert result[0]['event_type'] == 'proactive_sent'
-        assert result[1]['event_type'] == 'cron_tool_executed'
-
+# ── Tests: Memory Health scope ────────────────────────────────────────────────
 
 @pytest.mark.unit
-class TestFormatSnapshotWithNewFields:
-    """Verify _format_snapshot() renders decision_explanations and recent_autonomous_actions."""
+class TestMemoryHealthScope:
 
-    def _build_snapshot_and_extra(self):
-        """Minimal snapshot + extra dicts matching self-model structure."""
-        snapshot = {
-            'epistemic': {
-                'context_warmth': 0.5,
-                'gist_count': 2,
-                'fact_count': 3,
-                'working_memory_depth': 4,
-                'topic_age': '5min',
-                'partial_match_signal': 1,
-                'recall_failure_rate': 0.1,
-                'focus_active': False,
-                'recent_modes': ['RESPOND'],
-                'skill_reliability': {},
+    def _make_snapshot(self, episode_count=120, concept_count=45, wm_depth=7):
+        return {
+            'operational': {
+                'memory_pressure': {
+                    'episode_count': episode_count,
+                    'concept_count': concept_count,
+                }
             },
-            'operational': {'thread_health': {}, 'provider_status': {}, 'queue_depth': {}, 'memory_pressure': {}},
-            'capability': {'tool_count': 0, 'capability_categories': {}},
-            'noteworthy': [],
+            'epistemic': {
+                'working_memory_depth': wm_depth,
+            },
         }
-        extra = {
-            'communication_style': {},
-            'skill_stats': {},
-            'world_state': '',
-            'decision_explanations': [],
-            'recent_autonomous_actions': [],
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_shows_episode_count(self, mock_sms_cls, mock_db_fn):
+        mock_sms_cls.return_value.get_snapshot.return_value = self._make_snapshot(
+            episode_count=300, concept_count=80, wm_depth=5
+        )
+        mock_db_fn.return_value = _mock_db({'MAX(updated_at)': [('2026-01-01 10:00:00',)]})
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert '300' in result
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_shows_concept_count(self, mock_sms_cls, mock_db_fn):
+        mock_sms_cls.return_value.get_snapshot.return_value = self._make_snapshot(
+            episode_count=300, concept_count=80, wm_depth=5
+        )
+        mock_db_fn.return_value = _mock_db({'MAX(updated_at)': [('2026-01-01 10:00:00',)]})
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert '80' in result
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_shows_working_memory_depth(self, mock_sms_cls, mock_db_fn):
+        mock_sms_cls.return_value.get_snapshot.return_value = self._make_snapshot(
+            episode_count=300, concept_count=80, wm_depth=5
+        )
+        mock_db_fn.return_value = _mock_db({'MAX(updated_at)': [('2026-01-01 10:00:00',)]})
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert '5/12' in result
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_label_healthy(self, mock_sms_cls, mock_db_fn):
+        mock_sms_cls.return_value.get_snapshot.return_value = self._make_snapshot(episode_count=200)
+        mock_db_fn.return_value = _mock_db()
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert 'healthy' in result
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_label_developing(self, mock_sms_cls, mock_db_fn):
+        mock_sms_cls.return_value.get_snapshot.return_value = self._make_snapshot(episode_count=75)
+        mock_db_fn.return_value = _mock_db()
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert 'developing' in result
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_label_sparse(self, mock_sms_cls, mock_db_fn):
+        mock_sms_cls.return_value.get_snapshot.return_value = self._make_snapshot(episode_count=10)
+        mock_db_fn.return_value = _mock_db()
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert 'sparse' in result
+
+    @patch(_DB)
+    @patch(_SELF_MODEL)
+    def test_memory_health_graceful_degradation(self, mock_sms_cls, mock_db_fn):
+        """When SelfModelService raises, the scope must not propagate the exception."""
+        mock_sms_cls.return_value.get_snapshot.side_effect = RuntimeError('service down')
+        mock_db_fn.return_value = _mock_db()
+
+        from services.innate_skills.introspect_skill import _scope_memory_health
+        result = _scope_memory_health()
+
+        assert result == 'Memory: unavailable.'
+
+    def test_memory_health_graceful_degradation_via_full_output(self):
+        """Degraded memory scope must not crash the overall introspect output."""
+        with patch(_SELF_MODEL, side_effect=Exception('import fail')), \
+             patch(_DB, side_effect=Exception('db fail')):
+            result = _invoke()
+
+        assert '[INTROSPECT]'      in result
+        assert '## Memory Health'  in result
+        assert 'unavailable'       in result
+
+
+# ── Tests: Skill & Tool Usage scope ──────────────────────────────────────────
+
+@pytest.mark.unit
+class TestSkillUsageScope:
+
+    def _skill_stats(self, attempts=5, successes=4, updated_at='2026-03-18 08:00:00'):
+        return {
+            'total_attempts': attempts,
+            'total_successes': successes,
+            'updated_at': updated_at,
         }
-        return snapshot, extra
 
-    def test_empty_decision_explanations_renders_none_message(self):
-        from services.innate_skills.introspect_skill import _format_snapshot
-        snapshot, extra = self._build_snapshot_and_extra()
-        output = _format_snapshot(snapshot, extra, 'test_topic')
-        assert 'none in last hour' in output
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_table_has_name_header(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        svc = mock_proc_cls.return_value
+        svc.get_action_stats.return_value = self._skill_stats()
 
-    def test_decision_explanation_renders_mode(self):
-        from services.innate_skills.introspect_skill import _format_snapshot
-        snapshot, extra = self._build_snapshot_and_extra()
-        extra['decision_explanations'] = [{
-            'mode': 'RESPOND',
-            'confidence': 0.82,
-            'margin': 0.28,
-            'scores': {'RESPOND': 0.82},
-            'key_signals': {'context_warmth': 0.65},
-            'tiebreaker_used': False,
-            'tiebreaker_candidates': None,
-        }]
-        output = _format_snapshot(snapshot, extra, 'test_topic')
-        assert 'mode=RESPOND' in output
-        assert 'confidence=0.82' in output
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
 
-    def test_tiebreaker_info_rendered_when_used(self):
-        from services.innate_skills.introspect_skill import _format_snapshot
-        snapshot, extra = self._build_snapshot_and_extra()
-        extra['decision_explanations'] = [{
-            'mode': 'ACT',
-            'confidence': 0.45,
-            'margin': 0.02,
-            'scores': {},
-            'key_signals': {},
-            'tiebreaker_used': True,
-            'tiebreaker_candidates': ['ACT', 'RESPOND'],
-        }]
-        output = _format_snapshot(snapshot, extra, 'test_topic')
-        assert 'tiebreaker between' in output
+        assert '| Name' in result
 
-    def test_empty_autonomous_actions_renders_none_message(self):
-        from services.innate_skills.introspect_skill import _format_snapshot
-        snapshot, extra = self._build_snapshot_and_extra()
-        output = _format_snapshot(snapshot, extra, 'test_topic')
-        assert 'none recently' in output
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_table_has_uses_header(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        svc = mock_proc_cls.return_value
+        svc.get_action_stats.return_value = self._skill_stats()
 
-    def test_autonomous_action_rendered(self):
-        from services.innate_skills.introspect_skill import _format_snapshot
-        snapshot, extra = self._build_snapshot_and_extra()
-        extra['recent_autonomous_actions'] = [{
-            'event_type': 'proactive_sent',
-            'payload_summary': '{"message": "hello"}',
-            'created_at': '2024-01-01 10:00:00',
-        }]
-        output = _format_snapshot(snapshot, extra, 'test_topic')
-        assert 'proactive_sent' in output
-        assert '2024-01-01 10:00:00' in output
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert '| Uses' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_table_has_last_used_header(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        svc = mock_proc_cls.return_value
+        svc.get_action_stats.return_value = self._skill_stats()
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert '| Last Used' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_table_has_last_result_header(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        svc = mock_proc_cls.return_value
+        svc.get_action_stats.return_value = self._skill_stats()
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert '| Last Result' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_table_includes_skill_row(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        svc = mock_proc_cls.return_value
+
+        # Only 'recall' returns stats; all others return None
+        def _stats(name):
+            return self._skill_stats() if name == 'recall' else None
+
+        svc.get_action_stats.side_effect = _stats
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert 'recall' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_shows_attempt_count(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        svc = mock_proc_cls.return_value
+
+        def _stats(name):
+            return self._skill_stats(attempts=7) if name == 'recall' else None
+
+        svc.get_action_stats.side_effect = _stats
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert '7' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_empty_when_no_data(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+        # All skills return no stats
+        mock_proc_cls.return_value.get_action_stats.return_value = None
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert 'No usage data' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_success_label(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+
+        def _stats(name):
+            return self._skill_stats(attempts=4, successes=4) if name == 'recall' else None
+
+        mock_proc_cls.return_value.get_action_stats.side_effect = _stats
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert 'success' in result
+
+    @patch(_DB)
+    @patch(_PROCEDURAL)
+    def test_skill_usage_failed_label_when_mostly_failed(self, mock_proc_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
+
+        def _stats(name):
+            return self._skill_stats(attempts=4, successes=1) if name == 'recall' else None
+
+        mock_proc_cls.return_value.get_action_stats.side_effect = _stats
+
+        from services.innate_skills.introspect_skill import _scope_skill_tool_usage
+        result = _scope_skill_tool_usage()
+
+        assert 'failed' in result
+
+
+# ── Tests: Reasoning State scope ─────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestReasoningStateScope:
+
+    @patch(_DB)
+    def test_reasoning_state_shows_persistent_tasks(self, mock_db_fn):
+        task_rows = [
+            ('Research machine learning papers', 'in_progress', 3),
+        ]
+        mock_db_fn.return_value = _mock_db({'persistent_tasks': task_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
+        result = _reasoning_persistent_tasks()
+
+        assert 'Research machine learning papers' in result
+
+    @patch(_DB)
+    def test_reasoning_state_shows_task_status(self, mock_db_fn):
+        task_rows = [
+            ('Write weekly summary', 'paused', 1),
+        ]
+        mock_db_fn.return_value = _mock_db({'persistent_tasks': task_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
+        result = _reasoning_persistent_tasks()
+
+        assert 'paused' in result
+
+    @patch(_DB)
+    def test_reasoning_state_task_count_singular(self, mock_db_fn):
+        task_rows = [('Single task', 'accepted', 0)]
+        mock_db_fn.return_value = _mock_db({'persistent_tasks': task_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
+        result = _reasoning_persistent_tasks()
+
+        assert '1 persistent task' in result
+
+    @patch(_DB)
+    def test_reasoning_state_task_count_plural(self, mock_db_fn):
+        task_rows = [
+            ('Task A', 'accepted', 0),
+            ('Task B', 'in_progress', 2),
+        ]
+        mock_db_fn.return_value = _mock_db({'persistent_tasks': task_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
+        result = _reasoning_persistent_tasks()
+
+        assert '2 persistent tasks' in result
+
+    @patch(_DB)
+    def test_reasoning_state_no_tasks_returns_empty(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'persistent_tasks': []})
+
+        from services.innate_skills.introspect_skill import _reasoning_persistent_tasks
+        result = _reasoning_persistent_tasks()
+
+        assert result == ''
+
+    @patch(_UTC_NOW, return_value=_FIXED_NOW)
+    @patch(_DB)
+    def test_reasoning_state_shows_reminders(self, mock_db_fn, mock_now):
+        # due_at must be in the future relative to SQL datetime('now'), but the
+        # display uses _relative_time which is mocked via utc_now.
+        reminder_rows = [
+            ('Team standup call', '2026-03-19 14:00:00'),
+            ('Pay rent', '2026-03-20 09:00:00'),
+        ]
+        mock_db_fn.return_value = _mock_db({'scheduled_items': reminder_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_upcoming_reminders
+        result = _reasoning_upcoming_reminders()
+
+        assert 'Team standup call' in result
+
+    @patch(_UTC_NOW, return_value=_FIXED_NOW)
+    @patch(_DB)
+    def test_reasoning_state_reminder_count_singular(self, mock_db_fn, mock_now):
+        reminder_rows = [('Dentist appointment', '2026-03-19 15:00:00')]
+        mock_db_fn.return_value = _mock_db({'scheduled_items': reminder_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_upcoming_reminders
+        result = _reasoning_upcoming_reminders()
+
+        assert '1 upcoming reminder' in result
+
+    @patch(_UTC_NOW, return_value=_FIXED_NOW)
+    @patch(_DB)
+    def test_reasoning_state_reminder_count_plural(self, mock_db_fn, mock_now):
+        reminder_rows = [
+            ('First reminder', '2026-03-19 15:00:00'),
+            ('Second reminder', '2026-03-19 16:00:00'),
+        ]
+        mock_db_fn.return_value = _mock_db({'scheduled_items': reminder_rows})
+
+        from services.innate_skills.introspect_skill import _reasoning_upcoming_reminders
+        result = _reasoning_upcoming_reminders()
+
+        assert '2 upcoming reminders' in result
+
+    @patch(_DB)
+    def test_reasoning_state_no_reminders_returns_empty(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'scheduled_items': []})
+
+        from services.innate_skills.introspect_skill import _reasoning_upcoming_reminders
+        result = _reasoning_upcoming_reminders()
+
+        assert result == ''
+
+    @patch(_DB)
+    def test_reasoning_state_no_active_state_fallback_text(self, mock_db_fn):
+        """When all sub-parts are empty, the scope returns the fallback sentence."""
+        mock_db_fn.return_value = _mock_db({
+            'persistent_tasks': [],
+            'scheduled_items': [],
+            'interaction_log': [],
+        })
+
+        with patch('services.innate_skills.introspect_skill._reasoning_focus', return_value=''):
+            from services.innate_skills.introspect_skill import _scope_reasoning_state
+            result = _scope_reasoning_state()
+
+        assert 'No active reasoning state.' in result
+
+
+# ── Tests: Identity scope ─────────────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestIdentityScope:
+
+    @patch(_DB)
+    def test_identity_shows_relationship_depth_new(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'interaction_log': [(10,)]})
+
+        from services.innate_skills.introspect_skill import _identity_relationship_depth
+        result = _identity_relationship_depth()
+
+        assert 'new' in result
+
+    @patch(_DB)
+    def test_identity_shows_relationship_depth_developing(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'interaction_log': [(200,)]})
+
+        from services.innate_skills.introspect_skill import _identity_relationship_depth
+        result = _identity_relationship_depth()
+
+        assert 'developing' in result
+
+    @patch(_DB)
+    def test_identity_shows_relationship_depth_established(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'interaction_log': [(1000,)]})
+
+        from services.innate_skills.introspect_skill import _identity_relationship_depth
+        result = _identity_relationship_depth()
+
+        assert 'established' in result
+
+    @patch(_DB)
+    def test_identity_shows_relationship_depth_deep(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'interaction_log': [(5000,)]})
+
+        from services.innate_skills.introspect_skill import _identity_relationship_depth
+        result = _identity_relationship_depth()
+
+        assert 'deep' in result
+
+    @patch(_DB)
+    def test_identity_shows_interaction_count(self, mock_db_fn):
+        mock_db_fn.return_value = _mock_db({'interaction_log': [(342,)]})
+
+        from services.innate_skills.introspect_skill import _identity_relationship_depth
+        result = _identity_relationship_depth()
+
+        assert '342' in result
+
+    @patch(_DB)
+    @patch(_TRAIT_SVC)
+    def test_identity_communication_style_verbosity(self, mock_trait_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db()
+        mock_trait_cls.return_value.get_communication_style.return_value = {
+            'verbosity': 9, 'directness': 5, 'formality': 5,
+        }
+
+        from services.innate_skills.introspect_skill import _identity_communication_style
+        result = _identity_communication_style()
+
+        assert 'very verbose' in result
+
+    @patch(_DB)
+    @patch(_TRAIT_SVC)
+    def test_identity_communication_style_directness(self, mock_trait_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db()
+        mock_trait_cls.return_value.get_communication_style.return_value = {
+            'verbosity': 5, 'directness': 9, 'formality': 5,
+        }
+
+        from services.innate_skills.introspect_skill import _identity_communication_style
+        result = _identity_communication_style()
+
+        assert 'very direct' in result
+
+    @patch(_DB)
+    @patch(_TRAIT_SVC)
+    def test_identity_communication_style_formality(self, mock_trait_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db()
+        mock_trait_cls.return_value.get_communication_style.return_value = {
+            'verbosity': 5, 'directness': 5, 'formality': 9,
+        }
+
+        from services.innate_skills.introspect_skill import _identity_communication_style
+        result = _identity_communication_style()
+
+        assert 'formal' in result
+
+    @patch(_DB)
+    @patch(_IDENTITY)
+    def test_identity_personality_top_dimensions(self, mock_id_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db()
+        mock_id_cls.return_value.get_vectors.return_value = {
+            'curiosity':   {'current_activation': 0.9},
+            'warmth':      {'current_activation': 0.85},
+            'playfulness': {'current_activation': 0.4},   # below 0.6 threshold — must be excluded
+        }
+
+        from services.innate_skills.introspect_skill import _identity_personality
+        result = _identity_personality()
+
+        assert 'curious' in result
+        assert 'warm'    in result
+        assert 'playful' not in result
+
+    @patch(_DB)
+    @patch(_IDENTITY)
+    def test_identity_personality_max_three_dimensions(self, mock_id_cls, mock_db_fn):
+        mock_db_fn.return_value = _mock_db()
+        mock_id_cls.return_value.get_vectors.return_value = {
+            'curiosity':            {'current_activation': 0.95},
+            'warmth':               {'current_activation': 0.90},
+            'assertiveness':        {'current_activation': 0.85},
+            'skepticism':           {'current_activation': 0.80},
+            'playfulness':          {'current_activation': 0.75},
+            'uncertainty_tolerance':{'current_activation': 0.70},
+        }
+
+        from services.innate_skills.introspect_skill import _identity_personality
+        result = _identity_personality()
+
+        # The implementation caps at 3 dimensions
+        count = result.count(' and ')
+        # "A and B and C" has 2 occurrences of " and "
+        # "A and B" has 1
+        assert count <= 2
+
+    @patch(_AUTO_SVC)
+    @patch(_IDENTITY)
+    @patch(_TRAIT_SVC)
+    @patch(_DB)
+    def test_identity_graceful_degradation(
+        self, mock_db_fn, mock_trait_cls, mock_id_cls, mock_auto_cls
+    ):
+        """When every identity sub-service fails the scope returns the fallback string."""
+        mock_db_fn.return_value = MagicMock(
+            connection=MagicMock(
+                side_effect=RuntimeError('connection refused')
+            )
+        )
+        mock_trait_cls.return_value.get_communication_style.side_effect = RuntimeError
+        mock_id_cls.return_value.get_vectors.side_effect = RuntimeError
+        mock_auto_cls.return_value.get_current_narrative.side_effect = RuntimeError
+
+        from services.innate_skills.introspect_skill import _scope_identity_snapshot
+        result = _scope_identity_snapshot()
+
+        assert result == 'Identity data unavailable.'
+
+
+# ── Tests: _relative_time helper ─────────────────────────────────────────────
+
+@pytest.mark.unit
+class TestRelativeTimeFormatting:
+
+    def _call(self, dt_value, now=_FIXED_NOW):
+        with patch(_UTC_NOW, return_value=now):
+            from services.innate_skills.introspect_skill import _relative_time
+            return _relative_time(dt_value)
+
+    def test_just_now_for_seconds_ago(self):
+        ts = (_FIXED_NOW - timedelta(seconds=30)).isoformat()
+        result = self._call(ts)
+        assert result == 'just now'
+
+    def test_minutes_ago(self):
+        ts = (_FIXED_NOW - timedelta(minutes=15)).isoformat()
+        result = self._call(ts)
+        assert '15' in result
+        assert 'min' in result
+
+    def test_one_hour_ago(self):
+        ts = (_FIXED_NOW - timedelta(hours=1)).isoformat()
+        result = self._call(ts)
+        assert '1' in result
+        assert 'hour' in result
+
+    def test_multiple_hours_ago(self):
+        ts = (_FIXED_NOW - timedelta(hours=5)).isoformat()
+        result = self._call(ts)
+        assert '5' in result
+        assert 'hours' in result
+
+    def test_one_day_ago(self):
+        ts = (_FIXED_NOW - timedelta(days=1)).isoformat()
+        result = self._call(ts)
+        assert '1' in result
+        assert 'day' in result
+
+    def test_multiple_days_ago(self):
+        ts = (_FIXED_NOW - timedelta(days=4)).isoformat()
+        result = self._call(ts)
+        assert '4' in result
+        assert 'days' in result
+
+    def test_future_datetime(self):
+        ts = (_FIXED_NOW + timedelta(hours=2)).isoformat()
+        result = self._call(ts)
+        assert result == 'in the future'
+
+    def test_naive_sqlite_string(self):
+        """SQLite-style naive timestamp strings must be handled without error."""
+        ts = '2026-03-19 11:00:00'   # 1 hour before _FIXED_NOW, no tz suffix
+        result = self._call(ts)
+        assert '1' in result
+        assert 'hour' in result
+
+    def test_unparseable_value_does_not_crash(self):
+        # parse_utc returns datetime.min for bad input → large "days ago" string
+        result = self._call('not-a-date')
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_none_value_does_not_crash(self):
+        result = self._call(None)
+        assert isinstance(result, str) and len(result) > 0
