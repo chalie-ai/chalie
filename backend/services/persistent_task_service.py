@@ -2,14 +2,13 @@
 Persistent Task Service — Multi-session ACT task management.
 
 State machine:
-  PROPOSED → ACCEPTED → IN_PROGRESS → COMPLETED
-                ↓           ↓
-             CANCELLED    PAUSED → IN_PROGRESS
-                            ↓
-                         CANCELLED
+  ACCEPTED → IN_PROGRESS → COMPLETED
+      ↓           ↓
+   CANCELLED    PAUSED → IN_PROGRESS
+                  ↓
+               CANCELLED
   Auto-expiry: ACCEPTED/IN_PROGRESS/PAUSED → EXPIRED (14 days default)
 
-Bounded scope enforcement: open-ended goals must be scoped before ACCEPTED.
 Duplicate detection: Jaccard similarity > 0.6 against active tasks.
 Fairness: max 3 cycles per task per hour, max 5 active tasks per user.
 """
@@ -26,18 +25,16 @@ LOG_PREFIX = "[PERSISTENT TASK]"
 
 # Valid state transitions
 VALID_TRANSITIONS = {
-    'proposed': {'accepted', 'cancelled', 'expired'},
     'accepted': {'in_progress', 'cancelled', 'expired'},
     'in_progress': {'completed', 'paused', 'cancelled', 'expired'},
     'paused': {'in_progress', 'cancelled', 'expired'},
 }
 
 # States eligible for auto-expiry
-EXPIRABLE_STATES = {'proposed', 'accepted', 'in_progress', 'paused'}
+EXPIRABLE_STATES = {'accepted', 'in_progress', 'paused'}
 
 # Limits
 MAX_ACTIVE_TASKS = 5
-MAX_CYCLES_PER_HOUR = 3
 DEFAULT_EXPIRY_DAYS = 14
 DEFAULT_MAX_ITERATIONS = 20
 DEFAULT_FATIGUE_BUDGET = 15.0
@@ -69,7 +66,7 @@ class PersistentTaskService:
         fatigue_budget: float = DEFAULT_FATIGUE_BUDGET,
     ) -> Dict[str, Any]:
         """
-        Create a new persistent task in PROPOSED state.
+        Create a new persistent task in ACCEPTED state.
 
         Returns the created task dict.
         """
@@ -81,7 +78,7 @@ class PersistentTaskService:
                 INSERT INTO persistent_tasks
                     (account_id, thread_id, goal, scope, status, priority,
                      max_iterations, fatigue_budget, expires_at, deadline)
-                VALUES (?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, 'accepted', ?, ?, ?, ?, ?)
             """, (
                 account_id, thread_id, goal, scope, priority,
                 max_iterations, fatigue_budget, expires_at,
@@ -93,6 +90,17 @@ class PersistentTaskService:
 
         # Embed the goal for semantic world state retrieval (non-fatal)
         self._embed_task(task_id, goal)
+
+        # Wake the persistent task worker so it picks up the new task
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            store.rpush(
+                'persistent_task:execute',
+                json.dumps({'task_id': task_id, 'reason': 'created'}),
+            )
+        except Exception:
+            pass  # Non-fatal — worker will pick it up on next heartbeat
 
         return self.get_task(task_id)
 
@@ -126,7 +134,7 @@ class PersistentTaskService:
                        deadline, next_run_after, fatigue_budget
                 FROM persistent_tasks
                 WHERE account_id = ?
-                  AND status IN ('proposed', 'accepted', 'in_progress', 'paused')
+                  AND status IN ('accepted', 'in_progress', 'paused')
                 ORDER BY priority ASC, created_at ASC
             """, (account_id,))
             rows = cursor.fetchall()
@@ -379,30 +387,6 @@ class PersistentTaskService:
                 WHERE id = ?
             """, (next_run, task_id))
 
-    def check_rate_limit(self, task_id: int) -> bool:
-        """Check if a task has exceeded MAX_CYCLES_PER_HOUR."""
-        task = self.get_task(task_id)
-        if not task:
-            return False
-
-        progress = task.get('progress', {}) or {}
-        last_cycle_at = progress.get('last_cycle_at')
-        cycles_this_hour = progress.get('cycles_this_hour', 0)
-
-        if last_cycle_at:
-            try:
-                last = datetime.fromisoformat(last_cycle_at)
-                elapsed = (datetime.now(timezone.utc) - last).total_seconds()
-                if elapsed < 3600 and cycles_this_hour >= MAX_CYCLES_PER_HOUR:
-                    return False  # Rate limited
-                if elapsed >= 3600:
-                    # Reset hourly counter
-                    progress['cycles_this_hour'] = 0
-            except (ValueError, TypeError):
-                pass
-
-        return True
-
     # -- Duplicate Detection -------------------------------------------------
 
     def find_duplicate(self, account_id: int, goal: str) -> Optional[Dict[str, Any]]:
@@ -431,80 +415,25 @@ class PersistentTaskService:
         now = datetime.now(timezone.utc).isoformat()
         with self.db.connection() as conn:
             cursor = conn.cursor()
-            # SQLite does not support RETURNING; select first, then update.
-
-            # PROPOSED tasks that expire are treated as dismissed goals —
-            # the user never accepted them.  Fetch full rows so we can log
-            # the goal text for the goal_dismissed feedback event.
-            cursor.execute("""
-                SELECT id, goal, created_at FROM persistent_tasks
-                WHERE status = 'proposed'
-                  AND expires_at <= ?
-            """, (now,))
-            dismissed_rows = cursor.fetchall()
-            dismissed_ids = [r[0] for r in dismissed_rows]
-
-            # Other expirable states (accepted, in_progress, paused)
             cursor.execute("""
                 SELECT id FROM persistent_tasks
                 WHERE status IN ('accepted', 'in_progress', 'paused')
                   AND expires_at <= ?
             """, (now,))
-            other_expired_ids = [r[0] for r in cursor.fetchall()]
+            expired_ids = [r[0] for r in cursor.fetchall()]
 
-            all_expired_ids = dismissed_ids + other_expired_ids
-
-            if all_expired_ids:
-                placeholders = ','.join(['?'] * len(all_expired_ids))
+            if expired_ids:
+                placeholders = ','.join(['?'] * len(expired_ids))
                 cursor.execute(f"""
                     UPDATE persistent_tasks
                     SET status = 'expired', updated_at = datetime('now')
                     WHERE id IN ({placeholders})
-                """, all_expired_ids)
+                """, expired_ids)
 
-        if all_expired_ids:
-            logger.info(f"{LOG_PREFIX} Expired {len(all_expired_ids)} tasks: {all_expired_ids}")
+        if expired_ids:
+            logger.info(f"{LOG_PREFIX} Expired {len(expired_ids)} tasks: {expired_ids}")
 
-        # Log goal_dismissed for each proposed task that was never accepted.
-        # This feeds the domain confidence feedback loop (Stage 6a Component 4):
-        # _episodic_success() will see the dismissal and reduce confidence.
-        if dismissed_rows:
-            self._log_dismissed_goals(dismissed_rows)
-
-        return len(all_expired_ids)
-
-    def _log_dismissed_goals(self, dismissed_rows: list) -> None:
-        """
-        Log goal_dismissed events to interaction_log for each PROPOSED task
-        that expired without user acceptance.
-
-        These events are consumed by DomainConfidenceService._episodic_success()
-        as a signal that the user did not engage with the proposed goal,
-        which reduces future autonomous goal proposals in that domain.
-
-        Args:
-            dismissed_rows: List of (id, goal, created_at) tuples from
-                            persistent_tasks for tasks that just expired.
-        """
-        try:
-            from services.interaction_log_service import InteractionLogService
-            log_service = InteractionLogService(self.db)
-            for task_id, goal, created_at in dismissed_rows:
-                log_service.log_event(
-                    event_type='goal_dismissed',
-                    payload={
-                        'task_id': task_id,
-                        'goal': goal,
-                        'proposed_at': str(created_at) if created_at else None,
-                    },
-                    topic='persistent_task',
-                    source='persistent_task_service',
-                )
-                logger.info(
-                    f"{LOG_PREFIX} Logged goal_dismissed for task {task_id}: {goal[:80]}"
-                )
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to log goal_dismissed events: {e}")
+        return len(expired_ids)
 
     # -- Progress Summary ----------------------------------------------------
 

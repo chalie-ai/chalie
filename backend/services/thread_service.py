@@ -128,7 +128,12 @@ class ThreadService:
                 new_resolution.recent_visible_context = recent_context
                 return new_resolution
 
-        # No active thread — create new
+        # No active thread in MemoryStore — check SQLite (post-restart recovery)
+        recovered = self._recover_thread_from_sqlite(channel_id, platform)
+        if recovered:
+            return recovered
+
+        # Truly new conversation — create fresh thread
         return self._create_new_thread(channel_id, platform)
 
     def _create_new_thread(self, channel_id: str, platform: str) -> ThreadResolution:
@@ -196,6 +201,22 @@ class ThreadService:
             channel_id = thread_data.get("channel_id", "")
             pointer_key = f"active_thread:{channel_id}"
             self.store.expire(pointer_key, 86400)
+
+        # Write-through to SQLite so last_activity survives restarts
+        self._persist_activity(thread_id)
+
+    def _persist_activity(self, thread_id: str):
+        """Write-through: update last_activity in SQLite."""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.time_utils import utc_now
+            db = get_shared_db_service()
+            db.execute(
+                "UPDATE threads SET last_activity = ? WHERE thread_id = ?",
+                (utc_now().isoformat(), thread_id)
+            )
+        except Exception:
+            pass
 
     def update_activity(self, thread_id: str, topic: str = None):
         """Public: update thread activity and optionally set current topic."""
@@ -302,6 +323,108 @@ class ThreadService:
             return exchanges if exchanges else None
         except Exception as e:
             logging.debug(f"[THREAD] Failed to get recent context for {thread_id}: {e}")
+            return None
+
+    def _recover_thread_from_sqlite(self, channel_id: str, platform: str) -> Optional[ThreadResolution]:
+        """After restart, recover the last active thread from SQLite and rehydrate MemoryStore.
+
+        Checks thread_exchanges for actual last activity (more reliable than
+        threads.last_activity which may be stale). Applies the same soft/hard
+        expiry logic as the MemoryStore path.
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            from services.time_utils import parse_utc, utc_now
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                cursor = conn.cursor()
+
+                # Find most recent active thread for this channel
+                cursor.execute("""
+                    SELECT thread_id, current_topic, topic_history, exchange_count
+                    FROM threads
+                    WHERE channel_id = ? AND state = 'active'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (channel_id,))
+                row = cursor.fetchone()
+                if not row:
+                    cursor.close()
+                    return None
+
+                thread_id = row[0]
+                current_topic = row[1] or ""
+                topic_history = row[2] or "[]"
+                exchange_count = row[3] or 0
+
+                # Get actual last activity from exchanges (most reliable after restart)
+                cursor.execute("""
+                    SELECT MAX(COALESCE(response_time, prompt_time)) AS last_time
+                    FROM thread_exchanges
+                    WHERE thread_id = ?
+                """, (thread_id,))
+                ts_row = cursor.fetchone()
+                cursor.close()
+
+                if not ts_row or not ts_row[0]:
+                    return None  # No exchanges — let caller create new thread
+
+                last_activity = parse_utc(ts_row[0])
+                gap_seconds = (utc_now() - last_activity).total_seconds()
+
+                if gap_seconds >= self.hard_expiry_seconds:
+                    # Thread too old — expire in SQLite and let caller create new
+                    db.execute(
+                        "UPDATE threads SET state = 'expired', expired_at = ? WHERE thread_id = ?",
+                        (utc_now().isoformat(), thread_id)
+                    )
+                    return None
+
+                # Rehydrate MemoryStore — restore pointer, thread hash, and sequence counter
+                now = str(time.time())
+                created_ts = str(last_activity.timestamp())
+
+                pointer_key = f"active_thread:{channel_id}"
+                self.store.set(pointer_key, thread_id)
+                self.store.expire(pointer_key, 86400)
+
+                self.store.hset(f"thread:{thread_id}", mapping={
+                    "state": "active",
+                    "channel_id": channel_id,
+                    "platform": platform,
+                    "current_topic": current_topic,
+                    "topic_history": topic_history,
+                    "created_at": created_ts,
+                    "last_activity": now,
+                    "last_exchange_at": now,
+                    "exchange_count": str(exchange_count),
+                    "resume_count": "0",
+                    "last_resume_at": "",
+                })
+                self.store.expire(f"thread:{thread_id}", 86400)
+
+                # Restore sequence counter to avoid thread_id collisions
+                parts = thread_id.rsplit(":", 1)
+                if len(parts) == 2:
+                    try:
+                        seq = int(parts[1])
+                        seq_key = f"thread_seq:{channel_id}"
+                        current_seq = self.store.get(seq_key)
+                        if not current_seq or int(current_seq) < seq:
+                            self.store.set(seq_key, str(seq))
+                    except ValueError:
+                        pass
+
+                is_resumed = gap_seconds >= self.soft_expiry_seconds
+                logging.info(f"[THREAD] Recovered thread from SQLite: {thread_id} (gap={gap_seconds:.0f}s)")
+                return ThreadResolution(
+                    thread_id=thread_id,
+                    is_new=False,
+                    is_resumed=is_resumed,
+                    resume_gap_minutes=gap_seconds / 60.0 if is_resumed else 0.0,
+                )
+        except Exception as e:
+            logging.debug(f"[THREAD] SQLite recovery failed: {e}")
             return None
 
     def _persist_thread_created(self, thread_id: str, channel_id: str, platform: str):

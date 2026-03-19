@@ -172,60 +172,6 @@ class OutputService:
             original_metadata=metadata,
         )
 
-    def enqueue_card(
-        self,
-        topic: str,
-        card_data: Dict[str, Any],
-        original_metadata: Dict[str, Any] = None,
-    ) -> str:
-        """
-        Enqueue a CARD output for delivery via drift stream (output:events).
-
-        Args:
-            topic: Conversation topic identifier
-            card_data: Compiled card data from CardRendererService.render()
-                      {html, css, scope_id, title, accent_color, background_color, tool_name}
-            original_metadata: Optional original metadata from the request
-
-        Returns:
-            str: UUID of the enqueued output, or empty string if suppressed
-        """
-        # Suppress cards from background persistent task execution — these are
-        # internal thinking, not user-facing output.
-        if topic and topic.startswith('persistent_task_'):
-            logger.debug(
-                f"[OutputService] Suppressed card for background task topic '{topic}' "
-                f"(tool={card_data.get('tool_name')})"
-            )
-            return ''
-
-        output_id = str(uuid.uuid4())
-
-        event_payload = {
-            "type": "card",
-            "output_id": output_id,
-            "topic": topic,
-            "generated_at": utc_now().isoformat(),
-            **card_data,  # html, css, scope_id, title, accent_color, background_color, tool_name
-        }
-
-        self.store.publish("output:events", json.dumps(event_payload))
-
-        # Buffer for catch-up on drift stream reconnect (same pattern as enqueue_text)
-        try:
-            self.store.rpush('notifications:recent', json.dumps(event_payload))
-            self.store.ltrim('notifications:recent', -200, -1)
-            self.store.expire('notifications:recent', 86400)
-        except Exception as e:
-            logger.warning(f"Card notification buffer push failed: {e}")
-
-        logger.info(
-            f"Enqueued CARD output {output_id} for tool '{card_data.get('tool_name')}' "
-            f"(topic={topic})"
-        )
-
-        return output_id
-
     def _send_to_notification_tools(self, message: str) -> None:
         """
         Deliver proactive drift to all tools that declare notification support.
@@ -246,19 +192,6 @@ class OutputService:
                     logger.warning(f"Notification tool '{tool['name']}' error: {e}")
         except Exception as e:
             logger.warning(f"Notification dispatch error: {e}")
-
-    def enqueue_close_signal(self, sse_uuid: str) -> None:
-        """
-        Signal the waiting SSE connection to close with no text response.
-        Used for synthesize=false tools that render inline cards only.
-
-        Args:
-            sse_uuid: The SSE request UUID to close
-        """
-        if not sse_uuid:
-            return
-        self.store.publish(f"sse:{sse_uuid}", json.dumps({"type": "close"}))
-        logger.debug(f"[OutputService] Published close signal for SSE channel '{sse_uuid}'")
 
     def enqueue_act(
         self,

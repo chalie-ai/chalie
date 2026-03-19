@@ -50,6 +50,15 @@ Executes Python snippets in a restricted sandbox to verify formulas, test algori
 
 Populates world state with current time-of-day phase, sunrise, sunset, solar noon, and day length derived from client telemetry. No API key required.
 
+### Programming Docs
+
+| | |
+|---|---|
+| **Repo** | [chalie-ai/programming-docs-search-tool](https://github.com/chalie-ai/programming-docs-search-tool) |
+| **Trigger** | On-demand |
+
+Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. Each source uses its own search strategy against the canonical documentation site. Go covers its entire ecosystem (Gin, Echo, etc.) via pkg.go.dev; Rust covers all crates (Tokio, Serde) via docs.rs; C# covers ASP.NET and EF via Microsoft Learn. No API key required.
+
 ---
 
 ## Versioning

@@ -142,7 +142,7 @@ class TestInnateSkills:
     def test_contains_expected_skills(self):
         expected = {
             'recall', 'memorize', 'introspect', 'associate', 'schedule',
-            'persistent_task', 'list', 'autobiography', 'focus', 'moment', 'emit_card',
-            'document', 'read', 'reflect', 'notes',
+            'persistent_task', 'list', 'autobiography', 'focus', 'moment',
+            'document', 'read', 'reflect', 'notes', 'find_tools',
         }
         assert INNATE_SKILLS == expected

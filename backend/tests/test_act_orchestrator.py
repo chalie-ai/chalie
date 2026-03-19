@@ -451,44 +451,6 @@ class TestCriticEnabled:
         assert result.reflection == fake_reflection
 
 
-# ── Orchestrator: deferred card context ────────────────────────────
-
-@pytest.mark.unit
-class TestDeferredCardContext:
-    @patch('services.act_orchestrator_service.ActLoopService')
-    def test_deferred_card_context_injection(self, MockActLoop):
-        """With deferred_card_context=True, card offers are injected into history."""
-        mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
-        mock_loop.act_history = []
-        mock_loop.iteration_logs = []
-        mock_loop.iteration_number = 0
-        mock_loop.fatigue = 0.0
-        mock_loop._critic = None
-        mock_loop._escalation_hint_injected = False
-        mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
-        MockActLoop.return_value = mock_loop
-
-        cortex = _make_cortex_service([_make_response(actions=[])])
-
-        orchestrator = ACTOrchestrator(
-            config={}, max_iterations=5, deferred_card_context=True,
-        )
-
-        # Mock the MemoryStore call inside _inject_deferred_card_context
-        with patch('services.act_orchestrator_service.ACTOrchestrator._inject_deferred_card_context') as mock_inject:
-            mock_inject.return_value = '(none)\n## Available Card Offers\n- web_search (id: abc, 3 sources, 2 domains)'
-
-            result = orchestrator.run(
-                topic='test', text='hello', cortex_service=cortex,
-                act_prompt='test', classification={'topic': 't', 'confidence': 10},
-                chat_history=[],
-            )
-
-            assert mock_inject.called
-
 
 # ── Orchestrator: constructor parameters ───────────────────────────
 
@@ -503,7 +465,6 @@ class TestConstructorParams:
         assert o.smart_repetition is True
         assert o.escalation_hints is False
         assert o.persistent_task_exit is False
-        assert o.deferred_card_context is False
 
     def test_custom_params(self):
         o = ACTOrchestrator(
@@ -522,14 +483,12 @@ class TestConstructorParams:
         assert o.repetition_sim_threshold == 0.9
 
     def test_tool_worker_profile(self):
-        """tool_worker uses: critic=True, smart_rep=True, deferred_cards=True."""
+        """tool_worker uses: critic=True, smart_rep=True."""
         o = ACTOrchestrator(
             config={}, critic_enabled=True, smart_repetition=True,
-            deferred_card_context=True,
         )
         assert o.critic_enabled
         assert o.smart_repetition
-        assert o.deferred_card_context
 
     def test_digest_worker_profile(self):
         """digest_worker uses: critic=True, escalation_hints=True, PT exit=True."""

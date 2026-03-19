@@ -54,6 +54,7 @@ class ActLoopService:
         dispatcher=None,
         loop_id: str = '',
         scratchpad_enabled: bool = True,
+        execution_gate: bool = True,
     ):
         """
         Initialize ACT loop service.
@@ -68,12 +69,15 @@ class ActLoopService:
             dispatcher: Optional ActDispatcherService instance (reused across iterations)
             loop_id: Unique ID for this loop's scratchpad namespace
             scratchpad_enabled: Whether to gate large results to scratchpad
+            execution_gate: Whether the dispatcher should apply the autonomous
+                execution gate (passed through to ActDispatcherService)
         """
         self.config = config
         self.cumulative_timeout = cumulative_timeout
         self.per_action_timeout = per_action_timeout
         self.max_iterations = max_iterations
         self.cortex_iteration_service = cortex_iteration_service
+        self.execution_gate = execution_gate
 
         # Critic and dispatcher (injected, not monkey-patched)
         self._critic = critic
@@ -313,7 +317,10 @@ class ActLoopService:
         # Reuse dispatcher across iterations (P5 fix) — lazy-build on first call
         if self._dispatcher is None:
             from services.act_dispatcher_service import ActDispatcherService
-            self._dispatcher = ActDispatcherService(timeout=self.per_action_timeout)
+            self._dispatcher = ActDispatcherService(
+                timeout=self.per_action_timeout,
+                execution_gate=self.execution_gate,
+            )
 
         results = []
         accumulated = {}  # outputs from completed actions, keyed by downstream param name

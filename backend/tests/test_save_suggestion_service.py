@@ -361,17 +361,3 @@ class TestDocumentCreation:
             result = service.create_document_from_conversation('thread1', 'topic', 'plan')
 
         assert result is None
-
-
-# ── Card Emission ────────────────────────────────────────────
-
-class TestCardEmission:
-
-    def test_emit_save_card_calls_document_card_service(self, service):
-        mock_card = MagicMock()
-        with patch('services.document_card_service.DocumentCardService', return_value=mock_card):
-            service.emit_save_card('thread1', 'fitness', 'plan')
-
-            mock_card.emit_save_suggestion_card.assert_called_once_with(
-                'fitness', 'plan', 'thread1',
-            )

@@ -44,8 +44,6 @@ class CronToolWorker:
         manifest = tool_config.get("manifest", {})
         self._auth = manifest.get("auth", {})
         output_config = manifest.get("output", {})
-        self.card_enabled = output_config.get("card", {}).get("enabled", False)
-        self.card_config = output_config.get("card", {}) if self.card_enabled else None
         self.tool_dir = tool_config["dir"]
         self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 
@@ -180,23 +178,7 @@ class CronToolWorker:
 
                 if output_type is not None:
                     # New contract: route by output field
-                    if output_type == "card":
-                        result_html = result.get("html")
-                        result_title = result.get("title")
-                        if result_html:
-                            try:
-                                from services.card_renderer_service import CardRendererService
-                                from services.output_service import OutputService
-                                card_cfg = result.get("card_config") or {}
-                                card_data = CardRendererService().render_tool_html(
-                                    self.tool_name, result_html,
-                                    result_title or card_cfg.get("title", self.tool_name), card_cfg
-                                )
-                                if card_data:
-                                    OutputService().enqueue_card("cron", card_data, {})
-                            except Exception as e:
-                                _log.warning(f"[TOOL CRON] {self.tool_name}: card render failed: {e}")
-                    elif output_type == "prompt":
+                    if output_type == "prompt":
                         result_text = sanitize_tool_output(result.get("text", ""))
                         if len(result_text) > MAX_OUTPUT_CHARS:
                             result_text = result_text[:MAX_OUTPUT_CHARS]
@@ -218,39 +200,15 @@ class CronToolWorker:
 
                 # --- Legacy output routing (backward compat: no "output" field) ---
                 result_text = ""
-                result_html = None
-                result_title = None
 
                 if isinstance(result, dict):
                     result_text = result.get("text", "")
-                    result_html = result.get("html")
-                    result_title = result.get("title")
                     if not result.get("notify", True):
                         _log.debug(f"[TOOL CRON] {self.tool_name}: notify=false, skipping enqueue")
                         continue
                 else:
                     result_text = str(result) if result else ""
 
-                skip_text_followup = False
-                if self.card_enabled and result_html:
-                    try:
-                        from services.card_renderer_service import CardRendererService
-                        from services.output_service import OutputService
-                        card_data = CardRendererService().render_tool_html(
-                            self.tool_name, result_html, result_title or self.card_config.get("title", self.tool_name),
-                            self.card_config
-                        )
-                        if card_data:
-                            OutputService().enqueue_card("cron", card_data, {})
-                            # Check if synthesize is False → skip text followup
-                            if not self.card_config.get("synthesize", True):
-                                skip_text_followup = True
-                    except Exception as e:
-                        _log.warning(f"[TOOL CRON] Card render failed for {self.tool_name}: {e}")
-
-                if skip_text_followup:
-                    _log.info(f"[TOOL CRON] {self.tool_name} executed with card (response suppressed)")
-                    continue
                 result_text = sanitize_tool_output(result_text)
                 if len(result_text) > MAX_OUTPUT_CHARS:
                     result_text = result_text[:MAX_OUTPUT_CHARS]

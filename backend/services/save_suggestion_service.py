@@ -286,15 +286,8 @@ class SaveSuggestionService:
     # ──────────────────────────────────────────────────────────────────────────
 
     def emit_save_card(self, thread_id: str, topic: str, content_type: str) -> None:
-        """Emit a save suggestion card via DocumentCardService."""
-        try:
-            from services.document_card_service import DocumentCardService
-
-            card_svc = DocumentCardService()
-            card_svc.emit_save_suggestion_card(topic, content_type, thread_id)
-            logger.info(f"{LOG_PREFIX} Emitted save suggestion card for {content_type}")
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} emit_save_card failed: {e}")
+        """Save suggestion (card system removed -- detection still works, UI pending)."""
+        logger.info(f"{LOG_PREFIX} Save suggestion detected: {content_type} (thread={thread_id})")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Document creation (called when user accepts)

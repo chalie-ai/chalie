@@ -653,7 +653,7 @@ CREATE TABLE IF NOT EXISTS persistent_tasks (
     thread_id TEXT REFERENCES threads(thread_id),
     goal TEXT NOT NULL,
     scope TEXT,
-    status TEXT DEFAULT 'proposed',
+    status TEXT DEFAULT 'accepted',
     priority INTEGER DEFAULT 5,
     progress TEXT DEFAULT '{}',              -- JSONB
     result TEXT,

@@ -111,11 +111,6 @@ def _handle_create(service, params: dict, topic: str) -> str:
 
     try:
         list_id = service.create_list(name)
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_create_card(topic, name)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[LIST] Created list '{name}' (id={list_id})."
     except ValueError as e:
         return f"[LIST] {e}"
@@ -148,12 +143,6 @@ def _handle_add(service, params: dict, topic: str) -> str:
     if added == 0:
         return f"[LIST] All items already on '{name}' (deduped)."
     skipped = len(items) - added
-    if added > 0:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_add_card(topic, name, items[:added], skipped)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     msg = f"[LIST] Added {added} item(s) to '{name}'."
     if skipped > 0:
         msg += f" {skipped} skipped (already present)."
@@ -174,12 +163,6 @@ def _handle_remove(service, params: dict, topic: str) -> str:
         return "[LIST] Multiple lists exist. Specify 'name'."
 
     removed = service.remove_items(name, items)
-    if removed > 0:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_remove_card(topic, name, items[:removed])
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Removed {removed} item(s) from '{name}'."
 
 
@@ -197,12 +180,6 @@ def _handle_check(service, params: dict, topic: str) -> str:
         return "[LIST] Multiple lists exist. Specify 'name'."
 
     count = service.check_items(name, items)
-    if count > 0:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_check_card(topic, name, items[:count], True)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Checked {count} item(s) on '{name}'."
 
 
@@ -220,12 +197,6 @@ def _handle_uncheck(service, params: dict, topic: str) -> str:
         return "[LIST] Multiple lists exist. Specify 'name'."
 
     count = service.uncheck_items(name, items)
-    if count > 0:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_check_card(topic, name, items[:count], False)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Unchecked {count} item(s) on '{name}'."
 
 
@@ -244,12 +215,6 @@ def _handle_view(service, params: dict, topic: str) -> str:
     total = len(items)
     checked = sum(1 for i in items if i['checked'])
 
-    try:
-        from services.list_card_service import ListCardService
-        ListCardService().emit_view_card(topic, lst['name'], items, checked, total)
-    except Exception as card_err:
-        logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
-
     if not items:
         return f"[LIST] '{lst['name']}' is empty."
 
@@ -264,13 +229,6 @@ def _handle_view(service, params: dict, topic: str) -> str:
 
 def _handle_list_all(service, topic: str) -> str:
     lists = service.get_all_lists()
-    if lists:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_list_all_card(topic, lists)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
-
     if not lists:
         return "[LIST] No lists found."
 
@@ -291,12 +249,6 @@ def _handle_clear(service, params: dict, topic: str) -> str:
     count = service.clear_list(name)
     if count == -1:
         return f"[LIST] List '{name}' not found."
-    if count > 0:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_clear_card(topic, name, count)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
     return f"[LIST] Cleared {count} item(s) from '{name}'."
 
 
@@ -307,11 +259,6 @@ def _handle_delete(service, params: dict, topic: str) -> str:
 
     success = service.delete_list(name)
     if success:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_delete_card(topic, name)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[LIST] Deleted list '{name}'."
     return f"[LIST] List '{name}' not found."
 
@@ -324,11 +271,6 @@ def _handle_rename(service, params: dict, topic: str) -> str:
 
     success = service.rename_list(name, new_name)
     if success:
-        try:
-            from services.list_card_service import ListCardService
-            ListCardService().emit_rename_card(topic, name, new_name)
-        except Exception as card_err:
-            logger.warning(f"[LIST SKILL] Card emit failed (non-fatal): {card_err}")
         return f"[LIST] Renamed '{name}' → '{new_name}'."
     return f"[LIST] Failed to rename '{name}' — list not found or new name already in use."
 

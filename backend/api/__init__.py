@@ -157,6 +157,10 @@ def create_app():
     from .interfaces import interfaces_bp
     from .signals import signals_bp
     from .context import context_bp
+    from .wrappers import wrappers_bp
+    from .updates import updates_bp
+    from .query import query_bp
+    from .intents import intents_bp
 
     app.register_blueprint(user_auth_bp)
     app.register_blueprint(system_bp)
@@ -177,6 +181,10 @@ def create_app():
     app.register_blueprint(interfaces_bp)
     app.register_blueprint(signals_bp)
     app.register_blueprint(context_bp)
+    app.register_blueprint(wrappers_bp)
+    app.register_blueprint(updates_bp)
+    app.register_blueprint(query_bp)
+    app.register_blueprint(intents_bp)
 
     # ── Dashboard gateway (interface daemons) ─────────────────────
     _init_dashboard_gateway(app)
