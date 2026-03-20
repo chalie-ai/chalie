@@ -264,7 +264,7 @@ def delete_all():
             "tool_reflection:pending",
             "semantic_consolidation:*",
             "reflex:*",
-            "adaptive_boundary:*",
+            "two_signal_boundary:*",
             "adaptive_fork_*",
             "adaptive_growth_*",
 

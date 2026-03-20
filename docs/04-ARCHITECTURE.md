@@ -150,9 +150,8 @@ frontend/
 - **`event_bus_service.py`** — Pub/sub event routing
 
 #### Topic Classification
-- **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with adaptive boundary detection
-- **`adaptive_boundary_detector.py`** — 3-layer self-calibrating topic boundary detector (NEWMA + Transient Surprise + Leaky Accumulator); persists per-thread state in MemoryStore; degrades gracefully to static threshold when < 5 messages
-- **`topic_stability_regulator_service.py`** — 24h adaptive tuning of topic classification and boundary detector parameters
+- **`topic_classifier_service.py`** — Embedding-based deterministic topic classification with two-signal boundary detection
+- **`two_signal_boundary_service.py`** — Self-calibrating topic boundary detector: consecutive + window similarity must both drop below adaptive thresholds (K=1.6), with discourse marker fast path; per-thread state in MemoryStore with 24h TTL
 
 #### Session & Conversation
 - **`thread_conversation_service.py`** — MemoryStore-backed conversation thread persistence
@@ -205,7 +204,6 @@ frontend/
   - *ReconcileAction* — Autonomous drift action (priority 4, 30min cooldown); samples traits+concepts, runs pairwise classification, creates uncertainty records or auto-supersedes temporal changes
 - **Routing Stability Regulator** — Single authority for router weight mutation
 - **Routing Reflection** — Idle-time peer review of routing decisions
-- **Topic Stability Regulator** — Adaptive tuning of topic classification parameters
 - **Experience Assimilation** — Tool results → episodic memory (60s poll)
 - **Thread Expiry Service** — Expires stale threads (5min cycle)
 - **Scheduler Service** — Fires due reminders/tasks (60s poll)
@@ -225,7 +223,7 @@ frontend/
 ```
 [User Input]
   → [run.py] → [PromptQueue] → [Digest Worker]
-    ├─ Classification (embedding-based, adaptive boundary detection)
+    ├─ Classification (embedding-based, two-signal boundary detection)
     ├─ Context Assembly (retrieve from all 5 memory layers)
     ├─ Mode Routing (deterministic ~5ms mathematical router)
     ├─ Mode-Specific LLM Generation
@@ -301,12 +299,10 @@ See `docs/02-PROVIDERS-SETUP.md` for provider configuration.
 
 ### Adaptive Topic Boundary Detection
 - Replaces static 0.65 cosine similarity threshold with a 3-layer self-calibrating detector
-- **NEWMA** (fast/slow EWMA divergence) detects gradual semantic drift
-- **Transient Surprise** (z-score of similarity drop) catches sharp topic shifts
-- **Leaky Accumulator** provides hysteresis — single-message outliers don't create false topics
-- All thresholds derived from running conversation statistics; no manual tuning
-- State persisted in MemoryStore (`adaptive_boundary:{thread_id}`, 24h TTL); cold-start fallback (0.55 threshold) when < 5 messages
-- Base parameters (`accumulator_boundary_base`, `accumulator_leak_rate`, NEWMA windows) are the slow outer loop controlled by Topic Stability Regulator
+- **Two-Signal Detection**: consecutive similarity (cos to previous message) AND window similarity (cos to centroid of last 5 messages) must both drop below self-calibrating thresholds (mean - K*std, K=1.6) for a boundary to fire
+- **Discourse Markers**: 16 regex patterns for explicit topic switch phrases ("by the way", "speaking of", etc.) provide a high-precision fast path bypassing the two-signal gate
+- All thresholds derived from running conversation statistics; stats only updated on non-boundary messages to keep baseline clean
+- State persisted in MemoryStore (`two_signal_boundary:{thread_id}`, 24h TTL); cold-start mode (markers only) during first 6 messages
 
 ### Topic Confidence Reinforcement
 - Topic confidence updated via bounded reinforcement formula

@@ -27,11 +27,6 @@ _DISTRACTION_THRESHOLD = 0.35
 # Auto-infer focus after this many consecutive exchanges on same topic
 _INFER_AFTER_EXCHANGES = 5
 
-# Boundary modifier values by source
-_BOUNDARY_MODIFIER = {
-    'explicit': 1.0,
-    'inferred': 0.5,
-}
 
 
 class FocusSessionService:
@@ -237,18 +232,6 @@ class FocusSessionService:
 
         source_label = "(declared)" if focus.get('source') == 'explicit' else "(inferred)"
         return f"## Current Focus\nPrimary: {focus['description']} {source_label}"
-
-    def get_boundary_modifier(self, thread_id: str) -> float:
-        """
-        Get boundary modifier for adaptive boundary detector.
-
-        Returns:
-            0.0 (no focus), 0.5 (inferred focus), 1.0 (explicit focus)
-        """
-        focus = self.get_focus(thread_id)
-        if not focus:
-            return 0.0
-        return _BOUNDARY_MODIFIER.get(focus.get('source', 'inferred'), 0.5)
 
     def _generate_embedding(self, text: str) -> Optional[list]:
         """Generate a text embedding as a plain list suitable for JSON serialization.

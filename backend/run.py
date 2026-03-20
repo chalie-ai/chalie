@@ -347,8 +347,6 @@ def main():
     # Optional services (fail gracefully)
     _try_register(manager, "growth-pattern-service",
                   "services.growth_pattern_service", "growth_pattern_worker")
-    _try_register(manager, "topic-stability-regulator-service",
-                  "services.topic_stability_regulator_service", "topic_stability_regulator_worker")
     _try_register(manager, "routing-stability-regulator-service",
                   "services.routing_stability_regulator_service", "routing_stability_regulator_worker")
     _try_register(manager, "triage-calibration-service",
