@@ -455,6 +455,26 @@
         </div>
     </div>
 
+    <!-- Job Stats Modal -->
+    <div class="modal-overlay hidden" id="jobStatsModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2 id="jobStatsTitle">Token Usage</h2>
+                    <button type="button" class="btn-close" id="closeJobStatsModal">✕</button>
+                </div>
+            </div>
+            <div class="stats-period-tabs" id="statsPeriodTabs">
+                <button class="stats-tab active" data-hours="1">Last hour</button>
+                <button class="stats-tab" data-hours="24">Last 24h</button>
+                <button class="stats-tab" data-hours="168">Last 7 days</button>
+                <button class="stats-tab" data-hours="720">Last 30 days</button>
+            </div>
+            <div class="stats-summary" id="statsSummary"></div>
+            <div class="stats-table-wrap" id="statsTableWrap"></div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
