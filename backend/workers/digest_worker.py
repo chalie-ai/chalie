@@ -1875,6 +1875,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _wm_text = f"{text}\n[Attached: {_visual_note}]" if text else f"[Attached: {_visual_note}]"
     working_memory.append_turn(thread_id, 'user', _wm_text)
 
+    # Persist user turn to topic transcript (durable, searchable)
+    try:
+        from services import transcript_service
+        transcript_service.append(context_topic, 'user', _wm_text)
+    except Exception:
+        logging.debug("[DIGEST] Transcript append (user) failed", exc_info=True)
+
     # Situational intelligence — update conversation phase and situation model for this
     # user message.  Both calls are non-blocking, fail-open, and write to MemoryStore
     # only.  The updated state is ready when the frontal cortex generates its response.
@@ -2286,6 +2293,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Step 11a: Append assistant turn to working memory (keyed by thread_id)
     working_memory.append_turn(thread_id, 'assistant', response_data['response'])
+
+    # Persist assistant turn to topic transcript (durable, searchable)
+    try:
+        from services import transcript_service
+        transcript_service.append(topic, 'assistant', response_data['response'])
+    except Exception:
+        logging.debug("[DIGEST] Transcript append (assistant) failed", exc_info=True)
 
     # Update conversation phase with Chalie's response so momentum and direction
     # reflect the full exchange, not just the user turn.
