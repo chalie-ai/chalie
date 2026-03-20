@@ -42,15 +42,3 @@ Executes Python snippets in a restricted sandbox to verify formulas, test algori
 
 Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. No API key required.
 
----
-
-## Adding a Tool
-
-Create a directory under `backend/tools/` with:
-
-- `runner.py` — Subprocess entry point (base64 JSON in, JSON out)
-- `handler.py` — Core execution logic (`execute()` function)
-- `manifest.json` — Capability metadata (name, description, trigger, parameters, returns)
-- `requirements.txt` — Python dependencies (optional)
-
-The tool will be auto-discovered by `ToolRegistryService` on startup.

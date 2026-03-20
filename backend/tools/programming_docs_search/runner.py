@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point for the programming_docs_search embodiment tool."""
+"""Entry point for the programming_docs_search tool."""
 
 import base64
 import json
