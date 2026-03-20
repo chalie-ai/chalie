@@ -122,6 +122,15 @@ def _process_task(task_service, task):
             )
             return
 
+        # Respect iteration budget
+        if task.get('iterations_used', 0) >= task.get('max_iterations', 20):
+            logger.info(
+                f"{LOG_PREFIX} Task {task_id} exhausted iteration budget "
+                f"({task['iterations_used']}/{task['max_iterations']})"
+            )
+            task_service.complete_task(task_id, progress.get('last_summary', 'Iteration limit reached.'))
+            return
+
         progress = task.get('progress', {}) or {}
         prev_coverage = progress.get('coverage_estimate', 0.0)
 
