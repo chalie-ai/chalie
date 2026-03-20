@@ -124,10 +124,11 @@ class ThreadConversationService:
                           generation_time_ms, steps, memory_chunk
                    FROM thread_exchanges
                    WHERE thread_id = ?
-                   ORDER BY rowid ASC
+                   ORDER BY rowid DESC
                    LIMIT ?""",
                 (thread_id, self.MAX_EXCHANGES)
             )
+            rows = list(reversed(rows))  # Restore chronological order
         except Exception as e:
             logger.debug(f"[THREAD_CONV] SQLite load failed: {e}")
             return []
