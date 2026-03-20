@@ -602,6 +602,7 @@ function renderCognition() {
                 </div>
                 <div class="job-card__meta">
                     <div class="job-caps">${capsHtml}</div>
+                    <button class="btn-stats" onclick="openJobStats('${job.id}', '${escapeHtml(job.name)}')" title="Token usage stats">⊡</button>
                 </div>
             </div>
         `;
@@ -640,6 +641,103 @@ async function assignJob(jobName, selectEl) {
         }
     } catch (e) {
         showToast('Network error', 'error');
+    }
+}
+
+// ==========================================
+// Job Stats Modal — Token Usage Statistics
+// ==========================================
+let statsJobName = '';
+
+async function openJobStats(jobId, jobName) {
+    statsJobName = jobId;
+    document.getElementById('jobStatsTitle').textContent = `${jobName} — Token Usage`;
+    document.getElementById('jobStatsModal').classList.remove('hidden');
+
+    // Reset tab selection to 24h
+    document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('#statsPeriodTabs .stats-tab[data-hours="24"]').classList.add('active');
+
+    await loadJobStats(jobId, 24);
+}
+
+document.getElementById('closeJobStatsModal').addEventListener('click', () => {
+    document.getElementById('jobStatsModal').classList.add('hidden');
+});
+
+document.getElementById('jobStatsModal').addEventListener('click', (e) => {
+    if (e.target.id === 'jobStatsModal') {
+        document.getElementById('jobStatsModal').classList.add('hidden');
+    }
+});
+
+document.getElementById('statsPeriodTabs').addEventListener('click', async (e) => {
+    const tab = e.target.closest('.stats-tab');
+    if (!tab) return;
+    document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    await loadJobStats(statsJobName, parseInt(tab.dataset.hours));
+});
+
+async function loadJobStats(jobId, hours) {
+    const summaryEl = document.getElementById('statsSummary');
+    const tableEl = document.getElementById('statsTableWrap');
+    summaryEl.innerHTML = '<div class="loading">Loading…</div>';
+    tableEl.innerHTML = '';
+
+    try {
+        const res = await apiFetch(`/providers/jobs/${jobId}/stats?hours=${hours}`);
+        if (!res.ok) throw new Error('Failed to load stats');
+        const data = await res.json();
+        const s = data.summary || {};
+
+        summaryEl.innerHTML = `
+            <div class="stat-card">
+                <div class="stat-value">${(s.total_calls || 0).toLocaleString()}</div>
+                <div class="stat-label">Calls</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${(s.tokens_in || 0).toLocaleString()}</div>
+                <div class="stat-label">Tokens In</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${(s.tokens_out || 0).toLocaleString()}</div>
+                <div class="stat-label">Tokens Out</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${Math.round(s.avg_latency_ms || 0).toLocaleString()}<span class="stat-unit">ms</span></div>
+                <div class="stat-label">Avg Latency</div>
+            </div>
+        `;
+
+        const calls = data.calls || [];
+        if (calls.length === 0) {
+            tableEl.innerHTML = '<div class="stats-empty">No calls in this period.</div>';
+            return;
+        }
+
+        const rows = calls.slice(0, 200).map(c => {
+            const t = c.created_at ? new Date(c.created_at + 'Z') : null;
+            const time = t ? t.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+            return `<tr>
+                <td>${time}</td>
+                <td>${escapeHtml(c.model || '—')}</td>
+                <td class="num">${(c.tokens_in || 0).toLocaleString()}</td>
+                <td class="num">${(c.tokens_out || 0).toLocaleString()}</td>
+                <td class="num">${(c.latency_ms || 0).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+
+        tableEl.innerHTML = `
+            <table class="stats-table">
+                <thead><tr>
+                    <th>Time</th><th>Model</th><th class="num">In</th><th class="num">Out</th><th class="num">Latency</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        `;
+    } catch (e) {
+        summaryEl.innerHTML = '<div class="stats-empty">Failed to load stats.</div>';
     }
 }
 
