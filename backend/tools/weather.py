@@ -1,15 +1,14 @@
 """
-Weather Tool Handler — Open-Meteo (primary) with wttr.in fallback.
+Weather Tool — Open-Meteo (primary) with wttr.in fallback.
 
 Open-Meteo: free, no key, returns only requested fields (~1KB vs ~30KB for j1).
 wttr.in: fallback for city-name lookups and when Open-Meteo fails.
 
 Routing:
-  - Coords available (from telemetry): Open-Meteo → wttr.in fallback
+  - Coords available (from telemetry): Open-Meteo -> wttr.in fallback
   - City name in params: wttr.in directly (Open-Meteo needs coordinates)
 
 Module-level cache per location key, 10min TTL.
-Note: Cache does not persist across container runs (Docker sandbox).
 """
 
 import logging
@@ -67,7 +66,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
         country = telemetry.get("country", "")
         location_name = f"{city}, {country}" if city and country else city or country or None
 
-    # Build cache key — prefer resolved name, fall back to coords or param
+    # Build cache key -- prefer resolved name, fall back to coords or param
     if location_name and not location_param:
         cache_key = location_name.lower()
     elif lat is not None and lon is not None and not location_param:
@@ -90,7 +89,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
         result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
 
     # Fall back to wttr.in only when we have an explicit city name param
-    # (raw coordinates passed to wttr.in fail silently — skip if coords-only)
+    # (raw coordinates passed to wttr.in fail silently -- skip if coords-only)
     if result is None and location_param:
         result, wttr_err = _fetch_wttr(location_param)
 
