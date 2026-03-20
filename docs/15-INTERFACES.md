@@ -467,9 +467,18 @@ Response:
 | Field | Type | Description |
 |-------|------|-------------|
 | `text` | string \| null | Human-readable result |
-| `html` | string \| null | Rich HTML output (rendered as card) |
 | `data` | object \| null | Structured result data |
 | `error` | string \| null | Error description (null on success) |
+| `blocks` | array \| null | Block array for UI rendering (overlay updates) |
+| `openUrl` | string \| null | URL to open in a new browser tab |
+
+**GET /render** — Returns the daemon's UI for the app overlay:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `blocks` | array | Block array describing the interface UI |
+
+Daemons return `Block[]` from `renderInterface()`. The SDK serializes this as `{ "blocks": [...] }` with `Content-Type: application/json`. The gateway adds a `gateway` field and proxies to the frontend, which renders blocks using `BlockRenderer`. No HTML, JS, or CSS from daemons — structure only. See `plans/block-protocol.md` for the full block schema.
 
 ### 6.2 Health Monitoring
 
