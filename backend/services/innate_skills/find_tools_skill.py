@@ -107,11 +107,27 @@ def handle_find_tools(topic: str, params: dict) -> dict:
     available_tools = _filter_available(rows)
 
     if not available_tools:
+        # Collect matching innate skill names so the model knows what to use
+        matched_skills = []
+        for row in rows:
+            tool_type = row[1] if not isinstance(row, dict) else row['tool_type']
+            if tool_type == 'skill':
+                name = row[0] if not isinstance(row, dict) else row['tool_name']
+                summary = row[2] if not isinstance(row, dict) else row['short_summary']
+                matched_skills.append((name, summary))
+        if matched_skills:
+            skill_lines = "\n".join(
+                f"  - **{name}**: {summary}" for name, summary in matched_skills[:5]
+            )
+            hint = (
+                f"{LOG_PREFIX} No external tools match '{query}', but these "
+                f"built-in skills are already available to you:\n{skill_lines}\n"
+                "Call them directly — they are in your current tool list."
+            )
+        else:
+            hint = f"{LOG_PREFIX} No tools found matching '{query}'."
         return {
-            "text": (
-                f"{LOG_PREFIX} No external tools match '{query}'. "
-                "Only innate skills matched — those are already at your disposal."
-            ),
+            "text": hint,
             "_discovered_tools": [],
         }
 
