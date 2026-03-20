@@ -43,34 +43,16 @@
       "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none" }
     },
     {
-      "id": "mode-reflection",
-      "name": "Mode Reflection",
-      "desc": "Peer-reviews routing decisions during idle time (nightly batch).",
-      "caps": { "reasoning": "high", "structured": "medium", "creativity": "none", "classification": "medium" }
-    },
-    {
       "id": "semantic-memory",
       "name": "Semantic Memory",
       "desc": "Extracts concepts and relationships to build the knowledge graph.",
       "caps": { "reasoning": "high", "structured": "high", "creativity": "none", "classification": "medium" }
     },
     {
-      "id": "tool-prefilter",
-      "name": "Tool Pre-filter",
-      "desc": "Selects relevant tools and skills when ONNX confidence is low. Lightweight, infrequent.",
-      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
-    },
-    {
       "id": "experience-assimilation",
       "name": "Experience Assimilation",
       "desc": "Evaluates tool outputs for novel knowledge worth storing.",
       "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high" }
-    },
-    {
-      "id": "fact-store",
-      "name": "Fact Store",
-      "desc": "Extracts and stores atomic facts from exchanges. Runs async.",
-      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "medium" }
     },
     {
       "id": "autonomous-ambient-tool",
