@@ -91,8 +91,8 @@ Runs immediately for every message, before any routing decision.
 │          Match → 📤 M  📤 DB  (trait + identity)                   │
 │          No match → continue                                        │
 │                           │                                         │
-│  Step 2  Working Memory                           📥 M              │
-│          key: wm:{thread_id}  (list, 4 turns, 24h TTL)             │
+│  Step 2  Working Memory (transcript + compaction)  📥 DB             │
+│          topic_compactions + topic_transcript (budget-aware)        │
 │          ─────────────────────────────────────────────────          │
 │  Step 3  Gists                                    📥 M              │
 │          key: gist:{topic}  (sorted set, 30min TTL)                │
@@ -341,10 +341,9 @@ Runs after every response is generated (Paths A, B, C).
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHASE D: Post-Response Commit                                      │
 │                                                                     │
-│  Step 1  Append to Working Memory               📤 M               │
-│          key: wm:{thread_id}  (append)                              │
-│          { role: 'assistant', content, timestamp }                 │
-│          Max 4 turns maintained                                     │
+│  Step 1  Append to transcript + compaction check  📤 DB              │
+│          topic_transcript (append assistant turn)                   │
+│          Fires compaction if context > 85% of budget               │
 │                         │                                           │
 │  Step 2  Log interaction event                  📤 DB              │
 │          Table: interaction_log                                      │
@@ -503,7 +502,7 @@ Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Networ
 ```
 Key Pattern                        TTL        Read    Written by
 ─────────────────────────────────────────────────────────────────────
-wm:{thread_id}                     24h        A,C     D, tool_worker
+wm:{thread_id}                     24h        —       D (legacy fallback)
 gist:{topic}                       30min      A,C     Drift, memory_chunker
 fact:{topic}:{key}                 24h        A       Frontal cortex
 fok:{topic}                        —          A,B     FOK update service
