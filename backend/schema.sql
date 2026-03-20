@@ -879,3 +879,23 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
 
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
     ON llm_call_log (job_name, created_at);
+
+-- ────────────────────────────────────────────────────────────────
+-- TOPIC TRANSCRIPT — persistent, topic-scoped conversation record
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS topic_transcript (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tool_call_id TEXT,
+    tool_name TEXT,
+    internal INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_topic ON topic_transcript(topic, created_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS topic_transcript_vec USING vec0(
+    embedding float[768]
+);

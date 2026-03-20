@@ -512,6 +512,25 @@ class ACTOrchestrator:
                         "content": result_text[:8000],  # Prevent context overflow
                     })
 
+            # ── Persist to transcript (fire-and-forget) ──────────────
+            try:
+                from services import transcript_service
+                # Record tool results
+                for exec_r in actions_executed:
+                    _atype = exec_r.get('action_type', '')
+                    _result = exec_r.get('result', '')
+                    if isinstance(_result, dict):
+                        _result = _result.get('text', str(_result))
+                    elif not isinstance(_result, str):
+                        _result = str(_result)
+                    if _result:
+                        transcript_service.append(
+                            topic, 'tool', _result[:4000],
+                            tool_name=_atype,
+                        )
+            except Exception:
+                pass
+
             # ── Smart repetition detection (embedding-based) ────────────
             if self.smart_repetition and not termination_reason:
                 current_fingerprint = _action_fingerprint(actions)
