@@ -174,7 +174,12 @@ export class Chat {
         if (responseBlocks.length) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          this._renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
+          if (pendingForm.isConnected) {
+            this._renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
+          } else {
+            // pendingForm was removed by narration — append fresh
+            this._renderer.appendChalieForm(responseBlocks, responseMeta);
+          }
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
