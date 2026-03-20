@@ -5,20 +5,19 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 15 skills).
+register_innate_skills() in __init__.py (currently 14 skills).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
 ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
-    'moment', 'persistent_task', 'document',
+    'persistent_task', 'document',
     'read', 'reflect', 'transcript', 'find_tools',
 })
 
-# ── LLM-visible for planning: excludes moment (context read, not a
-#    user-facing skill) ──────────────────────────────────────────────────────
-PLANNING_SKILLS: frozenset = ALL_SKILL_NAMES - frozenset({'moment'})
+# ── LLM-visible for planning ──────────────────────────────────────────────
+PLANNING_SKILLS: frozenset = ALL_SKILL_NAMES
 
 # ── Reflection filter: innate skills whose output should NOT go to
 #    experience assimilation (all innate skills are filtered out) ────────────
@@ -59,7 +58,6 @@ SKILL_DESCRIPTIONS: dict = {
     'focus': 'Start and manage deep focus or work sessions, Pomodoro-style timers',
     'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
     'persistent_task': 'Create, manage, track, complete, and update progress on multi-session background tasks with state machine lifecycle',
-    'moment': 'Capture and read ambient context snapshots (time, place, energy, device)',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
@@ -78,7 +76,6 @@ SKILL_EFFORT: dict = {
     'focus': 'trivial',
     'autobiography': 'light',
     'persistent_task': 'deep',
-    'moment': 'trivial',
     'document': 'light',
     'read': 'light',
     'reflect': 'light',
@@ -97,7 +94,6 @@ SKILL_CATEGORIES: dict = {
     'focus': 'productivity',
     'autobiography': 'identity',
     'persistent_task': 'task_management',
-    'moment': 'context',
     'document': 'knowledge',
     'read': 'research',
     'reflect': 'cognition',

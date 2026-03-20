@@ -6,6 +6,5 @@ conversations
 coder-agent
 __pycache__/
 *.pyc
-tools/
 tools_disabled/
 .key

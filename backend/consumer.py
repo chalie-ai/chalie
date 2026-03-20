@@ -478,9 +478,6 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
-    # tool-update-checker removed — embodiment versions are pinned in
-    # embodiment_library.json and synced on boot, no periodic polling needed
-
     # One-time migration: tools_disabled → tools
     try:
         from pathlib import Path as _MigPath
