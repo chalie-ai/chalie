@@ -220,6 +220,38 @@ class OllamaService:
                 else:
                     raise
 
+    def get_context_limit(self) -> int:
+        """Query Ollama for model's context window size, cached."""
+        if hasattr(self, '_cached_context_limit'):
+            return self._cached_context_limit
+        try:
+            resp = requests.post(
+                f"{self.host}/api/show",
+                json={"name": self.model},
+                timeout=5,
+            )
+            if resp.ok:
+                data = resp.json()
+                model_info = data.get('model_info', {})
+                for key, val in model_info.items():
+                    if 'context_length' in key.lower():
+                        self._cached_context_limit = int(val)
+                        return self._cached_context_limit
+        except Exception as e:
+            logging.debug(f"[OllamaService] Failed to get context limit: {e}")
+        self._cached_context_limit = 8192  # Conservative default
+        return self._cached_context_limit
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        """Estimate tokens using heuristic (Ollama models vary too much for fixed tokenizer)."""
+        from services.llm_service import estimate_tokens
+        parts = [system_prompt] if system_prompt else []
+        for msg in messages:
+            parts.append(msg.get('content', '') or '')
+        if tools:
+            parts.append(json.dumps(tools, default=str))
+        return estimate_tokens(' '.join(parts))
+
     def generate_embedding(self, text: str, embedding_model: str = None, target_dimensions: int = None) -> list:
         """
         Generate embedding vector using sentence-transformers (no Ollama required).

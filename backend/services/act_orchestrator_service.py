@@ -36,6 +36,7 @@ from typing import Optional, Callable
 from services.act_loop_service import ActLoopService
 from services.innate_skills.registry import COGNITIVE_PRIMITIVES
 from services.tool_schema_service import get_skill_schemas, get_external_tool_schemas
+from services.llm_service import estimate_tokens
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -203,9 +204,17 @@ class ACTOrchestrator:
 
         # Build native tool schemas for all innate skills
         _native_tools = get_skill_schemas(selected_skills)
-        logger.debug(
+
+        # Auto-calculate context budget from provider limits
+        try:
+            _context_limit = cortex_service.get_context_limit()
+        except Exception:
+            _context_limit = 32000  # Safe fallback
+        _context_budget = min(int(_context_limit * 0.6), 150_000)
+        logger.info(
             f"{LOG_PREFIX} System prompt built ({len(_system_prompt)} chars), "
-            f"{len(_native_tools)} native tools"
+            f"{len(_native_tools)} native tools, "
+            f"context budget: {_context_budget} tokens (limit: {_context_limit})"
         )
 
         # ── Repetition detection state ──────────────────────────────────
@@ -273,8 +282,7 @@ class ACTOrchestrator:
                 })
 
             # Token budget guard — prune oldest message pairs when approaching limit
-            context_budget = self.config.get('context_budget_tokens', 32000)
-            _messages = self._prune_messages(_messages, context_budget)
+            _messages = self._prune_messages(_messages, _context_budget)
 
             try:
                 response_data = cortex_service.generate_response_appended(
@@ -683,9 +691,6 @@ class ACTOrchestrator:
         messages are dropped in pairs until the array fits the budget or only
         the minimum tail (first message + 2 most-recent messages) remains.
 
-        Token count is estimated as ``word_count * 1.3`` — the same heuristic
-        used elsewhere in the ACT loop.
-
         Args:
             messages: Current message array (mutated copy is returned; original
                 is not modified)
@@ -698,8 +703,8 @@ class ACTOrchestrator:
         if not messages:
             return messages
 
-        total_text = ' '.join(m.get('content', '') for m in messages)
-        estimated_tokens = int(len(total_text.split()) * 1.3)
+        total_text = ' '.join(m.get('content', '') or '' for m in messages)
+        estimated_tokens = estimate_tokens(total_text)
 
         if estimated_tokens <= budget_tokens or len(messages) <= 3:
             return messages
@@ -711,8 +716,8 @@ class ACTOrchestrator:
         pruned = [messages[0]] + messages[-keep_tail:]
 
         while len(pruned) > 3:
-            total = ' '.join(m.get('content', '') for m in pruned)
-            if int(len(total.split()) * 1.3) <= budget_tokens:
+            total = ' '.join(m.get('content', '') or '' for m in pruned)
+            if estimate_tokens(total) <= budget_tokens:
                 break
             # Remove the oldest non-first message
             pruned.pop(1)
