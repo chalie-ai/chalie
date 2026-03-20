@@ -4,7 +4,6 @@ Tools blueprint — /tools endpoints for listing tools and managing their config
 
 import json
 import logging
-from pathlib import Path
 from urllib.parse import quote as url_quote
 
 from flask import Blueprint, request, jsonify
@@ -227,13 +226,6 @@ def list_tools():
         # 1. Active tools in registry (connected/available/system)
         for name in sorted(registry.tools.keys()):
             tool = registry.tools[name]
-            tool_dir = Path(tool["dir"])
-
-            # Ghost check: verify tool directory still exists on disk
-            if not tool_dir.exists():
-                logger.debug(f"[REST API] Skipping ghost tool '{name}': directory not found at {tool_dir}")
-                continue
-
             manifest = tool["manifest"]
             trigger = manifest.get("trigger", {})
 

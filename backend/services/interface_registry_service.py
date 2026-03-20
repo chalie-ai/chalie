@@ -339,14 +339,13 @@ class InterfaceRegistryService:
             logger.warning("[INTERFACE] Could not fetch capabilities from %s: %s", iface["name"], e)
             return []
 
-        # Check if capabilities changed
+        # Always re-register tools (idempotent) so they reach the
+        # in-memory registry and tool profiler — covers process restarts.
         caps_json = json.dumps(capabilities, sort_keys=True)
         new_hash = _hash(caps_json)
 
         if new_hash != iface.get("capabilities_hash"):
-            # Capabilities changed — re-register
             self._unregister_tools(interface_id)
-            self._register_tools(interface_id, capabilities)
             with self._db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -354,10 +353,12 @@ class InterfaceRegistryService:
                     (new_hash, interface_id),
                 )
                 cursor.close()
-            logger.info(
-                "[INTERFACE] Capabilities updated for '%s' — %d tools",
-                iface["name"], len(capabilities),
-            )
+
+        self._register_tools(interface_id, capabilities)
+        logger.info(
+            "[INTERFACE] Registered %d capabilities for '%s'",
+            len(capabilities), iface["name"],
+        )
 
         return capabilities
 

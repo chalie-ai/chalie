@@ -1,10 +1,8 @@
 """
-Programming docs search handler.
+Programming Docs Search Tool — Official documentation lookup.
 
-Each language source defines:
-  - search(query) -> list of {url, title} dicts
-  - base_url for fallback browsing
-
+Searches and reads official documentation for 12 languages and 11 major
+frameworks. Each language source defines search(query) and a base_url.
 The lookup() function resolves the language, searches, fetches the top
 result, extracts clean text, and returns a tool result dict.
 """
@@ -1088,3 +1086,18 @@ def lookup(language, query):
         "url": top["url"],
         "source": source.name,
     }
+
+
+# ---------------------------------------------------------------------------
+# Unified execute() interface
+# ---------------------------------------------------------------------------
+
+def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict:
+    """Unified tool interface wrapping lookup()."""
+    language = (params.get("language") or "").strip()
+    query = (params.get("query") or "").strip()
+    if not language:
+        return {"error": "Missing required parameter: language"}
+    if not query:
+        return {"error": "Missing required parameter: query"}
+    return lookup(language, query)

@@ -13,8 +13,8 @@ class TestToolRegistryTieredRewards:
     """Unit tests for _log_outcome reward classification."""
 
     def _make_service(self):
-        """Return a ToolRegistryService with tools disabled (skips Docker setup)."""
-        with patch("services.tool_registry_service.ToolRegistryService._load_library"):
+        """Return a ToolRegistryService with tools disabled (skips loading)."""
+        with patch("services.tool_registry_service.ToolRegistryService._load_tools"):
             from services.tool_registry_service import ToolRegistryService
             svc = ToolRegistryService.__new__(ToolRegistryService)
             svc._enabled = True
