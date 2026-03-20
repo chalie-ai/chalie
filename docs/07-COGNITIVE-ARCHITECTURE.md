@@ -67,7 +67,7 @@ The router naturally shifts behavior as memory accumulates:
 
 ## Innate Skills (Action Types)
 
-The ACT loop uses cognitive primitives (always available) and contextual skills (discovered on-demand via `find_skills`). All are non-LLM operations (fast, sub-cortical).
+The ACT loop uses cognitive primitives (always available) and contextual skills. All are non-LLM operations (fast, sub-cortical). All innate skills are always available — no discovery step needed.
 
 **Cognitive Primitives** (always injected into every ACT prompt):
 
@@ -77,9 +77,8 @@ The ACT loop uses cognitive primitives (always available) and contextual skills 
 | `memorize` | memory | <50ms | Explicit memory encoding |
 | `associate` | cognition | <500ms | Spreading activation from seed concepts through semantic graph |
 | `find_tools` | discovery | <100ms | Discover registered tools via semantic search against tool capability profiles |
-| `find_skills` | discovery | <100ms | Discover innate cognitive skills by describing what you need |
 
-**Contextual Skills** (discovered on-demand via `find_skills`):
+**Contextual Skills**:
 
 | Skill | Category | Speed | Purpose |
 |---|---|---|---|
@@ -217,7 +216,7 @@ The ACT loop executes internal actions with safety limits. No decision gate or n
 
 The ACT prompt template (`frontal-cortex-act.md`) is a skeleton with a `{{injected_skills}}` placeholder.
 
-**Cognitive primitives** (`recall`, `memorize`, `associate`, `find_tools`, `find_skills`) are always injected into every ACT prompt. Contextual skills are not pre-injected — the LLM discovers them on-demand by calling `find_skills` during the ACT loop.
+**Cognitive primitives** (`recall`, `memorize`, `associate`, `find_tools`) are always injected into every ACT prompt. All other innate skills are also available — the LLM invokes them directly by name.
 
 **Skill doc files** live in `backend/prompts/skills/{skill}.md` — one file per skill. `FrontalCortexService._get_injected_skills()` loads only the primitive skill files at call time.
 

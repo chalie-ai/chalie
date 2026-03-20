@@ -81,7 +81,7 @@ class ChalieApp {
           return;
         }
         if (!data.has_session) {
-          await this._showLoginDialog();
+          window.location.replace('/login/');
           return;
         }
       } else {
@@ -1327,7 +1327,13 @@ class ChalieApp {
         if (responseBlocks.length) {
           responseMeta.duration_ms = data.duration_ms;
           responseMeta.ts = exchangeTimestamp;
-          this.renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
+          if (pendingForm.isConnected) {
+            // No narrations — resolve the pending form in place
+            this.renderer.resolvePendingForm(pendingForm, responseBlocks, responseMeta);
+          } else {
+            // Narrations replaced the pending form — append as a new message
+            this.renderer.appendChalieForm(responseBlocks, responseMeta);
+          }
           this._pendingForm = null;
           // Notify if user switched away while waiting for the response
           if (!document.hasFocus()) {
@@ -1338,8 +1344,8 @@ class ChalieApp {
             if (notifText) this._notifyBackground(notifText);
           }
         } else {
-          // No blocks response — remove the pending bubble
-          pendingForm.remove();
+          // No blocks response — remove the pending bubble (if still in DOM)
+          if (pendingForm.isConnected) pendingForm.remove();
           this._pendingForm = null;
         }
         this.presence.setState('resting');
@@ -1756,69 +1762,8 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _handleAuthFailure() {
-    // Stop the task strip interval so it doesn't keep firing 401s while user re-authenticates
     clearInterval(this._taskStripInterval);
-    // Guard: don't open the login dialog if it's already open (e.g. two concurrent
-    // 401s from _loadRecentConversation and _loadActiveTasks both firing at once).
-    const dialog = document.getElementById('loginDialog');
-    if (dialog?.open) return;
-    this._showLoginDialog();
-  }
-
-  _showLoginDialog() {
-    return new Promise((resolve) => {
-      const dialog = document.getElementById('loginDialog');
-      const submitBtn = document.getElementById('loginSubmitBtn');
-      const statusEl = document.getElementById('loginStatus');
-      const usernameEl = document.getElementById('loginUsername');
-      const passwordEl = document.getElementById('loginPassword');
-
-      statusEl.textContent = '';
-      statusEl.className = 'api-key-dialog__status';
-
-      const doLogin = async () => {
-        const username = usernameEl.value.trim();
-        const password = passwordEl.value;
-        if (!username || !password) {
-          statusEl.textContent = 'Username and password required.';
-          statusEl.className = 'api-key-dialog__status api-key-dialog__status--error';
-          return;
-        }
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Logging in...';
-        try {
-          const res = await fetch('/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ username, password }),
-          });
-          if (res.ok) {
-            dialog.close();
-            resolve();
-            // Reload the page — the first _init() returned early (before any _initXxx() calls)
-            // so the app shell was never wired up. A clean reload is more reliable than
-            // trying to re-bootstrap in-place with leftover timers and partial state.
-            window.location.reload();
-          } else {
-            statusEl.textContent = res.status === 401 ? 'Invalid credentials.' : 'Login failed.';
-            statusEl.className = 'api-key-dialog__status api-key-dialog__status--error';
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Login';
-          }
-        } catch {
-          statusEl.textContent = 'Network error.';
-          statusEl.className = 'api-key-dialog__status api-key-dialog__status--error';
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Login';
-        }
-      };
-
-      const form = document.getElementById('loginForm');
-      form.onsubmit = (e) => { e.preventDefault(); doLogin(); };
-
-      dialog.showModal();
-    });
+    window.location.replace('/login/');
   }
 
   // ---------------------------------------------------------------------------

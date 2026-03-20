@@ -1098,6 +1098,10 @@ body::before {
 .obs-task-card__badge.--learning  { background: rgba(138,  92, 255, 0.10); color: var(--accent-primary); }
 .obs-task-card__badge.--behavioral { background: rgba(  0, 240, 255, 0.10); color: #00F0FF; }
 .obs-task-card__meta { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.obs-task-card__actions { margin-top: 10px; display: flex; gap: 8px; }
+.obs-task-btn { font-size: 11px; font-weight: 500; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; cursor: pointer; transition: all 0.15s; }
+.obs-task-btn.--cancel { color: var(--danger, #ef4444); border-color: rgba(239, 68, 68, 0.3); }
+.obs-task-btn.--cancel:hover { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.5); }
 
 .obs-section-title {
     font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;

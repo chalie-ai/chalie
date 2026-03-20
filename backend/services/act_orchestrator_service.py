@@ -35,6 +35,7 @@ from typing import Optional, Callable
 
 from services.act_loop_service import ActLoopService
 from services.innate_skills.registry import COGNITIVE_PRIMITIVES
+from services.tool_schema_service import get_skill_schemas, get_external_tool_schemas
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -51,6 +52,7 @@ class ACTResult:
     critic_telemetry: dict = field(default_factory=dict)
     loop_telemetry: dict = field(default_factory=dict)
     reflection: Optional[dict] = None
+    final_response: str = ''  # Model's text when it stops calling tools
 
 
 class ACTOrchestrator:
@@ -183,27 +185,28 @@ class ACTOrchestrator:
         self._narrated = False  # Set on iteration 0 by LLM decision
         self._request_id = request_id
 
-        # ── Append mode: build system prompt once, grow message array ────
-        append_mode = self.config.get('append_mode', False)
-        _system_prompt = None   # Set below when append_mode is True
-        _messages = None        # Growing message array for append mode
+        # ── Build system prompt once, grow message array ─────────────────
+        _system_prompt = cortex_service.build_system_prompt(
+            system_prompt_template=act_prompt,
+            original_prompt=text,
+            classification=classification,
+            chat_history=chat_history,
+            assembled_context=assembled_context,
+            relevant_tools=relevant_tools,
+            selected_tools=selected_tools,
+            selected_skills=selected_skills,
+            thread_id=session_id,
+            returning_from_silence=False,
+            inclusion_map=inclusion_map,
+        )
+        _messages = [{"role": "user", "content": text}]
 
-        if append_mode:
-            _system_prompt = cortex_service.build_system_prompt(
-                system_prompt_template=act_prompt,
-                original_prompt=text,
-                classification=classification,
-                chat_history=chat_history,
-                assembled_context=assembled_context,
-                relevant_tools=relevant_tools,
-                selected_tools=selected_tools,
-                selected_skills=selected_skills,
-                thread_id=session_id,
-                returning_from_silence=False,
-                inclusion_map=inclusion_map,
-            )
-            _messages = [{"role": "user", "content": text}]
-            logger.debug(f"{LOG_PREFIX} Append mode: system prompt built once ({len(_system_prompt)} chars)")
+        # Build native tool schemas for all innate skills
+        _native_tools = get_skill_schemas(selected_skills)
+        logger.debug(
+            f"{LOG_PREFIX} System prompt built ({len(_system_prompt)} chars), "
+            f"{len(_native_tools)} native tools"
+        )
 
         # ── Repetition detection state ──────────────────────────────────
         consecutive_same_action = 0
@@ -218,6 +221,7 @@ class ACTOrchestrator:
         )
 
         termination_reason = None
+        _final_response = ''  # Model's text when it stops calling tools
 
         # ── Main loop ───────────────────────────────────────────────────
         while True:
@@ -233,126 +237,90 @@ class ACTOrchestrator:
                     if isinstance(item, dict) and item.get('type') == 'tool'
                 )
 
-            if append_mode:
-                # ── Append mode: grow message array ──────────────────────
-                # Collect per-iteration context updates into a single user message
-                # so the system prompt (and its cache) stay untouched each iteration.
-                context_updates = []
+            # ── Grow message array ─────────────────────────────────────
+            # Collect per-iteration context updates into a single user message
+            # so the system prompt (and its cache) stay untouched each iteration.
+            context_updates = []
 
-                # Steering from the user mid-loop
-                if self._request_id:
-                    steer_text = self._get_steering_text()
-                    if steer_text:
-                        context_updates.append(steer_text)
+            # Steering from the user mid-loop
+            if self._request_id:
+                steer_text = self._get_steering_text()
+                if steer_text:
+                    context_updates.append(steer_text)
 
-                # Tool health signals (degraded tools only)
-                if _tool_names:
-                    _potentials = {t: get_potential(t) for t in _tool_names}
-                    _health_hint = format_health_hint(_potentials)
-                    if _health_hint:
-                        context_updates.append(f"[Tool Health]\n{_health_hint}")
+            # Tool health signals (degraded tools only)
+            if _tool_names:
+                _potentials = {t: get_potential(t) for t in _tool_names}
+                _health_hint = format_health_hint(_potentials)
+                if _health_hint:
+                    context_updates.append(f"[Tool Health]\n{_health_hint}")
 
-                # Cautionary lessons from procedural memory (after first iteration)
-                if act_loop.act_history:
-                    _lessons_hint = self._get_cautionary_lessons(act_loop.act_history)
-                    if _lessons_hint:
-                        context_updates.append(f"[Cautionary Lessons]\n{_lessons_hint}")
+            # Cautionary lessons from procedural memory (after first iteration)
+            if act_loop.act_history:
+                _lessons_hint = self._get_cautionary_lessons(act_loop.act_history)
+                if _lessons_hint:
+                    context_updates.append(f"[Cautionary Lessons]\n{_lessons_hint}")
 
-                # ACT history delta (results from the last iteration's actions)
-                act_history_str = act_loop.get_history_context()
-                if act_history_str and act_history_str != "(none)":
-                    context_updates.append(act_history_str)
+            # ACT history delta (results from the last iteration's actions)
+            act_history_str = act_loop.get_history_context()
+            if act_history_str and act_history_str != "(none)":
+                context_updates.append(act_history_str)
 
-                if context_updates:
-                    _messages.append({
-                        "role": "user",
-                        "content": "\n\n".join(context_updates),
-                    })
+            if context_updates:
+                _messages.append({
+                    "role": "user",
+                    "content": "\n\n".join(context_updates),
+                })
 
-                # Token budget guard — prune oldest message pairs when approaching limit
-                context_budget = self.config.get('context_budget_tokens', 32000)
-                _messages = self._prune_messages(_messages, context_budget)
+            # Token budget guard — prune oldest message pairs when approaching limit
+            context_budget = self.config.get('context_budget_tokens', 32000)
+            _messages = self._prune_messages(_messages, context_budget)
 
-                try:
-                    response_data = cortex_service.generate_response_appended(
-                        system_prompt=_system_prompt,
-                        messages=_messages,
-                        cache_prefix=True,
-                    )
-                except Exception as _gen_err:
-                    logger.error(
-                        f"{LOG_PREFIX} LLM call failed at iteration "
-                        f"{act_loop.iteration_number}: {_gen_err}", exc_info=True
-                    )
-                    termination_reason = 'generation_error'
-                    act_loop.log_iteration(
-                        started_at=iteration_start, completed_at=time.time(),
-                        chosen_mode='ACT', chosen_confidence=0.0,
-                        actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
-                        termination_reason=termination_reason, decision_data={'net_value': 0.0},
-                    )
-                    act_loop.iteration_number += 1
-                    break
+            try:
+                response_data = cortex_service.generate_response_appended(
+                    system_prompt=_system_prompt,
+                    messages=_messages,
+                    cache_prefix=True,
+                    tools=_native_tools,
+                )
+            except Exception as _gen_err:
+                logger.error(
+                    f"{LOG_PREFIX} LLM call failed at iteration "
+                    f"{act_loop.iteration_number}: {_gen_err}", exc_info=True
+                )
+                termination_reason = 'generation_error'
+                act_loop.log_iteration(
+                    started_at=iteration_start, completed_at=time.time(),
+                    chosen_mode='ACT', chosen_confidence=0.0,
+                    actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
+                    termination_reason=termination_reason, decision_data={'net_value': 0.0},
+                )
+                act_loop.iteration_number += 1
+                break
 
-                # Append assistant turn for the next iteration
+            # Append assistant turn for the next iteration
+            if response_data.get('tool_calls'):
+                # Native tool calling: append assistant message with tool_calls
+                _messages.append({
+                    "role": "assistant",
+                    "content": response_data.get('narration', ''),
+                    "tool_calls": response_data['tool_calls'],
+                })
+            else:
+                # Text-only response (no tools called)
                 raw_response = response_data.get('raw_response', response_data.get('response', ''))
                 if raw_response:
                     _messages.append({"role": "assistant", "content": raw_response})
-
-            else:
-                # ── Legacy mode: rebuild full prompt each iteration ────────
-                act_history_str = act_loop.get_history_context()
-
-                # Inject user steering input (if any)
-                if self._request_id:
-                    act_history_str = self._inject_steering(act_history_str)
-
-                # Inject tool health signals (degraded tools only)
-                if _tool_names:
-                    _potentials = {t: get_potential(t) for t in _tool_names}
-                    _health_hint = format_health_hint(_potentials)
-                    if _health_hint:
-                        act_history_str += f"\n\n[Tool Health]\n{_health_hint}"
-
-                # Inject cautionary lessons (after first iteration)
-                if act_loop.act_history:
-                    _lessons_hint = self._get_cautionary_lessons(act_loop.act_history)
-                    if _lessons_hint:
-                        act_history_str += f"\n\n[Cautionary Lessons]\n{_lessons_hint}"
-
-                try:
-                    response_data = cortex_service.generate_response(
-                        system_prompt_template=act_prompt,
-                        original_prompt=text,
-                        classification=classification,
-                        chat_history=chat_history,
-                        act_history=act_history_str,
-                        relevant_tools=relevant_tools,
-                        selected_skills=selected_skills,
-                        selected_tools=selected_tools,
-                        assembled_context=assembled_context,
-                        inclusion_map=inclusion_map,
-                    )
-                except Exception as _gen_err:
-                    logger.error(
-                        f"{LOG_PREFIX} LLM call failed at iteration "
-                        f"{act_loop.iteration_number}: {_gen_err}", exc_info=True
-                    )
-                    termination_reason = 'generation_error'
-                    act_loop.log_iteration(
-                        started_at=iteration_start, completed_at=time.time(),
-                        chosen_mode='ACT', chosen_confidence=0.0,
-                        actions_executed=[], frontal_cortex_response={'error': str(_gen_err)},
-                        termination_reason=termination_reason, decision_data={'net_value': 0.0},
-                    )
-                    act_loop.iteration_number += 1
-                    break
 
             actions = response_data.get('actions', [])
 
             # ── Narration gate (iteration 0 only) + emission ─────────────
             if act_loop.iteration_number == 0:
-                self._narrated = bool(response_data.get('narrated', False))
+                # Native tool calling: text alongside tool_use blocks = narration
+                if response_data.get('tool_calls') and response_data.get('narration'):
+                    self._narrated = True
+                else:
+                    self._narrated = bool(response_data.get('narrated', False))
                 if self._narrated:
                     logger.info(f"{LOG_PREFIX} Narrated ACT loop enabled")
 
@@ -437,6 +405,7 @@ class ACTOrchestrator:
 
             # ── No actions → exit ───────────────────────────────────────
             if not actions:
+                _final_response = response_data.get('response', '') or response_data.get('narration', '')
                 logger.info(f"{LOG_PREFIX} No actions, exiting ACT loop")
                 termination_reason = 'no_actions'
                 act_loop.log_iteration(
@@ -473,6 +442,35 @@ class ACTOrchestrator:
                 actions=actions,
             )
 
+            # ── Dynamic tool injection (find_tools → native tools) ─────
+            for _exec_r in actions_executed:
+                if _exec_r.get('action_type') != 'find_tools':
+                    continue
+                _ft_result = _exec_r.get('result')
+                if not isinstance(_ft_result, dict):
+                    continue
+                _discovered = _ft_result.get('_discovered_tools', [])
+                if not _discovered:
+                    continue
+                try:
+                    _new_schemas = get_external_tool_schemas(_discovered)
+                    _existing = {t['name'] for t in _native_tools}
+                    _injected = []
+                    for _schema in _new_schemas:
+                        if _schema['name'] not in _existing:
+                            _native_tools.append(_schema)
+                            _existing.add(_schema['name'])
+                            _injected.append(_schema['name'])
+                    if _injected:
+                        logger.info(
+                            f"{LOG_PREFIX} Dynamically injected {len(_injected)} "
+                            f"tool schema(s): {_injected}"
+                        )
+                except Exception as _inj_err:
+                    logger.warning(
+                        f"{LOG_PREFIX} Dynamic tool injection failed: {_inj_err}"
+                    )
+
             # ── Tool health: record outcomes + check exhaustion ────────
             for _exec_r in actions_executed:
                 _atype = _exec_r.get('action_type', '')
@@ -488,6 +486,23 @@ class ACTOrchestrator:
                     termination_reason = 'tool_exhausted'
 
             act_loop.append_results(actions_executed)
+
+            # ── Native tool calling: append tool_result messages ─────────
+            if _native_tools and response_data.get('tool_calls'):
+                for tc, exec_r in zip(response_data['tool_calls'], actions_executed):
+                    result_text = exec_r.get('result', '')
+                    if isinstance(result_text, dict):
+                        # Skills returning {"text": ..., "_meta": ...} —
+                        # send the text to the LLM, strip internal metadata.
+                        result_text = result_text.get('text') or json.dumps(result_text, default=str)
+                    elif not isinstance(result_text, str):
+                        result_text = str(result_text)
+                    _messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc['id'],
+                        "name": tc['name'],
+                        "content": result_text[:8000],  # Prevent context overflow
+                    })
 
             # ── Smart repetition detection (embedding-based) ────────────
             if self.smart_repetition and not termination_reason:
@@ -628,37 +643,16 @@ class ACTOrchestrator:
             critic_telemetry={},
             loop_telemetry=loop_telemetry,
             reflection=reflection,
+            final_response=_final_response,
         )
 
     # ── Private helpers ─────────────────────────────────────────────────
 
-    def _inject_steering(self, act_history_str: str) -> str:
-        """Check MemoryStore for user steering input and inject into act_history.
-
-        Used by legacy (non-append) mode only.  Append mode uses
-        :meth:`_get_steering_text` to obtain the steering text as a plain
-        string that is appended to the context-update message instead.
-        """
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            steer_key = f"steer:{self._request_id}"
-            steers = store.lrange(steer_key, 0, -1)
-            if steers:
-                store.delete(steer_key)
-                for steer in steers:
-                    steer_text = steer if isinstance(steer, str) else steer.decode()
-                    act_history_str += f"\n\n⚡ [User interrupted]: {steer_text}"
-                    logger.info(f"{LOG_PREFIX} Injected user steer: {steer_text[:80]}")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Steering check failed: {e}")
-        return act_history_str
-
     def _get_steering_text(self) -> str:
         """Drain the MemoryStore steering queue and return formatted text.
 
-        Used by append mode so that steering content can be included in a
-        discrete user message rather than appended to the act_history string.
+        Steering content is included in a discrete user message within the
+        message array each iteration.
 
         Returns:
             Formatted steering lines joined by newlines, or an empty string

@@ -245,10 +245,10 @@ Used by background workers (tool_worker, persistent_task_worker, curiosity_pursu
 │  │     ActDispatcherService                                     │  │
 │  │     Chains outputs: result[N] → input[N+1]                  │  │
 │  │     Action types:                                            │  │
-│  │       recall, memorize, associate, find_tools, find_skills  │  │
+│  │       recall, memorize, associate, find_tools               │  │
 │  │       (cognitive primitives, always available)              │  │
-│  │       schedule, list, focus, persistent_task                │  │
-│  │       (contextual, discovered via find_skills)              │  │
+│  │       schedule, list, focus, persistent_task, etc.          │  │
+│  │       (all innate skills available directly)                │  │
 │  │       (+ external tools via tool_worker thread)             │  │
 │  │                                                              │  │
 │  │  4. Accumulate fatigue               ⚡ DET                 │  │

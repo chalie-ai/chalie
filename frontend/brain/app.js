@@ -119,7 +119,7 @@ async function resolveApiKey() {
         }
         // No session — redirect to main interface for login
         if (!data.has_session) {
-            window.location.replace('/?next=/brain/');
+            window.location.replace('/login/?next=/brain/');
             return;
         }
         // Logged in — load dashboard regardless of provider state
@@ -138,7 +138,7 @@ async function loadData() {
             providers = data.providers || [];
         } else if (res.status === 401) {
             // Session expired — redirect to login
-            window.location.replace('/?next=/brain/');
+            window.location.replace('/login/?next=/brain/');
             return;
         } else {
             showToast('Failed to load providers', 'error');
@@ -1989,6 +1989,9 @@ async function loadTasksObs() {
                     <div class="obs-task-card__meta">
                         ${t.priority ? 'Priority: ' + escapeHtml(String(t.priority)) + ' · ' : ''}${progress}
                     </div>
+                    <div class="obs-task-card__actions">
+                        <button class="obs-task-btn --cancel" data-task-cancel="${t.id}">Cancel</button>
+                    </div>
                 </div>`;
             }
         } else {
@@ -2018,6 +2021,19 @@ async function loadTasksObs() {
         }
 
         el.innerHTML = html;
+
+        // Wire cancel buttons
+        el.querySelectorAll('[data-task-cancel]').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const taskId = e.target.dataset.taskCancel;
+                if (!confirm('Cancel this task?')) return;
+                try {
+                    const r = await apiFetch(`/system/observability/tasks/${taskId}`, { method: 'DELETE' });
+                    if (r.ok) loadTasksObs();
+                    else alert('Failed to cancel task');
+                } catch { alert('Failed to cancel task'); }
+            });
+        });
     } catch (e) {
         el.innerHTML = '<div class="obs-empty">Could not load task data.</div>';
     }

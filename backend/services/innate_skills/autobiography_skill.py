@@ -12,6 +12,41 @@ from services.database_service import text
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "autobiography",
+    "description": (
+        "Retrieve Chalie's self-reflective narrative — a first-person account of "
+        "growth, evolving relationship with the user, recognized patterns, and active "
+        "threads. More holistic than recall (individual memories) or introspect (system state). "
+        "Use when conversation requires self-awareness, referencing shared history, "
+        "understanding own growth, or providing continuity."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "section": {
+                "type": "string",
+                "enum": [
+                    "identity",
+                    "relationship_arc",
+                    "values_and_goals",
+                    "behavioral_patterns",
+                    "active_threads",
+                    "long_term_themes",
+                    "delta",
+                    "growth",
+                ],
+                "description": (
+                    "Optional: extract a specific section. 'delta' or 'growth' shows "
+                    "what changed between the last two narrative versions. "
+                    "Omit to return the full narrative."
+                ),
+            },
+        },
+        "required": [],
+    },
+}
+
 
 def handle_autobiography(topic: str, params: dict) -> str:
     """

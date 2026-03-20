@@ -9,6 +9,73 @@ from typing import Dict
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "memorize",
+    "description": (
+        "Store information as persistent user traits for future recall. "
+        "Use when you want to record something about the user for long-term reference. "
+        "Each trait has a key, value, confidence, and category. "
+        "Categories: 'core' (identity facts like name), 'preference' (likes/dislikes), "
+        "'behavioral' (observed patterns). The 'facts' format is also accepted for "
+        "backward compatibility and maps to traits."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "traits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Trait identifier (e.g. 'name', 'favorite_color').",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Trait value (e.g. 'Dylan', 'blue').",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "description": "Confidence 0.0-1.0 (default 0.7).",
+                        },
+                        "category": {
+                            "type": "string",
+                            "enum": ["core", "preference", "behavioral"],
+                            "description": "Trait category (default 'preference').",
+                        },
+                    },
+                    "required": ["key", "value"],
+                },
+                "description": "List of traits to store: [{key, value, confidence?, category?}].",
+            },
+            "facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Fact key.",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "Fact value.",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "description": "Confidence 0.0-1.0 (default 0.7).",
+                        },
+                    },
+                    "required": ["key", "value"],
+                },
+                "description": "Legacy format — list of facts [{key, value, confidence?}]. Mapped to traits with category 'preference'.",
+            },
+        },
+        "required": [],
+    },
+}
+
 
 def handle_memorize(topic: str, params: dict) -> str:
     """

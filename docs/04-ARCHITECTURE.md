@@ -181,7 +181,6 @@ frontend/
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
 - **`find_tools_skill.py`** — Discover registered tools via semantic search against tool capability profiles
-- **`find_skills_skill.py`** — Discover innate cognitive skills via semantic search against tool capability profiles
 - **`notes_skill.py`** — Query working notes from this session for on-demand retrieval of older action history
 
 ## Worker Processes (`backend/workers/`)

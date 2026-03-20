@@ -47,25 +47,22 @@ def _mock_db_with_rows(rows):
 
 class TestHandleFindTools:
 
-    def test_default_action_is_search(self):
-        """With no action specified, should default to search."""
+    def test_returns_dict(self):
+        """Result should always be a dict with 'text' and '_discovered_tools'."""
         result = handle_find_tools("topic", {"query": ""})
-        assert "[FIND_TOOLS]" in result
-        assert "Error" in result
+        assert isinstance(result, dict)
+        assert 'text' in result
+        assert '_discovered_tools' in result
 
-    def test_unknown_action(self):
-        result = handle_find_tools("topic", {"action": "bogus"})
-        assert "Unknown action" in result
+    def test_empty_query_returns_error(self):
+        result = handle_find_tools("topic", {"query": ""})
+        assert "Error" in result['text']
+        assert result['_discovered_tools'] == []
 
-    def test_search_requires_query(self):
-        result = handle_find_tools("topic", {"action": "search", "query": ""})
-        assert "Error" in result
-        assert "query" in result.lower()
-
-    def test_details_requires_tool_name(self):
-        result = handle_find_tools("topic", {"action": "details", "tool_name": ""})
-        assert "Error" in result
-        assert "tool_name" in result
+    def test_missing_query_returns_error(self):
+        result = handle_find_tools("topic", {})
+        assert "Error" in result['text']
+        assert result['_discovered_tools'] == []
 
 
 class TestFilterAvailable:
@@ -146,7 +143,7 @@ class TestFormatSearchResults:
         result = _format_search_results("search the internet", tools)
         assert 'web_search' in result
         assert '92%' in result
-        assert 'find_tools' in result
+        assert 'directly' in result.lower()
 
     @patch('services.innate_skills.find_tools_skill._get_param_summary')
     def test_format_multiple_tools(self, mock_params):
@@ -197,7 +194,7 @@ class TestSearchIntegration:
     @patch(_DB)
     @patch(_EMB)
     def test_search_happy_path(self, mock_emb_cls, mock_db_fn, mock_registry_cls):
-        """Full search flow: embed query → vec search → filter → format."""
+        """Full search flow: embed query -> vec search -> filter -> format."""
         mock_emb_cls.return_value.generate_embedding.return_value = [0.1] * 768
 
         mock_db_fn.return_value = _mock_db_with_rows([
@@ -209,9 +206,11 @@ class TestSearchIntegration:
         )
         mock_registry_cls.return_value = mock_reg
 
-        result = handle_find_tools("topic", {"action": "search", "query": "search online"})
-        assert 'web_search' in result
-        assert 'Found 1 tool' in result
+        result = handle_find_tools("topic", {"query": "search online"})
+        assert isinstance(result, dict)
+        assert 'web_search' in result['text']
+        assert 'Found 1 tool' in result['text']
+        assert 'web_search' in result['_discovered_tools']
 
     @patch(_DB)
     @patch(_EMB)
@@ -220,41 +219,29 @@ class TestSearchIntegration:
         mock_emb_cls.return_value.generate_embedding.side_effect = RuntimeError("model not loaded")
         mock_db_fn.return_value = _mock_db_with_rows([])
 
-        result = handle_find_tools("topic", {"action": "search", "query": "weather"})
-        assert "keyword" in result.lower() or "No tools found" in result
+        result = handle_find_tools("topic", {"query": "weather"})
+        assert isinstance(result, dict)
+        assert "keyword" in result['text'].lower() or "No tools found" in result['text']
+        assert isinstance(result['_discovered_tools'], list)
 
-    @patch('services.innate_skills.find_tools_skill._fetch_profile')
-    @patch('services.innate_skills.find_tools_skill._fetch_manifest')
-    def test_details_with_profile_and_manifest(self, mock_manifest, mock_profile):
-        """Details should combine profile and manifest info."""
-        mock_profile.return_value = {
-            'full_profile': 'Searches the web using multiple engines',
-            'short_summary': 'Web search',
-            'usage_scenarios': json.dumps(['Finding news', 'Research']),
-            'anti_scenarios': json.dumps(['Local file search']),
-        }
-        mock_manifest.return_value = {
-            'parameters': {
-                'query': {'required': True, 'type': 'string', 'description': 'Search query'},
-                'region': {'required': False, 'type': 'string', 'description': 'Region code'},
-            }
-        }
+    @patch(_REGISTRY)
+    @patch(_DB)
+    @patch(_EMB)
+    def test_discovered_tools_list_populated(self, mock_emb_cls, mock_db_fn, mock_registry_cls):
+        """_discovered_tools should contain the tool names from search results."""
+        mock_emb_cls.return_value.generate_embedding.return_value = [0.1] * 768
+        mock_db_fn.return_value = _mock_db_with_rows([
+            ('tool_a', 'tool', 'Tool A', 'Full', 'D', 'light', 0.2),
+            ('tool_b', 'tool', 'Tool B', 'Full', 'D', 'light', 0.4),
+        ])
+        mock_reg = _mock_registry(tools={
+            'tool_a': {'manifest': {'parameters': {}}},
+            'tool_b': {'manifest': {'parameters': {}}},
+        })
+        mock_registry_cls.return_value = mock_reg
 
-        result = handle_find_tools("topic", {"action": "details", "tool_name": "web_search"})
-        assert 'web_search' in result
-        assert 'query' in result
-        assert 'region' in result
-        assert 'required' in result
-
-    @patch('services.innate_skills.find_tools_skill._fetch_profile')
-    @patch('services.innate_skills.find_tools_skill._fetch_manifest')
-    def test_details_not_found(self, mock_manifest, mock_profile):
-        """When tool doesn't exist, should return helpful error."""
-        mock_profile.return_value = None
-        mock_manifest.return_value = None
-
-        result = handle_find_tools("topic", {"action": "details", "tool_name": "nonexistent"})
-        assert 'not found' in result.lower()
+        result = handle_find_tools("topic", {"query": "test"})
+        assert set(result['_discovered_tools']) == {'tool_a', 'tool_b'}
 
 
 class TestLimitCapping:
@@ -269,7 +256,7 @@ class TestLimitCapping:
         mock_db_fn.return_value = mock_db
         mock_registry_cls.return_value = _mock_registry()
 
-        handle_find_tools("topic", {"action": "search", "query": "test", "limit": 50})
+        handle_find_tools("topic", {"query": "test", "limit": 50})
 
         # k parameter should be 10 + 5 = 15 (not 50 + 5 = 55)
         call_args = mock_db._test_cursor.execute.call_args
@@ -287,8 +274,10 @@ class TestEdgeCases:
         mock_db_fn.return_value = _mock_db_with_rows([])
         mock_registry_cls.return_value = _mock_registry()
 
-        result = handle_find_tools("topic", {"action": "search", "query": "anything"})
-        assert 'No tools found' in result or 'No available' in result
+        result = handle_find_tools("topic", {"query": "anything"})
+        assert isinstance(result, dict)
+        assert 'No tools found' in result['text'] or 'No available' in result['text']
+        assert result['_discovered_tools'] == []
 
     @patch(_REGISTRY)
     @patch(_DB)
@@ -301,5 +290,7 @@ class TestEdgeCases:
         ])
         mock_registry_cls.return_value = _mock_registry()
 
-        result = handle_find_tools("topic", {"action": "search", "query": "remember something"})
-        assert 'innate skills' in result.lower() or 'No available' in result
+        result = handle_find_tools("topic", {"query": "remember something"})
+        assert isinstance(result, dict)
+        assert 'innate skills' in result['text'].lower() or 'No available' in result['text']
+        assert result['_discovered_tools'] == []

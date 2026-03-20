@@ -10,6 +10,41 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "recall",
+    "description": (
+        "Unified memory retrieval across all memory layers in one call. "
+        "Searches working memory, episodes, concepts, and user traits. "
+        "Use when you need to find what is known about something. "
+        "For self-knowledge queries ('what do you know about me?'), use "
+        "layers=[\"user_traits\"] with query \"user profile\" — returns all "
+        "stored traits organized by category with confidence labels. "
+        "Broad queries are capped at 15 traits."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search text to look up across memory layers.",
+            },
+            "layers": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["working_memory", "episodes", "concepts", "user_traits"],
+                },
+                "description": "Target specific memory layers. Omit to search all layers.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results per layer (default 3, max 10).",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
 ALL_LAYERS = ["working_memory", "episodes", "concepts", "user_traits"]
 
 # Broad self-knowledge queries — return all traits, not keyword-filtered

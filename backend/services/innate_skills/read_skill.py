@@ -22,6 +22,35 @@ from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "read",
+    "description": (
+        "Read and extract clean text from a URL or local file. Supports web pages, "
+        "PDF, DOCX, PPTX, HTML, Markdown, and plain text. Use when user asks to read, "
+        "open, fetch, or summarize a URL/webpage/article/file, or when a search returns "
+        "a promising URL and the snippet is insufficient. Do NOT use for documents already "
+        "in the library (use 'document' skill instead). Returns page links for follow-up browsing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "URL (e.g. 'https://example.com/article') or filesystem path (e.g. '/home/user/doc.pdf').",
+            },
+            "url": {
+                "type": "string",
+                "description": "Alias for 'source' (backward compat). Use 'source' preferred.",
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": "Max characters to return (default 4000, max 8000).",
+            },
+        },
+        "required": ["source"],
+    },
+}
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _URL_FETCH_TIMEOUT = 8  # seconds

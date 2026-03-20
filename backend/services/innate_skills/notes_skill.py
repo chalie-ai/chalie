@@ -3,6 +3,35 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "notes",
+    "description": (
+        "Query working notes from this session. Large tool results and older action history "
+        "are compressed into notes automatically for on-demand retrieval. Use when act_history "
+        "is long and you need to recall a result from many iterations ago, or when the prompt "
+        "says 'older actions are stored in notes'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "read"],
+                "description": "Operation: 'list' shows titles/summaries of all notes; 'read' retrieves specific note content.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Keyword or phrase to search within notes. Used with 'read' action.",
+            },
+            "id": {
+                "type": "string",
+                "description": "Specific note ID to retrieve. Used with 'read' action.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def handle_notes(topic: str, params: dict) -> str:
     action = params.get('action', 'list')

@@ -129,18 +129,33 @@ class OllamaService:
                 else:
                     raise
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
         url = f"{self.host}/api/chat"
+
+        # Convert normalized messages to Ollama format (OpenAI-compatible)
+        api_messages = _ollama_convert_messages(messages)
 
         payload = {
             "model": self.model,
-            "messages": [{"role": "system", "content": system_prompt}] + messages,
+            "messages": [{"role": "system", "content": system_prompt}] + api_messages,
             "stream": False,
             "keep_alive": self.keep_alive,
             "options": {
                 "temperature": self.temperature,
             },
         }
+        if tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t['name'],
+                        "description": t.get('description', ''),
+                        "parameters": t.get('input_schema', {"type": "object", "properties": {}}),
+                    },
+                }
+                for t in tools
+            ]
 
         last_exception = None
         for attempt in range(1 + self.max_retries):
@@ -148,12 +163,31 @@ class OllamaService:
                 response = requests.post(url, json=payload, timeout=self.timeout)
                 response.raise_for_status()
                 data = response.json()
+
+                msg = data.get('message', {})
+                text = msg.get('content', '')
+
+                # Extract tool calls (Ollama uses OpenAI-compatible format)
+                tool_calls = None
+                raw_tool_calls = msg.get('tool_calls')
+                if raw_tool_calls:
+                    tool_calls = []
+                    for i, tc in enumerate(raw_tool_calls):
+                        fn = tc.get('function', {})
+                        tool_calls.append({
+                            'id': f"ollama_{fn.get('name', 'unknown')}_{i}",
+                            'name': fn.get('name', ''),
+                            'input': fn.get('arguments', {}),
+                        })
+
                 return LLMResponse(
-                    text=data['message']['content'],
+                    text=text,
                     model=data.get('model', self.model),
                     provider='ollama',
                     tokens_input=data.get('prompt_eval_count'),
                     tokens_output=data.get('eval_count'),
+                    tool_calls=tool_calls,
+                    stop_reason='tool_use' if tool_calls else 'end_turn',
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 last_exception = e
@@ -212,3 +246,32 @@ class OllamaService:
         except Exception as e:
             logging.error(f"Failed to generate embedding: {e}")
             raise
+
+
+def _ollama_convert_messages(messages: list) -> list:
+    """Convert normalized messages to Ollama format (OpenAI-compatible)."""
+    import json as _json
+    result = []
+    for msg in messages:
+        if msg['role'] == 'assistant' and msg.get('tool_calls'):
+            result.append({
+                "role": "assistant",
+                "content": msg.get('content', ''),
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": tc['name'],
+                            "arguments": tc['input'],
+                        },
+                    }
+                    for tc in msg['tool_calls']
+                ],
+            })
+        elif msg['role'] == 'tool':
+            result.append({
+                "role": "tool",
+                "content": msg.get('content', ''),
+            })
+        else:
+            result.append(msg)
+    return result

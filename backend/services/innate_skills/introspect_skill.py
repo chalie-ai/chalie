@@ -14,6 +14,25 @@ from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "introspect",
+    "description": (
+        "Perception directed inward. Returns a comprehensive internal state report "
+        "covering four scopes: memory health (episode/concept counts, working memory depth, "
+        "consolidation recency), skill and tool usage (table with counts and last results), "
+        "reasoning state (active focus, persistent tasks, upcoming reminders, recent autonomous "
+        "actions), and identity (relationship depth, communication style, personality, "
+        "autobiography recency). All deterministic — no LLM calls. "
+        "Use when the user asks about system state, capabilities, or what you have been doing, "
+        "or when you need to gauge how much context you have before deciding what to do."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
 # Identity dimension labels and their natural-language descriptions
 _DIMENSION_LABELS = {
     'curiosity': 'curious',
