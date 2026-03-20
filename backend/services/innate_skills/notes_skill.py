@@ -1,97 +1,70 @@
-import json
+"""
+Transcript Skill — search past conversation turns by semantic query.
+
+Replaces the MemoryStore-based notes/scratchpad with persistent,
+topic-scoped transcript search backed by SQLite + sqlite-vec.
+
+The LLM calls this when it needs context from earlier in the conversation
+that has fallen out of its current context window.
+"""
+
 import logging
 
 logger = logging.getLogger(__name__)
 
 TOOL_SCHEMA = {
-    "name": "notes",
+    "name": "transcript",
     "description": (
-        "Query working notes from this session. Large tool results and older action history "
-        "are compressed into notes automatically for on-demand retrieval. Use when act_history "
-        "is long and you need to recall a result from many iterations ago, or when the prompt "
-        "says 'older actions are stored in notes'."
+        "Search past conversation turns and working notes for this topic. "
+        "Use when you need context from earlier in the conversation that is "
+        "no longer in your current window."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["list", "read"],
-                "description": "Operation: 'list' shows titles/summaries of all notes; 'read' retrieves specific note content.",
-            },
             "query": {
                 "type": "string",
-                "description": "Keyword or phrase to search within notes. Used with 'read' action.",
+                "description": "What you're looking for — describe it naturally.",
             },
-            "id": {
-                "type": "string",
-                "description": "Specific note ID to retrieve. Used with 'read' action.",
+            "limit": {
+                "type": "integer",
+                "description": "Max results (default 5, max 20).",
             },
         },
-        "required": ["action"],
+        "required": ["query"],
     },
 }
 
 
 def handle_notes(topic: str, params: dict) -> str:
-    action = params.get('action', 'list')
-    loop_id = params.get('loop_id', '')
+    """Search the topic transcript for matching entries.
 
-    if not loop_id:
-        return "No active scratchpad in this context."
+    Handler name kept as handle_notes for backward compatibility with
+    the skill registry. Internally uses transcript_service for search.
+    """
+    query = params.get('query', '').strip()
+    if not query:
+        return "Provide a 'query' describing what you're looking for."
 
-    from services.memory_client import MemoryClientService
-    store = MemoryClientService.create_connection()
-    key = f"scratchpad:{loop_id}:entries"
+    limit = min(params.get('limit', 5), 20)
 
-    raw_entries = store.lrange(key, 0, -1)
-    if not raw_entries:
-        return "Notes are empty — no large results or pruned history yet."
+    from services import transcript_service
 
-    entries = []
-    for raw in raw_entries:
-        try:
-            entries.append(json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode()))
-        except Exception:
-            continue
+    results = transcript_service.search(topic, query, limit=limit)
+    if not results:
+        return f"No transcript entries found matching '{query}'."
 
-    if action == 'list':
-        lines = [f"## Working Notes ({len(entries)} entries)"]
-        for e in entries:
-            lines.append(
-                f"- **{e.get('id', '?')}** [{e.get('source', '?')}] "
-                f"iter {e.get('iteration', '?')}: {e.get('summary', '')[:120]}"
-            )
-        return '\n'.join(lines)
+    lines = [f"Found {len(results)} transcript entry/entries matching '{query}':\n"]
+    for r in results:
+        role = r['role']
+        content = r['content']
+        # Truncate long entries
+        if len(content) > 1500:
+            content = content[:1500] + '...'
+        sim_pct = int(r.get('similarity', 0) * 100)
+        tool_tag = f" [{r['tool_name']}]" if r.get('tool_name') else ''
+        lines.append(f"**[{role}{tool_tag}]** ({sim_pct}% match, {r['created_at']})")
+        lines.append(content)
+        lines.append('')
 
-    if action == 'read':
-        entry_id = params.get('id', '')
-        query = params.get('query', '').lower()
-
-        if entry_id:
-            for e in entries:
-                if e.get('id') == entry_id:
-                    return f"## Note {entry_id}\n\n{e.get('full_content', e.get('summary', 'No content'))}"
-            return f"Note {entry_id} not found."
-
-        if query:
-            matches = []
-            for e in entries:
-                searchable = (
-                    f"{e.get('summary', '')} {e.get('query_hint', '')} {e.get('full_content', '')}"
-                ).lower()
-                if query in searchable:
-                    matches.append(e)
-            if not matches:
-                return f"No notes matching '{query}'."
-            lines = [f"## Notes matching '{query}' ({len(matches)} results)"]
-            for e in matches[:3]:
-                content = e.get('full_content', e.get('summary', ''))
-                if len(content) > 2000:
-                    content = content[:2000] + '...'
-                lines.append(f"### {e.get('id', '?')} [{e.get('source', '?')}]\n{content}")
-            return '\n'.join(lines)
-
-        return "Provide 'id' or 'query' parameter for read action."
-
-    return f"Unknown notes action: {action}. Use 'list' or 'read'."
+    return '\n'.join(lines)
