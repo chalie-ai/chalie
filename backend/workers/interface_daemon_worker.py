@@ -195,7 +195,7 @@ def _scan_and_reconcile(interfaces_dir: Path, gateway_url: str):
     current_dirs: dict[str, Path] = {}
     if interfaces_dir.is_dir():
         for entry in interfaces_dir.iterdir():
-            if entry.is_dir() and not entry.name.startswith("."):
+            if entry.is_dir() and not entry.name.startswith((".", "_")):
                 if _find_entry_point(entry):
                     current_dirs[entry.name] = entry
 

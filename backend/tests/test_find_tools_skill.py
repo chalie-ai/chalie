@@ -292,5 +292,6 @@ class TestEdgeCases:
 
         result = handle_find_tools("topic", {"query": "remember something"})
         assert isinstance(result, dict)
-        assert 'innate skills' in result['text'].lower() or 'No available' in result['text']
+        assert 'built-in skills' in result['text'].lower() or 'no tools found' in result['text'].lower()
+        assert 'recall' in result['text']  # Should name the matching skill
         assert result['_discovered_tools'] == []
