@@ -102,14 +102,13 @@ class TopicClassifierService:
         self.W_SEMANTIC = self.DEFAULT_W_SEMANTIC
         self.W_FRESHNESS = self.DEFAULT_W_FRESHNESS
         self.W_SALIENCE = self.DEFAULT_W_SALIENCE
-        self._boundary_params = {}
 
     def classify(self, message_text: str, recent_topic: str = None, thread_id: str = None) -> Dict:
         """
         Classify message into existing topic or create new one.
 
         Two-stage process:
-        1. Check if ANY topic exceeds similarity threshold (via AdaptiveBoundaryDetector)
+        1. Check if a topic boundary occurred (via TwoSignalBoundaryService)
         2. If yes: rank top-k candidates by switch_score
         3. If no: create new topic
 
@@ -190,40 +189,28 @@ class TopicClassifierService:
         logger.info(f"[TOPIC CLASSIFIER] Calculated {len(similarities)} similarities in {similarity_time:.3f}s"
                      f"{f' (recency bonus applied to {recent_topic})' if recent_topic else ''}")
 
-        # Adaptive boundary detection
+        # Boundary detection
         boundary_diagnostics = {}
         is_new_topic_boundary = False
         _just_reset_from_silence = False
         if thread_id:
             try:
-                from services.adaptive_boundary_detector import AdaptiveBoundaryDetector
+                from services.two_signal_boundary_service import TwoSignalBoundaryService
 
-                # Fetch focus modifier to raise boundary during active focus sessions
-                focus_modifier = 0.0
-                try:
-                    from services.focus_session_service import FocusSessionService
-                    focus_modifier = FocusSessionService().get_boundary_modifier(thread_id)
-                except Exception:
-                    pass
-
-                detector = AdaptiveBoundaryDetector(
-                    thread_id=thread_id,
-                    regulator_params=getattr(self, '_boundary_params', {}),
-                    focus_modifier=focus_modifier,
-                )
-                result = detector.update(current_embedding, best_similarity)
+                detector = TwoSignalBoundaryService(thread_id=thread_id)
+                result = detector.update(current_embedding, message_text)
                 detector.save_state()
                 is_new_topic_boundary = result.is_boundary
                 _just_reset_from_silence = result.just_reset_from_silence
                 boundary_diagnostics = {
-                    'acc': round(result.accumulator, 3),
-                    'bound': round(result.boundary, 3),
-                    'newma': round(result.newma_signal, 3),
-                    'surprise': round(result.surprise_signal, 3),
+                    'trigger': result.trigger,
                     'confidence': round(result.confidence, 3),
+                    'consec_sim': round(result.consec_sim, 4),
+                    'window_sim': round(result.window_sim, 4),
+                    'marker_found': result.marker_found,
                 }
             except Exception as e:
-                logger.warning(f"[TOPIC CLASSIFIER] AdaptiveBoundaryDetector failed, "
+                logger.warning(f"[TOPIC CLASSIFIER] TwoSignalBoundaryService failed, "
                                f"falling back to static threshold: {e}")
                 is_new_topic_boundary = best_similarity < self.SWITCH_THRESHOLD
         else:
@@ -239,8 +226,7 @@ class TopicClassifierService:
             logger.info(
                 f"[TOPIC CLASSIFIER] New topic '{topic_name}' "
                 f"(best_sim={best_similarity:.3f}, "
-                f"{'adaptive' if thread_id else 'static'}: "
-                f"{'acc=' + str(boundary_diagnostics.get('acc', '')) + ' bound=' + str(boundary_diagnostics.get('bound', '')) if thread_id and boundary_diagnostics else 'threshold=' + str(self.SWITCH_THRESHOLD)}) "
+                f"{'two_signal: trigger=' + str(boundary_diagnostics.get('trigger', '')) if thread_id and boundary_diagnostics else 'static: threshold=' + str(self.SWITCH_THRESHOLD)}) "
                 f"in {classification_time:.3f}s"
             )
 

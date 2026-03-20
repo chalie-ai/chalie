@@ -74,11 +74,9 @@ def _handle_check(service, thread_id: str) -> str:
         return "[FOCUS] No active focus session."
 
     source_label = "declared" if focus.get('source') == 'explicit' else "inferred"
-    modifier = service.get_boundary_modifier(thread_id)
     return (
         f"[FOCUS] Active focus ({source_label}): '{focus['description']}'\n"
-        f"  Topic: {focus.get('topic', '(none)')}\n"
-        f"  Boundary modifier: +{modifier:.1f}"
+        f"  Topic: {focus.get('topic', '(none)')}"
     )
 
 
