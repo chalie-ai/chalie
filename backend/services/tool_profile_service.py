@@ -651,10 +651,21 @@ class ToolProfileService:
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Tool registry not available during bootstrap: {e}")
 
-        # Purge profiles for tools/skills that no longer exist
+        # Purge profiles for tools/skills that no longer exist.
+        # Preserve interface tool profiles — they're managed by the
+        # interface lifecycle (register → profile, remove → unprofile).
         try:
             valid_names = ALL_SKILL_NAMES | active_tool_names
+
+            # Interface tools may not be in registry.tools yet at bootstrap
+            # time (daemons haven't re-registered). Read from DB directly.
             db = self._get_db()
+            try:
+                iface_rows = db.fetch_all("SELECT DISTINCT tool_name FROM interface_tools")
+                valid_names |= {r['tool_name'] for r in (iface_rows or [])}
+            except Exception:
+                pass  # table may not exist on fresh install
+
             existing = db.fetch_all("SELECT tool_name FROM tool_capability_profiles")
             stale = [r['tool_name'] for r in (existing or []) if r['tool_name'] not in valid_names]
             if stale:

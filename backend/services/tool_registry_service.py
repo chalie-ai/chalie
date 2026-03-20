@@ -1,14 +1,12 @@
 """
 Tool Registry Service — First-party tool loading and dispatch.
 
-Singleton. Loads tools declared in TOOL_LIBRARY, validates manifests,
-installs deps at startup, and dispatches invocations via subprocess.
+Singleton. First-party tools are declared in ToolLibraryService (metadata
+and handlers in Python code — no manifest.json, no subprocess, no runner.py).
 Interface tools are registered dynamically via register_interface_tool().
 
-IPC contract (formalized):
-  Input:  base64-encoded JSON as subprocess arg: {"params", "settings", "telemetry"}
-  Output: JSON on stdout: {"text"?, "html"?, "title"?, "error"?}
-  Error:  non-zero exit code + error text on stderr
+First-party tools are invoked directly in-process. Interface tools are
+invoked via HTTP to the paired interface.
 
 Tool output is sanitized and wrapped in [TOOL:name]...[/TOOL] markers.
 Cost metadata is appended to every result.
@@ -21,26 +19,13 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 # Singleton instance
 _instance = None
-
-# ── Tool Library ────────────────────────────────────────────────────
-# Declared set of first-party tools. Each entry maps a tool name to its
-# subdirectory under backend/tools/. Adding a new tool means adding it
-# here AND placing its manifest.json + runner.py in the directory.
-# No filesystem scanning — this IS the contract.
-TOOL_LIBRARY = {
-    "weather": "weather",
-    "web_search": "web_search",
-    "code_eval": "code_eval",
-    "programming_docs_search": "programming_docs_search",
-}
 
 
 class _CronToolWorker:
@@ -353,11 +338,10 @@ class ToolRegistryService:
     Registry for first-party tools and interface-provided tools.
 
     Singleton — created at startup. First-party tools are declared in
-    TOOL_LIBRARY and loaded once. Interface tools register dynamically
-    via register_interface_tool(). All dispatch via subprocess or HTTP.
+    ToolLibraryService and invoked directly in-process. Interface tools
+    register dynamically via register_interface_tool() and are invoked
+    via HTTP to the paired interface.
     """
-
-    REQUIRED_MANIFEST_FIELDS = {"name", "description", "trigger", "parameters", "returns"}
 
     # Delegated to shared utilities (tool_output_utils.py)
     from services.tool_output_utils import MAX_OUTPUT_CHARS
@@ -378,38 +362,22 @@ class ToolRegistryService:
             _instance._initialized = False
         return _instance
 
-    def __init__(self, tools_dir: str = None):
-        """Initialise the singleton registry and kick off tool discovery.
+    def __init__(self):
+        """Initialise the singleton registry and load first-party tools.
 
         Idempotent — subsequent calls on the already-initialised singleton are
         no-ops (guarded by ``_initialized``).
 
         Reads ``configs/frontal-cortex.json`` to check the ``tools_enabled``
-        kill-switch.  When disabled, discovery is skipped entirely.  Otherwise,
-        ``_load_library()`` loads tools declared in ``TOOL_LIBRARY``,
-        validates manifests, installs dependencies, and registers each tool.
-
-        Args:
-            tools_dir: Optional path to the tools root directory.  Defaults to
-                ``<repo_root>/tools`` when ``None``.
+        kill-switch.  When disabled, loading is skipped entirely.
         """
         if self._initialized:
             return
         self._initialized = True
 
-        if tools_dir:
-            self.tools_dir = Path(tools_dir)
-        else:
-            self.tools_dir = Path(__file__).parent.parent / "tools"
-
-        self.tools: Dict[str, dict] = {}  # name -> {manifest, dir, runner_path, ...}
+        self.tools: Dict[str, dict] = {}  # name -> {manifest, source_type, ...}
         self._enabled = True
-
-        # Lifecycle management
-        self._build_status: Dict[str, dict] = {}  # name -> {status, error}
-        self._install_locks: Set[str] = set()      # names currently being installed
-        self._deps_ready: Set[str] = set()         # trusted tools whose pip deps are installed
-        self._lock = threading.Lock()              # protects build_status, install_locks, deps_ready, and tools mutations
+        self._lock = threading.Lock()
 
         try:
             from services.config_service import ConfigService
@@ -422,73 +390,38 @@ class ToolRegistryService:
             logger.info("[TOOL REGISTRY] Tools disabled via kill switch (tools_enabled=false)")
             return
 
-        self._load_library()
+        self._load_tools()
 
-    def _load_library(self):
-        """Load tools declared in TOOL_LIBRARY. No filesystem scanning."""
-        candidates = []
-        for tool_name, dir_name in TOOL_LIBRARY.items():
-            tool_dir = self.tools_dir / dir_name
-            manifest_path = tool_dir / "manifest.json"
-            runner_path = tool_dir / "runner.py"
-
-            if not manifest_path.exists():
-                logger.warning(f"[TOOL REGISTRY] Skipping '{tool_name}': missing manifest.json at {tool_dir}")
-                continue
-            if not runner_path.exists():
-                logger.warning(f"[TOOL REGISTRY] Skipping '{tool_name}': missing runner.py at {tool_dir}")
-                continue
-
-            candidates.append((tool_dir, manifest_path))
-
-        if not candidates:
-            logger.info("[TOOL REGISTRY] No tools found in library")
+    def _load_tools(self):
+        """Load first-party tools from ToolLibraryService."""
+        try:
+            from services.tool_library_service import TOOL_METADATA, ALL_TOOL_NAMES
+        except Exception as e:
+            logger.warning(f"[TOOL REGISTRY] Failed to import ToolLibraryService: {e}")
             return
 
         # Filter out DB-disabled tools
+        disabled = set()
         try:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
             config_svc = ToolConfigService(get_shared_db_service())
-            filtered = []
-            for (entry, manifest_path) in candidates:
-                try:
-                    with open(manifest_path) as f:
-                        tool_name = json.load(f).get("name", entry.name)
-                    if not config_svc.is_tool_enabled(tool_name):
-                        logger.info(f"[TOOL REGISTRY] Skipping disabled tool '{tool_name}'")
-                        continue
-                except Exception:
-                    pass
-                filtered.append((entry, manifest_path))
-            candidates = filtered
+            for name in ALL_TOOL_NAMES:
+                if not config_svc.is_tool_enabled(name):
+                    logger.info(f"[TOOL REGISTRY] Skipping disabled tool '{name}'")
+                    disabled.add(name)
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
 
-        # Load tools in parallel (up to 4 concurrent)
-        tool_dirs: list = []
-        for (entry, _manifest_path) in candidates:
-            try:
-                import json as _json
-                with open(_manifest_path) as _f:
-                    _name = _json.load(_f).get("name", entry.name)
-            except Exception:
-                _name = entry.name
-            tool_dirs.append((_name, entry))
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(self._load_tool, d, m): d.name for d, m in candidates}
-            for future in as_completed(futures):
-                dir_name = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.warning(f"[TOOL REGISTRY] Failed to load tool '{dir_name}': {e}")
-                    with self._lock:
-                        self._build_status[dir_name] = {
-                            "status": "error",
-                            "error": str(e)
-                        }
+        for name in ALL_TOOL_NAMES:
+            if name in disabled:
+                continue
+            metadata = TOOL_METADATA.get(name, {})
+            with self._lock:
+                self.tools[name] = {
+                    "manifest": metadata,
+                    "source_type": "library",
+                }
 
         if self.tools:
             names = ", ".join(sorted(self.tools.keys()))
@@ -496,132 +429,20 @@ class ToolRegistryService:
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
 
-        # Synchronous pip install
-        if tool_dirs:
-            for tool_name, tool_dir in tool_dirs:
-                self._install_tool_requirements(tool_name, tool_dir)
-            logger.info(f"[TOOL REGISTRY] Dep install complete ({len(tool_dirs)} tools)")
+        # Kick off profile enrichment in background
+        for name in list(self.tools.keys()):
+            _name = name
+            _metadata = dict(self.tools[name]["manifest"])
 
-    def _install_tool_requirements(self, tool_name: str, tool_dir: Path) -> None:
-        """Install pip packages declared in a trusted tool's requirements.txt.
+            def _build_profile(n=_name, m=_metadata):
+                try:
+                    from services.tool_profile_service import ToolProfileService
+                    ToolProfileService().build_profile(n, m)
+                except Exception as _e:
+                    logger.warning(f"[TOOL REGISTRY] Profile build failed for '{n}': {_e}")
 
-        Runs once per tool load (startup or hot-reload). Uses the same Python
-        interpreter as the running process so deps land in the active venv.
-        Silent no-op if requirements.txt is absent or all packages already satisfied.
-        """
-        req_path = tool_dir / "requirements.txt"
-        if not req_path.exists():
-            with self._lock:
-                self._deps_ready.add(tool_name)
-            return
-
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-q", "-r", str(req_path)],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if result.returncode == 0:
-                logger.info(
-                    f"[TOOL REGISTRY] Deps installed for trusted tool '{tool_name}'"
-                )
-                with self._lock:
-                    self._deps_ready.add(tool_name)
-            else:
-                logger.warning(
-                    f"[TOOL REGISTRY] Dep install failed for '{tool_name}': "
-                    f"{result.stderr[:200]}"
-                )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                f"[TOOL REGISTRY] Dep install timed out for '{tool_name}' (>120s)"
-            )
-        except Exception as e:
-            logger.warning(
-                f"[TOOL REGISTRY] Dep install error for '{tool_name}': {str(e)[:120]}"
-            )
-
-    def _load_tool(self, tool_dir: Path, manifest_path: Path):
-        """Load and validate a tool, registering it for subprocess execution."""
-        with open(manifest_path, "r") as f:
-            manifest = json.load(f)
-
-        self._validate_manifest(manifest, tool_dir.name)
-
-        tool_name = manifest["name"]
-        runner_path = str(tool_dir / "runner.py")
-
-        with self._lock:
-            self.tools[tool_name] = {
-                "manifest": manifest,
-                "image": None,
-                "dir": str(tool_dir),
-                "sandbox": {},
-                "trust": "trusted",
-                "runner_path": runner_path,
-            }
-
-        trigger_type = manifest.get("trigger", {}).get("type", "unknown")
-        logger.info(f"[TOOL REGISTRY] Loaded tool '{tool_name}' (trigger={trigger_type})")
-
-        # Immediately kick off profile enrichment so the tool is discoverable
-        # via find_tools as soon as it is registered — no waiting for the 6h cycle.
-        _manifest_snapshot = dict(manifest)
-        _tool_name_snapshot = tool_name
-
-        def _build_profile():
-            try:
-                from services.tool_profile_service import ToolProfileService
-                ToolProfileService().build_profile(_tool_name_snapshot, _manifest_snapshot)
-                logger.info(f"[TOOL REGISTRY] Profile built for '{_tool_name_snapshot}'")
-            except Exception as _e:
-                logger.warning(f"[TOOL REGISTRY] Profile build failed for '{_tool_name_snapshot}': {_e}")
-
-        threading.Thread(target=_build_profile, daemon=True,
-                         name=f"profile-build-{tool_name}").start()
-
-    def _validate_manifest(self, manifest: dict, dir_name: str):
-        """Validate manifest has required fields and correct structure."""
-        missing = self.REQUIRED_MANIFEST_FIELDS - set(manifest.keys())
-        if missing:
-            raise ValueError(f"Manifest missing required fields: {missing}")
-
-        trigger = manifest.get("trigger", {})
-        if "type" not in trigger:
-            raise ValueError("trigger must have a 'type' field")
-        if trigger["type"] not in ("on_demand", "cron", "webhook"):
-            raise ValueError(f"Unknown trigger type: {trigger['type']}")
-
-        if trigger["type"] == "cron":
-            if "schedule" not in trigger:
-                raise ValueError("Cron trigger must have a 'schedule' field")
-            if "prompt" not in trigger:
-                raise ValueError("Cron trigger must have a 'prompt' field")
-
-        # Validate optional auth block
-        auth = manifest.get("auth")
-        if auth:
-            if auth.get("type") not in ("oauth2",):
-                raise ValueError(f"Unknown auth type: {auth.get('type')}")
-            if auth["type"] == "oauth2":
-                required_auth = {"authorization_url", "token_url", "scopes"}
-                missing_auth = required_auth - set(auth.keys())
-                if missing_auth:
-                    raise ValueError(f"OAuth2 auth missing fields: {missing_auth}")
-
-        if manifest.get("name") != dir_name:
-            logger.warning(
-                f"[TOOL REGISTRY] Tool name '{manifest.get('name')}' "
-                f"doesn't match directory '{dir_name}' — using manifest name"
-            )
-
-        # Warn (not error) if documentation field is missing
-        if not manifest.get('documentation'):
-            logger.warning(
-                f"[TOOL REGISTRY] Tool '{manifest.get('name', dir_name)}' has no 'documentation' field. "
-                f"Add 'documentation' for richer capability profiles."
-            )
+            threading.Thread(target=_build_profile, daemon=True,
+                             name=f"profile-build-{name}").start()
 
     def _refresh_oauth_token(self, tool_name: str, manifest: dict, settings: dict) -> dict:
         """Refresh OAuth token if manifest declares auth.type == 'oauth2'.
@@ -689,10 +510,10 @@ class ToolRegistryService:
 
     def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
         """
-        Invoke a tool by name via subprocess.
+        Invoke a tool by name.
 
-        Validates params, fetches DB config, runs subprocess, sanitizes output,
-        appends cost metadata, logs outcome to procedural memory.
+        First-party tools are called directly in-process via their handler.
+        Interface tools are routed via HTTP to the paired interface.
 
         Returns:
             Formatted result string: [TOOL:name] ... [/TOOL]
@@ -711,7 +532,7 @@ class ToolRegistryService:
         manifest = tool["manifest"]
         validated_params = self._validate_params(params, manifest.get("parameters", {}))
 
-        # Fetch DB-stored config and inject into payload (renamed to 'settings')
+        # Fetch DB-stored config
         try:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
@@ -719,51 +540,34 @@ class ToolRegistryService:
         except Exception:
             settings = {}
 
-        # OAuth token refresh — if manifest declares auth.type == "oauth2"
+        # OAuth token refresh
         settings = self._refresh_oauth_token(tool_name, manifest, settings)
 
-        # Get raw telemetry and flatten for tool payload
+        # Build telemetry
         raw_telemetry = {}
         try:
             from services.client_context_service import ClientContextService
             raw_telemetry = ClientContextService().get()
         except Exception:
             pass
-
         flattened_telemetry = self._build_telemetry(raw_telemetry)
 
-        # Formalized contract: three keys only, no topic at top level
-        payload = {
-            "params": validated_params,
-            "settings": settings,
-            "telemetry": flattened_telemetry,
-        }
-        timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
-
-        # Gate: tools must have deps installed before invocation
-        with self._lock:
-            deps_ok = tool_name in self._deps_ready
-        if not deps_ok:
-            return (
-                f"[TOOL:{tool_name}] Tool '{tool_name}' is still installing "
-                f"dependencies — please try again in a moment. [/TOOL]"
-            )
+        # Resolve handler from library
+        from services.tool_library_service import get_handler
+        handler = get_handler(tool_name)
+        if not handler:
+            return f"[TOOL:{tool_name}] No handler registered for '{tool_name}' [/TOOL]"
 
         start_time = time.time()
         success = False
         try:
-            from services.tool_subprocess_service import ToolSubprocessService
-            result = ToolSubprocessService().run(
-                tool["runner_path"],
-                payload,
-                timeout=timeout,
+            result = handler(
+                topic=topic,
+                params=validated_params,
+                config=settings,
+                telemetry=flattened_telemetry,
             )
             success = True
-        except TimeoutError as e:
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' timed out: {e}")
-            self._log_outcome(tool_name, False, topic, elapsed_ms, failure_class="external")
-            return f"[TOOL:{tool_name}] Error: timed out after {timeout}s (cost: {elapsed_ms}ms) [/TOOL]"
         except Exception as e:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[TOOL REGISTRY] Tool '{tool_name}' failed: {e}")
@@ -902,18 +706,9 @@ class ToolRegistryService:
             logger.debug(f"[TOOL REGISTRY] Failed to record performance metric: {e}")
 
     def unregister_tool(self, tool_name: str):
-        """
-        Unregister a tool from the registry (e.g., when disabling it).
-
-        Removes the tool from self.tools, clears build status, and removes any install locks.
-
-        Args:
-            tool_name: Name of the tool to unregister
-        """
+        """Unregister a tool from the registry (e.g., when disabling it)."""
         with self._lock:
             self.tools.pop(tool_name, None)
-            self._build_status.pop(tool_name, None)
-            self._install_locks.discard(tool_name)
         logger.info(f"[TOOL REGISTRY] Unregistered tool '{tool_name}'")
 
     def register_interface_tool(self, interface_id: str, manifest: dict):
@@ -965,8 +760,6 @@ class ToolRegistryService:
 
         with self._lock:
             self.tools[name] = tool_entry
-            # Interface tools are always ready (no pip deps to install)
-            self._deps_ready.add(name)
 
         logger.info(f"[TOOL REGISTRY] Registered interface tool: {name} (interface={interface_id})")
 
@@ -987,7 +780,11 @@ class ToolRegistryService:
                          name=f"profile-build-{name}").start()
 
     def remove_interface_tools(self, interface_id: str):
-        """Remove all tools that belong to a specific interface."""
+        """Remove all tools that belong to a specific interface.
+
+        Cleans up both the in-memory registry and tool_capability_profiles
+        so removed interfaces don't linger in find_tools results.
+        """
         with self._lock:
             to_remove = [
                 name for name, tool in self.tools.items()
@@ -995,10 +792,33 @@ class ToolRegistryService:
             ]
             for name in to_remove:
                 self.tools.pop(name, None)
-                self._deps_ready.discard(name)
-                self._build_status.pop(name, None)
 
+        # Remove profiles so find_tools stops returning them
         if to_remove:
+            try:
+                from services.database_service import get_shared_db_service
+                db = get_shared_db_service()
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    for name in to_remove:
+                        # Delete vec entry first (FK on rowid)
+                        row = cursor.execute(
+                            "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
+                            (name,),
+                        ).fetchone()
+                        if row:
+                            cursor.execute(
+                                "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
+                                (row[0],),
+                            )
+                        cursor.execute(
+                            "DELETE FROM tool_capability_profiles WHERE tool_name = ?",
+                            (name,),
+                        )
+                    cursor.close()
+            except Exception as e:
+                logger.warning(f"[TOOL REGISTRY] Failed to remove profiles: {e}")
+
             logger.info(f"[TOOL REGISTRY] Removed {len(to_remove)} interface tools for interface {interface_id}")
 
     def get_interface_id_for_tool(self, tool_name: str) -> str | None:
@@ -1008,22 +828,15 @@ class ToolRegistryService:
             return tool.get("interface_id")
         return None
 
-    def get_all_build_statuses(self) -> dict:
-        """
-        Get a shallow copy of all tool build statuses.
-
-        Returns:
-            dict: {tool_name: {"status": str, "error": str|None}, ...}
-        """
-        with self._lock:
-            return dict(self._build_status)
-
     # ── Public API ──────────────────────────────────────────────────
 
     def _is_ready(self, name: str, tool: dict) -> bool:
-        """Check if a tool is ready for invocation (deps installed)."""
-        with self._lock:
-            return name in self._deps_ready
+        """Check if a tool is ready for invocation."""
+        # Library tools are always ready (deps in main requirements.txt)
+        if tool.get("source_type") == "library":
+            return True
+        # Interface tools are ready once registered
+        return True
 
     def _is_interface_online(self, tool: dict) -> bool:
         """Check if an interface-sourced tool's interface is online."""
@@ -1100,7 +913,7 @@ class ToolRegistryService:
                 "name": str,
                 "schedule": str,
                 "prompt": str,
-                "dir": str,
+                "dir": str | None,
                 "manifest": dict,
                 "runner_path": str | None,
             }
@@ -1113,7 +926,7 @@ class ToolRegistryService:
                     "name": name,
                     "schedule": trigger["schedule"],
                     "prompt": trigger["prompt"],
-                    "dir": tool["dir"],
+                    "dir": tool.get("dir"),
                     "manifest": tool["manifest"],
                     "runner_path": tool.get("runner_path"),
                 })

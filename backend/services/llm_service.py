@@ -240,9 +240,37 @@ def _build_service(config: dict):
     raise ValueError(f"Unknown platform: {platform}")
 
 
+class LoggingLLMService:
+    """Thin wrapper that logs every LLM call to the persistent call log."""
+
+    def __init__(self, service, job_name: str):
+        self._service = service
+        self._job_name = job_name
+
+    def send_message(self, system_prompt: str, user_message: str, stream: bool = False) -> LLMResponse:
+        result = self._service.send_message(system_prompt, user_message, stream=stream)
+        _log_llm_call(self._job_name, result)
+        return result
+
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
+        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+        _log_llm_call(self._job_name, result)
+        return result
+
+    def get_context_limit(self) -> int:
+        return self._service.get_context_limit()
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        return self._service.count_tokens(messages, system_prompt, tools)
+
+
 def create_llm_service(config: dict):
     """
     Create an LLM service based on the platform field in config.
+
+    If the config contains a '_job_name' key (injected by
+    ConfigService.resolve_agent_config), the returned service is wrapped
+    with LoggingLLMService so every call is logged to the persistent store.
 
     Args:
         config: Dict with at least 'platform' (defaults to 'ollama').
@@ -261,9 +289,13 @@ def create_llm_service(config: dict):
                 fallback_config = dict(providers[fallback_name])
                 fallback_config['platform'] = providers[fallback_name].get('platform', 'ollama')
                 fallback = _build_service(fallback_config)
-                return FallbackLLMService(primary, fallback)
+                primary = FallbackLLMService(primary, fallback)
         except Exception as e:
             logger.warning(f"Failed to load fallback provider '{fallback_name}': {e}")
+
+    job_name = config.get('_job_name')
+    if job_name:
+        return LoggingLLMService(primary, job_name)
     return primary
 
 

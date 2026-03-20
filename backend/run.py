@@ -224,14 +224,6 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool cron registration failed: {e}")
 
-    # Restore persisted interface tools so bootstrap_all() sees them
-    # and builds/preserves their profiles instead of purging them.
-    try:
-        from services.interface_registry_service import InterfaceRegistryService
-        InterfaceRegistryService().restore_tools_on_startup()
-    except Exception as e:
-        logger.warning(f"[Startup] Interface tool restoration failed: {e}")
-
     # Bootstrap tool profiles (background thread)
     try:
         import threading

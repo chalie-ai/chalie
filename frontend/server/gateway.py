@@ -146,6 +146,16 @@ def register_daemon():
                 requested_scopes=body.get("scopes", {}),
                 status="online",
             )
+
+            # Re-register capabilities so they reach the tool profiler
+            # (covers Chalie restart where in-memory state was lost).
+            chalie_iface_id = iface.get("chalie_interface_id")
+            if chalie_iface_id and _chalie_client:
+                try:
+                    _chalie_client.refresh_capabilities(chalie_iface_id)
+                except Exception:
+                    pass
+
             return jsonify({
                 "gateway_url": gateway_url,
                 "interface_id": iface["id"],

@@ -4,34 +4,33 @@ Tools are one of three capability tiers in Chalie:
 
 1. **Innate Skills** (`backend/services/innate_skills/`) — Built-in cognitive capabilities with direct access to Chalie's services, database, and memory. Always injected into the LLM context. Examples: `recall`, `memorize`, `schedule`, `list`, `document`, `find_tools`, `reflect`.
 
-2. **Tools** (`backend/tools/`) — First-party capabilities committed to the repo. Run as trusted subprocesses with zero access to Chalie internals. Declared in `TOOL_LIBRARY` and loaded at startup. This document covers these.
+2. **Tools** (`backend/tools/`) — First-party capabilities committed to the repo. Simple callable Python modules invoked directly in-process. All metadata declared in `ToolLibraryService`. This document covers these.
 
 3. **Interfaces** (`frontend/_interfaces/`) — External third-party integrations that pair with Chalie via the interface protocol. Can expose capabilities and update world state. See [15-INTERFACES.md](15-INTERFACES.md).
 
 ## Overview
 
 The tools system provides:
-- **Subprocess execution**: All tools run as Python subprocesses (same IPC contract: base64 JSON in, JSON out)
+- **Direct invocation**: First-party tools are called in-process (no subprocess, no IPC)
 - **Interface tools**: External applications can pair with Chalie and expose tool capabilities via the interface protocol
 - **Configuration Management**: Per-tool secrets and credentials stored in SQLite (encrypted)
 - **Semantic Matching**: Tool relevance determined via embedding-based similarity, not regex patterns
-- **Safety Limits**: Timeouts (default 9s), no privilege escalation
 - **Audit Trail**: All tool invocations logged to procedural memory with success/failure and execution time
 
 ## Architecture
 
 ### Components
 
-**Tool Registry Service**
-- Singleton that loads tools declared in `TOOL_LIBRARY` (`backend/services/tool_registry_service.py`)
-- Validates manifest.json at startup
-- Dispatches invocations via `ToolSubprocessService`
-- Logs outcomes for feedback/learning
+**Tool Library Service** (`backend/services/tool_library_service.py`)
+- Single source of truth for first-party tool metadata and handlers
+- All tool descriptions, parameters, and constraints declared in Python (like innate skills)
+- Maps tool names to handler functions imported from `backend/tools/*.py`
 
-**Tool Subprocess Service**
-- Runs tools as Python subprocesses (same OS user as Chalie)
-- IPC contract: base64-encoded JSON in (CMD arg) → JSON out (stdout)
-- Supports `run()` for single-shot and `run_interactive()` for bidirectional dialog
+**Tool Registry Service** (`backend/services/tool_registry_service.py`)
+- Singleton that loads tools from ToolLibraryService at startup
+- Invokes first-party tools directly in-process
+- Routes interface tools via HTTP to paired interfaces
+- Logs outcomes for feedback/learning
 
 **Tool Config Service**
 - SQLite backend for per-tool configuration
@@ -41,7 +40,6 @@ The tools system provides:
 **Tool Relevance Service**
 - Embedding-based semantic matching between user intent and available tools
 - Caches embeddings for performance (disk-persisted)
-- Replaces regex-based tool hints with cosine similarity scoring
 - Threshold-based filtering (default: 0.35 relevance minimum)
 
 **REST API** (`backend/api/tools.py`)
@@ -49,19 +47,24 @@ The tools system provides:
 - Get/set/delete tool configuration
 - Test tool configuration completeness
 
-## IPC Contract
+## Tool Interface
 
-All tools implement a unified contract: **base64-encoded JSON in → JSON out**.
+All first-party tools expose a single function:
 
-**Input** (from framework → tool subprocess as base64 CMD arg):
+```python
+def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict
+```
 
-| Key | Contents |
+**Input parameters:**
+
+| Arg | Contents |
 |-----|----------|
-| `params` | LLM-extracted parameters matching manifest schema |
-| `settings` | Per-tool config from database (API keys, endpoints) |
+| `topic` | Current conversation topic |
+| `params` | LLM-extracted parameters matching tool schema |
+| `config` | Per-tool config from database (API keys, endpoints) |
 | `telemetry` | Flattened client context (location, time, locale — fields may be null) |
 
-**Output** (tool → stdout as JSON):
+**Return dict:**
 
 | Key | Description |
 |-----|-------------|
@@ -115,7 +118,7 @@ When user sends a message that matches ACT mode:
 2. **Tool Selection** — Mode router picks most relevant tools with relevance > threshold
 3. **Parameter Extraction** — LLM extracts parameters from conversation context
 4. **Configuration Injection** — ToolConfigService fetches stored API keys/endpoints
-5. **Subprocess Execution** — ToolSubprocessService runs the tool with timeout
+5. **Direct Invocation** — Handler called in-process via `ToolLibraryService.get_handler()`
 6. **Output Sanitization** — Result stripped of action-like patterns, truncated to 3000 chars
 7. **Memory Logging** — Outcome (success/failure, execution time) logged to procedural memory
 8. **Integration** — Tool output wrapped in `[TOOL:name]...[/TOOL]` markers and included in LLM context
@@ -154,15 +157,14 @@ Tool output is sanitized before integration:
 
 ### Tool Not Appearing in List
 
-1. Check the tool is declared in `TOOL_LIBRARY` in `backend/services/tool_registry_service.py`
-2. Check tool directory exists: `backend/tools/tool_name/`
-3. Check manifest.json is valid JSON: `python -m json.tool manifest.json`
-4. Check runner.py or runner.sh exists: `ls backend/tools/tool_name/`
-5. View logs in the `python backend/run.py` console output
+1. Check the tool has an entry in `TOOL_HANDLERS` and `TOOL_METADATA` in `backend/services/tool_library_service.py`
+2. Check the tool module exists: `backend/tools/tool_name.py`
+3. Check the module exposes `execute(topic, params, config, telemetry) -> dict`
+4. View logs in the `python backend/run.py` console output
 
 ### "Tool not found" Error
 
-Tool name in manifest must match directory name exactly (case-sensitive).
+Tool name in `TOOL_HANDLERS` must match the name used in `TOOL_METADATA` exactly.
 
 ### Configuration Not Being Used
 
@@ -172,20 +174,13 @@ Tool name in manifest must match directory name exactly (case-sensitive).
 
 ### Tool Timeout
 
-1. Increase timeout in manifest: `"constraints": {"timeout_seconds": 30}`
+1. Increase `timeout_seconds` in `TOOL_METADATA` constraints: `"constraints": {"timeout_seconds": 30}`
 2. Optimize tool code (database queries, API calls, etc.)
-
-### "Timed out after 9s" Error
-
-Tool exceeded timeout. Options:
-1. Increase `timeout_seconds` in manifest
-2. Optimize tool code
-3. Add caching if tool does expensive computation
 
 ## Safety Guardrails
 
 - **Kill Switch**: Set `tools_enabled: false` in config to disable all tools
-- **Declared Library**: Tools are declared in `TOOL_LIBRARY`, not discovered by scanning
+- **Declared Library**: Tools are declared in `ToolLibraryService`, not discovered by scanning
 - **Single Authority**: Procedural memory (reward signal) is single authority for tool retraining
 - **Data Scope**: All tool invocations scoped to topic (no cross-topic leakage)
 - **Audit Trail**: Every invocation logged with topic, success/failure, execution time

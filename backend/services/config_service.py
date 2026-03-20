@@ -168,6 +168,7 @@ class ConfigService:
         except Exception as e:
             logger.warning(f"[ConfigService] Job assignment lookup failed for '{agent_name}': {e}")
 
+        config['_job_name'] = agent_name
         return ConfigService.resolve_provider(config)
 
     @staticmethod

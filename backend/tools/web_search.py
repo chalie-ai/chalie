@@ -1,5 +1,5 @@
 """
-Web Search Tool Handler — DuckDuckGo web search.
+Web Search Tool — DuckDuckGo web search.
 
 Privacy-focused, zero-config search via duckduckgo-search library.
 Rate-limit aware: 2s cooldown between calls, 3 retries with exponential backoff.
@@ -38,7 +38,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
             "limit": int (optional, default 5, clamped 1-8),
             "time_range": str (optional: day/week/month/year)
         }
-        config: Tool config (unused — no API key needed)
+        config: Tool config (unused -- no API key needed)
         telemetry: Client telemetry (unused)
 
     Returns:
@@ -104,7 +104,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
     }
 
 
-# ── DuckDuckGo search ─────────────────────────────────────────────────────────
+# -- DuckDuckGo search --------------------------------------------------------
 
 def _search_ddg(query: str, limit: int, timelimit: str | None):
     """Run DDG text search with cooldown enforcement and retry on rate-limit."""
@@ -196,7 +196,7 @@ def _fetch_images_ddg(query: str, result_holder: list) -> None:
         result_holder.append([])
 
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+# -- Utilities -----------------------------------------------------------------
 
 def _domain(url: str) -> str:
     """Extract domain from URL for dedup and display."""
