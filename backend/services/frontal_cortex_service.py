@@ -253,6 +253,14 @@ class FrontalCortexService:
         self.llm = create_llm_service(config)
         self.world_state_service = WorldStateService()
 
+    def get_context_limit(self) -> int:
+        """Delegate to underlying LLM service."""
+        return self.llm.get_context_limit()
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        """Delegate to underlying LLM service."""
+        return self.llm.count_tokens(messages, system_prompt, tools)
+
     def generate_response(
         self,
         system_prompt_template: str,
