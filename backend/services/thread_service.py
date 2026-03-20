@@ -437,7 +437,8 @@ class ThreadService:
                 cursor.execute("""
                     INSERT INTO threads (thread_id, channel_id, platform, state)
                     VALUES (?, ?, ?, 'active')
-                    ON CONFLICT (thread_id) DO NOTHING
+                    ON CONFLICT (thread_id) DO UPDATE SET
+                        state = 'active', expired_at = NULL
                 """, (thread_id, channel_id, platform))
                 cursor.close()
         except Exception as e:
