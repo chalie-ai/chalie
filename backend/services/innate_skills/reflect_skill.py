@@ -18,6 +18,32 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[REFLECT SKILL]"
 
+TOOL_SCHEMA = {
+    "name": "reflect",
+    "description": (
+        "On-demand experiential synthesis via lightweight LLM. Synthesizes recent experience "
+        "into insight: what worked, what didn't, patterns noticed, connections formed. Use to "
+        "generate strategic insight or identify patterns across interactions. Unlike 'introspect' "
+        "(raw state snapshot) or 'recall' (memory fetch without synthesis), this produces "
+        "genuine synthesis."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "What to reflect on. Defaults to recent experience if omitted.",
+            },
+            "scope": {
+                "type": "string",
+                "enum": ["recent", "session", "broad"],
+                "description": "Retrieval scope: 'recent' (last few interactions, default), 'session' (current thread), 'broad' (wider search).",
+            },
+        },
+        "required": [],
+    },
+}
+
 
 def handle_reflect(topic: str, params: dict) -> str:
     """
@@ -390,5 +416,3 @@ def _synthesize(context_block: str) -> str:
 
     # Fallback: return structured summary without synthesis
     return f"[REFLECT] Raw reflection context (LLM synthesis unavailable):\n{context_block}"
-
-

@@ -230,11 +230,10 @@ class CuriosityPursuitService:
             )
 
     def _run_act_loop(self, self_prompt: str, thread: Dict, fatigue_budget: float) -> Optional[str]:
-        """Route a self-prompt through the ACT loop machinery.
+        """Route a self-prompt through the ACT orchestrator.
 
-        Builds an ActLoopService with a bounded iteration cap derived from
-        the thread's engagement score, runs up to max_iterations cycles, then
-        summarises the resulting act_history into a learning note.
+        Delegates to :class:`ACTOrchestrator` for the full loop execution,
+        then summarises the resulting act_history into a learning note.
 
         Args:
             self_prompt: Internally generated exploration prompt string.
@@ -246,75 +245,45 @@ class CuriosityPursuitService:
             1-3 sentence learning note summary string, or None on failure.
         """
         try:
-            from services.act_loop_service import ActLoopService
+            from services.act_orchestrator_service import ACTOrchestrator
             from services.frontal_cortex_service import FrontalCortexService
-            from services.act_dispatcher_service import ActDispatcherService
-            from services.innate_skills import register_innate_skills
+            from services.innate_skills.registry import ALL_SKILL_NAMES
 
             cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
-
-            act_config = ConfigService.resolve_agent_config("frontal-cortex")
-            act_prompt_template = ConfigService.get_agent_prompt("frontal-cortex-act")
-
+            act_prompt = ConfigService.get_agent_prompt("frontal-cortex-act")
             cortex = FrontalCortexService(cortex_config)
-            dispatcher = ActDispatcherService()
-            register_innate_skills(dispatcher)
 
-            act_loop = ActLoopService(
+            orchestrator = ACTOrchestrator(
                 config=cortex_config,
+                max_iterations=cortex_config.get('max_act_iterations', 5),
                 cumulative_timeout=cortex_config.get('act_cumulative_timeout', 30.0),
                 per_action_timeout=cortex_config.get('act_per_action_timeout', 10.0),
-                max_iterations=cortex_config.get('max_act_iterations', 5),
+                execution_gate=True,  # autonomous background execution
             )
 
             topic = thread.get('seed_topic', 'general')
             classification = {'topic': topic, 'confidence': 0.5}
 
-            # Determine skills for pursuit
-            if thread['thread_type'] == 'learning':
-                selected_skills = ['recall', 'memorize', 'introspect', 'associate']
-            else:
-                selected_skills = ['recall', 'introspect', 'associate']
+            result = orchestrator.run(
+                topic=topic,
+                text=self_prompt,
+                cortex_service=cortex,
+                act_prompt=act_prompt,
+                classification=classification,
+                chat_history=[],
+                selected_skills=list(ALL_SKILL_NAMES),
+                session_id=f'curiosity_{thread["id"][:8]}',
+                exchange_id=thread['id'],
+            )
 
-            # Include ambient-capable external tools for richer exploration
-            try:
-                from services.tool_registry_service import ToolRegistryService
-                registry = ToolRegistryService()
-                for tool in registry.get_ambient_tools():
-                    tool_name = tool['name']
-                    if tool_name not in selected_skills:
-                        selected_skills.append(tool_name)
-            except Exception:
-                pass  # Graceful degradation — pursue with innate skills only
+            # Get the history for summarization
+            history = ''
+            if result.act_history:
+                from services.act_loop_service import ActLoopService
+                _tmp = ActLoopService.__new__(ActLoopService)
+                _tmp.act_history = result.act_history
+                history = _tmp.get_history_context()
 
-            # Run ACT loop iterations
-            for _ in range(act_loop.max_iterations):
-                can_continue, reason = act_loop.can_continue()
-                if not can_continue:
-                    break
-
-                response = cortex.generate_response(
-                    system_prompt_template=act_prompt_template,
-                    original_prompt=self_prompt,
-                    classification=classification,
-                    chat_history=[],
-                    act_history=act_loop.get_history_context(),
-                    selected_skills=selected_skills,
-                )
-
-                actions = response.get('actions')
-                if not actions:
-                    break
-
-                results = act_loop.execute_actions(
-                    topic=topic,
-                    actions=actions,
-                )
-                act_loop.append_results(results)
-                act_loop.iteration_number += 1
-
-            # Summarize act_history into a learning note
-            history = act_loop.get_history_context()
             if not history:
                 return None
 

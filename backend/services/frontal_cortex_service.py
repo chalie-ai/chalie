@@ -383,6 +383,7 @@ class FrontalCortexService:
         system_prompt: str,
         messages: list,
         cache_prefix: bool = False,
+        tools: list = None,
     ) -> dict:
         """Multi-turn LLM call using a pre-built system prompt.
 
@@ -396,24 +397,75 @@ class FrontalCortexService:
             messages: Growing list of {"role": ..., "content": ...} dicts
             cache_prefix: When True, hint to the provider to cache the system
                 prompt prefix (Anthropic / OpenAI prompt-caching APIs)
+            tools: List of native tool schema dicts. When provided, the LLM
+                uses native tool calling instead of JSON text output.
 
         Returns:
             Same dict structure as :meth:`generate_response`, plus
             ``raw_response`` containing the unmodified LLM text (needed by
             the orchestrator to append the assistant turn to the message array).
+            When native tool calling is used, ``tool_calls`` contains the
+            structured tool invocations and ``actions`` is derived from them.
         """
         start_time = time.time()
 
         try:
-            response_text = self.llm.send_messages(system_prompt, messages, cache_prefix).text
+            llm_response = self.llm.send_messages(
+                system_prompt, messages, cache_prefix, tools=tools,
+            )
         except Exception as e:
             raise Exception(f"LLM generation failed: {str(e)}") from e
 
         generation_time = time.time() - start_time
 
-        result = self._parse_response_text(response_text, generation_time)
-        # Expose the raw text so the orchestrator can append the assistant turn
-        result['raw_response'] = response_text
+        # Native tool calling path — structured response, no parsing needed
+        if llm_response.tool_calls:
+            actions = [
+                {
+                    'type': tc['name'],
+                    'tool_call_id': tc['id'],
+                    **tc['input'],
+                }
+                for tc in llm_response.tool_calls
+            ]
+            return {
+                'mode': 'ACT',
+                'modifiers': [],
+                'response': '',
+                'generation_time': generation_time,
+                'actions': actions,
+                'confidence': 0.9,
+                'alternative_paths': [],
+                'downstream_mode': 'UNIFIED',
+                'narrated': False,
+                'narration': llm_response.text or '',
+                'raw_response': llm_response.text or '',
+                'tool_calls': llm_response.tool_calls,
+                'stop_reason': llm_response.stop_reason,
+            }
+
+        # Text-only response — either direct reply or legacy JSON parsing
+        if tools:
+            # Model chose to respond with text instead of calling tools
+            return {
+                'mode': 'UNIFIED',
+                'modifiers': [],
+                'response': llm_response.text,
+                'generation_time': generation_time,
+                'actions': None,
+                'confidence': 0.8,
+                'alternative_paths': [],
+                'downstream_mode': 'UNIFIED',
+                'narrated': False,
+                'narration': '',
+                'raw_response': llm_response.text,
+                'tool_calls': None,
+                'stop_reason': llm_response.stop_reason,
+            }
+
+        # Legacy path (no tools parameter) — parse JSON from text
+        result = self._parse_response_text(llm_response.text, generation_time)
+        result['raw_response'] = llm_response.text
         return result
 
     def _parse_response_text(self, response_text: str, generation_time: float) -> dict:
@@ -785,10 +837,26 @@ class FrontalCortexService:
         if selected_skills and '{{injected_skills}}' not in template:
             logging.error("[FRONTAL CORTEX] ACT template missing {{injected_skills}} placeholder — skill docs will not be injected")
 
-        # Inject skill docs for the provided list; empty list injects nothing
-        injected_skills = self._get_injected_skills(selected_skills or [])
+        # Inject skill docs for the provided list.
+        # When native tool calling is active (append mode with all skills), inject
+        # a minimal note instead of full docs — the tool definitions are in the
+        # `tools` API parameter and shouldn't be duplicated in the prompt text.
+        _use_native_tools = self.config.get('append_mode', False) and selected_skills
+        if _use_native_tools and len(selected_skills or []) > 4:
+            # All skills available as native tools — don't repeat docs in prompt
+            injected_skills = (
+                "All cognitive skills are available as callable tools. "
+                "Call them directly by name — their descriptions and parameters "
+                "are provided via the tools interface."
+            )
+        else:
+            injected_skills = self._get_injected_skills(selected_skills or [])
         result = result.replace('{{injected_skills}}', injected_skills)
 
+        # Inject registered tool name index (lightweight, no docs)
+        if '{{registered_tool_names}}' in result:
+            tool_names = self._get_registered_tool_names()
+            result = result.replace('{{registered_tool_names}}', tool_names)
 
         # Strategy hints from procedural memory (learned action reliability)
         strategy_hints = ''
@@ -1226,51 +1294,72 @@ class FrontalCortexService:
         """
         return self._get_injected_skills(skills)
 
-    def _get_discovery_tools_docs(self) -> str:
-        """Load find_skills + find_tools documentation for unified prompt injection.
-
-        Returns only the two discovery tool docs (~100 tokens total) instead of
-        full skill documentation. All other skills are discovered at runtime via
-        find_skills.
-        """
-        import os
-        skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts', 'skills')
-        parts = []
-        for skill_name in ('find_skills', 'find_tools'):
-            path = os.path.join(skills_dir, f'{skill_name}.md')
-            try:
-                with open(path) as f:
-                    parts.append(f.read().strip())
-            except FileNotFoundError:
-                logging.warning(f"[FRONTAL CORTEX] Missing discovery tool doc: {path}")
-        return '\n\n'.join(parts)
-
     def _get_injected_skills(self, skills: list) -> str:
         """
-        Load skill doc files for the selected skills and concatenate them.
+        Build skill documentation from TOOL_SCHEMA dicts on handler modules.
 
-        Each skill maps to backend/prompts/skills/{skill}.md. Missing files are
-        logged as warnings but do not raise — the prompt continues without them.
+        Each skill handler module exposes a TOOL_SCHEMA dict with name,
+        description, and input_schema. This method formats them into a
+        compact prompt-ready block.
 
         Args:
             skills: List of innate skill names (e.g. ['recall', 'memorize', 'schedule'])
 
         Returns:
-            str: Concatenated skill docs separated by double newlines, or '' if empty.
+            str: Formatted skill docs, or '' if empty.
         """
         if not skills:
             return ''
-        import os
-        skills_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts', 'skills')
+        from services.innate_skills import get_skill_handler
+        import importlib, inspect
         parts = []
         for skill in skills:
-            path = os.path.join(skills_dir, f'{skill}.md')
-            try:
-                with open(path) as f:
-                    parts.append(f.read())
-            except FileNotFoundError:
-                logging.warning(f"[FRONTAL CORTEX] No skill doc file for '{skill}' at {path}")
+            handler = get_skill_handler(skill)
+            if not handler:
+                logging.warning(f"[FRONTAL CORTEX] No handler for skill '{skill}'")
+                continue
+            module = inspect.getmodule(handler)
+            schema = getattr(module, 'TOOL_SCHEMA', None)
+            if not schema:
+                logging.warning(f"[FRONTAL CORTEX] No TOOL_SCHEMA for skill '{skill}'")
+                continue
+            parts.append(self._format_skill_doc(schema))
         return '\n\n'.join(parts)
+
+    @staticmethod
+    def _format_skill_doc(schema: dict) -> str:
+        """Format a TOOL_SCHEMA dict into a compact prompt-ready block."""
+        import json
+        name = schema.get('name', '?')
+        desc = schema.get('description', '')
+        input_schema = schema.get('input_schema', {})
+        props = input_schema.get('properties', {})
+        required = input_schema.get('required', [])
+
+        lines = [f"### {name}", desc, "", "Parameters:"]
+        for pname, pdef in props.items():
+            req_marker = " (required)" if pname in required else ""
+            ptype = pdef.get('type', 'any')
+            pdesc = pdef.get('description', '')
+            enum = pdef.get('enum')
+            enum_str = f" [{', '.join(str(e) for e in enum)}]" if enum else ""
+            lines.append(f"- `{pname}` ({ptype}{enum_str}){req_marker}: {pdesc}")
+        return '\n'.join(lines)
+
+    def _get_registered_tool_names(self) -> str:
+        """Return descriptors of registered external tools from the database."""
+        try:
+            from services.database_service import DatabaseService
+            db = DatabaseService()
+            rows = db.fetch_all(
+                "SELECT tool_name, descriptor FROM tool_capability_profiles "
+                "WHERE tool_type = 'tool' ORDER BY tool_name"
+            )
+            parts = [r['descriptor'] or r['tool_name'] for r in (rows or [])]
+            return ', '.join(parts) if parts else '(none registered)'
+        except Exception as e:
+            logging.debug(f"[FRONTAL CORTEX] Failed to fetch tool names: {e}")
+            return '(none registered)'
 
     def _get_available_skills(self) -> str:
         """

@@ -11,6 +11,88 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "schedule",
+    "description": (
+        "Create, list, or cancel scheduled reminders and prompts. "
+        "Use when the user asks to be reminded of something, schedule a recurring check, "
+        "or manage existing reminders. Always normalize natural time expressions to ISO 8601 "
+        "UTC before calling create. due_at must be in the future. "
+        "Use the injected current date/time as anchor for relative expressions — never use "
+        "training-time knowledge of today's date. "
+        "'notification' surfaces text as-is at the scheduled time; 'prompt' feeds text to "
+        "Chalie as a conversational turn. "
+        "To cancel by content (no ID needed), set message to key words from the reminder text."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["create", "list", "cancel"],
+                "description": "The scheduler action to perform.",
+            },
+            "message": {
+                "type": "string",
+                "description": (
+                    "Required for create: what to remind or prompt (max 1000 chars). "
+                    "Optional for cancel: fuzzy content match when item_id is unknown."
+                ),
+            },
+            "due_at": {
+                "type": "string",
+                "description": (
+                    "Required for create: ISO 8601 UTC timestamp "
+                    "(e.g. '2026-03-20T09:00:00+00:00'). Must be in the future."
+                ),
+            },
+            "item_type": {
+                "type": "string",
+                "enum": ["notification", "prompt"],
+                "description": (
+                    "Optional for create (default 'notification'). "
+                    "'notification' = timed reminder shown as-is. "
+                    "'prompt' = fed to Chalie as a conversational turn at the scheduled time."
+                ),
+            },
+            "recurrence": {
+                "type": "string",
+                "description": (
+                    "Optional for create: 'daily', 'weekly', 'monthly', 'weekdays', "
+                    "'hourly', or 'interval:N' (every N minutes, 1-1440). Omit for one-time."
+                ),
+            },
+            "window_start": {
+                "type": "string",
+                "description": (
+                    "Optional for create with recurrence='hourly': HH:MM start of active "
+                    "window (e.g. '09:00'). Requires window_end."
+                ),
+            },
+            "window_end": {
+                "type": "string",
+                "description": (
+                    "Optional for create with recurrence='hourly': HH:MM end of active "
+                    "window (e.g. '17:00'). Requires window_start."
+                ),
+            },
+            "item_id": {
+                "type": "string",
+                "description": "Optional for cancel: exact ID returned at create time. Prefer this when known.",
+            },
+            "time_range": {
+                "type": "string",
+                "enum": ["today", "tomorrow", "this_week", "next_hour", "soon", "all"],
+                "description": (
+                    "Optional for list: filter results by time window. "
+                    "'soon' = next 6 hours. Default 'all'."
+                ),
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 LOG_PREFIX = "[SCHEDULER SKILL]"
 
 

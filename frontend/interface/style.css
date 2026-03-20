@@ -3009,6 +3009,39 @@ details.block-section[open] > summary.block-section__title::before {
   color: var(--text-secondary);
 }
 
+/* -- Action buttons (base) -- */
+.block-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 1rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: #fff;
+  background: var(--accent-primary);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.block-action-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.block-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.block-action-btn--selected {
+  background: rgba(138, 92, 255, 0.18);
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
 /* -- Action button variants -- */
 .block-action-btn--secondary {
   background: rgba(255, 255, 255, 0.06) !important;

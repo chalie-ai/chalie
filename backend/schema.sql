@@ -534,6 +534,7 @@ CREATE TABLE IF NOT EXISTS tool_capability_profiles (
     domain TEXT DEFAULT 'Other',
     effort TEXT DEFAULT 'moderate',
     skill_category TEXT,                           -- e.g. 'memory', 'cognition', 'productivity'
+    descriptor TEXT,                                -- compact discovery label: 'name (synonym1, synonym2, ...)'
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -861,3 +862,20 @@ CREATE TABLE IF NOT EXISTS wrapper_tokens (
 CREATE INDEX IF NOT EXISTS idx_wrapper_tokens_hash
     ON wrapper_tokens(token_hash)
     WHERE revoked_at IS NULL;
+
+-- ────────────────────────────────────────────────────────────────
+-- LLM_CALL_LOG — per-call token usage and latency tracking
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS llm_call_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    tokens_input INTEGER NOT NULL DEFAULT 0,
+    tokens_output INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
+    ON llm_call_log (job_name, created_at);

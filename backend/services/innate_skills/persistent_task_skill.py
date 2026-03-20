@@ -21,6 +21,64 @@ import logging
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PERSISTENT TASK SKILL]"
 
+TOOL_SCHEMA = {
+    "name": "persistent_task",
+    "description": (
+        "Multi-session background tasks. Create, monitor, or control tasks that require "
+        "deeper work than the current ACT loop can handle. Use when work clearly exceeds "
+        "3-5 iterations, requires systematic traversal of many resources, or user asks to "
+        "research deeply. Do NOT use when a single action answers the question or work fits "
+        "within the current ACT loop."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "create", "status", "list", "pause", "resume",
+                    "cancel", "expand", "priority", "plan",
+                    "complete", "progress",
+                ],
+                "description": "Task operation to perform.",
+            },
+            "goal": {
+                "type": "string",
+                "description": "What to accomplish — clear, specific objective. Required for create; used as fuzzy match for status/pause/resume/cancel/expand/priority/plan when task_id is omitted.",
+            },
+            "scope": {
+                "type": "string",
+                "description": "Focus constraints for create — topics, URL patterns, time ranges, depth limits.",
+            },
+            "priority": {
+                "type": "integer",
+                "description": "Task priority 1-10 (default 5). For create or priority action.",
+            },
+            "task_id": {
+                "type": "integer",
+                "description": "Explicit task ID for status/pause/resume/cancel/plan/expand/priority/complete/progress.",
+            },
+            "result": {
+                "type": "string",
+                "description": "Final result text for complete action.",
+            },
+            "artifact": {
+                "type": "string",
+                "description": "Optional artifact data for complete action.",
+            },
+            "coverage": {
+                "type": "number",
+                "description": "Coverage estimate 0.0-1.0 for progress action.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "Progress summary text for progress action.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def handle_persistent_task(topic: str, params: dict) -> str:
     """

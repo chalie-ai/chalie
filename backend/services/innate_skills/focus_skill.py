@@ -8,6 +8,35 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "focus",
+    "description": (
+        "Manage per-thread focus sessions that gate distraction and raise topic boundaries. "
+        "Use when the user declares a deep work session, or to check distraction status "
+        "when a focus session is active. Never use focus to block the user — it is a signal "
+        "to anchor conversation, not restrict it."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["set", "check", "clear"],
+                "description": "The focus action to perform.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Required for 'set': what the user is focused on (e.g. 'deep architecture review').",
+            },
+            "thread_id": {
+                "type": "string",
+                "description": "Optional: thread ID. Defaults to current topic.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def handle_focus(topic: str, params: dict) -> str:
     """

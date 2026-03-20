@@ -87,6 +87,8 @@ class LLMResponse:
     provider: Optional[str] = None
     tokens_input: Optional[int] = None
     tokens_output: Optional[int] = None
+    tool_calls: Optional[list] = None
+    stop_reason: Optional[str] = None
     latency_ms: Optional[int] = None
 
 
@@ -167,12 +169,12 @@ class FallbackLLMService:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_message(system_prompt, user_message, stream=stream)
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
         try:
-            return self._primary.send_messages(system_prompt, messages, cache_prefix)
+            return self._primary.send_messages(system_prompt, messages, cache_prefix, tools=tools)
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
-            return self._fallback.send_messages(system_prompt, messages, cache_prefix)
+            return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools)
 
 
 def _build_service(config: dict):
@@ -246,6 +248,22 @@ def create_llm_service(config: dict):
         except Exception as e:
             logger.warning(f"Failed to load fallback provider '{fallback_name}': {e}")
     return primary
+
+
+def _log_llm_call(job_name: str, response: LLMResponse):
+    """Fire-and-forget logging of LLM call to persistent store."""
+    try:
+        from services.llm_call_log_service import log_call
+        log_call(
+            job_name=job_name,
+            provider=response.provider or 'unknown',
+            model=response.model or 'unknown',
+            tokens_input=response.tokens_input or 0,
+            tokens_output=response.tokens_output or 0,
+            latency_ms=response.latency_ms or 0,
+        )
+    except Exception:
+        pass  # Never fail a response because of logging
 
 
 class RefreshableLLMService:
@@ -327,11 +345,15 @@ class RefreshableLLMService:
             Any exception raised by the underlying LLM service.
         """
         self._ensure_fresh()
-        return self._service.send_message(system_prompt, user_message, stream=stream)
+        result = self._service.send_message(system_prompt, user_message, stream=stream)
+        _log_llm_call(self._agent_name, result)
+        return result
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
         self._ensure_fresh()
-        return self._service.send_messages(system_prompt, messages, cache_prefix)
+        result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+        _log_llm_call(self._agent_name, result)
+        return result
 
 
 def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
@@ -442,7 +464,7 @@ class AnthropicService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
         import anthropic
 
         client = self._get_client()
@@ -454,14 +476,21 @@ class AnthropicService:
             else system_prompt
         )
 
+        # Convert normalized messages to Anthropic format (handle tool_calls + tool results)
+        api_messages = _anthropic_convert_messages(messages)
+
+        create_kwargs = {
+            'model': self.model,
+            'max_tokens': self._MAX_TOKENS,
+            'system': system,
+            'messages': api_messages,
+        }
+        if tools:
+            create_kwargs['tools'] = tools  # Anthropic format matches our schema directly
+
         def _call():
             try:
-                return client.messages.create(
-                    model=self.model,
-                    max_tokens=self._MAX_TOKENS,
-                    system=system,
-                    messages=messages,
-                )
+                return client.messages.create(**create_kwargs)
             except anthropic.RateLimitError as e:
                 retry_after = None
                 if hasattr(e, 'response') and e.response is not None:
@@ -476,12 +505,28 @@ class AnthropicService:
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        text = response.content[0].text if response.content else ""
+        # Extract text + tool_calls from response content blocks
+        text_parts = []
+        tool_calls = []
+        for block in (response.content or []):
+            block_type = getattr(block, 'type', None)
+            if block_type == 'tool_use':
+                tool_calls.append({
+                    'id': block.id,
+                    'name': block.name,
+                    'input': block.input,
+                })
+            elif hasattr(block, 'text') and block.text:
+                text_parts.append(block.text)
+
+        text = '\n'.join(text_parts)
+        stop_reason = response.stop_reason  # 'end_turn', 'tool_use', 'max_tokens'
 
         logger.info(
             f"[AnthropicService] model={response.model}, "
             f"tokens={response.usage.input_tokens}+{response.usage.output_tokens}, "
-            f"latency={latency_ms}ms"
+            f"latency={latency_ms}ms, stop={stop_reason}"
+            + (f", tools={len(tool_calls)}" if tool_calls else "")
         )
 
         return LLMResponse(
@@ -491,7 +536,60 @@ class AnthropicService:
             tokens_input=response.usage.input_tokens,
             tokens_output=response.usage.output_tokens,
             latency_ms=latency_ms,
+            tool_calls=tool_calls if tool_calls else None,
+            stop_reason=stop_reason,
         )
+
+
+def _anthropic_convert_messages(messages: list) -> list:
+    """Convert normalized messages to Anthropic's content block format.
+
+    Handles three message types:
+    - Regular: {"role": "user"|"assistant", "content": "text"}
+    - Assistant with tool calls: {"role": "assistant", "content": "text", "tool_calls": [...]}
+    - Tool result: {"role": "tool", "tool_call_id": "...", "content": "..."}
+    """
+    result = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+
+        if msg['role'] == 'assistant' and msg.get('tool_calls'):
+            # Build content blocks: text (if any) + tool_use blocks
+            content = []
+            text = msg.get('content', '')
+            if text:
+                content.append({"type": "text", "text": text})
+            for tc in msg['tool_calls']:
+                content.append({
+                    "type": "tool_use",
+                    "id": tc['id'],
+                    "name": tc['name'],
+                    "input": tc['input'],
+                })
+            result.append({"role": "assistant", "content": content})
+
+        elif msg['role'] == 'tool':
+            # Anthropic expects tool results as user messages with tool_result content blocks.
+            # Collect consecutive tool results into a single user message.
+            tool_results = []
+            while i < len(messages) and messages[i]['role'] == 'tool':
+                tm = messages[i]
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tm['tool_call_id'],
+                    "content": tm.get('content', ''),
+                })
+                i += 1
+            result.append({"role": "user", "content": tool_results})
+            continue  # Skip the i += 1 at the bottom
+
+        else:
+            # Regular message — pass through
+            result.append(msg)
+
+        i += 1
+    return result
 
 
 class OpenAIService:
@@ -600,18 +698,37 @@ class OpenAIService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
         import openai as openai_mod
+        import json as _json
 
         client = self._get_client()
         start_time = time.time()
 
+        # Convert normalized messages to OpenAI format
+        api_messages = _openai_convert_messages(messages)
+
         create_kwargs = {
             'model': self.model,
-            'messages': [{"role": "system", "content": system_prompt}] + messages,
+            'messages': [{"role": "system", "content": system_prompt}] + api_messages,
         }
-        if self.format == 'json':
-            create_kwargs['response_format'] = {"type": "json_object"}
+        if tools:
+            # Convert to OpenAI function calling format
+            create_kwargs['tools'] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t['name'],
+                        "description": t.get('description', ''),
+                        "parameters": t.get('input_schema', {"type": "object", "properties": {}}),
+                    },
+                }
+                for t in tools
+            ]
+        # Note: send_messages is the native-tool-calling / multi-turn path.
+        # Never set response_format: json_object here — the prompt may not
+        # mention "json" (OpenAI requires it), and tool calling uses its own
+        # structured output protocol. Legacy JSON output lives in send_message.
 
         def _call():
             try:
@@ -630,22 +747,32 @@ class OpenAIService:
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        text = response.choices[0].message.content or ""
+        msg = response.choices[0].message
+        text = msg.content or ""
         finish_reason = response.choices[0].finish_reason
 
-        if not text or not text.strip():
-            logger.warning(
-                f"[OpenAIService] Empty response from model={response.model}, "
-                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
-                f"latency={latency_ms}ms, finish_reason={finish_reason}. "
-                f"Content was: {repr(response.choices[0].message.content)}"
-            )
-        else:
-            logger.info(
-                f"[OpenAIService] model={response.model}, "
-                f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
-                f"latency={latency_ms}ms"
-            )
+        # Extract tool calls
+        tool_calls = None
+        if msg.tool_calls:
+            tool_calls = []
+            for tc in msg.tool_calls:
+                try:
+                    parsed_args = _json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except _json.JSONDecodeError:
+                    parsed_args = {}
+                tool_calls.append({
+                    'id': tc.id,
+                    'name': tc.function.name,
+                    'input': parsed_args,
+                })
+
+        log_level = logger.info if (text and text.strip()) or tool_calls else logger.warning
+        log_level(
+            f"[OpenAIService] model={response.model}, "
+            f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}, "
+            f"latency={latency_ms}ms, finish={finish_reason}"
+            + (f", tools={len(tool_calls)}" if tool_calls else "")
+        )
 
         return LLMResponse(
             text=text,
@@ -654,7 +781,42 @@ class OpenAIService:
             tokens_input=response.usage.prompt_tokens,
             tokens_output=response.usage.completion_tokens,
             latency_ms=latency_ms,
+            tool_calls=tool_calls,
+            stop_reason=finish_reason,
         )
+
+
+def _openai_convert_messages(messages: list) -> list:
+    """Convert normalized messages to OpenAI format."""
+    import json as _json
+    result = []
+    for msg in messages:
+        if msg['role'] == 'assistant' and msg.get('tool_calls'):
+            oai_msg = {
+                "role": "assistant",
+                "content": msg.get('content') or None,
+                "tool_calls": [
+                    {
+                        "id": tc['id'],
+                        "type": "function",
+                        "function": {
+                            "name": tc['name'],
+                            "arguments": _json.dumps(tc['input']),
+                        },
+                    }
+                    for tc in msg['tool_calls']
+                ],
+            }
+            result.append(oai_msg)
+        elif msg['role'] == 'tool':
+            result.append({
+                "role": "tool",
+                "tool_call_id": msg['tool_call_id'],
+                "content": msg.get('content', ''),
+            })
+        else:
+            result.append(msg)
+    return result
 
 
 class GeminiService:
@@ -759,7 +921,7 @@ class GeminiService:
             latency_ms=latency_ms,
         )
 
-    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False) -> LLMResponse:
+    def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None) -> LLMResponse:
         try:
             from google import genai
         except ImportError:
@@ -773,17 +935,23 @@ class GeminiService:
 
         start_time = time.time()
 
-        gemini_contents = [
-            {
-                "role": "model" if m["role"] == "assistant" else m["role"],
-                "parts": [{"text": m["content"]}],
-            }
-            for m in messages
-        ]
+        # Convert normalized messages to Gemini format
+        gemini_contents = _gemini_convert_messages(messages)
 
         gen_config_kwargs = {'system_instruction': system_prompt}
-        if self.format == 'json':
+        if self.format == 'json' and not tools:
             gen_config_kwargs['response_mime_type'] = 'application/json'
+        if tools:
+            gen_config_kwargs['tools'] = [
+                genai.types.Tool(function_declarations=[
+                    genai.types.FunctionDeclaration(
+                        name=t['name'],
+                        description=t.get('description', ''),
+                        parameters=t.get('input_schema'),
+                    )
+                    for t in tools
+                ])
+            ]
 
         def _call():
             try:
@@ -803,9 +971,27 @@ class GeminiService:
         response = _call_with_retry(_call)
         latency_ms = int((time.time() - start_time) * 1000)
 
-        text = response.text if response.text else ""
-        if not text:
-            finish_reason = getattr(response, 'finish_reason', 'unknown')
+        # Extract text + tool calls from response parts
+        text_parts = []
+        tool_calls = []
+        if response.candidates:
+            for part in (response.candidates[0].content.parts or []):
+                if hasattr(part, 'text') and part.text:
+                    text_parts.append(part.text)
+                if hasattr(part, 'function_call') and part.function_call:
+                    fc = part.function_call
+                    tool_calls.append({
+                        'id': f"gemini_{fc.name}_{int(time.time()*1000)}",
+                        'name': fc.name,
+                        'input': dict(fc.args) if fc.args else {},
+                    })
+
+        text = '\n'.join(text_parts)
+        finish_reason = None
+        if response.candidates:
+            finish_reason = str(response.candidates[0].finish_reason) if response.candidates[0].finish_reason else None
+
+        if not text and not tool_calls:
             logger.warning(f"[GeminiService] Empty response, finish_reason={finish_reason}")
             raise ValueError(f"Empty Gemini response (finish_reason={finish_reason})")
 
@@ -817,6 +1003,7 @@ class GeminiService:
             f"[GeminiService] model={self.model}, "
             f"tokens={tokens_input}+{tokens_output}, "
             f"latency={latency_ms}ms"
+            + (f", tools={len(tool_calls)}" if tool_calls else "")
         )
 
         return LLMResponse(
@@ -826,4 +1013,43 @@ class GeminiService:
             tokens_input=tokens_input,
             tokens_output=tokens_output,
             latency_ms=latency_ms,
+            tool_calls=tool_calls if tool_calls else None,
+            stop_reason=finish_reason,
         )
+
+
+def _gemini_convert_messages(messages: list) -> list:
+    """Convert normalized messages to Gemini format."""
+    result = []
+    for msg in messages:
+        role = "model" if msg['role'] == 'assistant' else msg['role']
+        if msg['role'] == 'tool':
+            # Gemini expects function responses as user messages
+            result.append({
+                "role": "user",
+                "parts": [{
+                    "function_response": {
+                        "name": msg.get('name', ''),
+                        "response": {"content": msg.get('content', '')},
+                    }
+                }],
+            })
+        elif msg['role'] == 'assistant' and msg.get('tool_calls'):
+            parts = []
+            text = msg.get('content', '')
+            if text:
+                parts.append({"text": text})
+            for tc in msg['tool_calls']:
+                parts.append({
+                    "function_call": {
+                        "name": tc['name'],
+                        "args": tc['input'],
+                    }
+                })
+            result.append({"role": "model", "parts": parts})
+        else:
+            result.append({
+                "role": role,
+                "parts": [{"text": msg.get('content', '')}],
+            })
+    return result

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[TOOL PROFILE]"
 
-from services.innate_skills.registry import SKILL_DESCRIPTIONS
+from services.innate_skills.registry import ALL_SKILL_NAMES
 
 # MemoryStore cache key and TTL
 TRIAGE_SUMMARIES_CACHE_KEY = "tool_triage_summaries"
@@ -196,13 +196,15 @@ class ToolProfileService:
                 if effort_tier not in ('trivial', 'light', 'moderate', 'deep'):
                     effort_tier = 'moderate'
 
+                descriptor = profile_data.get('descriptor', f'{tool_name}')
+
                 cursor.execute(
                     """
                     INSERT INTO tool_capability_profiles
                         (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
                          anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, effort, updated_at)
-                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                         triage_triggers, effort, descriptor, updated_at)
+                    VALUES (?, 'tool', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT (tool_name) DO UPDATE SET
                         tool_type = 'tool',
                         short_summary = EXCLUDED.short_summary,
@@ -214,6 +216,7 @@ class ToolProfileService:
                         domain = EXCLUDED.domain,
                         triage_triggers = EXCLUDED.triage_triggers,
                         effort = EXCLUDED.effort,
+                        descriptor = EXCLUDED.descriptor,
                         updated_at = datetime('now')
                     """,
                     (
@@ -227,6 +230,7 @@ class ToolProfileService:
                         profile_data.get('domain', 'Other'),
                         json.dumps(triage_triggers),
                         effort_tier,
+                        descriptor,
                     )
                 )
 
@@ -260,131 +264,6 @@ class ToolProfileService:
 
         return profile_data
 
-    def build_skill_profile(self, skill_name: str, skill_desc: str, force: bool = False) -> dict:
-        """Build and store a capability profile for an innate skill."""
-        logger.info(f"{LOG_PREFIX} Building profile for skill: {skill_name}")
-
-        # Use skill description as a minimal manifest
-        pseudo_manifest = {
-            'name': skill_name,
-            'description': skill_desc,
-            'documentation': skill_desc,
-        }
-        manifest_hash = _compute_manifest_hash(pseudo_manifest)
-
-        if not force and not self.check_staleness(skill_name, manifest_hash):
-            logger.info(f"{LOG_PREFIX} Profile for skill {skill_name} is current, skipping")
-            return self.get_full_profile(skill_name) or {}
-
-        episodes_text = self._get_related_episodes(skill_desc)
-
-        prompt_template = self._load_prompt('tool-profile-builder')
-        prompt = (
-            prompt_template
-            .replace('{{manifest}}', json.dumps(pseudo_manifest, indent=2))
-            .replace('{{episodes}}', episodes_text)
-        )
-
-        try:
-            llm = self._get_llm()
-            response_text = llm.send_message("", prompt).text
-            profile_data = _extract_json(response_text)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} LLM profile build failed for skill {skill_name}: {e}")
-            profile_data = {
-                'short_summary': skill_desc[:100],
-                'full_profile': skill_desc,
-                'usage_scenarios': [],
-                'anti_scenarios': [],
-                'complementary_skills': [],
-            }
-
-        usage_scenarios = profile_data.get('usage_scenarios', [])[:MAX_SCENARIOS]
-
-        # Generate embedding from short_summary + full_profile for robust semantic search
-        embedding = None
-        try:
-            emb_service = self._get_embedding_service()
-            short_summary = profile_data.get('short_summary', '')
-            full_profile = profile_data.get('full_profile', skill_desc)
-            embedding_text = f"{short_summary}\n{full_profile}" if short_summary else full_profile
-            embedding = emb_service.generate_embedding(embedding_text)
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Embedding failed for skill {skill_name}: {e}")
-
-        db = self._get_db()
-        try:
-            triage_triggers = profile_data.get('triage_triggers', [])[:10]
-
-            # Skills are innate — use authoritative effort and category from registry
-            from services.innate_skills.registry import SKILL_EFFORT, SKILL_CATEGORIES
-            effort = SKILL_EFFORT.get(skill_name, 'moderate')
-            skill_category = SKILL_CATEGORIES.get(skill_name)
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO tool_capability_profiles
-                        (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
-                         anti_scenarios, complementary_skills, manifest_hash, domain,
-                         triage_triggers, effort, skill_category, updated_at)
-                    VALUES (?, 'skill', ?, ?, ?, ?, ?, ?, 'Innate Skill', ?, ?, ?, datetime('now'))
-                    ON CONFLICT (tool_name) DO UPDATE SET
-                        tool_type = 'skill',
-                        short_summary = EXCLUDED.short_summary,
-                        full_profile = EXCLUDED.full_profile,
-                        usage_scenarios = EXCLUDED.usage_scenarios,
-                        anti_scenarios = EXCLUDED.anti_scenarios,
-                        complementary_skills = EXCLUDED.complementary_skills,
-                        manifest_hash = EXCLUDED.manifest_hash,
-                        domain = EXCLUDED.domain,
-                        triage_triggers = EXCLUDED.triage_triggers,
-                        effort = EXCLUDED.effort,
-                        skill_category = EXCLUDED.skill_category,
-                        updated_at = datetime('now')
-                    """,
-                    (
-                        skill_name,
-                        profile_data.get('short_summary', skill_desc[:100]),
-                        profile_data.get('full_profile', skill_desc),
-                        json.dumps(usage_scenarios),
-                        json.dumps(profile_data.get('anti_scenarios', [])[:20]),
-                        json.dumps(profile_data.get('complementary_skills', [])),
-                        manifest_hash,
-                        json.dumps(triage_triggers),
-                        effort,
-                        skill_category,
-                    )
-                )
-
-                # Store embedding in vec table
-                if embedding is not None:
-                    row = cursor.execute(
-                        "SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?",
-                        (skill_name,)
-                    ).fetchone()
-                    if row:
-                        blob = _pack_embedding(embedding)
-                        cursor.execute(
-                            "DELETE FROM tool_capability_profiles_vec WHERE rowid = ?",
-                            (row[0],)
-                        )
-                        cursor.execute(
-                            "INSERT INTO tool_capability_profiles_vec(rowid, embedding) VALUES (?, ?)",
-                            (row[0], blob)
-                        )
-
-                cursor.close()
-            logger.info(f"{LOG_PREFIX} Upserted profile for skill {skill_name}")
-        except Exception as e:
-            logger.error(f"{LOG_PREFIX} DB upsert failed for skill {skill_name}: {e}")
-        finally:
-            if not self._db:
-                db.close_pool()
-
-        self._invalidate_cache()
-        return profile_data
 
     # -- Enrichment ------------------------------------------------------------
 
@@ -743,23 +622,9 @@ class ToolProfileService:
         """
         logger.info(f"{LOG_PREFIX} Bootstrap: checking all tool/skill profiles...")
 
-        # Bootstrap innate skills
-        for skill_name, skill_desc in SKILL_DESCRIPTIONS.items():
-            try:
-                pseudo_manifest = {'name': skill_name, 'documentation': skill_desc}
-                manifest_hash = _compute_manifest_hash(pseudo_manifest)
-                if self.check_staleness(skill_name, manifest_hash):
-                    self.build_skill_profile(skill_name, skill_desc)
-                else:
-                    # Rebuild if new columns were added but not yet populated
-                    profile = self.get_full_profile(skill_name)
-                    if profile and self._profile_needs_rebuild(profile):
-                        logger.info(f"{LOG_PREFIX} Rebuilding skill {skill_name} profile (missing fields)")
-                        self.build_skill_profile(skill_name, skill_desc, force=True)
-                    else:
-                        logger.debug(f"{LOG_PREFIX} Skill {skill_name} profile is current")
-            except Exception as e:
-                logger.warning(f"{LOG_PREFIX} Bootstrap failed for skill {skill_name}: {e}")
+        # Innate skills no longer profiled — documentation lives in TOOL_SCHEMA
+        # dicts on each handler module. Procedural memory (strategy hints) is
+        # separate and unaffected.
 
         # Bootstrap registered tools
         active_tool_names: set = set()
@@ -788,7 +653,7 @@ class ToolProfileService:
 
         # Purge profiles for tools/skills that no longer exist
         try:
-            valid_names = set(SKILL_DESCRIPTIONS.keys()) | active_tool_names
+            valid_names = ALL_SKILL_NAMES | active_tool_names
             db = self._get_db()
             existing = db.fetch_all("SELECT tool_name FROM tool_capability_profiles")
             stale = [r['tool_name'] for r in (existing or []) if r['tool_name'] not in valid_names]
@@ -998,6 +863,8 @@ class ToolProfileService:
             return True
         scenarios = profile.get('usage_scenarios')
         if not scenarios or scenarios == []:
+            return True
+        if not profile.get('descriptor'):
             return True
         return False
 

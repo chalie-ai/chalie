@@ -5,7 +5,7 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 16 skills).
+register_innate_skills() in __init__.py (currently 15 skills).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
@@ -13,7 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'moment', 'persistent_task', 'document',
-    'read', 'reflect', 'notes', 'find_tools', 'find_skills',
+    'read', 'reflect', 'notes', 'find_tools',
 })
 
 # ── LLM-visible for planning: excludes moment (context read, not a
@@ -27,7 +27,7 @@ REFLECTION_FILTER_SKILLS: frozenset = ALL_SKILL_NAMES
 # ── Cognitive primitives: always injected into ACT mode regardless of
 #    triage selection. These are the foundational memory operations. ─────────
 COGNITIVE_PRIMITIVES: frozenset = frozenset({
-    'recall', 'memorize', 'associate', 'find_tools', 'find_skills',
+    'recall', 'memorize', 'associate', 'find_tools',
 })
 
 # ── Contextual skills: planning-visible skills minus primitives.
@@ -39,7 +39,7 @@ TRIAGE_VALID_SKILLS: frozenset = PLANNING_SKILLS
 
 # ── Ordered primitives list: used where insertion order matters
 #    (e.g., prepending to skill lists in triage) ───────────────────────────
-COGNITIVE_PRIMITIVES_ORDERED: list = ['recall', 'memorize', 'associate', 'find_tools', 'find_skills']
+COGNITIVE_PRIMITIVES_ORDERED: list = ['recall', 'memorize', 'associate', 'find_tools']
 
 # ── Skills tracked by procedural memory (skill_outcome_recorder).
 #    Only the 4 core primitives — dynamic tools are tracked separately
@@ -65,7 +65,6 @@ SKILL_DESCRIPTIONS: dict = {
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
     'notes': 'Query working notes from this session — large tool results and older action history are stored here for on-demand retrieval',
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
-    'find_skills': 'Discover which cognitive skills are available by describing what you need — returns full documentation for matching skills',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
@@ -85,7 +84,6 @@ SKILL_EFFORT: dict = {
     'reflect': 'light',
     'notes': 'trivial',
     'find_tools': 'trivial',
-    'find_skills': 'trivial',
 }
 
 # ── Skill categories ───────────────────────────────────────────────────────────
@@ -105,5 +103,4 @@ SKILL_CATEGORIES: dict = {
     'reflect': 'cognition',
     'notes': 'memory',
     'find_tools': 'cognition',
-    'find_skills': 'cognition',
 }

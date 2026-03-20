@@ -30,7 +30,8 @@ Generate JSON with exactly these fields:
   "anti_scenarios": ["Specific examples of when NOT to use this tool"],
   "complementary_skills": ["skill names that work well alongside this tool"],
   "triage_triggers": ["5-10 short action verbs or phrases that should activate this tool in triage routing"],
-  "effort_tier": "trivial | light | moderate | deep"
+  "effort_tier": "trivial | light | moderate | deep",
+  "descriptor": "tool_name (synonym1, synonym2, ...)"
 }
 
 Think exhaustively about usage_scenarios. Include:
@@ -58,6 +59,12 @@ IMPORTANT for full_profile:
 - Describe capabilities as ready-to-use (e.g., "reads your Gmail inbox" not "can read Gmail if connected")
 - NEVER mention OAuth, authentication setup, credentials, or connection requirements
 - The system handles auth transparently — the profile should describe what the tool DOES, not what it NEEDS
+
+For descriptor: a compact label used for discovery. Format: `tool_name (synonym1, synonym2, ...)`.
+- Max 5 synonyms. Each synonym is 1-2 words.
+- Synonyms must be grounded in the tool's actual capabilities — only words that appear in or directly describe the tool's code, manifest, or documentation. Do not invent synonyms.
+- Include the most common ways a user would refer to this capability.
+- Examples: `schedule (reminders, alarms, recurring tasks)`, `web_search (google, look up, find online)`, `email (gmail, inbox, send message)`
 
 For the invocation example at the end of full_profile: use the exact tool name from the manifest's "name" field and the most important parameter name from "parameters". Example format:
 Invoke as: {"type": "weather", "location": "London"}

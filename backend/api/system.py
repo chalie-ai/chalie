@@ -274,7 +274,7 @@ def observability_tools():
     try:
         from services.database_service import get_shared_db_service
         from services.tool_performance_service import ToolPerformanceService
-        from services.tool_profile_service import SKILL_DESCRIPTIONS
+        from services.innate_skills.registry import ALL_SKILL_NAMES
 
         db = get_shared_db_service()
 
@@ -282,7 +282,7 @@ def observability_tools():
         valid_names: set | None = None
         try:
             from services.tool_registry_service import ToolRegistryService
-            valid_names = set(ToolRegistryService().tools.keys()) | set(SKILL_DESCRIPTIONS.keys())
+            valid_names = set(ToolRegistryService().tools.keys()) | ALL_SKILL_NAMES
         except Exception:
             pass  # If registry is unavailable, show all profiles rather than nothing
 

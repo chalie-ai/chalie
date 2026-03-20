@@ -10,6 +10,36 @@ from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "associate",
+    "description": (
+        "Spreading activation through the semantic concept graph. "
+        "Surfaces related ideas through associative links from seed concepts, "
+        "including creative leaps via weak/random associations. "
+        "Use when you need to explore what concepts relate to a query, "
+        "especially when recall returns sparse results."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "seeds": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of concept names or queries to activate from.",
+            },
+            "depth": {
+                "type": "integer",
+                "description": "Max activation depth in the graph (default 2).",
+            },
+            "include_weak": {
+                "type": "boolean",
+                "description": "Include weak/random associations for creative leaps (default true).",
+            },
+        },
+        "required": ["seeds"],
+    },
+}
+
 
 def handle_associate(topic: str, params: dict) -> str:
     """

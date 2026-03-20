@@ -224,7 +224,7 @@ class TestFallbackMultiTurn:
         primary.send_messages.return_value = expected
 
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-        primary.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, False)
+        primary.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, False, tools=None)
         fallback.send_messages.assert_not_called()
         assert result is expected
 
@@ -239,7 +239,7 @@ class TestFallbackMultiTurn:
         fallback.send_messages.return_value = expected
 
         result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
-        fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True)
+        fallback.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)
         assert result is expected
 
     def test_rate_limit_triggers_fallback(self):
@@ -272,5 +272,5 @@ class TestRefreshableMultiTurn:
         with patch.object(svc, '_ensure_fresh'):
             result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, cache_prefix=True)
 
-        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True)
+        inner.send_messages.assert_called_once_with(SYSTEM_PROMPT, MESSAGES, True, tools=None)
         assert result is expected
