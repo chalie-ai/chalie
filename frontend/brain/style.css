@@ -662,6 +662,116 @@ body::before {
     margin-right: 4px;
 }
 
+/* Stats button on job cards */
+.btn-stats {
+    margin-left: auto;
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 5px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    padding: 2px 8px;
+    cursor: pointer;
+    transition: color 180ms, border-color 180ms;
+    line-height: 1;
+}
+.btn-stats:hover {
+    color: var(--text-primary);
+    border-color: rgba(138, 92, 255, 0.3);
+}
+
+/* Stats modal — period tabs */
+.stats-period-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+}
+.stats-tab {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: all 160ms;
+}
+.stats-tab:hover { color: var(--text-primary); }
+.stats-tab.active {
+    background: rgba(138, 92, 255, 0.12);
+    border-color: rgba(138, 92, 255, 0.25);
+    color: var(--text-primary);
+}
+
+/* Stats summary cards */
+.stats-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+}
+.stat-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-align: center;
+}
+.stat-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+.stat-unit {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    margin-left: 2px;
+}
+.stat-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+/* Stats call table */
+.stats-table-wrap {
+    max-height: 340px;
+    overflow-y: auto;
+}
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.stats-table th {
+    position: sticky;
+    top: 0;
+    background: #0d1120;
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.stats-table td {
+    padding: 5px 10px;
+    color: var(--text-primary);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    font-variant-numeric: tabular-nums;
+}
+.stats-table .num { text-align: right; }
+.stats-table th.num { text-align: right; }
+.stats-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+
+.stats-empty {
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 0;
+}
+
 /* =====================================================
    Cognition — subtabs / filter tabs
    ===================================================== */
