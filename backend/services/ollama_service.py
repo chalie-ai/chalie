@@ -254,7 +254,7 @@ class OllamaService:
 
     def generate_embedding(self, text: str, embedding_model: str = None, target_dimensions: int = None) -> list:
         """
-        Generate embedding vector using sentence-transformers (no Ollama required).
+        Generate embedding vector via EmbeddingService (no Ollama required).
 
         Note: embedding_model and target_dimensions parameters are deprecated and ignored.
         All embeddings now use the unified EmbeddingService.

@@ -27,8 +27,8 @@ class SemanticMemoryConfig:
 
     @property
     def embedding_model(self) -> str:
-        """Get embedding model name (sentence-transformers)."""
-        return self._config.get('embedding_model', 'all-mpnet-base-v2')
+        """Get embedding model name."""
+        return self._config.get('embedding_model', 'gte-modernbert-base')
 
     @property
     def embedding_dimensions(self) -> int:

@@ -189,14 +189,14 @@ def generate_webhook_key(tool_name: str):
 @require_session
 def list_tools():
     """
-    List all tools: loaded (connected/available/system), building, error, and disabled.
+    List all tools: loaded (connected/available/system), error, and disabled.
 
     Returns:
         {
             "tools": [
                 {
                     "name": str,
-                    "status": "connected|available|system|disabled|building|error",
+                    "status": "connected|available|system|disabled|error",
                     "icon": str,
                     "description": str,
                     "last_error": str|null,
@@ -212,7 +212,6 @@ def list_tools():
         from services.database_service import get_shared_db_service
 
         registry = ToolRegistryService()
-        tools_dir = registry.tools_dir
 
         # DB access is best-effort
         try:
@@ -290,98 +289,6 @@ def list_tools():
                 tool_entry["oauth_connected"] = bool(stored_config.get("_oauth_access_token"))
             result.append(tool_entry)
             processed_names.add(name)
-
-        # 2. Building/error tools (in registry but not yet loaded, or failed)
-        build_statuses = registry.get_all_build_statuses()
-        for name, status_info in build_statuses.items():
-            if name in processed_names:
-                continue
-
-            status = status_info.get("status", "unknown")
-            error = status_info.get("error")
-
-            # Try to read manifest from tools/ directory for metadata
-            tool_dir = tools_dir / name
-            manifest = {}
-            icon = "⚙"
-            description = ""
-
-            if tool_dir.exists():
-                manifest_path = tool_dir / "manifest.json"
-                if manifest_path.exists():
-                    try:
-                        with open(manifest_path, "r") as f:
-                            manifest = json.load(f)
-                        icon = manifest.get("icon", "⚙")
-                        description = manifest.get("description", "")
-                    except Exception:
-                        pass
-
-            # Source metadata (best-effort from DB)
-            build_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
-
-            result.append({
-                "name": name,
-                "display_name": name.replace("_", " ").title(),
-                "icon": icon,
-                "description": description,
-                "trigger_type": manifest.get("trigger", {}).get("type", ""),
-                "status": status,
-                "last_error": error,
-                "source_type": build_config.get("_source_type"),
-                "source_url": build_config.get("_source_url"),
-                "installed_tag": build_config.get("_installed_tag"),
-            })
-            processed_names.add(name)
-
-        # 3. Filesystem scan: disabled tools + safety net for tools that failed to load
-        if tools_dir.exists():
-            for tool_dir in sorted(tools_dir.iterdir()):
-                if not tool_dir.is_dir() or tool_dir.name.startswith(("_", ".")):
-                    continue
-
-                manifest_path = tool_dir / "manifest.json"
-                # Trusted tools use runner.py; only sandboxed tools need a Dockerfile
-                if not manifest_path.exists():
-                    continue
-                if not (tool_dir / "Dockerfile").exists() and not (tool_dir / "runner.py").exists():
-                    continue
-
-                try:
-                    with open(manifest_path, "r") as f:
-                        manifest = json.load(f)
-                    name = manifest.get("name", tool_dir.name)
-                except Exception:
-                    name = tool_dir.name
-                    manifest = {}
-
-                if name in processed_names:
-                    continue
-
-                stored_config = tool_config_svc.get_tool_config(name) if tool_config_svc else {}
-                if stored_config.get("_enabled", "true").lower() == "false":
-                    status = "disabled"
-                    last_error = None
-                else:
-                    status = "error"
-                    last_error = "Tool failed to load at startup"
-
-                icon = manifest.get("icon", "⚙")
-                description = manifest.get("description", "")
-
-                result.append({
-                    "name": name,
-                    "display_name": name.replace("_", " ").title(),
-                    "icon": icon,
-                    "description": description,
-                    "trigger_type": manifest.get("trigger", {}).get("type", ""),
-                    "status": status,
-                    "last_error": last_error,
-                    "source_type": stored_config.get("_source_type"),
-                    "source_url": stored_config.get("_source_url"),
-                    "installed_tag": stored_config.get("_installed_tag"),
-                })
-                processed_names.add(name)
 
         # Sort result by name
         result.sort(key=lambda t: t["name"])

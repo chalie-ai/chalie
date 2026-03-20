@@ -10,8 +10,7 @@ CLI options:
     python backend/run.py --host=127.0.0.1
 
 All worker threads, database initialization, and the Flask+WebSocket server
-run in a single process. Docker is optional — used only for sandboxed tool
-execution. Voice runs natively when deps are installed.
+run in a single process. Voice runs natively when deps are installed.
 """
 
 import argparse
@@ -148,7 +147,7 @@ def main():
         logger.warning(f"Settings initialization failed: {e}")
 
     # Import consumer's WorkerManager and all services
-    from consumer import WorkerManager, ToolScannerThread
+    from consumer import WorkerManager
 
     # Import worker functions
     from services.idle_consolidation_service import idle_consolidation_process
@@ -225,14 +224,13 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool cron registration failed: {e}")
 
-    # Wire up hot-reload tool scanner
-    if registry:
-        try:
-            scanner = ToolScannerThread(manager=manager, tools_dir=registry.tools_dir)
-            manager._tool_scanner = scanner
-            manager._tool_scanner_registry = registry
-        except Exception as e:
-            logger.warning(f"[Startup] Tool scanner setup failed: {e}")
+    # Restore persisted interface tools so bootstrap_all() sees them
+    # and builds/preserves their profiles instead of purging them.
+    try:
+        from services.interface_registry_service import InterfaceRegistryService
+        InterfaceRegistryService().restore_tools_on_startup()
+    except Exception as e:
+        logger.warning(f"[Startup] Interface tool restoration failed: {e}")
 
     # Bootstrap tool profiles (background thread)
     try:
