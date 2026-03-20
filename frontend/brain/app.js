@@ -22,9 +22,6 @@ let editPlatform = 'ollama';
 let editingProviderId = null;
 let deletingProviderId = null;
 
-// Embodiment state
-let embodyTools = [];           // full tool list from API
-
 // Cognition observability state
 let obsData = {};               // cached API responses keyed by subtab name
 let obsLoaded = {};             // whether a subtab has been fetched
@@ -151,9 +148,6 @@ async function loadData() {
     await Promise.all([loadAssignments(), loadJobDefinitions()]);
     renderMain();
     renderCognition();
-
-    // Handle OAuth callback URL parameters
-    handleOAuthCallback();
 }
 
 async function loadJobDefinitions() {
@@ -297,8 +291,6 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
     // Load content when tabs are clicked
     if (tabName === 'cognition') {
         loadCognitionSubtab(activeSubtab);
-    } else if (tabName === 'embodiment') {
-        loadEmbodiment();
     } else if (tabName === 'scheduler') {
         loadScheduler();
     } else if (tabName === 'lists') {
@@ -652,11 +644,14 @@ let statsJobName = '';
 async function openJobStats(jobId, jobName) {
     statsJobName = jobId;
     document.getElementById('jobStatsTitle').textContent = `${jobName} — Token Usage`;
+    document.getElementById('statsSummary').innerHTML = '<div class="loading">Loading stats…</div>';
+    document.getElementById('statsTableWrap').innerHTML = '';
     document.getElementById('jobStatsModal').classList.remove('hidden');
 
     // Reset tab selection to 24h
     document.querySelectorAll('#statsPeriodTabs .stats-tab').forEach(t => t.classList.remove('active'));
-    document.querySelector('#statsPeriodTabs .stats-tab[data-hours="24"]').classList.add('active');
+    const defaultTab = document.querySelector('#statsPeriodTabs .stats-tab[data-hours="24"]');
+    if (defaultTab) defaultTab.classList.add('active');
 
     await loadJobStats(jobId, 24);
 }
@@ -738,166 +733,6 @@ async function loadJobStats(jobId, hours) {
         `;
     } catch (e) {
         summaryEl.innerHTML = '<div class="stats-empty">Failed to load stats.</div>';
-    }
-}
-
-// ==========================================
-// Embodiment Tab — Read-Only Embodiment List
-// ==========================================
-async function loadEmbodiment() {
-    const el = document.getElementById('embodimentList');
-    try {
-        const res = await apiFetch('/tools');
-        if (!res.ok) throw new Error('Failed to load embodiments');
-        const data = await res.json();
-        embodyTools = data.tools || [];
-        renderEmbodimentList();
-    } catch (e) {
-        console.error('loadEmbodiment error:', e);
-        el.innerHTML = `<div class="empty-state"><h3>Error loading embodiments</h3><p>${escapeHtml(e.message)}</p></div>`;
-    }
-}
-
-function renderEmbodimentList() {
-    const el = document.getElementById('embodimentList');
-    if (!el) return;
-
-    if (embodyTools.length === 0) {
-        el.innerHTML = `<div class="empty-state" style="text-align:center;padding:64px 24px"><h3>No embodiments installed</h3><p>Embodiments are installed automatically on startup.</p></div>`;
-        return;
-    }
-
-    el.innerHTML = embodyTools.map(renderEmbodimentItem).join('');
-    if (typeof lucide !== 'undefined') lucide.createIcons({ node: el });
-}
-
-function renderEmbodimentItem(tool) {
-    const name = tool.name;
-    const icon = tool.icon || '⚙';
-    const status = tool.status;
-    const version = tool.installed_tag || '';
-
-    const statusClass = {
-        'connected': '--active', 'available': '--active', 'system': '--active',
-        'building': '--building', 'error': '--error', 'disabled': '--disabled',
-    }[status] || '--active';
-
-    const statusLabel = {
-        'connected': 'Active', 'available': 'Ready', 'system': 'Active',
-        'building': 'Building…', 'error': 'Error', 'disabled': 'Disabled',
-    }[status] || status;
-
-    // Error details
-    let errorHtml = '';
-    if (status === 'error' && tool.last_error) {
-        errorHtml = `<div class="embodiment-item__error">${escapeHtml(tool.last_error)}</div>`;
-    }
-
-    // OAuth section (only if tool declares OAuth)
-    let oauthHtml = '';
-    if (tool.auth_type === 'oauth2') {
-        if (tool.oauth_connected) {
-            oauthHtml = `
-                <div class="embodiment-item__oauth">
-                    <span class="embodiment-item__oauth-status --connected">${escapeHtml(tool.auth_provider_hint || 'OAuth')} connected</span>
-                    <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px" onclick="event.stopPropagation();disconnectOAuth('${escapeHtml(name)}')">Disconnect</button>
-                </div>`;
-        } else {
-            oauthHtml = `
-                <div class="embodiment-item__oauth">
-                    <span class="embodiment-item__oauth-status --disconnected">Not connected</span>
-                    <button class="btn btn-primary" style="font-size:11px;padding:4px 10px" onclick="event.stopPropagation();startOAuth('${escapeHtml(name)}')">Connect ${escapeHtml(tool.auth_provider_hint || 'Account')}</button>
-                </div>`;
-        }
-    }
-
-    return `
-        <div class="embodiment-item" onclick="this.classList.toggle('--expanded')">
-            <div class="embodiment-item__header">
-                <div class="embodiment-item__icon">${renderIconHtml(icon)}</div>
-                <div class="embodiment-item__name">${escapeHtml(tool.display_name || tool.name)}</div>
-                ${version ? `<span class="embodiment-item__version">${escapeHtml(version)}</span>` : ''}
-                <span class="embodiment-item__dot ${statusClass}" title="${escapeHtml(statusLabel)}"></span>
-                <span class="embodiment-item__chevron">▸</span>
-            </div>
-            <div class="embodiment-item__body">
-                <p class="embodiment-item__desc">${escapeHtml(tool.description)}</p>
-                <div class="embodiment-item__meta">
-                    <span>Trigger: ${escapeHtml(tool.trigger_type || 'on_demand')}</span>
-                    ${tool.source_url ? `<span><a href="${escapeHtml(tool.source_url)}" target="_blank" rel="noopener" style="color:var(--accent-primary)">Source</a></span>` : ''}
-                </div>
-                ${errorHtml}
-                ${oauthHtml}
-            </div>
-        </div>
-    `;
-}
-
-// ==========================================
-// OAuth Functions (generic, tool-agnostic)
-// ==========================================
-async function startOAuth(toolName) {
-    try {
-        const res = await apiFetch(`/tools/${toolName}/oauth/start`);
-        if (!res.ok) {
-            const err = await res.json();
-            showToast(err.error || 'Failed to start OAuth', 'error');
-            return;
-        }
-        const data = await res.json();
-        if (data.auth_url) {
-            // Open OAuth URL in popup window
-            const popup = window.open(data.auth_url, 'oauth_popup', 'width=600,height=700,scrollbars=yes');
-            if (!popup) {
-                // Popup blocked — redirect in same window
-                window.location.href = data.auth_url;
-            }
-        }
-    } catch (e) {
-        showToast('Error starting OAuth: ' + e.message, 'error');
-    }
-}
-
-async function disconnectOAuth(toolName) {
-    try {
-        const res = await apiFetch(`/tools/${toolName}/oauth/disconnect`, { method: 'POST' });
-        if (res.ok) {
-            showToast('Account disconnected', 'success');
-            await loadEmbodiment();
-        } else {
-            const err = await res.json();
-            showToast(err.error || 'Failed to disconnect', 'error');
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
-}
-
-// Handle OAuth callback parameters on page load
-function handleOAuthCallback() {
-    const params = new URLSearchParams(window.location.search);
-    const oauthSuccess = params.get('oauth_success');
-    const oauthError = params.get('oauth_error');
-    const toolName = params.get('tool');
-
-    if (oauthSuccess === 'true' && toolName) {
-        showToast(`${toolName.replace(/_/g, ' ')} account connected successfully`, 'success');
-        // Clean URL
-        window.history.replaceState({}, document.title, window.location.pathname);
-        // Reload tools to reflect new status
-        loadEmbodiment();
-        // If this was opened in a popup, close it and refresh parent
-        if (window.opener) {
-            window.opener.loadEmbodiment();
-            window.close();
-        }
-    } else if (oauthError) {
-        showToast(`OAuth error: ${oauthError}`, 'error');
-        window.history.replaceState({}, document.title, window.location.pathname);
-        if (window.opener) {
-            window.opener.showToast(`OAuth error: ${oauthError}`, 'error');
-            window.close();
-        }
     }
 }
 
@@ -2289,19 +2124,6 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
-}
-
-function renderIconHtml(icon) {
-    if (!icon) return '&#x2699;';
-    if (icon.startsWith('http://') || icon.startsWith('https://') || icon.startsWith('/')) {
-        return `<img src="${escapeHtml(icon)}" style="width:100%;height:100%;object-fit:contain" alt="">`;
-    }
-    if (icon.startsWith('fa-')) {
-        // Legacy FA icon name — map to Lucide equivalent where possible, else fallback glyph
-        const lucideName = icon.replace(/^fa-solid\s+/, '').replace(/^fa-/, '');
-        return `<i data-lucide="${escapeHtml(lucideName)}"></i>`;
-    }
-    return escapeHtml(icon);
 }
 
 // ==========================================

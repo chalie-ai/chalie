@@ -1,34 +1,25 @@
-# Embodiments
+# First-Party Tools
 
-Embodiments are Chalie's built-in capabilities — always installed, always enabled, internally managed. They are not user-configurable tools; they are core abilities that Chalie uses autonomously through the ACT loop.
+First-party tools are Chalie's built-in capabilities that run as trusted subprocesses. They live in `backend/tools/` and are committed to the main repo. They have zero access to Chalie internals (SQLite, MemoryStore, services) — they receive input via base64 JSON and return JSON results.
 
-Embodiments live in separate repositories but are bundled with every Chalie instance. On startup, Chalie downloads or upgrades each embodiment to the version pinned in `backend/configs/embodiment_library.json`.
+Tools are discoverable via the `find_tools` innate skill (semantic search over tool profiles) and available on-demand through the ACT loop.
 
-## Current Embodiments
+## Current Tools
 
 ### Weather
 
 | | |
 |---|---|
-| **Repo** | [chalie-ai/chalie-tool-weather](https://github.com/chalie-ai/chalie-tool-weather) |
+| **Path** | `backend/tools/weather/` |
 | **Trigger** | On-demand |
 
 Fetches current weather conditions and tomorrow's forecast using [Open-Meteo](https://open-meteo.com/) and [wttr.in](https://wttr.in/). No API key required.
-
-### Reddit
-
-| | |
-|---|---|
-| **Repo** | [chalie-ai/reddit-tool](https://github.com/chalie-ai/reddit-tool) |
-| **Trigger** | On-demand |
-
-Searches Reddit for community discussions, opinions, recommendations, and troubleshooting threads. No API key required.
 
 ### Web Search
 
 | | |
 |---|---|
-| **Repo** | [chalie-ai/chalie-tool-web-search](https://github.com/chalie-ai/chalie-tool-web-search) |
+| **Path** | `backend/tools/web_search/` |
 | **Trigger** | On-demand |
 
 Searches the web via DuckDuckGo. Privacy-focused, no API key required.
@@ -37,53 +28,29 @@ Searches the web via DuckDuckGo. Privacy-focused, no API key required.
 
 | | |
 |---|---|
+| **Path** | `backend/tools/code_eval/` |
 | **Trigger** | On-demand |
 
-Executes Python snippets in a restricted sandbox to verify formulas, test algorithms, or compute results precisely. Built-in (no external repo).
+Executes Python snippets in a restricted sandbox to verify formulas, test algorithms, or compute results precisely.
 
-### World Clock
+### Programming Docs Search
 
 | | |
 |---|---|
-| **Repo** | [chalie-ai/world-clock-interface](https://github.com/chalie-ai/world-clock-interface) |
-| **Trigger** | Cron (15-minute interval) |
-
-Populates world state with current time-of-day phase, sunrise, sunset, solar noon, and day length derived from client telemetry. No API key required.
-
-### Programming Docs
-
-| | |
-|---|---|
-| **Repo** | [chalie-ai/programming-docs-search-tool](https://github.com/chalie-ai/programming-docs-search-tool) |
+| **Path** | `backend/tools/programming_docs_search/` |
 | **Trigger** | On-demand |
 
-Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. Each source uses its own search strategy against the canonical documentation site. Go covers its entire ecosystem (Gin, Echo, etc.) via pkg.go.dev; Rust covers all crates (Tokio, Serde) via docs.rs; C# covers ASP.NET and EF via Microsoft Learn. No API key required.
+Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. No API key required.
 
 ---
 
-## Versioning
+## Adding a Tool
 
-Each embodiment is pinned to a specific version (git tag) in `backend/configs/embodiment_library.json`. On startup, Chalie compares the installed version against the pinned version and downloads the correct release if they differ.
+Create a directory under `backend/tools/` with:
 
-Versions are updated in `embodiment_library.json` as part of Chalie releases — users do not manage embodiment versions manually.
+- `runner.py` — Subprocess entry point (base64 JSON in, JSON out)
+- `handler.py` — Core execution logic (`execute()` function)
+- `manifest.json` — Capability metadata (name, description, trigger, parameters, returns)
+- `requirements.txt` — Python dependencies (optional)
 
-## Adding an Embodiment
-
-Add an entry to `backend/configs/embodiment_library.json`:
-
-```json
-{
-  "name": "my_tool",
-  "title": "My Tool",
-  "icon": "fa-star",
-  "repo": "chalie-ai/chalie-tool-my-tool",
-  "summary": "One-line description",
-  "trigger": "on_demand",
-  "version": "v1.0.0"
-}
-```
-
-Requirements:
-- Must have a `runner.py` (subprocess entry point)
-- Must have a `manifest.json` with valid `name`, `description`, `trigger`, `parameters`, `returns`
-- Must be hosted on GitHub with a tagged release matching the `version` field
+The tool will be auto-discovered by `ToolRegistryService` on startup.

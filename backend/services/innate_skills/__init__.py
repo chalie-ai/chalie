@@ -23,7 +23,6 @@ from services.innate_skills.scheduler_skill import handle_scheduler
 from services.innate_skills.autobiography_skill import handle_autobiography
 from services.innate_skills.focus_skill import handle_focus
 from services.innate_skills.list_skill import handle_list
-from services.innate_skills.moment_skill import handle_moment
 from services.innate_skills.persistent_task_skill import handle_persistent_task
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
@@ -41,7 +40,6 @@ _SKILL_HANDLERS = {
     'autobiography': handle_autobiography,
     'focus': handle_focus,
     'list': handle_list,
-    'moment': handle_moment,
     'persistent_task': handle_persistent_task,
     'document': handle_document,
     'read': handle_read,
@@ -72,7 +70,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["autobiography"] = lambda topic, action: handle_autobiography(topic, action)
     dispatcher.handlers["focus"] = lambda topic, action: handle_focus(topic, action)
     dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)
-    dispatcher.handlers["moment"] = lambda topic, action: handle_moment(topic, action)
     dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
     dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)

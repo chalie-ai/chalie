@@ -41,15 +41,12 @@ class TestSkillRegistry:
             register_innate_skills(mock_dispatcher)
 
         # Exclude backward-compatibility aliases
-        aliases = {'memory_query', 'memory_write', 'world_state_read', 'internal_reasoning', 'semantic_query'}
+        aliases = {'memory_query', 'memory_write', 'world_state_read', 'internal_reasoning', 'semantic_query', 'notes'}
         registered = set(mock_dispatcher.handlers.keys()) - aliases
         assert registered == ALL_SKILL_NAMES
 
     def test_cognitive_primitives_subset_of_all(self):
         assert COGNITIVE_PRIMITIVES < ALL_SKILL_NAMES
-
-    def test_planning_skills_excludes_internal(self):
-        assert 'moment' not in PLANNING_SKILLS
 
     def test_contextual_plus_primitives_equals_planning(self):
         assert CONTEXTUAL_SKILLS | COGNITIVE_PRIMITIVES == PLANNING_SKILLS
