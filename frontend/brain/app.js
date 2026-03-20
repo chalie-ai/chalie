@@ -117,9 +117,9 @@ async function resolveApiKey() {
             window.location.replace('/on-boarding/');
             return;
         }
-        // No session — show the dashboard login modal
+        // No session — redirect to main interface for login
         if (!data.has_session) {
-            showLoginModal();
+            window.location.replace('/?next=/brain/');
             return;
         }
         // Logged in — load dashboard regardless of provider state
@@ -129,44 +129,6 @@ async function resolveApiKey() {
     }
 }
 
-function showLoginModal() {
-    document.getElementById('loginModal').classList.remove('hidden');
-}
-
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const username = document.getElementById('loginUsername').value.trim();
-    const password = document.getElementById('loginPassword').value.trim();
-    if (!username || !password) {
-        showToast('Username and password required', 'error');
-        return;
-    }
-    const btn = e.target.querySelector('button[type="submit"]');
-    btn.disabled = true;
-    btn.textContent = 'Logging in...';
-    try {
-        const res = await fetch('/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ username, password }),
-        });
-        if (res.ok) {
-            // Reload the page so resolveApiKey() runs fresh with the session cookie committed
-            window.location.replace('/brain/');
-        } else if (res.status === 401) {
-            showToast('Invalid credentials', 'error');
-        } else {
-            const err = await res.json().catch(() => ({}));
-            showToast(err.error || 'Login failed', 'error');
-        }
-    } catch {
-        showToast('Network error', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Login';
-    }
-});
 
 async function loadData() {
     try {
@@ -175,8 +137,8 @@ async function loadData() {
             const data = await res.json();
             providers = data.providers || [];
         } else if (res.status === 401) {
-            // Session expired — show login modal
-            showLoginModal();
+            // Session expired — redirect to login
+            window.location.replace('/?next=/brain/');
             return;
         } else {
             showToast('Failed to load providers', 'error');

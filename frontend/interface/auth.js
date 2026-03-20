@@ -90,6 +90,12 @@ export class Auth {
           if (res.ok) {
             dialog.close();
             resolve();
+            // Check for ?next= redirect (e.g. brain dashboard sent us here)
+            const nextUrl = new URLSearchParams(window.location.search).get('next');
+            if (nextUrl && nextUrl.startsWith('/')) {
+              window.location.replace(nextUrl);
+              return;
+            }
             // Reload the page — the first checkSession() returned early (before any _initXxx()
             // calls) so the app shell was never wired up. A clean reload is more reliable than
             // trying to re-bootstrap in-place with leftover timers and partial state.

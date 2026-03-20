@@ -376,11 +376,11 @@ def patch_meta(interface_id: str):
 
 @gateway_bp.route("/gw/<interface_id>/render", methods=["GET"])
 def proxy_render(interface_id: str):
-    """Proxy the daemon's renderInterface() HTML so the browser doesn't
-    need direct access to the daemon's port.
+    """Proxy the daemon's renderInterface() output.
 
-    Injects a global CHALIE_GW_BASE variable so the daemon's UI code can
-    call gateway routes (execute, signals, etc.) without knowing its own ID.
+    SDK v2 daemons return JSON blocks (Content-Type: application/json).
+    Legacy SDK v1 daemons return HTML (Content-Type: text/html).
+    The gateway detects the response type and handles each accordingly.
     """
     iface, err = _get_interface(interface_id)
     if err:
@@ -390,16 +390,22 @@ def proxy_render(interface_id: str):
             f"http://{iface['host']}:{iface['port']}/",
             timeout=_DISCOVER_TIMEOUT,
         )
-        if resp.ok:
-            # Inject the gateway base path so the SDK's client-side helper
-            # (window.chalie) routes requests through the gateway proxy.
-            # The SDK script checks for CHALIE_GW_BASE before falling back
-            # to the path baked in at daemon startup.
-            gw_base = f"/gw/{interface_id}"
+        if not resp.ok:
+            return jsonify({"error": f"Daemon returned {resp.status_code}"}), 502
+
+        content_type = resp.headers.get("Content-Type", "")
+        gw_base = f"/gw/{interface_id}"
+
+        if "application/json" in content_type:
+            # SDK v2: blocks response — inject gateway path for action wiring
+            data = resp.json()
+            data["gateway"] = gw_base
+            return jsonify(data), 200
+        else:
+            # SDK v1 legacy: raw HTML — inject CHALIE_GW_BASE global
             script = f'<script>window.CHALIE_GW_BASE="{gw_base}";</script>'
             html = script + resp.text
             return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-        return jsonify({"error": f"Daemon returned {resp.status_code}"}), 502
     except Exception as e:
         return jsonify({"error": f"Daemon unreachable: {e}"}), 502
 

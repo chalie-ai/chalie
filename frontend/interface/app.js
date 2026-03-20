@@ -9,6 +9,7 @@ import { VoiceIO } from './voice.js';
 import { ClientHeartbeat } from './heartbeat.js';
 import { AmbientSensor } from './ambient.js';
 import { MomentSearch } from './moment_search.js';
+import { BlockRenderer } from './blocks.js';
 
 // Safe localStorage wrapper — private browsing on iOS Safari / Firefox throws SecurityError.
 function _lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
@@ -45,6 +46,9 @@ class ChalieApp {
     this._pendingImageAnalysis = new Map();
 
     this._momentSearch = null;
+    this._blockRenderer = new BlockRenderer();
+    this._overlayPollTimers = [];  // interval IDs for container polling
+    this._overlayGateway = null;   // gateway base path for current overlay
 
     // Web Audio context (unlocked on first user gesture)
     this._audioCtx = null;
@@ -510,9 +514,28 @@ class ChalieApp {
 
     try {
       const resp = await fetch(`/gw/${app.id}/render`);
-      if (resp.ok) {
+      if (!resp.ok) {
+        content.textContent = '';
+        const errP = document.createElement('p');
+        errP.style.color = 'var(--text-secondary)';
+        errP.textContent = 'Could not load app interface.';
+        content.appendChild(errP);
+        return;
+      }
+
+      const ct = resp.headers.get('Content-Type') || '';
+      if (ct.includes('application/json')) {
+        // SDK v2: blocks response
+        const data = await resp.json();
+        this._overlayGateway = data.gateway || `/gw/${app.id}`;
+        content.textContent = '';
+        const fragment = this._blockRenderer.render(data.blocks || []);
+        content.appendChild(fragment);
+        this._wireOverlayActions(content);
+        this._startOverlayPolling(content);
+      } else {
+        // SDK v1 legacy: raw HTML
         const html = await resp.text();
-        // Daemon-rendered HTML injected via innerHTML — trusted gateway content
         content.innerHTML = html;
         content.querySelectorAll('script').forEach(old => {
           const s = document.createElement('script');
@@ -521,12 +544,6 @@ class ChalieApp {
           old.replaceWith(s);
         });
         if (window.lucide) lucide.createIcons({ node: content });
-      } else {
-        content.textContent = '';
-        const errP = document.createElement('p');
-        errP.style.color = 'var(--text-secondary)';
-        errP.textContent = 'Could not load app interface.';
-        content.appendChild(errP);
       }
     } catch (_) {
       content.textContent = '';
@@ -538,8 +555,137 @@ class ChalieApp {
   }
 
   _closeAppOverlay() {
+    // Clear polling timers
+    for (const id of this._overlayPollTimers) clearInterval(id);
+    this._overlayPollTimers = [];
+    this._overlayGateway = null;
+
     document.getElementById('appOverlay')?.classList.add('hidden');
-    document.getElementById('appOverlayContent').innerHTML = '';
+    const content = document.getElementById('appOverlayContent');
+    if (content) content.textContent = '';
+  }
+
+  /**
+   * Wire execute buttons inside the app overlay.
+   * Buttons with data-execute call the daemon capability via gateway,
+   * optionally collecting form values and rendering response into a target container.
+   */
+  _wireOverlayActions(root) {
+    root.querySelectorAll('[data-execute]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+
+        const capability = btn.dataset.execute;
+        const collectId = btn.dataset.collect;
+        const targetId = btn.dataset.target;
+        const wantsUrl = btn.dataset.openUrl === 'true';
+        let params = {};
+
+        // Collect form values if specified
+        if (collectId) {
+          params = this._collectOverlayFormValues(collectId);
+        }
+
+        // Merge static payload if present
+        if (btn.dataset.payload) {
+          try { Object.assign(params, JSON.parse(btn.dataset.payload)); } catch (_) {}
+        }
+
+        try {
+          const resp = await fetch(`${this._overlayGateway}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ capability, params }),
+          });
+          const data = await resp.json();
+
+          // Open external URL if requested
+          if (wantsUrl && data.openUrl) {
+            window.open(data.openUrl, '_blank');
+          }
+
+          // Render response blocks into target container
+          if (targetId && data.blocks) {
+            const target = root.querySelector(`[data-container-id="${targetId}"]`);
+            if (target) {
+              target.textContent = '';
+              target.appendChild(this._blockRenderer.render(data.blocks));
+              this._wireOverlayActions(target);
+            }
+          } else if (!targetId && data.blocks) {
+            // No target — replace entire overlay content
+            root.textContent = '';
+            root.appendChild(this._blockRenderer.render(data.blocks));
+            this._wireOverlayActions(root);
+            this._startOverlayPolling(root);
+          }
+        } catch (e) {
+          console.error('Execute failed:', e);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  /**
+   * Start polling for containers with data-poll-capability.
+   */
+  _startOverlayPolling(root) {
+    root.querySelectorAll('[data-poll-capability]').forEach(container => {
+      const capability = container.dataset.pollCapability;
+      const interval = parseInt(container.dataset.pollInterval, 10) || 5000;
+      let params = {};
+      if (container.dataset.pollParams) {
+        try { params = JSON.parse(container.dataset.pollParams); } catch (_) {}
+      }
+
+      const timerId = setInterval(async () => {
+        try {
+          const resp = await fetch(`${this._overlayGateway}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ capability, params }),
+          });
+          const data = await resp.json();
+          if (data.blocks) {
+            container.textContent = '';
+            container.appendChild(this._blockRenderer.render(data.blocks));
+            this._wireOverlayActions(container);
+          }
+          // Stop polling if response says so
+          if (data.stopPolling) {
+            clearInterval(timerId);
+            this._overlayPollTimers = this._overlayPollTimers.filter(id => id !== timerId);
+          }
+        } catch (_) {}
+      }, interval);
+
+      this._overlayPollTimers.push(timerId);
+    });
+  }
+
+  /**
+   * Collect all form field values from a form block.
+   */
+  _collectOverlayFormValues(formId) {
+    const form = document.querySelector(`[data-form-id="${formId}"]`);
+    if (!form) return {};
+
+    const values = {};
+    form.querySelectorAll('[data-form-field]').forEach(field => {
+      const name = field.dataset.name;
+      if (!name) return;
+
+      if (field.tagName === 'INPUT' || field.tagName === 'SELECT') {
+        values[name] = field.value;
+      } else if (field.dataset.value !== undefined) {
+        // Toggle buttons store value in dataset
+        values[name] = field.dataset.value === 'true';
+      }
+    });
+    return values;
   }
 
   async _openAppDetail(appId) {

@@ -88,6 +88,17 @@ export class BlockRenderer {
       case 'divider':   return this._renderDivider();
       case 'actions':   return this._renderActions(block);
       case 'carousel':  return this._renderCarousel(block);
+      case 'columns':   return this._renderColumns(block);
+      case 'section':   return this._renderSection(block);
+      case 'tabs':      return this._renderTabs(block);
+      case 'container': return this._renderContainer(block);
+      case 'input':     return this._renderInput(block);
+      case 'select':    return this._renderSelect(block);
+      case 'toggle':    return this._renderToggle(block);
+      case 'form':      return this._renderForm(block);
+      case 'badge':     return this._renderBadge(block);
+      case 'alert':     return this._renderAlert(block);
+      case 'loading':   return this._renderLoading(block);
       default:          return this._renderUnknown(block);
     }
   }
@@ -308,8 +319,9 @@ export class BlockRenderer {
   }
 
   /**
-   * actions block — one-time-use action buttons.
-   * { type: "actions", buttons: [{ label: "Yes", skill: "memorize", payload: {...} }] }
+   * actions block — action buttons.
+   * Chat actions: { label, skill, payload } — one-time use, dispatches chalie:action
+   * Interface actions: { label, execute, collect?, target?, openUrl?, style? } — daemon capability calls
    */
   _renderActions(block) {
     if (!Array.isArray(block.buttons) || block.buttons.length === 0) return null;
@@ -324,19 +336,32 @@ export class BlockRenderer {
 
       const button = document.createElement('button');
       button.className = 'block-action-btn';
+      if (btn.style === 'secondary') button.classList.add('block-action-btn--secondary');
+      if (btn.style === 'danger') button.classList.add('block-action-btn--danger');
       button.textContent = label;
 
-      button.addEventListener('click', () => {
-        // Disable ALL buttons in this actions block (one-time use)
-        for (const b of container.querySelectorAll('.block-action-btn')) {
-          b.disabled = true;
-        }
-        button.classList.add('block-action-btn--selected');
+      // Interface daemon action: execute a capability via gateway
+      if (btn.execute) {
+        button.dataset.execute = btn.execute;
+        if (btn.collect) button.dataset.collect = btn.collect;
+        if (btn.target) button.dataset.target = btn.target;
+        if (btn.openUrl) button.dataset.openUrl = 'true';
+        if (btn.payload) button.dataset.payload = JSON.stringify(btn.payload);
+        // Click handling is wired by the overlay host (apps_panel / app.js),
+        // not here — the block renderer has no gateway context.
+      } else {
+        // Chat action: one-time use, dispatches chalie:action
+        button.addEventListener('click', () => {
+          for (const b of container.querySelectorAll('.block-action-btn')) {
+            b.disabled = true;
+          }
+          button.classList.add('block-action-btn--selected');
 
-        document.dispatchEvent(new CustomEvent('chalie:action', {
-          detail: { payload: btn.payload ?? null },
-        }));
-      });
+          document.dispatchEvent(new CustomEvent('chalie:action', {
+            detail: { payload: btn.payload ?? null },
+          }));
+        });
+      }
 
       container.appendChild(button);
     }
@@ -433,6 +458,289 @@ export class BlockRenderer {
 
     return carousel;
   }
+
+  // ---------------------------------------------------------------------------
+  // Interface block renderers (P5 — layout, form, feedback)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * columns block — CSS Grid multi-column layout.
+   * { type: "columns", columns: [{ width: "1fr", blocks: [...] }, ...] }
+   */
+  _renderColumns(block) {
+    if (!Array.isArray(block.columns) || block.columns.length === 0) return null;
+
+    const grid = document.createElement('div');
+    grid.className = 'block-columns';
+    grid.style.gridTemplateColumns = block.columns
+      .map(c => c.width || '1fr')
+      .join(' ');
+
+    for (const col of block.columns) {
+      const cell = document.createElement('div');
+      cell.className = 'block-columns__col';
+      if (Array.isArray(col.blocks)) {
+        cell.appendChild(this.render(col.blocks));
+      }
+      grid.appendChild(cell);
+    }
+
+    return grid;
+  }
+
+  /**
+   * section block — grouped content with optional title and collapsibility.
+   * { type: "section", title?: "...", collapsible?: false, blocks: [...] }
+   */
+  _renderSection(block) {
+    if (!Array.isArray(block.blocks)) return null;
+
+    if (block.collapsible) {
+      const details = document.createElement('details');
+      details.className = 'block-section';
+      details.open = true;
+      if (block.title) {
+        const summary = document.createElement('summary');
+        summary.className = 'block-section__title';
+        summary.textContent = block.title;
+        details.appendChild(summary);
+      }
+      const body = document.createElement('div');
+      body.className = 'block-section__body';
+      body.appendChild(this.render(block.blocks));
+      details.appendChild(body);
+      return details;
+    }
+
+    const div = document.createElement('div');
+    div.className = 'block-section';
+    if (block.title) {
+      const h = document.createElement('div');
+      h.className = 'block-section__title';
+      h.textContent = block.title;
+      div.appendChild(h);
+    }
+    const body = document.createElement('div');
+    body.className = 'block-section__body';
+    body.appendChild(this.render(block.blocks));
+    div.appendChild(body);
+    return div;
+  }
+
+  /**
+   * tabs block — tabbed panels.
+   * { type: "tabs", tabs: [{ label: "Tab 1", blocks: [...] }, ...] }
+   */
+  _renderTabs(block) {
+    if (!Array.isArray(block.tabs) || block.tabs.length === 0) return null;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'block-tabs';
+
+    const bar = document.createElement('div');
+    bar.className = 'block-tabs__bar';
+
+    const panels = [];
+    const buttons = [];
+
+    for (let i = 0; i < block.tabs.length; i++) {
+      const tab = block.tabs[i];
+      const btn = document.createElement('button');
+      btn.className = 'block-tabs__btn' + (i === 0 ? ' block-tabs__btn--active' : '');
+      btn.textContent = tab.label || `Tab ${i + 1}`;
+      btn.dataset.tabIndex = i;
+      bar.appendChild(btn);
+      buttons.push(btn);
+
+      const panel = document.createElement('div');
+      panel.className = 'block-tabs__panel';
+      if (i !== 0) panel.style.display = 'none';
+      if (Array.isArray(tab.blocks)) {
+        panel.appendChild(this.render(tab.blocks));
+      }
+      panels.push(panel);
+    }
+
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-tab-index]');
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.tabIndex, 10);
+      if (isNaN(idx)) return;
+      for (let i = 0; i < panels.length; i++) {
+        panels[i].style.display = i === idx ? '' : 'none';
+        buttons[i].classList.toggle('block-tabs__btn--active', i === idx);
+      }
+    });
+
+    wrapper.appendChild(bar);
+    for (const p of panels) wrapper.appendChild(p);
+    return wrapper;
+  }
+
+  /**
+   * container block — named container for dynamic content replacement.
+   * { type: "container", id: "...", blocks: [...], poll?: { capability, interval, params } }
+   */
+  _renderContainer(block) {
+    const div = document.createElement('div');
+    div.className = 'block-container';
+    if (block.id) div.dataset.containerId = block.id;
+
+    if (block.poll && typeof block.poll === 'object') {
+      if (block.poll.capability) div.dataset.pollCapability = block.poll.capability;
+      if (block.poll.interval) div.dataset.pollInterval = block.poll.interval;
+      if (block.poll.params) div.dataset.pollParams = JSON.stringify(block.poll.params);
+    }
+
+    if (Array.isArray(block.blocks)) {
+      div.appendChild(this.render(block.blocks));
+    }
+    return div;
+  }
+
+  /**
+   * input block — text input field.
+   * { type: "input", name: "...", placeholder?: "...", value?: "...", inputType?: "text" }
+   */
+  _renderInput(block) {
+    const name = block.name;
+    if (typeof name !== 'string' || !name) return null;
+
+    const input = document.createElement('input');
+    input.className = 'block-input';
+    input.type = block.inputType || 'text';
+    input.dataset.name = name;
+    input.dataset.formField = '';
+    if (block.placeholder) input.placeholder = block.placeholder;
+    if (block.value != null) input.value = block.value;
+    return input;
+  }
+
+  /**
+   * select block — dropdown select.
+   * { type: "select", name: "...", options: [{ label, value }], value?: "..." }
+   */
+  _renderSelect(block) {
+    const name = block.name;
+    if (typeof name !== 'string' || !name) return null;
+    if (!Array.isArray(block.options)) return null;
+
+    const select = document.createElement('select');
+    select.className = 'block-select';
+    select.dataset.name = name;
+    select.dataset.formField = '';
+
+    for (const opt of block.options) {
+      if (!opt || typeof opt !== 'object') continue;
+      const option = document.createElement('option');
+      option.value = opt.value ?? '';
+      option.textContent = opt.label || opt.value || '';
+      if (block.value != null && String(opt.value) === String(block.value)) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    }
+
+    return select;
+  }
+
+  /**
+   * toggle block — on/off switch.
+   * { type: "toggle", name: "...", label: "...", value?: false }
+   */
+  _renderToggle(block) {
+    const name = block.name;
+    if (typeof name !== 'string' || !name) return null;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'block-toggle';
+
+    const btn = document.createElement('button');
+    btn.className = 'block-toggle__switch' + (block.value ? ' on' : '');
+    btn.dataset.name = name;
+    btn.dataset.formField = '';
+    btn.dataset.value = block.value ? 'true' : 'false';
+    btn.addEventListener('click', () => {
+      const isOn = btn.classList.toggle('on');
+      btn.dataset.value = isOn ? 'true' : 'false';
+    });
+
+    const label = document.createElement('span');
+    label.className = 'block-toggle__label';
+    label.textContent = block.label || name;
+
+    wrapper.appendChild(btn);
+    wrapper.appendChild(label);
+    return wrapper;
+  }
+
+  /**
+   * form block — groups input/select/toggle fields for collection.
+   * { type: "form", id: "...", blocks: [...] }
+   */
+  _renderForm(block) {
+    if (!block.id || !Array.isArray(block.blocks)) return null;
+
+    const div = document.createElement('div');
+    div.className = 'block-form';
+    div.dataset.formId = block.id;
+    div.appendChild(this.render(block.blocks));
+    return div;
+  }
+
+  /**
+   * badge block — inline status label.
+   * { type: "badge", text: "...", variant?: "info"|"success"|"warning"|"error" }
+   */
+  _renderBadge(block) {
+    if (typeof block.text !== 'string' || !block.text) return null;
+
+    const span = document.createElement('span');
+    span.className = 'block-badge';
+    if (block.variant) span.classList.add(`block-badge--${block.variant}`);
+    span.textContent = block.text;
+    return span;
+  }
+
+  /**
+   * alert block — message banner with variant.
+   * { type: "alert", message: "...", variant?: "info"|"success"|"warning"|"error" }
+   */
+  _renderAlert(block) {
+    if (typeof block.message !== 'string' || !block.message) return null;
+
+    const div = document.createElement('div');
+    div.className = 'block-alert';
+    if (block.variant) div.classList.add(`block-alert--${block.variant}`);
+    div.textContent = block.message;
+    return div;
+  }
+
+  /**
+   * loading block — spinner with optional label.
+   * { type: "loading", label?: "..." }
+   */
+  _renderLoading(block) {
+    const div = document.createElement('div');
+    div.className = 'block-loading';
+
+    const spinner = document.createElement('div');
+    spinner.className = 'block-loading__spinner';
+    div.appendChild(spinner);
+
+    if (block.label) {
+      const label = document.createElement('span');
+      label.className = 'block-loading__label';
+      label.textContent = block.label;
+      div.appendChild(label);
+    }
+
+    return div;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fallback
+  // ---------------------------------------------------------------------------
 
   /**
    * Unknown block type — render fallback text if present, otherwise skip.
