@@ -77,7 +77,7 @@ class ContextAssemblyService:
 
         # Use thread_id for working memory if available
         wm_identifier = thread_id if thread_id else topic
-        sections['working_memory'] = self._get_working_memory(wm_identifier)
+        sections['working_memory'] = self._get_working_memory(wm_identifier, topic)
         sections['moments'] = self._get_moments(prompt)
         sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding)
         sections['procedural'] = self._get_procedural_hints(topic)
@@ -114,11 +114,81 @@ class ContextAssemblyService:
 
         return sections
 
-    def _get_working_memory(self, identifier: str) -> str:
-        """Retrieve working memory context for a thread or topic.
+    def _get_working_memory(self, identifier: str, topic: str = None) -> str:
+        """Retrieve working memory from compaction + transcript.
+
+        Uses stored compaction (summarized older turns) plus recent transcript
+        entries since the compaction watermark. Falls back to legacy MemoryStore
+        FIFO when no transcript data exists yet.
 
         Args:
-            identifier: Thread ID or topic string used to scope the working memory lookup.
+            identifier: Thread ID or topic string (used for legacy fallback).
+            topic: Conversation topic for transcript/compaction lookup.
+
+        Returns:
+            Formatted working memory string, or empty string on error.
+        """
+        effective_topic = topic or identifier
+
+        try:
+            from services import compaction_service, transcript_service
+            from services.llm_service import estimate_tokens
+
+            compaction = compaction_service.get_compaction(effective_topic)
+            watermark = compaction['compacted_up_to_id'] if compaction else 0
+
+            entries = transcript_service.get_recent(
+                effective_topic, limit=50, since_id=watermark,
+            )
+
+            if not compaction and not entries:
+                return self._get_working_memory_legacy(identifier)
+
+            parts = []
+
+            if compaction and compaction.get('compacted_text'):
+                parts.append(
+                    f"## Conversation History Summary\n{compaction['compacted_text']}"
+                )
+
+            if entries:
+                turn_budget = self.max_context_tokens // 2
+                turn_lines = ["## Recent Conversation"]
+                used_tokens = 0
+
+                selected = []
+                for entry in reversed(entries):
+                    content = entry.get('content', '')
+                    entry_tokens = estimate_tokens(content)
+                    if used_tokens + entry_tokens > turn_budget:
+                        break
+                    selected.append(entry)
+                    used_tokens += entry_tokens
+
+                selected.reverse()
+                for entry in selected:
+                    role = entry.get('role', 'unknown').capitalize()
+                    content = entry.get('content', '')
+                    tool_name = entry.get('tool_name')
+                    if tool_name:
+                        turn_lines.append(f"{role} ({tool_name}): {content}")
+                    else:
+                        turn_lines.append(f"{role}: {content}")
+
+                if len(turn_lines) > 1:
+                    parts.append("\n".join(turn_lines))
+
+            return "\n\n".join(parts) if parts else ""
+
+        except Exception as e:
+            logging.debug(f"[CONTEXT] Transcript-based working memory failed, using legacy: {e}")
+            return self._get_working_memory_legacy(identifier)
+
+    def _get_working_memory_legacy(self, identifier: str) -> str:
+        """Legacy working memory from MemoryStore FIFO buffer.
+
+        Args:
+            identifier: Thread ID or topic string.
 
         Returns:
             Formatted working memory string, or empty string on error.

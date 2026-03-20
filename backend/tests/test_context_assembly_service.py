@@ -77,7 +77,7 @@ class TestContextAssemblyService:
 
             svc.assemble(prompt='hi', topic='t', thread_id='thread-123')
 
-        mock_wm.assert_called_once_with('thread-123')
+        mock_wm.assert_called_once_with('thread-123', 't')
 
     def test_working_memory_falls_back_to_topic_without_thread_id(self):
         """Without thread_id, topic should be used as the identifier."""
@@ -91,7 +91,7 @@ class TestContextAssemblyService:
 
             svc.assemble(prompt='hi', topic='my-topic')
 
-        mock_wm.assert_called_once_with('my-topic')
+        mock_wm.assert_called_once_with('my-topic', 'my-topic')
 
     # ── Episodes ──────────────────────────────────────────────────────
 
