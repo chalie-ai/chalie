@@ -85,7 +85,9 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from 6 memory layers (working memory, moments, facts, gists, episodes, procedural, concepts) with weighted budget allocation; procedural hints surface learned action reliability (≥8 attempts, top 3, confidence labels)
+- **`context_assembly_service.py`** — Unified retrieval from multiple memory layers (transcript + compaction, moments, episodes, procedural, concepts) with weighted budget allocation; working memory now reads from compaction summary + budget-constrained recent transcript entries instead of fixed-size MemoryStore FIFO
+- **`transcript_service.py`** — Persistent, topic-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning
+- **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `topic_compactions`
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
 - **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
 - **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, relationship, physical, preference, communication_style, micro_preference, behavioral_pattern)
@@ -181,7 +183,7 @@ frontend/
 - **`read_skill.py`** — Fetch and read web page content for information gathering and research
 - **`reflect_skill.py`** — On-demand experiential synthesis via lightweight LLM call; retrieves ACT loop outcomes, episodes, concepts, and strategy patterns, then synthesizes into actionable insight (what worked, what didn't, patterns noticed, connections formed); optionally stores as gist
 - **`find_tools_skill.py`** — Discover registered tools via semantic search against tool capability profiles
-- **`notes_skill.py`** — Query working notes from this session for on-demand retrieval of older action history
+- **`notes_skill.py`** — Search past conversation transcript for on-demand retrieval of older context (renamed to `transcript` skill; `notes` alias preserved for backward compat)
 
 ## Worker Processes (`backend/workers/`)
 
@@ -273,7 +275,9 @@ frontend/
 - Focused scope prevents elaboration and improves consistency
 
 ### Memory Hierarchy
-- **Working Memory** (MemoryStore, 4 turns, 24h TTL) — Current conversation
+- **Topic Transcript** (SQLite + sqlite-vec) — Persistent, append-only conversation record per topic; budget-aware filling replaces fixed turn limits
+- **Compaction** (SQLite) — Incremental LLM summarization of older transcript entries; preserves facts/decisions/preferences, discards conversation flow
+- **Working Memory** (MemoryStore, legacy fallback) — FIFO buffer used only when no transcript data exists yet
 - **Gists** (MemoryStore, 30min TTL) — Compressed exchange summaries
 - **Facts** (MemoryStore, 24h TTL) — Atomic key-value assertions
 - **Episodes** (SQLite + sqlite-vec) — Narrative units with decay
@@ -282,7 +286,7 @@ frontend/
 - **User Traits** (SQLite) — Personal facts with category-specific decay (includes behavioral patterns from temporal mining)
 - **Lists** (SQLite) — Deterministic ground-truth state (shopping, to-do, chores); perfect recall, no decay, full event history
 
-Each layer optimized for its timescale; all integrated via context assembly. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
+Each layer optimized for its timescale; all integrated via context assembly. Context assembly reads compaction summary + budget-constrained recent transcript entries for working memory context. Lists are injected into all prompts as `{{active_lists}}` for passive awareness; the ACT loop uses the `list` skill for mutations.
 
 ### Configuration Precedence
 ```

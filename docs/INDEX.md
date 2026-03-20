@@ -164,12 +164,13 @@ Mode is selected by a fast mathematical router (~5ms) based on observable signal
 
 ### Memory Hierarchy
 Information flows through multiple layers with different timescales:
-1. **Working Memory** (4 turns, 24h) → Current conversation
-2. **Gists** (30min) → Compressed exchange summaries
-3. **Facts** (24h) → Atomic assertions
-4. **Episodes** (permanent, decaying) → Narrative memories
-5. **Concepts** (permanent, decaying) → Knowledge graph
-6. **Lists** (permanent, no decay) → Deterministic ground-truth state (shopping, to-do, chores)
+1. **Topic Transcript** (persistent, append-only) → Full conversation record per topic
+2. **Compaction** (persistent) → Incremental LLM summary of older transcript entries
+3. **Gists** (30min) → Compressed exchange summaries
+4. **Facts** (24h) → Atomic assertions
+5. **Episodes** (permanent, decaying) → Narrative memories
+6. **Concepts** (permanent, decaying) → Knowledge graph
+7. **Lists** (permanent, no decay) → Deterministic ground-truth state (shopping, to-do, chores)
 
 ### Autonomy
 Chalie can generate spontaneous thoughts during idle periods via the Cognitive Drift Engine (Default Mode Network). Thoughts go through three gates (quality, timing, engagement) before being sent to users.

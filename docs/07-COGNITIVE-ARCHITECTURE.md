@@ -119,7 +119,7 @@ User Input → Topic Classifier (embedding-based)
 ### Step 2: Context Assembly (same as before)
 ```
 Classification Result → Load Context:
-  - Working memory (12 turns), world state
+  - Transcript context (compaction + recent entries, budget-aware), world state
   - Episodes + concepts (vector similarity)
   - User traits (semantic retrieval)
   - Calculate context_warmth (0.0-1.0)
