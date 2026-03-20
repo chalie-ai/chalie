@@ -322,23 +322,16 @@ class ACTOrchestrator:
 
             actions = response_data.get('actions', [])
 
-            # ── Narration gate (iteration 0 only) + emission ─────────────
-            if act_loop.iteration_number == 0:
-                # Native tool calling: text alongside tool_use blocks = narration
-                if response_data.get('tool_calls') and response_data.get('narration'):
-                    self._narrated = True
-                else:
-                    self._narrated = bool(response_data.get('narrated', False))
-                if self._narrated:
-                    logger.info(f"{LOG_PREFIX} Narrated ACT loop enabled")
-
-            if self._narrated:
+            # ── Narration emission ─────────────────────────────────────
+            if on_narration and actions:
                 narration_text = response_data.get('narration', '')
-                logger.info(
-                    f"{LOG_PREFIX} Narration check: has_callback={on_narration is not None}, "
-                    f"has_text={bool(narration_text)}, text={narration_text[:50] if narration_text else '(none)'}"
-                )
-                if on_narration and narration_text:
+                if not narration_text:
+                    # Auto-narrate from action types (OpenAI models don't
+                    # return text alongside tool_calls)
+                    action_names = [a.get('type', '') for a in actions if a.get('type')]
+                    if action_names:
+                        narration_text = f"Using {', '.join(action_names)}..."
+                if narration_text:
                     try:
                         on_narration(narration_text, act_loop.iteration_number)
                     except Exception as e:
