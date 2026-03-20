@@ -42,7 +42,7 @@ _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --disable-voice)         _DISABLE_VOICE=true; shift ;;
-      --disable-default-tools) shift ;; # deprecated, ignored — embodiments are always installed
+      --disable-default-tools) shift ;; # deprecated, ignored — tools are bundled in the repo
       *) shift ;;
     esac
   done

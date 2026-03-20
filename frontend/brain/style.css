@@ -143,7 +143,8 @@ body::before {
     gap: 6px;
 }
 
-.btn-close {
+.modal-overlay .btn-close {
+    position: static;
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -152,9 +153,13 @@ body::before {
     padding: 4px;
     line-height: 1;
     border-radius: 4px;
+    opacity: 1;
+    box-sizing: content-box;
+    width: auto;
+    height: auto;
 }
 
-.btn-close:hover {
+.modal-overlay .btn-close:hover {
     color: var(--text-primary);
     background: rgba(255, 255, 255, 0.06);
 }
@@ -187,7 +192,10 @@ body::before {
     to   { opacity: 1; }
 }
 
-.modal {
+/* Override Bootstrap's .modal { display: none; position: fixed } */
+.modal-overlay .modal {
+    display: block;
+    position: static;
     background: #0d1120;
     border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 14px;
@@ -198,44 +206,50 @@ body::before {
     overflow-y: auto;
     animation: slideUp 0.2s ease;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(138, 92, 255, 0.08);
+    height: auto;
+    inset: unset;
+    z-index: unset;
+    outline: unset;
 }
 
-.modal.modal-sm { max-width: 420px; }
-.modal.modal-lg { max-width: 700px; max-height: 80vh; overflow-y: auto; }
+.modal-overlay .modal-sm { max-width: 420px; }
+.modal-overlay .modal-lg { max-width: 700px; min-height: 200px; max-height: 80vh; overflow-y: auto; }
 
 @keyframes slideUp {
     from { transform: translateY(16px); opacity: 0; }
     to   { transform: translateY(0);    opacity: 1; }
 }
 
-.modal-header {
+.modal-overlay .modal-header {
     margin-bottom: 20px;
+    padding: 0;
+    border: none;
 }
 
-.modal-header h2 {
+.modal-overlay .modal-header h2 {
     font-size: 18px;
     font-weight: 600;
 }
 
-.modal-header p {
+.modal-overlay .modal-header p {
     color: var(--text-secondary);
     font-size: 13px;
     margin-top: 4px;
 }
 
-.modal-title-row {
+.modal-overlay .modal-title-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
 }
 
-.modal-body {
+.modal-overlay .modal-body {
     padding: 16px 0;
     max-height: 50vh;
     overflow-y: auto;
 }
 
-.modal-actions {
+.modal-overlay .modal-actions {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
@@ -808,106 +822,6 @@ body::before {
     border-color: rgba(138, 92, 255, 0.30);
     color: var(--accent-hover);
 }
-
-/* =====================================================
-   Embodiment — Collapsible item list
-   ===================================================== */
-
-.embodiment-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.embodiment-item {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    transition: border-color 220ms ease;
-}
-
-.embodiment-item:hover { border-color: var(--accent-primary); }
-
-.embodiment-item__header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 20px;
-    cursor: pointer;
-    user-select: none;
-}
-
-.embodiment-item__icon { font-size: 20px; width: 32px; text-align: center; flex-shrink: 0; line-height: 1; }
-.embodiment-item__icon img { width: 20px; height: 20px; object-fit: contain; }
-.embodiment-item__name { font-weight: 600; font-size: 14px; flex: 1; }
-.embodiment-item__version { font-size: 11px; color: var(--text-secondary); font-family: monospace; letter-spacing: 0.2px; }
-
-.embodiment-item__dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-.embodiment-item__dot.--active   { background: var(--success); }
-.embodiment-item__dot.--error    { background: var(--error); }
-.embodiment-item__dot.--disabled { background: var(--text-secondary); opacity: 0.5; }
-.embodiment-item__dot.--building { background: var(--accent-primary); animation: pulse 1.5s infinite; }
-
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-.embodiment-item__chevron {
-    color: var(--text-secondary);
-    font-size: 12px;
-    transition: transform 200ms;
-    flex-shrink: 0;
-}
-.embodiment-item.--expanded .embodiment-item__chevron { transform: rotate(90deg); }
-
-.embodiment-item__body {
-    display: none;
-    padding: 0 20px 16px 64px;
-}
-.embodiment-item.--expanded .embodiment-item__body { display: block; }
-
-.embodiment-item__desc {
-    font-size: 13px;
-    color: var(--text-secondary);
-    line-height: 1.6;
-    margin: 0 0 8px;
-}
-
-.embodiment-item__meta {
-    display: flex;
-    gap: 16px;
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-
-.embodiment-item__error {
-    margin-top: 8px;
-    padding: 8px 12px;
-    background: rgba(239, 68, 68, 0.08);
-    border-radius: 6px;
-    font-size: 12px;
-    color: var(--error);
-    word-break: break-word;
-}
-
-.embodiment-item__oauth {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-}
-
-.embodiment-item__oauth-status {
-    font-size: 12px;
-    flex: 1;
-}
-.embodiment-item__oauth-status.--connected { color: var(--success); }
-.embodiment-item__oauth-status.--disconnected { color: var(--text-secondary); }
 
 /* Shared small action button (used by scheduler, lists, documents) */
 .tool-card__btn {

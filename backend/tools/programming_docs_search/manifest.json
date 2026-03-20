@@ -1,0 +1,45 @@
+{
+  "name": "programming_docs_search",
+  "version": "1.0.0",
+  "description": "Look up official programming language and framework documentation. Searches the canonical documentation site and returns the relevant page content. Supports 12 languages (PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL) and 11 major frameworks (Laravel, Django, Flask, NumPy, Pandas, Node.js, React, Vue, Spring, Rails, Flutter).",
+  "documentation": "Use this tool when you need to look up a function, class, method, module, or concept in a programming language or framework's official documentation. Pass the language/framework name (or alias like 'py', 'js', 'django', 'react', 'rails') and the query. Returns extracted documentation text from the official source. Go covers all Go packages (gin, echo, etc.) via pkg.go.dev. Rust covers all crates (tokio, serde, actix) via docs.rs. C# covers ASP.NET and EF via Microsoft Learn.",
+  "icon": "fa-solid fa-book-open",
+  "trigger": {
+    "type": "on_demand",
+    "description": "When Chalie needs to look up programming language documentation"
+  },
+  "parameters": {
+    "language": {
+      "type": "string",
+      "required": true,
+      "description": "Programming language or framework name (e.g. 'python', 'django', 'flask', 'numpy', 'pandas', 'javascript', 'node', 'react', 'vue', 'php', 'laravel', 'go', 'rust', 'java', 'spring', 'ruby', 'rails', 'csharp', 'dart', 'flutter', 'c', 'cpp', 'bash', 'sql')"
+    },
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Function, class, method, module, or concept to look up (e.g. 'array_map', 'asyncio.gather', 'Vec::push', 'fmt.Println')"
+    }
+  },
+  "returns": {
+    "text": {"type": "string"},
+    "url": {"type": "string"},
+    "source": {"type": "string"}
+  },
+  "constraints": {
+    "timeout_seconds": 15
+  },
+  "output": {
+    "synthesize": false,
+    "ephemeral": true,
+    "card": {
+      "enabled": false
+    }
+  },
+  "tips": [
+    "Use when you need exact function signatures, parameter descriptions, or return types from official docs",
+    "Supports frameworks directly: django, flask, numpy, pandas, node, react, vue, laravel, spring, rails, flutter",
+    "Go ecosystem (gin, echo, fiber) covered via pkg.go.dev; Rust crates (tokio, serde) via docs.rs; C#/.NET (aspnet, ef) via Microsoft Learn",
+    "Query can be a function name (array_map), qualified name (fmt.Println), or concept (list comprehension)",
+    "Prefer this over web_search when you know the language/framework and what you're looking for"
+  ]
+}

@@ -23,7 +23,7 @@ DETERMINISTIC_ACTIONS: frozenset = frozenset({
 # ── Safe actions (can be silently corrected by critic without user
 #    confirmation — no irreversible side effects) ──────────────────────────
 SAFE_ACTIONS: frozenset = frozenset({
-    'recall', 'memorize', 'introspect', 'associate', 'autobiography', 'moment', 'reflect', 'find_tools',
+    'recall', 'memorize', 'introspect', 'associate', 'autobiography', 'reflect', 'find_tools',
 })
 
 # ── Critic-skippable reads: simple reads where the critic is skipped

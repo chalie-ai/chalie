@@ -1,0 +1,70 @@
+{
+  "name": "web_search",
+  "version": "1.0",
+  "description": "Search the web via DuckDuckGo. Privacy-focused, no API key required.",
+  "documentation": "Searches the web via DuckDuckGo and returns titles, snippets, URLs, and optional images. Use for general web queries when no domain-specific tool applies. For programming questions prefer stackexchange, for tech discussions prefer hackernews, for academic papers prefer arxiv, for news prefer news_tool, for encyclopedic knowledge prefer wikipedia. Supports time_range filtering (day/week/month/year). Pair with web_read to fetch full page content from promising results. DuckDuckGo may rate-limit on burst usage — space queries and prefer domain-specific tools to reduce pressure.",
+  "category": "research",
+  "icon": "fa-magnifying-glass",
+  "trigger": {
+    "type": "on_demand",
+    "description": "Initiated by Chalie when general web search is needed"
+  },
+
+  "parameters": {
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Search query (e.g., 'best practices for Python async', 'latest news on AI regulation')"
+    },
+    "limit": {
+      "type": "integer",
+      "required": false,
+      "default": 5,
+      "description": "Number of results to return (1-8). Capped at 8 to avoid cognitive overload."
+    },
+    "time_range": {
+      "type": "string",
+      "required": false,
+      "description": "Filter results by time: 'day', 'week', 'month', or 'year'. Omit for no filter."
+    }
+  },
+
+  "returns": {
+    "results": {
+      "type": "array",
+      "description": "List of {title, snippet, url, domain}"
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of results returned"
+    },
+    "_meta": {
+      "type": "object",
+      "description": "Observability: fetch_latency_ms, source_count, unique_domains, has_images, retry_used"
+    }
+  },
+
+  "constraints": {
+    "timeout_seconds": 15
+  },
+
+  "config_schema": {},
+
+  "tips": [
+    "Prefer stackexchange for programming/tech Q&A, hackernews for tech discussions, arxiv for papers, news_tool for news",
+    "Set time_range='day' or 'week' for recent results on fast-moving topics",
+    "Pair with web_read to fetch full content from the most relevant result",
+    "Use memorize to persist key findings as facts"
+  ],
+
+  "output": {
+    "synthesize": true,
+    "card": {
+      "enabled": true,
+      "mode": "immediate",
+      "title": "Web Search",
+      "accent_color": "#1a8fff",
+      "background_color": "rgba(26,143,255,0.06)"
+    }
+  }
+}
