@@ -320,7 +320,7 @@ class ACTOrchestrator:
                 if raw_response:
                     _messages.append({"role": "assistant", "content": raw_response})
 
-            actions = response_data.get('actions', [])
+            actions = response_data.get('actions') or []
 
             # ── Narration emission ─────────────────────────────────────
             if on_narration and actions:
