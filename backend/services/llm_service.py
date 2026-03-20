@@ -17,6 +17,17 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def estimate_tokens(text: str) -> int:
+    """Fast token estimate (~1.3 tokens per whitespace-delimited word).
+
+    Used as a fallback when provider-specific counting is unavailable,
+    and for quick budget checks where exact counts aren't critical.
+    """
+    if not text:
+        return 0
+    return int(len(text.split()) * 1.3)
+
+
 class RateLimitError(Exception):
     """Raised when an LLM provider returns HTTP 429."""
     def __init__(self, message: str, retry_after: float = None, provider: str = None):
@@ -175,6 +186,12 @@ class FallbackLLMService:
         except Exception as e:
             logger.warning(f"Primary LLM failed ({type(e).__name__}), using fallback: {e}")
             return self._fallback.send_messages(system_prompt, messages, cache_prefix, tools=tools)
+
+    def get_context_limit(self) -> int:
+        return self._primary.get_context_limit()
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        return self._primary.count_tokens(messages, system_prompt, tools)
 
 
 def _build_service(config: dict):
@@ -354,6 +371,14 @@ class RefreshableLLMService:
         result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools)
         _log_llm_call(self._agent_name, result)
         return result
+
+    def get_context_limit(self) -> int:
+        self._ensure_fresh()
+        return self._service.get_context_limit()
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        self._ensure_fresh()
+        return self._service.count_tokens(messages, system_prompt, tools)
 
 
 def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
@@ -539,6 +564,29 @@ class AnthropicService:
             tool_calls=tool_calls if tool_calls else None,
             stop_reason=stop_reason,
         )
+
+    def get_context_limit(self) -> int:
+        """All Claude 3+ models support 200k context."""
+        return 200_000
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        """Count tokens via Anthropic's server-side API (free, exact)."""
+        try:
+            client = self._get_client()
+            kwargs = {
+                'model': self.model,
+                'messages': _anthropic_convert_messages(messages),
+            }
+            if system_prompt:
+                kwargs['system'] = system_prompt
+            if tools:
+                kwargs['tools'] = tools
+            result = client.messages.count_tokens(**kwargs)
+            return result.input_tokens
+        except Exception as e:
+            logger.debug(f"[AnthropicService] count_tokens API failed, using estimate: {e}")
+            parts = [system_prompt] + [m.get('content', '') or '' for m in messages]
+            return estimate_tokens(' '.join(parts))
 
 
 def _anthropic_convert_messages(messages: list) -> list:
@@ -785,6 +833,39 @@ class OpenAIService:
             stop_reason=finish_reason,
         )
 
+    def get_context_limit(self) -> int:
+        """Default 128k for GPT-4 class models."""
+        return 128_000
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        """Count tokens using tiktoken if available, else estimate."""
+        try:
+            import tiktoken
+            try:
+                enc = tiktoken.encoding_for_model(self.model)
+            except KeyError:
+                enc = tiktoken.get_encoding('cl100k_base')
+
+            import json as _json
+            parts = []
+            if system_prompt:
+                parts.append(system_prompt)
+            for msg in messages:
+                parts.append(msg.get('content', '') or '')
+                if msg.get('tool_calls'):
+                    parts.append(_json.dumps(msg['tool_calls'], default=str))
+            if tools:
+                parts.append(_json.dumps(tools, default=str))
+            text = '\n'.join(parts)
+            overhead = (len(messages) + 1) * 4  # ~4 tokens per message for framing
+            return len(enc.encode(text)) + overhead
+        except ImportError:
+            pass  # tiktoken not installed — fall through to estimate
+        except Exception as e:
+            logger.debug(f"[OpenAIService] tiktoken counting failed: {e}")
+        parts = [system_prompt] + [m.get('content', '') or '' for m in messages]
+        return estimate_tokens(' '.join(parts))
+
 
 def _openai_convert_messages(messages: list) -> list:
     """Convert normalized messages to OpenAI format."""
@@ -1016,6 +1097,41 @@ class GeminiService:
             tool_calls=tool_calls if tool_calls else None,
             stop_reason=finish_reason,
         )
+
+    def get_context_limit(self) -> int:
+        """Query Gemini API for model's input token limit, cached."""
+        if hasattr(self, '_cached_context_limit'):
+            return self._cached_context_limit
+        try:
+            from google import genai
+            api_key = _resolve_api_key(self._config)
+            client = genai.Client(api_key=api_key)
+            model_info = client.models.get(model=self.model)
+            self._cached_context_limit = model_info.input_token_limit
+            return self._cached_context_limit
+        except Exception as e:
+            logger.debug(f"[GeminiService] Failed to get context limit: {e}")
+            self._cached_context_limit = 1_000_000  # Gemini models default
+            return self._cached_context_limit
+
+    def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
+        """Count tokens via Gemini's server-side API (free, exact)."""
+        try:
+            from google import genai
+            api_key = _resolve_api_key(self._config)
+            client = genai.Client(api_key=api_key)
+            contents = _gemini_convert_messages(messages)
+            result = client.models.count_tokens(
+                model=self.model,
+                contents=contents,
+            )
+            # System prompt counted separately since count_tokens may not accept it
+            sys_tokens = estimate_tokens(system_prompt) if system_prompt else 0
+            return result.total_tokens + sys_tokens
+        except Exception as e:
+            logger.debug(f"[GeminiService] count_tokens API failed, using estimate: {e}")
+            parts = [system_prompt] + [m.get('content', '') or '' for m in messages]
+            return estimate_tokens(' '.join(parts))
 
 
 def _gemini_convert_messages(messages: list) -> list:
