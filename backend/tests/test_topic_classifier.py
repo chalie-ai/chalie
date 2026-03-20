@@ -110,3 +110,73 @@ class TestTopicClassifier:
                          'classification_time', 'boundary_diagnostics',
                          'just_reset_from_silence', 'message_embedding'}
         assert expected_keys == set(result.keys())
+
+    def test_two_signal_boundary_service_used_with_thread_id(self):
+        """With thread_id, TwoSignalBoundaryService is consulted for boundary detection."""
+        topic_embedding = _random_unit_vector()
+        mock_db, cursor = _make_db_mock(fetchall_return=[
+            ('existing-topic', topic_embedding.tolist(), 0.5,
+             datetime.now(timezone.utc) - timedelta(minutes=2), 5),
+        ])
+        svc = _make_classifier(mock_db)
+
+        mock_result = MagicMock()
+        mock_result.is_boundary = True
+        mock_result.just_reset_from_silence = False
+        mock_result.trigger = 'marker'
+        mock_result.confidence = 0.8
+        mock_result.consec_sim = 0.3
+        mock_result.window_sim = 0.35
+        mock_result.marker_found = 'by the way'
+
+        mock_detector = MagicMock()
+        mock_detector.update.return_value = mock_result
+
+        with patch('services.topic_classifier_service.generate_embedding') as mock_embed, \
+             patch('services.two_signal_boundary_service.TwoSignalBoundaryService',
+                   return_value=mock_detector) as mock_cls:
+            mock_embed.return_value = _random_unit_vector()
+            result = svc.classify("By the way, what's the weather like?", thread_id='thread-abc')
+
+        mock_cls.assert_called_once_with(thread_id='thread-abc')
+        mock_detector.update.assert_called_once()
+        mock_detector.save_state.assert_called_once()
+
+        # Boundary fired → new topic created
+        assert result['is_new_topic'] is True
+        assert result['just_reset_from_silence'] is False
+        assert result['boundary_diagnostics']['trigger'] == 'marker'
+        assert result['boundary_diagnostics']['marker_found'] == 'by the way'
+
+    def test_two_signal_boundary_service_no_boundary(self):
+        """With thread_id and no boundary fired, existing topic is matched."""
+        topic_embedding = _random_unit_vector()
+        mock_db, cursor = _make_db_mock(fetchall_return=[
+            ('existing-topic', topic_embedding.tolist(), 0.5,
+             datetime.now(timezone.utc) - timedelta(minutes=2), 5),
+        ])
+        svc = _make_classifier(mock_db)
+
+        mock_result = MagicMock()
+        mock_result.is_boundary = False
+        mock_result.just_reset_from_silence = False
+        mock_result.trigger = 'none'
+        mock_result.confidence = 0.0
+        mock_result.consec_sim = 0.85
+        mock_result.window_sim = 0.88
+        mock_result.marker_found = None
+
+        mock_detector = MagicMock()
+        mock_detector.update.return_value = mock_result
+
+        with patch('services.topic_classifier_service.generate_embedding') as mock_embed, \
+             patch('services.two_signal_boundary_service.TwoSignalBoundaryService',
+                   return_value=mock_detector):
+            # Near-identical embedding → high similarity → same topic
+            near_identical = topic_embedding + np.random.randn(768) * 0.01
+            mock_embed.return_value = near_identical / np.linalg.norm(near_identical)
+            result = svc.classify("More about existing topic", thread_id='thread-abc')
+
+        assert result['is_new_topic'] is False
+        assert result['topic'] == 'existing-topic'
+        assert result['boundary_diagnostics']['trigger'] == 'none'

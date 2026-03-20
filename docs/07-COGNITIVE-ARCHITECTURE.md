@@ -107,9 +107,10 @@ The ACT loop uses cognitive primitives (always available) and contextual skills 
 ```
 User Input → Topic Classifier (embedding-based)
   → Generate embedding (L2-normalised, 768-dim)
-  → AdaptiveBoundaryDetector.update(embedding, best_similarity)
-      ├─ Cold start (< 5 msgs): static 0.55 threshold
-      └─ Active: NEWMA + Transient Surprise → Leaky Accumulator
+  → TwoSignalBoundaryService.update(embedding, message_text)
+      ├─ Cold start (< 6 msgs): discourse markers only
+      └─ Active: consecutive_sim + window_sim both below threshold
+           OR discourse marker detected
            → is_boundary? → create new topic : match existing
   → {topic, confidence, switch_score, is_new_topic, boundary_diagnostics}
 ```
