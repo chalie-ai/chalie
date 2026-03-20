@@ -2185,6 +2185,70 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             'scores': {},
         }
 
+    # Store response in thread conversation history
+    thread_conv_service.add_response(
+        thread_id,
+        response_data['response'],
+        response_data['generation_time']
+    )
+
+    # Route through orchestrator (delivers response to WebSocket / output queue)
+    if metadata:
+        try:
+            orchestrator = get_orchestrator()
+
+            context = {
+                'topic': topic,
+                'response': response_data.get('response', ''),
+                'confidence': response_data.get('confidence', 0.0),
+                'generation_time': response_data.get('generation_time', 0.0),
+                'destination': metadata.get('destination', 'web'),
+                'metadata': metadata,
+                'actions': response_data.get('actions', []),
+                'clarification_question': None,
+                'reply_actions': response_data.get('reply_actions'),
+            }
+
+            mode = response_data.get('mode', 'UNIFIED')
+            logging.info(f"[FRONTAL CORTEX] Routing through orchestrator: {mode}")
+
+            orchestrator_result = orchestrator.route_path(mode=mode, context=context)
+
+            if orchestrator_result['status'] == 'error':
+                logging.error(f"[ORCHESTRATOR] Error: {orchestrator_result['message']}")
+                try:
+                    from services.output_service import OutputService
+                    OutputService().enqueue_text(
+                        topic=topic,
+                        response=response_data.get('response') or "I ran into an issue. Please try again.",
+                        mode='UNIFIED',
+                        confidence=response_data.get('confidence', 0.0),
+                        generation_time=response_data.get('generation_time', 0.0),
+                        original_metadata=metadata,
+                    )
+                except Exception as oe:
+                    logging.warning(f"[ORCHESTRATOR] Failed to surface error to user: {oe}")
+            else:
+                logging.info(f"[ORCHESTRATOR] Executed {mode}: {orchestrator_result.get('result', {})}")
+        except Exception as e:
+            logging.error(f"[ORCHESTRATOR] Failed: {e}")
+
+    # Signal completion for IGNORE/card-only mode on sync WebSocket channels.
+    if response_data.get('mode') == 'IGNORE' and metadata and metadata.get('uuid'):
+        try:
+            from services.output_service import OutputService
+            OutputService().enqueue_text(
+                topic=topic,
+                response='',
+                mode='ACT',
+                confidence=response_data.get('confidence', 1.0),
+                generation_time=response_data.get('generation_time', 0.0),
+                original_metadata=metadata,
+                reply_actions=response_data.get('reply_actions'),
+            )
+        except Exception as e:
+            logging.warning(f"[IGNORE] Failed to publish empty-text message event: {e}")
+
     # Add response to exchange data
     exchange_data['response'] = {'message': response_data['response']}
     if response_data.get('actions'):
