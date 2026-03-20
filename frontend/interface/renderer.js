@@ -359,10 +359,21 @@ export class Renderer {
 
   _extractPlainText(blocks) {
     if (!Array.isArray(blocks)) return '';
-    return blocks
-      .filter(b => b.type === 'text' || b.type === 'header' || b.type === 'code')
-      .map(b => b.content || '')
-      .join('\n');
+    const parts = [];
+    for (const b of blocks) {
+      if (b.type === 'text' || b.type === 'header' || b.type === 'code') {
+        if (b.content) parts.push(b.content);
+      } else if (b.type === 'list' && Array.isArray(b.items)) {
+        parts.push(b.items.join('\n'));
+      } else if (b.type === 'keyvalue' && Array.isArray(b.pairs)) {
+        parts.push(b.pairs.map(p => `${p.key}: ${p.value}`).join('\n'));
+      } else if (b.type === 'table') {
+        if (Array.isArray(b.rows)) parts.push(b.rows.map(r => r.join(', ')).join('\n'));
+      } else if (b.type === 'alert' && b.message) {
+        parts.push(b.message);
+      }
+    }
+    return parts.join('\n');
   }
 
   _createEl(tag, className) {
