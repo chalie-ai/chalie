@@ -52,7 +52,7 @@ def _pack_embedding(embedding) -> Optional[bytes]:
 
 def generate_embedding(text: str) -> np.ndarray:
     """
-    Generate embedding via unified EmbeddingService (sentence-transformers, 768-dim).
+    Generate embedding via unified EmbeddingService (gte-modernbert-base ONNX, 768-dim).
 
     Returns:
         numpy array of shape (768,) - L2-normalized embedding

@@ -41,10 +41,9 @@ Recommended reading order for engineers:
 
 ## Tools & Extensions
 
-**Building tools to extend Chalie's capabilities?**
-- **[09-TOOLS.md](09-TOOLS.md)** — Tools architecture, creating tools, subprocess execution, examples
-- **[14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md)** — Embodiments: Chalie's built-in capabilities, versioning, and auto-install
-- **[15-INTERFACES.md](15-INTERFACES.md)** — External interfaces (calendar, IDE), pairing protocol, capability discovery
+- **[09-TOOLS.md](09-TOOLS.md)** — Tools system architecture, IPC contract, execution flow, safety guardrails
+- **[14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md)** — First-party tools reference (weather, web search, code eval, docs search)
+- **[15-INTERFACES.md](15-INTERFACES.md)** — External interfaces: pairing protocol, signals, messages, tool execution
 
 ## Performance & Optimization
 
@@ -75,7 +74,7 @@ docs/
 ├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
 ├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
 ├── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
-├── 14-DEFAULT-TOOLS.md               ← Embodiments: built-in capabilities
+├── 14-DEFAULT-TOOLS.md               ← First-party tools (TOOL_LIBRARY)
 └── 15-INTERFACES.md                  ← Interface layer architecture
 ```
 

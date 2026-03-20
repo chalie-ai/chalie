@@ -14,11 +14,9 @@ PromptQueue handles job dispatch via threads (no RQ dependency).
 SQLite replaces PostgreSQL, MemoryStore replaces Redis.
 """
 
-import os
 import logging
 import time
 import signal
-import sys
 import threading
 from typing import Dict, List, Tuple
 
@@ -56,8 +54,6 @@ class WorkerManager:
         self.threads: Dict[str, threading.Thread] = {}
         self.service_definitions: List[Tuple[str, callable]] = []
         self.running = True
-        self._tool_scanner = None
-        self._tool_scanner_registry = None
 
     def register_service(self, worker_id: str, worker_func):
         """Register a worker service definition for future spawning.
@@ -159,10 +155,9 @@ class WorkerManager:
 
         Installs ``SIGINT`` and ``SIGTERM`` handlers that call
         :meth:`shutdown_all`.  Spawns all registered services via
-        :meth:`spawn_all_services`, optionally starts the hot-reload tool
-        scanner, then enters a 5-second polling loop.  Every iteration calls
-        :meth:`check_health` to restart dead threads.  A periodic summary is
-        logged every 5 minutes (60 × 5 s intervals).
+        :meth:`spawn_all_services`, then enters a 5-second polling loop.
+        Every iteration calls :meth:`check_health` to restart dead threads.
+        A periodic summary is logged every 5 minutes (60 × 5 s intervals).
 
         Blocks until :meth:`shutdown_all` is called or a
         ``KeyboardInterrupt`` is received, after which it ensures
@@ -173,10 +168,6 @@ class WorkerManager:
 
         logging.info("[Manager] Starting Worker Manager (single-process, threaded)")
         self.spawn_all_services()
-
-        # Start hot-reload tool scanner (daemon thread, in-process)
-        if self._tool_scanner is not None:
-            self._tool_scanner.start(self._tool_scanner_registry)
 
         try:
             health_check_counter = 0
@@ -196,181 +187,6 @@ class WorkerManager:
             self.shutdown_all()
 
 
-def _migrate_tools_disabled(tools_dir, db):
-    """One-time startup migration: move tools from legacy tools_disabled/ back to tools/
-    and write _enabled=false to DB for each."""
-    import json as _json
-    import shutil as _shutil
-    from pathlib import Path as _Path
-    disabled_dir = _Path(tools_dir).parent / "tools_disabled"
-    if not disabled_dir.exists():
-        return
-    from services.tool_config_service import ToolConfigService
-    config_svc = ToolConfigService(db)
-    for entry in sorted(disabled_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        dest = _Path(tools_dir) / entry.name
-        if dest.exists():
-            _shutil.rmtree(str(dest))
-        _shutil.move(str(entry), str(dest))
-        try:
-            with open(dest / "manifest.json") as f:
-                tool_name = _json.load(f).get("name", entry.name)
-        except Exception:
-            tool_name = entry.name
-        config_svc._set_enabled_flag(tool_name, enabled=False)
-        logging.info(f"[Startup] Migrated disabled tool '{tool_name}' -> tools/ with _enabled=false")
-    try:
-        disabled_dir.rmdir()
-    except OSError:
-        pass
-
-
-class ToolScannerThread:
-    """
-    Daemon thread that scans backend/tools/ for new tool directories
-    and registers them without a restart.
-    """
-
-    DEFAULT_INTERVAL = 30
-
-    def __init__(self, manager: WorkerManager, tools_dir):
-        """Initialise the tool scanner for the given tools directory.
-
-        Args:
-            manager: The :class:`WorkerManager` instance used to register and
-                spawn cron workers discovered during directory scans.
-            tools_dir: Filesystem path to the ``backend/tools/`` directory
-                that is monitored for new tool sub-directories.  The scan
-                interval can be overridden via the
-                ``TOOL_SCANNER_INTERVAL_SECONDS`` environment variable
-                (default: ``30`` seconds).
-        """
-        self._manager = manager
-        self._tools_dir = tools_dir
-        self._interval = int(os.environ.get("TOOL_SCANNER_INTERVAL_SECONDS", self.DEFAULT_INTERVAL))
-        self._registry = None
-
-    def start(self, registry):
-        """Start the background scan loop and wire up the tool-registered callback.
-
-        Stores a reference to ``registry``, installs
-        :meth:`_on_tool_registered` as the post-build callback, then starts
-        the ``_scan_loop`` as a daemon thread named ``'tool-scanner'``.
-
-        Args:
-            registry: ``ToolRegistryService`` instance used to inspect known
-                tools, query build statuses, and create cron worker callables.
-        """
-        self._registry = registry
-        registry.set_on_tool_registered(self._on_tool_registered)
-        t = threading.Thread(target=self._scan_loop, name="tool-scanner", daemon=True)
-        t.start()
-        logging.info(f"[ToolScanner] Started (interval={self._interval}s)")
-
-    def _on_tool_registered(self, tool_name: str):
-        """Callback fired after a successful build. Spawns cron worker if needed."""
-        tool = self._registry.tools.get(tool_name)
-        if not tool:
-            return
-        trigger = tool["manifest"].get("trigger", {})
-        if trigger.get("type") != "cron":
-            return
-
-        worker_id = f"tool-{tool_name}-service"
-        existing = self._manager.threads.get(worker_id)
-        if existing and existing.is_alive():
-            return
-
-        tool_config = {
-            "name": tool_name,
-            "schedule": trigger["schedule"],
-            "prompt": trigger["prompt"],
-            "image": tool["image"],
-            "sandbox": tool.get("sandbox", {}),
-            "dir": tool["dir"],
-            "manifest": tool["manifest"],
-        }
-        worker_func = self._registry.create_cron_worker(tool_config)
-        self._manager.register_service(worker_id, worker_func)
-        self._manager.spawn_service(worker_id, worker_func)
-        logging.info(f"[ToolScanner] Spawned cron worker: {worker_id}")
-
-    def _scan_loop(self):
-        """Run periodic scans at the configured interval, logging errors without crashing.
-
-        Sleeps for one full interval before the first scan to allow other
-        services to finish initialising.  Errors inside :meth:`_scan_once`
-        are caught and logged so the scanner thread never terminates
-        unexpectedly.
-        """
-        time.sleep(self._interval)
-        while True:
-            try:
-                self._scan_once()
-            except Exception as e:
-                logging.error(f"[ToolScanner] Scan error: {e}")
-            time.sleep(self._interval)
-
-    def _scan_once(self):
-        """Scan ``tools_dir`` once for new tool directories and trigger async builds.
-
-        A directory is skipped if any of the following conditions apply:
-
-        * It is already present in the registry (``known``).
-        * It is currently being built (``building``) or has an active install
-          lock (``locked``).
-        * It is missing a ``manifest.json`` or ``Dockerfile``.
-        * It is administratively disabled via ``ToolConfigService``.
-
-        Eligible new directories are handed off to
-        ``registry.register_tool_async`` for background image builds.
-        """
-        import json as _json
-        from pathlib import Path
-        if not self._tools_dir.exists():
-            return
-
-        known = set(self._registry.tools.keys())
-        building = {n for n, s in self._registry.get_all_build_statuses().items()
-                    if s.get("status") == "building"}
-        locked = set(self._registry._install_locks)
-        # Track tools that failed to build — don't retry every cycle
-        failed = {n for n, s in self._registry.get_all_build_statuses().items()
-                  if s.get("status") in ("failed", "error")}
-
-        for entry in sorted(self._tools_dir.iterdir()):
-            if not entry.is_dir() or entry.name.startswith(("_", ".")):
-                continue
-            if not (entry / "manifest.json").exists():
-                continue
-            # Trusted tools use runner.py (no Docker); sandboxed tools use Dockerfile.
-            # Accept either — reject dirs that have neither.
-            if not (entry / "runner.py").exists() and not (entry / "Dockerfile").exists():
-                continue
-            try:
-                with open(entry / "manifest.json") as f:
-                    tool_name = _json.load(f).get("name", "").strip()
-            except Exception:
-                continue
-            if not tool_name or tool_name in known or tool_name in building or tool_name in locked:
-                continue
-            if tool_name in failed:
-                continue
-            try:
-                from services.tool_config_service import ToolConfigService
-                from services.database_service import get_shared_db_service
-                if not ToolConfigService(get_shared_db_service()).is_tool_enabled(tool_name):
-                    logging.debug(f"[ToolScanner] Ignoring disabled tool '{tool_name}'")
-                    continue
-            except Exception:
-                pass
-            logging.info(f"[ToolScanner] Discovered new tool '{tool_name}', starting build")
-            try:
-                self._registry.register_tool_async(entry)
-            except Exception as e:
-                logging.warning(f"[ToolScanner] Build start failed for '{tool_name}': {e}")
 
 
 if __name__ == "__main__":
@@ -478,14 +294,6 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
 
-    # One-time migration: tools_disabled → tools
-    try:
-        from pathlib import Path as _MigPath
-        _tools_dir = _MigPath(__file__).parent / "tools"
-        _migrate_tools_disabled(_tools_dir, get_shared_db_service())
-    except Exception as _mig_err:
-        logging.warning(f"[Consumer] tools_disabled migration failed: {_mig_err}")
-
     # Register cron-triggered tools
     try:
         from services.tool_registry_service import ToolRegistryService
@@ -498,14 +306,6 @@ if __name__ == "__main__":
             logging.info(f"[Consumer] Tool registry loaded: {tool_count} tools")
     except Exception as e:
         logging.warning(f"[Consumer] Tool cron registration failed: {e}")
-
-    # Wire up hot-reload tool scanner
-    try:
-        scanner = ToolScannerThread(manager=manager, tools_dir=registry.tools_dir)
-        manager._tool_scanner = scanner
-        manager._tool_scanner_registry = registry
-    except Exception as e:
-        logging.warning(f"[Consumer] Tool scanner setup failed: {e}")
 
     # Bootstrap tool profiles (background thread)
     try:

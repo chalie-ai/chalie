@@ -107,23 +107,24 @@ Supported providers:
 
 ---
 
-### Tools
+### Capabilities
 
-Tools extend Chalie with real-world capabilities — web search, weather, reading pages, and more. Tools run either as **trusted** (subprocess, no Docker) or **sandboxed** (Docker container), completely separated from Chalie's internal services. Docker is only needed for sandboxed tools — trusted tools and all core features work without it.
+Chalie has three tiers of capability, each with different levels of access and trust:
 
-> **A tool marketplace is coming.** For now, tools must be installed manually by following each tool's setup instructions.
+**Innate Skills** — Built-in cognitive capabilities with direct access to Chalie's services, memory, and database. Always available: `recall`, `memorize`, `schedule`, `list`, `document`, `find_tools`, `reflect`, and more.
 
-**Officially supported tools:**
+**Tools** — First-party capabilities committed to the repo. Run as trusted subprocesses with zero access to Chalie internals. Declared in a tool library and loaded at startup:
 
 | Tool | Description |
 |---|---|
-| [searxng-tool](https://github.com/chalie-ai/searxng-tool) | Privacy-respecting web search via SearXNG |
-| [youtube-tool](https://github.com/chalie-ai/youtube-tool) | YouTube search and transcript extraction |
-| [tool-duckduckgo-search](https://github.com/chalie-ai/tool-duckduckgo-search) | Fast web search via DuckDuckGo |
-| [tool-web-read](https://github.com/chalie-ai/tool-web-read) | Read and extract content from web pages |
-| [tool-weather](https://github.com/chalie-ai/tool-weather) | Current weather and forecasts |
+| Weather | Current weather and forecasts (Open-Meteo, no API key) |
+| Web Search | Privacy-focused web search via DuckDuckGo |
+| Code Eval | Python code execution in a restricted sandbox |
+| Programming Docs Search | Official docs for 12 languages and 11 frameworks |
 
-More tools are on the way via the marketplace. See [docs/09-TOOLS.md](docs/09-TOOLS.md) for the full tools architecture and how to build your own.
+**Interfaces** — External third-party integrations that pair with Chalie via a bluetooth-style protocol. Can expose capabilities and update world state. See [docs/15-INTERFACES.md](docs/15-INTERFACES.md) for the full protocol.
+
+See [docs/09-TOOLS.md](docs/09-TOOLS.md) for the tools architecture.
 
 ---
 
@@ -200,7 +201,9 @@ No telemetry. No analytics. No background sync. You own your data.
 | [04-ARCHITECTURE.md](docs/04-ARCHITECTURE.md) | System architecture, services, database schema |
 | [05-WORKFLOW.md](docs/05-WORKFLOW.md) | Step-by-step request processing pipeline |
 | [07-COGNITIVE-ARCHITECTURE.md](docs/07-COGNITIVE-ARCHITECTURE.md) | Mode router and cognitive decision flow |
-| [09-TOOLS.md](docs/09-TOOLS.md) | Tools system, creating extensions |
+| [09-TOOLS.md](docs/09-TOOLS.md) | Tools system architecture |
+| [14-DEFAULT-TOOLS.md](docs/14-DEFAULT-TOOLS.md) | First-party tools reference |
+| [15-INTERFACES.md](docs/15-INTERFACES.md) | External interface protocol (signals, messages, tools) |
 
 ---
 

@@ -1,8 +1,9 @@
 """
-Tool Registry Service — Dynamic plugin discovery and dispatch.
+Tool Registry Service — First-party tool loading and dispatch.
 
-Singleton. Discovers tools from the tools/ folder, validates manifests,
+Singleton. Loads tools declared in TOOL_LIBRARY, validates manifests,
 installs deps at startup, and dispatches invocations via subprocess.
+Interface tools are registered dynamically via register_interface_tool().
 
 IPC contract (formalized):
   Input:  base64-encoded JSON as subprocess arg: {"params", "settings", "telemetry"}
@@ -28,6 +29,18 @@ logger = logging.getLogger(__name__)
 
 # Singleton instance
 _instance = None
+
+# ── Tool Library ────────────────────────────────────────────────────
+# Declared set of first-party tools. Each entry maps a tool name to its
+# subdirectory under backend/tools/. Adding a new tool means adding it
+# here AND placing its manifest.json + runner.py in the directory.
+# No filesystem scanning — this IS the contract.
+TOOL_LIBRARY = {
+    "weather": "weather",
+    "web_search": "web_search",
+    "code_eval": "code_eval",
+    "programming_docs_search": "programming_docs_search",
+}
 
 
 class _CronToolWorker:
@@ -337,10 +350,11 @@ class _CronToolWorker:
 
 class ToolRegistryService:
     """
-    Plugin registry for external tools.
+    Registry for first-party tools and interface-provided tools.
 
-    Singleton — one instance created at startup, cached. Tools are loaded once
-    and dispatched via subprocess on every invocation.
+    Singleton — created at startup. First-party tools are declared in
+    TOOL_LIBRARY and loaded once. Interface tools register dynamically
+    via register_interface_tool(). All dispatch via subprocess or HTTP.
     """
 
     REQUIRED_MANIFEST_FIELDS = {"name", "description", "trigger", "parameters", "returns"}
@@ -372,7 +386,7 @@ class ToolRegistryService:
 
         Reads ``configs/frontal-cortex.json`` to check the ``tools_enabled``
         kill-switch.  When disabled, discovery is skipped entirely.  Otherwise,
-        ``_discover_and_load()`` scans ``tools_dir`` for tool sub-directories,
+        ``_load_library()`` loads tools declared in ``TOOL_LIBRARY``,
         validates manifests, installs dependencies, and registers each tool.
 
         Args:
@@ -396,7 +410,6 @@ class ToolRegistryService:
         self._install_locks: Set[str] = set()      # names currently being installed
         self._deps_ready: Set[str] = set()         # trusted tools whose pip deps are installed
         self._lock = threading.Lock()              # protects build_status, install_locks, deps_ready, and tools mutations
-        self._on_tool_registered = None  # Optional[callable] set by consumer for cron worker spawning
 
         try:
             from services.config_service import ConfigService
@@ -409,48 +422,30 @@ class ToolRegistryService:
             logger.info("[TOOL REGISTRY] Tools disabled via kill switch (tools_enabled=false)")
             return
 
-        self._discover_and_load()
+        self._load_library()
 
-    def _discover_and_load(self):
-        """Scan tools/ folder for subdirectories with manifest.json and runner.py."""
-        if not self.tools_dir.exists():
-            logger.info(f"[TOOL REGISTRY] Tools directory not found: {self.tools_dir}")
-            return
-
+    def _load_library(self):
+        """Load tools declared in TOOL_LIBRARY. No filesystem scanning."""
         candidates = []
-        for entry in sorted(self.tools_dir.iterdir()):
-            if not entry.is_dir():
-                continue
-            if entry.name.startswith("_") or entry.name.startswith("."):
-                continue
-
-            manifest_path = entry / "manifest.json"
+        for tool_name, dir_name in TOOL_LIBRARY.items():
+            tool_dir = self.tools_dir / dir_name
+            manifest_path = tool_dir / "manifest.json"
+            runner_path = tool_dir / "runner.py"
 
             if not manifest_path.exists():
-                logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing manifest.json")
+                logger.warning(f"[TOOL REGISTRY] Skipping '{tool_name}': missing manifest.json at {tool_dir}")
                 continue
-
-            # Determine trust from Chalie's DB config (not the tool's manifest)
-            try:
-                with open(manifest_path) as f:
-                    _mf = json.load(f)
-                tool_name = _mf.get("name", entry.name)
-            except Exception:
-                tool_name = entry.name
-
-            # All tools require runner.py
-            runner_path = entry / "runner.py"
             if not runner_path.exists():
-                logger.warning(f"[TOOL REGISTRY] Skipping {entry.name}: missing runner.py")
+                logger.warning(f"[TOOL REGISTRY] Skipping '{tool_name}': missing runner.py at {tool_dir}")
                 continue
 
-            candidates.append((entry, manifest_path))
+            candidates.append((tool_dir, manifest_path))
 
         if not candidates:
-            logger.info("[TOOL REGISTRY] No tools found")
+            logger.info("[TOOL REGISTRY] No tools found in library")
             return
 
-        # Filter out DB-disabled tools before building
+        # Filter out DB-disabled tools
         try:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
@@ -470,10 +465,8 @@ class ToolRegistryService:
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
 
-        # Load tools in parallel (up to 4 concurrent).
-        # After the executor finishes, all registrations are complete and pip
-        # installs run synchronously so tools are ready before Flask startup.
-        tool_dirs: list = []  # (tool_name, tool_dir) pairs for pip install
+        # Load tools in parallel (up to 4 concurrent)
+        tool_dirs: list = []
         for (entry, _manifest_path) in candidates:
             try:
                 import json as _json
@@ -491,7 +484,6 @@ class ToolRegistryService:
                     future.result()
                 except Exception as e:
                     logger.warning(f"[TOOL REGISTRY] Failed to load tool '{dir_name}': {e}")
-                    # Track failure in build_status so it appears with error status in list_tools()
                     with self._lock:
                         self._build_status[dir_name] = {
                             "status": "error",
@@ -504,85 +496,11 @@ class ToolRegistryService:
         else:
             logger.info("[TOOL REGISTRY] No tools loaded")
 
-        # Purge DB entries for tools that no longer exist on disk
-        self._purge_stale_db_entries()
-
-        # Synchronous pip install — must complete before the system is ready so
-        # tools are never shown in prompts but unavailable for dispatch.
+        # Synchronous pip install
         if tool_dirs:
             for tool_name, tool_dir in tool_dirs:
                 self._install_tool_requirements(tool_name, tool_dir)
             logger.info(f"[TOOL REGISTRY] Dep install complete ({len(tool_dirs)} tools)")
-
-    def _purge_stale_db_entries(self):
-        """Remove DB records for tools that no longer exist on disk.
-
-        Called once after discovery completes. Cleans tool_capability_profiles
-        (and its vec companion), tool_configs, and user_tool_preferences so
-        stale tool names are never surfaced to the LLM or user.
-        """
-        live_tools = set(self.tools.keys())
-        if not live_tools:
-            return  # Bail out — something went wrong with discovery; don't wipe everything
-
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            with db.get_connection() as conn:
-                cursor = conn.cursor()
-
-                # tool_capability_profiles (type='tool' only — leave skill profiles alone)
-                cursor.execute(
-                    "SELECT tool_name FROM tool_capability_profiles WHERE tool_type = 'tool'"
-                )
-                db_tools = {row[0] for row in cursor.fetchall()}
-                stale = db_tools - live_tools
-
-                if stale:
-                    for name in stale:
-                        # Remove vec entry first (rowid join)
-                        cursor.execute(
-                            """DELETE FROM tool_capability_profiles_vec
-                               WHERE rowid = (
-                                   SELECT rowid FROM tool_capability_profiles WHERE tool_name = ?
-                               )""",
-                            (name,),
-                        )
-                        cursor.execute(
-                            "DELETE FROM tool_capability_profiles WHERE tool_name = ?", (name,)
-                        )
-                    conn.commit()
-                    logger.info(
-                        f"[TOOL REGISTRY] Purged {len(stale)} stale profile(s): {', '.join(sorted(stale))}"
-                    )
-
-                # tool_configs — configs for removed tools are orphaned and confusing
-                cursor.execute("SELECT tool_name FROM tool_configs")
-                cfg_tools = {row[0] for row in cursor.fetchall()}
-                stale_cfg = cfg_tools - live_tools
-                if stale_cfg:
-                    for name in stale_cfg:
-                        cursor.execute("DELETE FROM tool_configs WHERE tool_name = ?", (name,))
-                    conn.commit()
-                    logger.info(
-                        f"[TOOL REGISTRY] Purged {len(stale_cfg)} stale config(s): {', '.join(sorted(stale_cfg))}"
-                    )
-
-                # user_tool_preferences — stale prefs are harmless but noisy; clean them too
-                cursor.execute("SELECT DISTINCT tool_name FROM user_tool_preferences")
-                pref_tools = {row[0] for row in cursor.fetchall()}
-                stale_prefs = pref_tools - live_tools
-                if stale_prefs:
-                    for name in stale_prefs:
-                        cursor.execute("DELETE FROM user_tool_preferences WHERE tool_name = ?", (name,))
-                    conn.commit()
-                    logger.info(
-                        f"[TOOL REGISTRY] Purged {len(stale_prefs)} stale preference(s): {', '.join(sorted(stale_prefs))}"
-                    )
-
-        except Exception as e:
-            logger.warning(f"[TOOL REGISTRY] Stale DB purge failed (non-fatal): {e}")
 
     def _install_tool_requirements(self, tool_name: str, tool_dir: Path) -> None:
         """Install pip packages declared in a trusted tool's requirements.txt.
@@ -983,130 +901,6 @@ class ToolRegistryService:
         except Exception as e:
             logger.debug(f"[TOOL REGISTRY] Failed to record performance metric: {e}")
 
-    def register_tool_async(self, tool_dir: Path) -> bool:
-        """
-        Register a tool from a directory asynchronously.
-
-        Spawns a background thread to load and install the tool's dependencies.
-        Returns False if the tool is already being installed.
-        Returns True if installation started successfully.
-
-        Args:
-            tool_dir: Path to tool directory (must contain manifest.json)
-
-        Returns:
-            bool: True if build thread started, False if already installing
-        """
-        manifest_path = tool_dir / "manifest.json"
-        if not manifest_path.exists():
-            raise ValueError(f"manifest.json not found in {tool_dir}")
-
-        try:
-            with open(manifest_path, "r") as f:
-                manifest = json.load(f)
-            tool_name = manifest.get("name")
-            if not tool_name:
-                raise ValueError("Manifest missing 'name' field")
-        except (json.JSONDecodeError, KeyError) as e:
-            raise ValueError(f"Failed to read manifest: {e}")
-
-        with self._lock:
-            # Check if already installing
-            if tool_name in self._install_locks:
-                return False
-
-            # Mark as installing
-            self._install_locks.add(tool_name)
-            self._build_status[tool_name] = {"status": "building", "error": None}
-
-        # Spawn build worker in background thread
-        thread = threading.Thread(
-            target=self._build_worker,
-            args=(tool_dir, tool_name),
-            daemon=True,
-        )
-        thread.start()
-        logger.info(f"[TOOL REGISTRY] Started async build for '{tool_name}'")
-        return True
-
-    def _build_worker(self, tool_dir: Path, tool_name: str):
-        """
-        Private worker function for background tool loading (runs in thread).
-
-        Attempts to load the tool and install its dependencies. Updates _build_status and clears _install_locks.
-        """
-        try:
-            # Check if directory still exists (might have been disabled)
-            if not tool_dir.exists():
-                logger.info(f"[TOOL REGISTRY] Tool directory removed during build: {tool_name}")
-                with self._lock:
-                    self._install_locks.discard(tool_name)
-                return
-
-            manifest_path = tool_dir / "manifest.json"
-            # Build the tool (this calls _load_tool internally)
-            self._load_tool(tool_dir, manifest_path)
-
-            # Install deps so the tool is ready immediately
-            self._install_tool_requirements(tool_name, tool_dir)
-
-            # Success: clear build status
-            with self._lock:
-                self._build_status.pop(tool_name, None)
-                self._install_locks.discard(tool_name)
-
-            logger.info(f"[TOOL REGISTRY] Async build completed for '{tool_name}'")
-
-            # Build capability profile for the newly registered tool
-            try:
-                from services.tool_profile_service import ToolProfileService
-                profile_service = ToolProfileService()
-                manifest = self.tools[tool_name]['manifest']
-                profile_service.build_profile(tool_name, manifest)
-                logger.info(f"[TOOL REGISTRY] Built capability profile for {tool_name}")
-            except Exception as profile_err:
-                logger.warning(f"[TOOL REGISTRY] Profile build failed for {tool_name}: {profile_err}")
-
-            # Auto-resolve capability gaps when new tool's docs overlap
-            try:
-                from services.self_model_service import SelfModelService
-                sm = SelfModelService()
-                gaps = sm.get_frequent_gaps(min_occurrences=1, limit=20)
-                if gaps:
-                    doc_text = (manifest.get('documentation', '') + ' ' +
-                                manifest.get('description', '') + ' ' +
-                                tool_name).lower()
-                    doc_words = set(doc_text.split())
-                    for gap in gaps:
-                        gap_words = set(gap['request_summary'].lower().split())
-                        if not gap_words:
-                            continue
-                        overlap = len(doc_words & gap_words) / len(gap_words)
-                        if overlap >= 0.30:
-                            sm.resolve_gap(gap['id'], resolved_by=f"tool:{tool_name}")
-                            logger.info(
-                                f"[TOOL REGISTRY] Auto-resolved capability gap "
-                                f"'{gap['request_summary'][:60]}' via tool '{tool_name}'"
-                            )
-            except Exception as gap_err:
-                logger.debug(f"[TOOL REGISTRY] Gap auto-resolve failed: {gap_err}")
-
-            # Notify consumer so it can spawn cron workers for newly registered tools
-            if self._on_tool_registered:
-                try:
-                    self._on_tool_registered(tool_name)
-                except Exception as cb_err:
-                    logger.warning(f"[TOOL REGISTRY] on_tool_registered callback failed: {cb_err}")
-
-        except Exception as e:
-            logger.error(f"[TOOL REGISTRY] Async build failed for '{tool_name}': {e}")
-            with self._lock:
-                self._build_status[tool_name] = {
-                    "status": "error",
-                    "error": str(e)
-                }
-                self._install_locks.discard(tool_name)
-
     def unregister_tool(self, tool_name: str):
         """
         Unregister a tool from the registry (e.g., when disabling it).
@@ -1225,10 +1019,6 @@ class ToolRegistryService:
             return dict(self._build_status)
 
     # ── Public API ──────────────────────────────────────────────────
-
-    def set_on_tool_registered(self, callback):
-        """Called by consumer to register a hook for post-build cron worker spawning."""
-        self._on_tool_registered = callback
 
     def _is_ready(self, name: str, tool: dict) -> bool:
         """Check if a tool is ready for invocation (deps installed)."""
