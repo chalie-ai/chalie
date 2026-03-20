@@ -2301,6 +2301,21 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception:
         logging.debug("[DIGEST] Transcript append (assistant) failed", exc_info=True)
 
+    # Fire compaction if context is approaching budget
+    try:
+        from services import compaction_service
+        _ctx_budget = 32000
+        try:
+            from services.frontal_cortex_service import FrontalCortexService
+            _fc = FrontalCortexService(cortex_config, cortex_prompt_map)
+            _ctx_limit = _fc.get_context_limit()
+            _ctx_budget = min(int(_ctx_limit * 0.6), 150_000)
+        except Exception:
+            pass
+        compaction_service.check_and_compact(topic, _ctx_budget)
+    except Exception:
+        logging.debug("[DIGEST] Compaction check failed", exc_info=True)
+
     # Update conversation phase with Chalie's response so momentum and direction
     # reflect the full exchange, not just the user turn.
     try:
