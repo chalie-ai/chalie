@@ -1,60 +1,62 @@
 """
-Find Tools Skill — On-demand tool discovery.
+Find Tools Skill — On-demand tool discovery with dynamic injection.
 
 Cognitive primitive: always available in ACT mode. Lets Chalie search for
-capabilities (tools and interface actions) by semantic query instead
-of having all tool descriptions pre-injected into the prompt.
+external capabilities (tools and interface actions) by semantic query.
+
+After a successful search, the ACT orchestrator injects matching tool
+schemas into the native tools list so the LLM can call them directly
+in subsequent iterations — no second discovery step needed.
 
 Search queries `tool_capability_profiles_vec` (same embeddings used by triage).
-Details returns full invocation guide including parameters.
 
 Zero-tool-name references in infrastructure — fully tool-agnostic.
 """
 
-import json
 import logging
 import struct
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[FIND_TOOLS]"
 
+TOOL_SCHEMA = {
+    "name": "find_tools",
+    "description": (
+        "When a task requires actions you cannot perform with your built-in skills "
+        "— such as calling external APIs, fetching web content, or running specialized "
+        "processing — use this to discover available tools. Describe what you need; "
+        "matched tools become directly callable."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Describe the capability you need in natural language.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results (default 5, max 10).",
+            },
+        },
+        "required": ["query"],
+    },
+}
 
-def handle_find_tools(topic: str, params: dict) -> str:
+
+def handle_find_tools(topic: str, params: dict) -> dict:
     """
-    Discover tools by semantic search or get invocation details.
-
-    Args:
-        topic: Current conversation topic (unused, present for handler contract)
-        params: {
-            action: "search" | "details"
-            query: str (for search — what capability is needed)
-            tool_name: str (for details — which tool to inspect)
-            limit: int (optional, default 5, max 10)
-        }
+    Discover tools by semantic search.
 
     Returns:
-        Formatted tool discovery results or invocation guide.
+        dict with 'text' (formatted results for the LLM) and
+        '_discovered_tools' (tool names for the orchestrator to inject).
     """
-    action = params.get("action", "search")
-
-    if action == "search":
-        return _search_tools(params)
-    elif action == "details":
-        return _get_tool_details(params)
-    else:
-        return f"{LOG_PREFIX} Unknown action: {action}. Use 'search' or 'details'."
-
-
-# ── Search ────────────────────────────────────────────────────────────────
-
-
-def _search_tools(params: dict) -> str:
-    """Semantic search across tool capability profiles."""
     query = params.get("query", "").strip()
     if not query:
-        return f"{LOG_PREFIX} Error: 'query' parameter is required for search."
+        return {"text": f"{LOG_PREFIX} Error: 'query' is required.", "_discovered_tools": []}
 
     limit = min(params.get("limit", 5), 10)
 
@@ -96,18 +98,33 @@ def _search_tools(params: dict) -> str:
         return _fallback_keyword_search(query, limit)
 
     if not rows:
-        return f"{LOG_PREFIX} No tools found matching '{query}'. No capabilities are currently registered."
+        return {
+            "text": f"{LOG_PREFIX} No tools found matching '{query}'.",
+            "_discovered_tools": [],
+        }
 
     # Filter to only registered tools (not innate skills) and check availability
     available_tools = _filter_available(rows)
 
     if not available_tools:
-        return f"{LOG_PREFIX} No available tools match '{query}'. Only innate skills matched — those are already at your disposal."
+        return {
+            "text": (
+                f"{LOG_PREFIX} No external tools match '{query}'. "
+                "Only innate skills matched — those are already at your disposal."
+            ),
+            "_discovered_tools": [],
+        }
 
     # Cap to requested limit
     available_tools = available_tools[:limit]
 
-    return _format_search_results(query, available_tools)
+    discovered_names = [t['tool_name'] for t in available_tools]
+    text = _format_search_results(query, available_tools)
+
+    return {"text": text, "_discovered_tools": discovered_names}
+
+
+# -- Search helpers --------------------------------------------------------
 
 
 def _filter_available(rows: list) -> List[Dict]:
@@ -158,22 +175,18 @@ def _filter_available(rows: list) -> List[Dict]:
 
 
 def _format_search_results(query: str, tools: List[Dict]) -> str:
-    """Format search results with enough detail for the ACT loop to decide."""
+    """Format search results for the LLM."""
     lines = [f"{LOG_PREFIX} Found {len(tools)} tool(s) matching '{query}':\n"]
 
     for t in tools:
-        # Get parameter info from registry
         param_str = _get_param_summary(t['tool_name'])
         sim_pct = int(t['similarity'] * 100)
 
-        lines.append(f"### {t['tool_name']} (relevance: {sim_pct}%, effort: {t['effort']})")
-        lines.append(f"{t['short_summary']}")
+        lines.append(f"- **{t['tool_name']}** ({sim_pct}% match, {t['effort']}): {t['short_summary']}")
         if param_str:
-            lines.append(f"Parameters: {param_str}")
-        lines.append("")
+            lines.append(f"  Parameters: {param_str}")
 
-    lines.append("Use find_tools with action='details' and tool_name='<name>' for full invocation guide.")
-    lines.append("To invoke a tool, use it as an action type: {\"type\": \"<tool_name>\", ...params}")
+    lines.append("\nThese tools are now available for you to call directly.")
     return "\n".join(lines)
 
 
@@ -199,134 +212,10 @@ def _get_param_summary(tool_name: str) -> str:
         return ""
 
 
-# ── Details ───────────────────────────────────────────────────────────────
+# -- Fallback --------------------------------------------------------------
 
 
-def _get_tool_details(params: dict) -> str:
-    """Get full invocation guide for a specific tool."""
-    tool_name = params.get("tool_name", "").strip()
-    if not tool_name:
-        return f"{LOG_PREFIX} Error: 'tool_name' parameter is required for details."
-
-    # Get profile from DB
-    profile = _fetch_profile(tool_name)
-
-    # Get manifest from registry
-    manifest = _fetch_manifest(tool_name)
-
-    if not profile and not manifest:
-        return f"{LOG_PREFIX} Tool '{tool_name}' not found. Use search to discover available tools."
-
-    lines = [f"{LOG_PREFIX} Tool details for '{tool_name}':\n"]
-
-    # Profile info
-    if profile:
-        lines.append(f"## Description")
-        lines.append(profile.get('full_profile', profile.get('short_summary', '')))
-        lines.append("")
-
-        scenarios = profile.get('usage_scenarios', [])
-        if isinstance(scenarios, str):
-            try:
-                scenarios = json.loads(scenarios)
-            except (json.JSONDecodeError, TypeError):
-                scenarios = []
-        if scenarios:
-            lines.append(f"## When to use")
-            for s in scenarios[:5]:
-                lines.append(f"- {s}")
-            lines.append("")
-
-        anti_scenarios = profile.get('anti_scenarios', [])
-        if isinstance(anti_scenarios, str):
-            try:
-                anti_scenarios = json.loads(anti_scenarios)
-            except (json.JSONDecodeError, TypeError):
-                anti_scenarios = []
-        if anti_scenarios:
-            lines.append(f"## When NOT to use")
-            for s in anti_scenarios[:3]:
-                lines.append(f"- {s}")
-            lines.append("")
-
-    # Manifest parameter details
-    if manifest:
-        params_def = manifest.get('parameters', {})
-        if params_def:
-            lines.append(f"## Parameters")
-            for pname, pdef in params_def.items():
-                required = "required" if pdef.get('required', False) else "optional"
-                ptype = pdef.get('type', 'string')
-                desc = pdef.get('description', '')
-                default = pdef.get('default')
-                default_str = f", default: {default}" if default is not None else ""
-                lines.append(f"- `{pname}` ({ptype}, {required}{default_str}): {desc}")
-            lines.append("")
-
-        lines.append(f"## Invocation")
-        lines.append(f'```json\n{{"type": "{tool_name}", {_build_example_params(params_def)}}}\n```')
-
-    # Performance hint
-    perf = _get_performance(tool_name)
-    if perf:
-        lines.append(f"\n## Performance")
-        lines.append(perf)
-
-    return "\n".join(lines)
-
-
-def _fetch_profile(tool_name: str) -> Optional[Dict]:
-    """Fetch tool profile from database."""
-    try:
-        from services.tool_profile_service import ToolProfileService
-        return ToolProfileService().get_full_profile(tool_name)
-    except Exception as e:
-        logger.debug(f"{LOG_PREFIX} Profile fetch failed for {tool_name}: {e}")
-        return None
-
-
-def _fetch_manifest(tool_name: str) -> Optional[Dict]:
-    """Fetch tool manifest from registry."""
-    try:
-        from services.tool_registry_service import ToolRegistryService
-        registry = ToolRegistryService()
-        tool_data = registry.tools.get(tool_name)
-        return tool_data['manifest'] if tool_data else None
-    except Exception:
-        return None
-
-
-def _build_example_params(params_def: dict) -> str:
-    """Build example parameter JSON for invocation guide."""
-    if not params_def:
-        return ""
-    parts = []
-    for pname, pdef in params_def.items():
-        if pdef.get('required', False):
-            parts.append(f'"{pname}": "..."')
-    return ", ".join(parts) if parts else '"param": "..."'
-
-
-def _get_performance(tool_name: str) -> str:
-    """Get performance summary string."""
-    try:
-        from services.tool_performance_service import ToolPerformanceService
-        service = ToolPerformanceService()
-        stats = service.get_tool_stats(tool_name)
-        if not stats or stats.get('total', 0) < 3:
-            return ""
-        success_pct = int(stats['success_rate'] * 100)
-        avg_ms = int(stats['avg_latency'])
-        label = 'reliable' if success_pct >= 80 else 'moderate' if success_pct >= 50 else 'unreliable'
-        return f"{label} — {success_pct}% success rate, ~{avg_ms}ms avg latency, {stats['total']} invocations"
-    except Exception:
-        return ""
-
-
-# ── Fallback ──────────────────────────────────────────────────────────────
-
-
-def _fallback_keyword_search(query: str, limit: int) -> str:
+def _fallback_keyword_search(query: str, limit: int) -> dict:
     """Keyword-based fallback when embedding service is unavailable."""
     try:
         from services.database_service import get_shared_db_service
@@ -350,8 +239,12 @@ def _fallback_keyword_search(query: str, limit: int) -> str:
             cursor.close()
 
         if not rows:
-            return f"{LOG_PREFIX} No tools found matching '{query}' (keyword fallback)."
+            return {
+                "text": f"{LOG_PREFIX} No tools found matching '{query}' (keyword fallback).",
+                "_discovered_tools": [],
+            }
 
+        discovered = []
         lines = [f"{LOG_PREFIX} Found {len(rows)} tool(s) matching '{query}' (keyword search):\n"]
         for row in rows:
             name = row[0] if not isinstance(row, dict) else row['tool_name']
@@ -361,10 +254,14 @@ def _fallback_keyword_search(query: str, limit: int) -> str:
             lines.append(f"- **{name}** ({effort}): {summary}")
             if param_str:
                 lines.append(f"  Parameters: {param_str}")
+            discovered.append(name)
 
-        lines.append("\nUse find_tools with action='details' for full invocation guide.")
-        return "\n".join(lines)
+        lines.append("\nThese tools are now available for you to call directly.")
+        return {"text": "\n".join(lines), "_discovered_tools": discovered}
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Keyword fallback also failed: {e}")
-        return f"{LOG_PREFIX} Tool search unavailable. Error: {e}"
+        return {
+            "text": f"{LOG_PREFIX} Tool search unavailable. Error: {e}",
+            "_discovered_tools": [],
+        }

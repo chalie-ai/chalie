@@ -10,6 +10,49 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "document",
+    "description": (
+        "Search, create, and manage documents (warranties, contracts, manuals, receipts, "
+        "research notes, etc.). Two-phase retrieval: first 'search' to identify relevant "
+        "documents (returns metadata only, not content), then 'view' to load full text for "
+        "analysis. Never answer from search results alone. Use when user asks about uploaded "
+        "documents or wants to save/store content. Do NOT use for general knowledge unrelated "
+        "to personal documents."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["search", "list", "view", "delete", "restore", "create"],
+                "description": "Document operation to perform.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Text to search across all documents. Required for search.",
+            },
+            "id": {
+                "type": "string",
+                "description": "Document ID for exact match (view, delete, restore).",
+            },
+            "name": {
+                "type": "string",
+                "description": "Document filename (e.g. 'research-notes.md'). Required for create; optional fuzzy match for view/delete/restore.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The text content to store. Required for create.",
+            },
+            "source_type": {
+                "type": "string",
+                "description": "Origin of the document (default 'conversation').",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def _parse_extracted_metadata(raw) -> dict:
     """Safely parse extracted_metadata which may be a JSON string or dict."""

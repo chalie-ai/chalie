@@ -9,6 +9,54 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "list",
+    "description": (
+        "Deterministic list management — create and manage structured lists "
+        "(shopping, to-do, chores, etc.) with perfect recall and history tracking. "
+        "Always prefer this over memorize for list-like data. "
+        "'add' auto-creates the list if it does not exist. "
+        "If no lists exist and user says 'add milk', auto-create 'Shopping List' as default. "
+        "When name is omitted for add/remove/check/uncheck, resolves to the most recently used list. "
+        "This manages shopping/to-do lists, NOT scheduler reminders — use schedule.cancel for reminders."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "create", "add", "remove", "check", "uncheck",
+                    "view", "list_all", "clear", "delete", "rename", "history",
+                ],
+                "description": "The list action to perform.",
+            },
+            "name": {
+                "type": "string",
+                "description": (
+                    "List name (e.g. 'Shopping List', 'To Do'). Required for create, clear, "
+                    "delete, rename. Optional for add/remove/check/uncheck/view/history — "
+                    "resolves to most recently used list when omitted."
+                ),
+            },
+            "items": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Required for add/remove/check/uncheck: list of item strings (e.g. ['milk', 'eggs']).",
+            },
+            "new_name": {
+                "type": "string",
+                "description": "Required for rename: the new name for the list.",
+            },
+            "since": {
+                "type": "string",
+                "description": "Optional for history: ISO 8601 timestamp to filter history from.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 _DEFAULT_LIST_NAME = "Shopping List"
 
 

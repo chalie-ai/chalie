@@ -2,6 +2,7 @@
   "temperature": 0.5,
   "timeout": 180,
   "format": "json",
+  "append_mode": true,
   "attention_span_minutes": 30,
   "max_working_memory_turns": 12,
   "max_context_tokens": 4000,

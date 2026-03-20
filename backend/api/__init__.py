@@ -20,6 +20,7 @@ _FRONTEND_DIR = _BACKEND_DIR.parent / 'frontend'
 _INTERFACE_DIR = _FRONTEND_DIR / 'interface'
 _BRAIN_DIR = _FRONTEND_DIR / 'brain'
 _ONBOARDING_DIR = _FRONTEND_DIR / 'on-boarding'
+_LOGIN_DIR = _FRONTEND_DIR / 'login'
 _SHARED_DIR = _FRONTEND_DIR / 'shared'
 
 
@@ -229,6 +230,20 @@ def create_app():
     def onboarding_index():
         """Serve onboarding index."""
         return send_from_directory(str(_ONBOARDING_DIR), 'index.html')
+
+    @app.route('/login/<path:filename>')
+    def login_static(filename):
+        """Serve login page assets."""
+        filepath = _LOGIN_DIR / filename
+        if filepath.is_file():
+            return send_from_directory(str(_LOGIN_DIR), filename)
+        return send_from_directory(str(_LOGIN_DIR), 'index.html')
+
+    @app.route('/login/')
+    @app.route('/login')
+    def login_index():
+        """Serve login page."""
+        return send_from_directory(str(_LOGIN_DIR), 'index.html')
 
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>')

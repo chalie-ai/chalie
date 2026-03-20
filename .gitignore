@@ -35,3 +35,4 @@ frontend/_interfaces
 
 docker-compose.yml
 frontend/server/data/
+.aider*

@@ -18,7 +18,8 @@ from services.act_orchestrator_service import ACTOrchestrator, ACTResult, _actio
 def _make_cortex_service(responses):
     """Build a mock cortex service that returns canned responses in order."""
     service = MagicMock()
-    service.generate_response = MagicMock(side_effect=responses)
+    service.build_system_prompt.return_value = 'mock system prompt'
+    service.generate_response_appended = MagicMock(side_effect=responses)
     return service
 
 
@@ -576,8 +577,147 @@ class TestAppendMode:
         assert result == ''
 
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_run_append_mode_calls_build_system_prompt(self, MockActLoop):
-        """With append_mode=True, build_system_prompt is called once before the loop."""
+    def test_dynamic_tool_injection_from_find_tools(self, MockActLoop):
+        """When find_tools returns discovered tools, their schemas are injected."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+
+        # can_continue called: twice in iteration 0 (repetition + post-execute),
+        # once in iteration 1 (repetition check before no-actions exit)
+        mock_loop.can_continue.side_effect = [
+            (True, None),
+            (True, None),
+            (True, None),
+        ]
+        mock_loop.execute_actions.return_value = [
+            {
+                'action_type': 'find_tools',
+                'status': 'success',
+                'result': {
+                    'text': 'Found 1 tool matching "weather": weather_api',
+                    '_discovered_tools': ['weather_api'],
+                },
+                'execution_time': 0.05,
+            },
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = MagicMock()
+        cortex.build_system_prompt.return_value = 'system prompt'
+        cortex.generate_response_appended.side_effect = [
+            # Iteration 0: call find_tools
+            {
+                'actions': [{'type': 'find_tools', 'query': 'weather'}],
+                'confidence': 0.8,
+                'tool_calls': [{'id': 'tc1', 'name': 'find_tools', 'arguments': {'query': 'weather'}}],
+                'narration': '',
+            },
+            # Iteration 1: no actions, exit
+            {
+                'actions': [],
+                'confidence': 0.8,
+                'response': 'done',
+            },
+        ]
+
+        with patch(
+            'services.act_orchestrator_service.get_external_tool_schemas',
+            return_value=[{
+                'name': 'weather_api',
+                'description': 'Get weather',
+                'input_schema': {
+                    'type': 'object',
+                    'properties': {'city': {'type': 'string'}},
+                    'required': ['city'],
+                },
+            }],
+        ) as mock_get_schemas:
+            orchestrator = ACTOrchestrator(
+                config={}, max_iterations=5, smart_repetition=False,
+            )
+            result = orchestrator.run(
+                topic='test', text='what is the weather?', cortex_service=cortex,
+                act_prompt='test', classification={'topic': 't', 'confidence': 10},
+                chat_history=[],
+            )
+
+            # get_external_tool_schemas should have been called with discovered tools
+            mock_get_schemas.assert_called_once_with(['weather_api'])
+
+        # Second generate_response_appended call should include the injected tool
+        second_call_kwargs = cortex.generate_response_appended.call_args_list[1]
+        tools_arg = second_call_kwargs.kwargs.get('tools') or second_call_kwargs[1].get('tools', [])
+        tool_names = [t['name'] for t in tools_arg]
+        assert 'weather_api' in tool_names
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_dict_result_text_extraction_in_tool_messages(self, MockActLoop):
+        """Dict results with 'text' key should send text (not JSON) to the LLM."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            {
+                'action_type': 'find_tools',
+                'status': 'success',
+                'result': {
+                    'text': 'Found 1 tool.',
+                    '_discovered_tools': [],
+                },
+                'execution_time': 0.05,
+            },
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = MagicMock()
+        cortex.build_system_prompt.return_value = 'system prompt'
+        cortex.generate_response_appended.side_effect = [
+            {
+                'actions': [{'type': 'find_tools', 'query': 'test'}],
+                'tool_calls': [{'id': 'tc1', 'name': 'find_tools', 'arguments': {}}],
+                'narration': '',
+                'confidence': 0.8,
+            },
+            {'actions': [], 'response': 'done', 'confidence': 0.8},
+        ]
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=5, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='test', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+
+        # Check that the tool result message has clean text, not JSON
+        tool_messages = [
+            m for m in cortex.generate_response_appended.call_args_list[1].kwargs.get('messages', [])
+            if isinstance(m, dict) and m.get('role') == 'tool'
+        ]
+        if not tool_messages:
+            # Try positional args
+            for call in cortex.generate_response_appended.call_args_list:
+                msgs = call.kwargs.get('messages', [])
+                tool_messages.extend(m for m in msgs if isinstance(m, dict) and m.get('role') == 'tool')
+
+        assert any(m.get('content') == 'Found 1 tool.' for m in tool_messages)
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_run_always_uses_appended_path(self, MockActLoop):
+        """Orchestrator always builds system prompt once and uses generate_response_appended."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
@@ -599,7 +739,7 @@ class TestAppendMode:
         }
 
         orchestrator = ACTOrchestrator(
-            config={'append_mode': True}, max_iterations=5, smart_repetition=False,
+            config={}, max_iterations=5, smart_repetition=False,
         )
         result = orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
@@ -609,38 +749,3 @@ class TestAppendMode:
 
         cortex.build_system_prompt.assert_called_once()
         cortex.generate_response_appended.assert_called()
-        cortex.generate_response.assert_not_called()
-
-    @patch('services.act_orchestrator_service.ActLoopService')
-    def test_run_legacy_mode_calls_generate_response(self, MockActLoop):
-        """With append_mode=False, generate_response is called (legacy path)."""
-        mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
-        mock_loop.act_history = []
-        mock_loop.iteration_logs = []
-        mock_loop.iteration_number = 0
-        mock_loop.soft_nudge_injected = False
-        mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
-        MockActLoop.return_value = mock_loop
-
-        cortex = MagicMock()
-        cortex.generate_response.return_value = {
-            'actions': [],
-            'confidence': 0.8,
-            'response': 'done',
-        }
-
-        orchestrator = ACTOrchestrator(
-            config={'append_mode': False}, max_iterations=5, smart_repetition=False,
-        )
-        result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
-            act_prompt='test prompt', classification={'topic': 'test', 'confidence': 10},
-            chat_history=[],
-        )
-
-        cortex.generate_response.assert_called()
-        cortex.build_system_prompt.assert_not_called()
-        cortex.generate_response_appended.assert_not_called()

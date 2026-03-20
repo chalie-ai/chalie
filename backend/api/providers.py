@@ -363,3 +363,19 @@ def assign_job_provider(job_name):
     except Exception as e:
         logger.error(f"[REST API] Failed to assign job provider: {e}")
         return jsonify({"error": "Failed to assign job provider"}), 500
+
+
+@providers_bp.route('/jobs/<job_name>/stats', methods=['GET'])
+@require_session
+def get_job_stats(job_name):
+    """Return token usage statistics for a cognitive job."""
+    try:
+        hours = request.args.get('hours', 24, type=int)
+        if hours not in (1, 24, 168, 720):
+            hours = 24
+        from services.llm_call_log_service import get_stats
+        stats = get_stats(job_name, hours)
+        return jsonify(stats), 200
+    except Exception as e:
+        logger.error(f"[REST API] Failed to get job stats: {e}")
+        return jsonify({"error": "Failed to get job stats"}), 500

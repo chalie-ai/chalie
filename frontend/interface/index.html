@@ -296,26 +296,6 @@
     </div>
   </dialog>
 
-  <!-- Login dialog -->
-  <dialog id="loginDialog" class="api-key-dialog">
-    <form id="loginForm" class="api-key-dialog__content" method="post" action="/auth/login">
-      <h2 class="api-key-dialog__title">Welcome back</h2>
-      <p class="api-key-dialog__desc">Enter your credentials to continue.</p>
-      <div class="api-key-dialog__field">
-        <label for="loginUsername" class="api-key-dialog__label">Username</label>
-        <input type="text" id="loginUsername" name="username" class="api-key-dialog__input" placeholder="Your username" autocomplete="username">
-      </div>
-      <div class="api-key-dialog__field">
-        <label for="loginPassword" class="api-key-dialog__label">Password</label>
-        <input type="password" id="loginPassword" name="password" class="api-key-dialog__input" placeholder="Your password" autocomplete="current-password">
-      </div>
-      <div class="api-key-dialog__actions">
-        <button id="loginSubmitBtn" type="submit" class="btn btn-primary">Login</button>
-      </div>
-      <p id="loginStatus" class="api-key-dialog__status"></p>
-    </form>
-  </dialog>
-
   <!-- API Key dialog -->
   <dialog id="apiKeyDialog" class="api-key-dialog">
     <div class="api-key-dialog__content">

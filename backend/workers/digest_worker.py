@@ -41,6 +41,7 @@ from services.thread_service import get_thread_service
 from services.thread_conversation_service import ThreadConversationService
 from services.context_relevance_service import ContextRelevanceService
 from services.context_assembly_service import ContextAssemblyService
+from services.innate_skills.registry import ALL_SKILL_NAMES
 
 # Global session service instance (shared across worker invocations)
 _session_service = None
@@ -536,16 +537,28 @@ def generate_for_mode(topic, text, mode, classification, thread_conv_service, co
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
-    response_data = cortex_service.generate_response(
+    # Use appended path (no tools) — produces a text response without JSON parsing.
+    # The unified prompt uses native tool calling protocol, not JSON output.
+    system_prompt = cortex_service.build_system_prompt(
         system_prompt_template=prompt,
         original_prompt=text,
         classification=classification,
         chat_history=chat_history,
-        act_history=act_history_context or "(none)",
+        assembled_context=assembled_context,
         thread_id=thread_id,
         returning_from_silence=returning_from_silence,
         inclusion_map=inclusion_map,
-        assembled_context=assembled_context,
+    )
+    # Act history goes in the message array (not system prompt) for cache efficiency
+    act_history = act_history_context or "(none)"
+    user_content = text
+    if act_history and act_history != "(none)":
+        user_content = f"{text}\n\nPrevious Internal Actions:\n{act_history}"
+    messages = [{"role": "user", "content": user_content}]
+    response_data = cortex_service.generate_response_appended(
+        system_prompt=system_prompt,
+        messages=messages,
+        cache_prefix=True,
     )
 
     # Router decided the mode, not the LLM
@@ -563,7 +576,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
                      metadata=None, thread_id=None,
                      returning_from_silence=False, message_embedding=None):
     """
-    Unified generation — single LLM call with skills discoverable via find_skills/find_tools.
+    Unified generation — single LLM call with all innate skills available.
 
     The LLM decides whether to respond directly (Format B) or invoke
     skills/tools first (Format A). No mode routing.
@@ -675,17 +688,30 @@ def unified_generate(topic, text, classification, thread_conv_service,
     cortex_service = FrontalCortexService(config)
     chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
 
-    # First LLM call — let the model decide: Format A (actions) or Format B (direct)
-    first_response = cortex_service.generate_response(
+    # Build system prompt and native tool schemas for the first call
+    all_skills = list(ALL_SKILL_NAMES)
+    from services.tool_schema_service import get_skill_schemas
+    native_tools = get_skill_schemas(all_skills)
+
+    system_prompt = cortex_service.build_system_prompt(
         system_prompt_template=prompt,
         original_prompt=text,
         classification=classification,
         chat_history=chat_history,
-        act_history="(none)",
+        assembled_context=assembled_context,
+        selected_skills=all_skills,
         thread_id=thread_id,
         returning_from_silence=returning_from_silence,
         inclusion_map=inclusion_map,
-        assembled_context=assembled_context,
+    )
+    first_messages = [{"role": "user", "content": text}]
+
+    # First LLM call with native tools — model either responds with text or calls tools
+    first_response = cortex_service.generate_response_appended(
+        system_prompt=system_prompt,
+        messages=first_messages,
+        cache_prefix=True,
+        tools=native_tools,
     )
 
     routing_result = {
@@ -696,9 +722,9 @@ def unified_generate(topic, text, classification, thread_conv_service,
         'scores': {'UNIFIED': 1.0},
     }
 
-    # Check if the model wants to invoke skills/tools (Format A: non-empty actions list)
+    # Check if the model wants to invoke skills/tools (tool_calls or legacy actions)
     if not first_response.get('actions'):
-        # Format B — direct response, no ACT loop needed
+        # Direct response — no ACT loop needed
         first_response['mode'] = 'UNIFIED'
         if not first_response.get('response', '').strip():
             first_response['response'] = "I understand. Let me think about that."
@@ -706,7 +732,6 @@ def unified_generate(topic, text, classification, thread_conv_service,
 
     # Format A — enter ACT loop with unified prompt
     from services.act_orchestrator_service import ACTOrchestrator
-    from services.act_loop_service import ActLoopService
 
     act_cumulative_timeout = config.get('act_cumulative_timeout', cortex_config.get('act_cumulative_timeout', 60.0))
     act_per_action_timeout = config.get('act_per_action_timeout', cortex_config.get('act_per_action_timeout', 10.0))
@@ -778,7 +803,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
         classification=classification,
         chat_history=chat_history,
         relevant_tools=None,
-        selected_skills=['find_skills', 'find_tools'],  # Only discovery tools
+        selected_skills=list(ALL_SKILL_NAMES),
         selected_tools=None,
         assembled_context=assembled_context,
         inclusion_map=inclusion_map,
@@ -788,13 +813,9 @@ def unified_generate(topic, text, classification, thread_conv_service,
         request_id=request_uuid,
     )
 
-    # Format act_history for synthesis call
-    _tmp = ActLoopService.__new__(ActLoopService)
-    _tmp.act_history = result.act_history
-    act_history_for_respond = _tmp.get_history_context()
     logging.info(
-        f"[UNIFIED] Passing act_history to synthesis "
-        f"({len(act_history_for_respond)} chars, {len(result.act_history)} actions)"
+        f"[UNIFIED] ACT loop complete: {len(result.act_history)} actions, "
+        f"response={len(result.final_response)} chars"
     )
 
     # Card-only detection
@@ -828,14 +849,16 @@ def unified_generate(topic, text, classification, thread_conv_service,
             'confidence': 1.0,
         }
     else:
-        # Synthesis call — use UNIFIED mode for synthesis (unified prompt handles act_history well)
-        terminal_response = generate_for_mode(
-            topic, text, 'UNIFIED', classification,
-            thread_conv_service, cortex_config, cortex_prompt_map, metadata,
-            act_history_context=act_history_for_respond,
-            thread_id=thread_id,
-            signals=signals,
-        )
+        # Use the model's final response from the ACT loop — it already has full
+        # context from tool results via native tool calling. No synthesis LLM call needed.
+        terminal_response = {
+            'mode': 'UNIFIED',
+            'modifiers': [],
+            'response': result.final_response or "I understand. Let me think about that.",
+            'generation_time': 0.0,
+            'actions': None,
+            'confidence': 0.8,
+        }
 
     # Enqueue tool reflection
     try:

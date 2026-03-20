@@ -8,6 +8,29 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+TOOL_SCHEMA = {
+    "name": "moment",
+    "description": (
+        "Capture and read ambient context snapshots (time, place, energy, device). "
+        "Search for pinned moments by semantic query or list all active moments."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["search", "list"],
+                "description": "Operation: 'search' finds moments by query; 'list' shows all active moments.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Text to search for matching moments. Required for search action.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def handle_moment(topic: str, params: dict) -> str:
     """
