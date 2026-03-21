@@ -1,9 +1,5 @@
 """
-Tests for recall_skill — focusing on the user_traits layer added in plan-06.
-
-Existing layers (working_memory, gists, facts, episodes, concepts) are tested
-indirectly through integration; these tests cover the new user_traits layer and
-the _format_trait_hit helper.
+Tests for recall_skill — user_traits layer, transcript layer, and helpers.
 
 Note: UserTraitService and get_shared_db_service are imported inside the function
 body, so we patch them at their source modules (not in recall_skill).
@@ -180,3 +176,123 @@ class TestAllLayersConstant:
         from services.innate_skills.recall_skill import ALL_LAYERS
         # user_traits should be last — doesn't pollute non-self-knowledge queries
         assert ALL_LAYERS[-1] == "user_traits"
+
+    def test_transcript_not_in_default_layers(self):
+        from services.innate_skills.recall_skill import ALL_LAYERS
+        assert "transcript" not in ALL_LAYERS
+
+
+@pytest.mark.unit
+class TestSearchTranscript:
+    """Tests for _search_transcript — opt-in transcript layer."""
+
+    def test_default_uses_current_topic(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        mock_results = [
+            {'id': 1, 'role': 'user', 'content': 'Hello world',
+             'tool_name': None, 'created_at': '2026-03-20', 'similarity': 0.9, 'topic': 'greetings'},
+        ]
+        with patch('services.transcript_service.search', return_value=mock_results) as mock_search:
+            hits, status = _search_transcript('greetings', 'hello', 3, {})
+
+        mock_search.assert_called_once_with('greetings', 'hello', limit=3, date_from=None, date_to=None)
+        assert len(hits) == 1
+        assert hits[0]['layer'] == 'transcript'
+        assert '1 matches' in status
+
+    def test_global_passes_none_topic(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        with patch('services.transcript_service.search', return_value=[]) as mock_search:
+            _search_transcript('current', 'query', 3, {'transcript_topic': 'global'})
+
+        mock_search.assert_called_once_with(None, 'query', limit=3, date_from=None, date_to=None)
+
+    def test_specific_topic_override(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        with patch('services.transcript_service.search', return_value=[]) as mock_search:
+            _search_transcript('current', 'query', 3, {'transcript_topic': 'other-topic'})
+
+        mock_search.assert_called_once_with('other-topic', 'query', limit=3, date_from=None, date_to=None)
+
+    def test_date_range_passed_through(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        params = {
+            'date_range': {'from': '2026-03-01', 'to': '2026-03-20'},
+        }
+        with patch('services.transcript_service.search', return_value=[]) as mock_search:
+            _search_transcript('topic', 'query', 3, params)
+
+        mock_search.assert_called_once_with(
+            'topic', 'query', limit=3,
+            date_from='2026-03-01', date_to='2026-03-20',
+        )
+
+    def test_empty_results_includes_scope(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        with patch('services.transcript_service.search', return_value=[]):
+            hits, status = _search_transcript('topic', 'query', 3, {'transcript_topic': 'global'})
+
+        assert hits == []
+        assert 'global' in status
+
+    def test_content_truncated_at_300(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        long_content = 'x' * 500
+        mock_results = [
+            {'id': 1, 'role': 'user', 'content': long_content,
+             'tool_name': None, 'created_at': '2026-03-20', 'similarity': 0.8, 'topic': 't'},
+        ]
+        with patch('services.transcript_service.search', return_value=mock_results):
+            hits, _ = _search_transcript('t', 'query', 3, {})
+
+        # [user] prefix + 300 chars + ...
+        assert hits[0]['content'].endswith('...')
+        assert len(hits[0]['content']) < 320
+
+    def test_error_returns_empty(self):
+        from services.innate_skills.recall_skill import _search_transcript
+
+        with patch('services.transcript_service.search', side_effect=Exception('db down')):
+            hits, status = _search_transcript('topic', 'query', 3, {})
+
+        assert hits == []
+        assert 'error' in status
+
+
+@pytest.mark.unit
+class TestHandleRecallTranscriptIntegration:
+    """Test that include_transcript flag works in handle_recall."""
+
+    def test_include_transcript_false_by_default(self):
+        from services.innate_skills.recall_skill import handle_recall
+
+        with patch('services.innate_skills.recall_skill._search_working_memory', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_episodes', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_concepts', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_user_traits', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_transcript') as mock_transcript, \
+             patch('services.innate_skills.recall_skill._store_fok_signal'):
+
+            handle_recall('topic', {'query': 'test'})
+
+        mock_transcript.assert_not_called()
+
+    def test_include_transcript_true_calls_search(self):
+        from services.innate_skills.recall_skill import handle_recall
+
+        with patch('services.innate_skills.recall_skill._search_working_memory', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_episodes', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_concepts', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_user_traits', return_value=([], 'empty')), \
+             patch('services.innate_skills.recall_skill._search_transcript', return_value=([], 'empty')) as mock_transcript, \
+             patch('services.innate_skills.recall_skill._store_fok_signal'):
+
+            handle_recall('topic', {'query': 'test', 'include_transcript': True})
+
+        mock_transcript.assert_called_once()

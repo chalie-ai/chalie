@@ -1,13 +1,12 @@
 """
-Transcript Service — persistent, topic-scoped conversation record.
+Transcript Service — persistent conversation record.
 
 Stores every exchange turn (user, assistant, tool, internal) in SQLite
-with optional vector embeddings for semantic search. Replaces the
-MemoryStore-based scratchpad/notes with durable, searchable storage.
+with optional vector embeddings for semantic search.
 
 Key operations:
 - append(): Write a turn to the transcript
-- search(): Semantic search via topic_transcript_vec
+- search(): Semantic search via topic_transcript_vec (supports cross-topic)
 - get_recent(): Retrieve the most recent N entries for a topic
 - prune_old(): Delete entries older than TTL (90 days default)
 """
@@ -129,13 +128,25 @@ def append_batch(entries: List[Dict]) -> int:
         return 0
 
 
-def search(topic: str, query: str, limit: int = 5) -> List[Dict]:
-    """Semantic search over transcript entries for a topic.
+def search(
+    topic: Optional[str],
+    query: str,
+    limit: int = 5,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> List[Dict]:
+    """Semantic search over transcript entries.
 
-    Uses embedding similarity via topic_transcript_vec, filtered to
-    entries belonging to the given topic.
+    Uses embedding similarity via topic_transcript_vec.
 
-    Returns list of dicts with: id, role, content, tool_name, created_at, similarity.
+    Args:
+        topic: Filter to a specific topic, or None for cross-topic (global) search.
+        query: Search text.
+        limit: Max results (1-20).
+        date_from: ISO datetime lower bound (inclusive). Optional.
+        date_to: ISO datetime upper bound (inclusive). Optional.
+
+    Returns list of dicts with: id, role, content, tool_name, created_at, topic, similarity.
     """
     limit = min(max(limit, 1), 20)
 
@@ -145,7 +156,7 @@ def search(topic: str, query: str, limit: int = 5) -> List[Dict]:
         query_embedding = emb_service.generate_embedding(query)
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Embedding failed, falling back to keyword: {e}")
-        return _keyword_search(topic, query, limit)
+        return _keyword_search(topic, query, limit, date_from, date_to)
 
     blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
 
@@ -153,20 +164,36 @@ def search(topic: str, query: str, limit: int = 5) -> List[Dict]:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
+        # Build WHERE clause dynamically
+        conditions = ["v.embedding MATCH ?", "k = ?"]
+        params: list = [blob, limit + 10]
+
+        if topic:
+            conditions.append("tt.topic = ?")
+            params.append(topic)
+
+        if date_from:
+            conditions.append("tt.created_at >= ?")
+            params.append(date_from)
+
+        if date_to:
+            conditions.append("tt.created_at <= ?")
+            params.append(date_to)
+
+        where = " AND ".join(conditions)
+
         with db.connection() as conn:
             cursor = conn.cursor()
-            # Over-fetch to allow topic filtering
             cursor.execute(
-                """
+                f"""
                 SELECT tt.id, tt.role, tt.content, tt.tool_name, tt.created_at,
-                       v.distance
+                       v.distance, tt.topic
                 FROM topic_transcript_vec v
                 JOIN topic_transcript tt ON tt.rowid = v.rowid
-                WHERE v.embedding MATCH ? AND k = ?
-                  AND tt.topic = ?
+                WHERE {where}
                 ORDER BY v.distance
                 """,
-                (blob, limit + 10, topic),
+                params,
             )
             rows = cursor.fetchall()
             cursor.close()
@@ -182,12 +209,13 @@ def search(topic: str, query: str, limit: int = 5) -> List[Dict]:
                 'tool_name': row[3],
                 'created_at': row[4],
                 'similarity': similarity,
+                'topic': row[6],
             })
         return results
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Vector search failed: {e}")
-        return _keyword_search(topic, query, limit)
+        return _keyword_search(topic, query, limit, date_from, date_to)
 
 
 def get_recent(topic: str, limit: int = 20, since_id: int = None) -> List[Dict]:
@@ -353,23 +381,47 @@ def _embed_entry(rowid: int, content: str) -> None:
         logger.debug(f"{LOG_PREFIX} Embedding failed for rowid {rowid}: {e}")
 
 
-def _keyword_search(topic: str, query: str, limit: int) -> List[Dict]:
+def _keyword_search(
+    topic: Optional[str],
+    query: str,
+    limit: int,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> List[Dict]:
     """Keyword fallback when embedding search is unavailable."""
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
+        conditions = ["content LIKE ?"]
+        params: list = [f'%{query}%']
+
+        if topic:
+            conditions.append("topic = ?")
+            params.append(topic)
+
+        if date_from:
+            conditions.append("created_at >= ?")
+            params.append(date_from)
+
+        if date_to:
+            conditions.append("created_at <= ?")
+            params.append(date_to)
+
+        where = " AND ".join(conditions)
+        params.append(limit)
+
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
-                SELECT id, role, content, tool_name, created_at
+                f"""
+                SELECT id, role, content, tool_name, created_at, topic
                 FROM topic_transcript
-                WHERE topic = ? AND content LIKE ?
+                WHERE {where}
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (topic, f'%{query}%', limit),
+                params,
             )
             rows = cursor.fetchall()
             cursor.close()
@@ -381,7 +433,8 @@ def _keyword_search(topic: str, query: str, limit: int) -> List[Dict]:
                 'content': r[2],
                 'tool_name': r[3],
                 'created_at': r[4],
-                'similarity': 0.5,  # Unknown for keyword search
+                'similarity': 0.5,
+                'topic': r[5],
             }
             for r in rows
         ]

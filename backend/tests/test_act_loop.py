@@ -106,7 +106,7 @@ class TestHistoryTokenBudget:
         assert reason is None
 
     def test_get_history_context_truncates_when_over_budget(self):
-        """get_history_context moves older entries to notes, keeps most recent 3."""
+        """get_history_context drops older entries, keeps most recent 3."""
         svc = ActLoopService(_make_config())
         # Add 6 results with realistic multi-word text
         for i in range(6):
@@ -114,7 +114,7 @@ class TestHistoryTokenBudget:
 
         # Very small budget forces pruning
         context = svc.get_history_context(max_history_tokens=50)
-        assert "moved to notes" in context
+        assert "dropped" in context
         # Should still have the last 3 results
         assert "Result 3" in context
         assert "Result 4" in context

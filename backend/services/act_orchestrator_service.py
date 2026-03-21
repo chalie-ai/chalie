@@ -518,7 +518,7 @@ class ACTOrchestrator:
                         _result = str(_result)
                     if _result:
                         transcript_service.append(
-                            topic, 'tool', _result[:4000],
+                            topic, 'tool', _result[:80000],
                             tool_name=_atype,
                         )
             except Exception:
