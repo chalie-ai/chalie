@@ -6,7 +6,7 @@ This document defines what Chalie is, why it exists, and how every design decisi
 
 ## Mission Statement
 
-**Chalie is a continuous reasoning engine that amplifies any base model into a superintelligent cognitive runtime.**
+**Chalie is a persistent cognitive runtime that amplifies any base model through vertical stacking, continuous reasoning, and accumulated memory.**
 
 Intelligence emerges not from a single powerful model, but from the **vertical stacking** of specialized models through a persistent reasoning loop — perceive, update, reason, act, reflect — that runs continuously, not per-message.
 
@@ -307,6 +307,6 @@ If the answer to most is **no**, reconsider or simplify.
 
 ## Ultimate Goal
 
-Chalie is not a chatbot, assistant, or productivity tool. It is a **continuous reasoning engine** pursuing superintelligence through architectural amplification — vertically stacking specialized models through persistent memory, deterministic gates, and a continuous reasoning loop to unlock problem classes no single model can solve alone.
+Chalie is not a chatbot, assistant, or productivity tool. It is a **persistent cognitive runtime** — vertically stacking specialized models through persistent memory, deterministic gates, and a continuous reasoning loop to unlock problem classes no single model can solve alone.
 
 The measure of success is not response quality on any single interaction. It is the **scope of problems Chalie can solve autonomously** — from detecting a forming goal across casual mentions, to researching options, to executing a multi-session plan, to delegating and monitoring external work, to presenting a decision-ready shortlist — all while knowing what it doesn't know and escalating only when human judgment is required.

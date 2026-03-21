@@ -54,20 +54,11 @@ The visual language is inspired by "blockbuster dark UI" (JARVIS, Tron Legacy, K
 
 ### Implementation Guardrails
 
-**Avoid**
-- Purple/violet-tinted surfaces
-- Multi-color box-shadows (`magenta + cyan + black` stacked glows)
-- Rainbow gradients on buttons/badges
-- Fast ambient motion (25–35s drift minimum)
-- High-alpha accent fills
-
-**Ensure**
-- `line-height: 1.6` for comfortable reading
-- All transitions `220ms ease`
-- `:focus-visible`: `outline: 1.5px solid rgba(138,92,255,0.45); outline-offset: 2px;`
-- Canvas orb alphas in 0.05–0.08 range
-- Grain overlay opacity 0.04 with overlay blend mode
-- Scroll depth fade: `mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent)`
+- No purple-tinted surfaces — color bleeds from canvas atmosphere only
+- One glow color per element, no stacked multi-color box-shadows
+- No fast ambient motion (25–35s drift minimum)
+- `line-height: 1.6`, all transitions `220ms ease`
+- See `frontend/interface/style.css` for exact values
 
 ## Layout Structure
 
@@ -111,15 +102,7 @@ When Chalie's newest message is active:
 
 ## Canvas Atmosphere
 
-The `<canvas>` element renders 4 orbs:
-- Positions: ±40% X, ±40% Y from center
-- Alphas: 0.05–0.08 (drifting within this range)
-- Sizes: ~200–400px radius
-- Drift cycle: 25–35s (t += 0.0008)
-- Scale breath: ±4% (0.96–1.04)
-- Colors: Two warm (violet, magenta), two cool (cyan, indigo)
-
-Provides cinematic atmosphere without competing with UI.
+A background `<canvas>` renders 4 low-alpha orbs (two warm, two cool) drifting on slow 25–35s cycles. Provides cinematic depth without competing with UI elements. See `frontend/interface/ambient_canvas.js` for implementation.
 
 ## Cards System
 
@@ -198,21 +181,6 @@ All cards use the same design language: dark surfaces, violet accents, thin bord
 - **Desktop**: Centered with max-width, comfortable spacing
 
 All three sizes maintain Radiant design fidelity.
-
-## Implementation Checklist
-
-- [ ] Base color `#06080e` on all backgrounds
-- [ ] Surface opacity `rgba(255,255,255,0.03)` minimum
-- [ ] No Bootstrap — use Radiant only
-- [ ] All buttons use violet `#8A5CFF` solid, glow on hover
-- [ ] Canvas atmosphere with 4 orbs (25–35s drift)
-- [ ] Grain overlay at 0.04 opacity
-- [ ] Presence dots with appropriate states
-- [ ] Active message with thin violet edge + top gradient
-- [ ] Scroll depth fade at top/bottom
-- [ ] All transitions 220ms ease
-- [ ] Text `line-height: 1.6`
-- [ ] Focus states with violet outline
 
 ## References
 
