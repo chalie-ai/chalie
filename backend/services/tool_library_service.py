@@ -12,6 +12,7 @@ from tools.weather import execute as _weather_execute
 from tools.web_search import execute as _web_search_execute
 from tools.code_eval import execute as _code_eval_execute
 from tools.programming_docs_search import execute as _docs_execute
+from tools.search.search import execute as _search_execute
 
 
 # -- Handler registry ----------------------------------------------------------
@@ -19,6 +20,7 @@ from tools.programming_docs_search import execute as _docs_execute
 TOOL_HANDLERS = {
     "weather": _weather_execute,
     "web_search": _web_search_execute,
+    "search": _search_execute,
     "code_eval": _code_eval_execute,
     "programming_docs_search": _docs_execute,
 }
@@ -108,10 +110,78 @@ TOOL_METADATA: dict = {
         ],
     },
 
+    "search": {
+        "name": "search",
+        "description": (
+            "Search across multiple sources including Wikipedia, academic databases, "
+            "code repositories, Reddit, news, books, music, and more. Automatically "
+            "routes your query to the most relevant source(s). Falls back to general "
+            "web search if needed. Use provider parameter to force a specific source."
+        ),
+        "documentation": (
+            "Multi-provider search tool with semantic routing. Automatically selects "
+            "the best source(s) for each query from 12 providers: Wikipedia, Wikidata, "
+            "ArXiv, GitHub, Hacker News, Reddit, Google News, Stack Overflow, Open "
+            "Library, MusicBrainz, iTunes, and Nominatim. Falls back to DuckDuckGo "
+            "web search when no provider matches or when all selected providers return "
+            "empty. Use the provider parameter to force a specific source (e.g. "
+            "'wikipedia', 'reddit', 'arxiv', 'ddg'). Results include the source "
+            "provider for each item. Pair with read skill to fetch full content from "
+            "promising URLs."
+        ),
+        "category": "research",
+        "icon": "fa-magnifying-glass",
+        "trigger": {"type": "on_demand"},
+        "parameters": {
+            "query": {
+                "type": "string",
+                "required": True,
+                "description": "What to search for.",
+            },
+            "provider": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Force a specific provider. Use 'ddg' for general web search. "
+                    "Omit to let the system auto-route to the best source(s)."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "required": False,
+                "default": 5,
+                "description": "Max results per provider (default 5, max 10).",
+            },
+        },
+        "returns": {
+            "results": {"type": "array", "description": "List of {title, snippet, url, provider, date}"},
+            "count": {"type": "integer"},
+            "providers_used": {"type": "array", "description": "List of provider names that returned results"},
+            "_meta": {"type": "object", "description": "Routing scores, latency, method"},
+        },
+        "constraints": {"timeout_seconds": 20},
+        "config_schema": {},
+        "output": {
+            "synthesize": True,
+            "card": {"enabled": True, "mode": "immediate", "title": "Search",
+                     "accent_color": "#1a8fff", "background_color": "rgba(26,143,255,0.06)"},
+        },
+        "tips": [
+            "Omit provider to let semantic routing pick the best source(s)",
+            "Use provider='ddg' when you specifically need general web search",
+            "Use provider='reddit' for opinions, recommendations, community advice",
+            "Use provider='arxiv' for academic papers in physics, CS, math",
+            "Pair with read skill to fetch full content from the most relevant result",
+        ],
+    },
+
     "web_search": {
         "name": "web_search",
-        "description": "Search the web via DuckDuckGo. Privacy-focused, no API key required.",
+        "description": "Deprecated — use 'search' tool instead. DuckDuckGo-only web search.",
         "documentation": (
+            "DEPRECATED: Use the 'search' tool instead, which includes DuckDuckGo as "
+            "a fallback alongside 12 other providers with semantic routing. This tool "
+            "is kept for backward compatibility only. "
             "Searches the web via DuckDuckGo and returns titles, snippets, URLs, "
             "and optional images. Use for general web queries when no domain-specific "
             "tool applies. Supports time_range filtering (day/week/month/year). "
