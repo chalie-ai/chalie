@@ -16,12 +16,12 @@ The core deterministic inference engine. Reads browser telemetry and behavioral 
 
 | Dimension | What It Captures | Example Values |
 |-----------|-----------------|----------------|
-| `place` | Where the user likely is | `home`, `work`, `transit`, `unknown` |
-| `attention` | How focused the user appears | `deep_focus`, `active`, `idle`, `distracted` |
+| `place` | Where the user likely is | `home`, `work`, `transit`, `out` |
+| `attention` | How focused the user appears | `deep_focus`, `casual`, `distracted`, `away` |
 | `energy` | Estimated cognitive/physical energy | `high`, `moderate`, `low` |
-| `mobility` | Whether the user is moving | `stationary`, `walking`, `transit` |
-| `tempo` | Pace of interaction | `slow`, `normal`, `fast` |
-| `device_context` | Device type and state | `desktop`, `mobile`, `battery_low`, etc. |
+| `mobility` | Whether the user is moving | `stationary`, `commuting`, `traveling` |
+| `tempo` | Pace of interaction | `rushed`, `relaxed`, `reflective` |
+| `device_context` | Narrative description of device context | `"morning work session"`, `"evening commute"`, `"bedtime check"`, etc. |
 
 All classification is rule-based, driven by thresholds loaded from `configs/agents/ambient-inference.json`. When `emit_events=True`, the service emits transition events (place change, attention shift, energy change) to the Event Bridge whenever a dimension value changes.
 
@@ -88,7 +88,7 @@ Browser telemetry (battery, network, locale, interaction rate)
         +-- Aggregation window (60s bundle)
         |
         v
-      Autonomous action dispatch → CognitiveDriftEngine / ProactiveAction
+      Autonomous action dispatch → ReasoningLoopService / autonomous actions
 
 [Place Learning Service] — background, accumulates fingerprints
   |
@@ -122,6 +122,4 @@ This reflects a core design principle: reducing noise is as valuable as completi
 
 ## Related
 
-- **`07-COGNITIVE-ARCHITECTURE.md`** — how attention state gates the mode router and cognitive drift
-- **`06-WORKERS.md`** — Client Context Service and Event Bridge lifecycle details
 - **`04-ARCHITECTURE.md`** — full service listing under "Ambient Awareness"

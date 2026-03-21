@@ -325,17 +325,16 @@ All server messages include a `seq` (monotonic sequence number) for deduplicatio
 | `stage` | string | Processing stage (e.g. `"processing"`, `"thinking"`, `"retrieving_memory"`, `"responding"`) |
 | `seq` | integer | Sequence number |
 
-**message** — Final text response:
+**message** — Final response:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | string | `"message"` |
-| `text` | string | Response text (markdown) |
+| `blocks` | array | Block array (universal block protocol — no raw text/HTML over the wire) |
 | `topic` | string | Conversation topic |
-| `mode` | string | `"UNIFIED"`, `"ACT"`, or `"IGNORE"` |
+| `mode` | string | Cognitive mode (e.g. `"RESPOND"`, `"ACT"`) |
 | `confidence` | float | Response confidence (0–1) |
 | `exchange_id` | string | Unique exchange identifier |
-| `actions` | array \| null | Optional reply action buttons |
 | `seq` | integer | Sequence number |
 
 **act_narration** — Live ACT loop progress:
@@ -472,13 +471,13 @@ Response:
 | `blocks` | array \| null | Block array for UI rendering (overlay updates) |
 | `openUrl` | string \| null | URL to open in a new browser tab |
 
-**GET /render** — Returns the daemon's UI for the app overlay:
+**GET /** — Returns the daemon's UI for the app overlay:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `blocks` | array | Block array describing the interface UI |
 
-Daemons return `Block[]` from `renderInterface()`. The SDK serializes this as `{ "blocks": [...] }` with `Content-Type: application/json`. The gateway adds a `gateway` field and proxies to the frontend, which renders blocks using `BlockRenderer`. No HTML, JS, or CSS from daemons — structure only. See `plans/block-protocol.md` for the full block schema.
+Daemons return `Block[]` from `renderInterface()` at their root path (`/`). The gateway proxies `/gw/<interface_id>/render` → daemon's `/`, adds a `gateway` field, and forwards to the frontend, which renders blocks using `BlockRenderer`. No HTML, JS, or CSS from daemons — structure only. See `plans/block-protocol.md` for the full block schema.
 
 ### 6.2 Health Monitoring
 
@@ -509,7 +508,7 @@ Daemons return `Block[]` from `renderInterface()`. The SDK serializes this as `{
 | `host` | string | yes | Interface hostname/IP |
 | `port` | integer | yes | Interface port (1–65535) |
 
-**Response:** `200 {"interface_id": "<uuid>", "signal_token": "<token>"}`
+**Response:** `201 {"interface_id": "<uuid>", "signal_token": "<token>"}`
 
 After pairing, the interface's capabilities are registered as tools. The LLM sees them alongside innate skills and local tools — it does not know the difference.
 

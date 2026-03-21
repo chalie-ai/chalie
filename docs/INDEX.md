@@ -1,232 +1,62 @@
-# Chalie Documentation Index
+# Chalie Documentation
 
-Welcome to the Chalie documentation. This is your guide to understanding, deploying, and developing the cognitive assistant system.
+## Start Here
 
-## Vision & Philosophy
+| Document | What You'll Learn |
+|---|---|
+| [00-VISION.md](00-VISION.md) | Product vision, design principles, feature decision filter |
+| [01-QUICK-START.md](01-QUICK-START.md) | Install, configure, and start using Chalie |
+| [02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md) | Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini) |
+| [FAQ.md](FAQ.md) | Common questions and answers |
 
-**Understand what Chalie is and why it exists:**
-- **[00-VISION.md](00-VISION.md)** — Product vision, design principles, delegation boundary, feature decision filter
+## For Developers
 
-## Getting Started
+**Recommended reading order:**
 
-**New to Chalie?** Start here:
-1. **[01-QUICK-START.md](01-QUICK-START.md)** — Quick start guide, prerequisites, deployment instructions
+1. [13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md) — Visual map of every path, storage hit, and LLM call
+2. [04-ARCHITECTURE.md](04-ARCHITECTURE.md) — All services, workers, database schema, and data flow
+3. [09-TOOLS.md](09-TOOLS.md) — How tools work and how to add new ones
+4. [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) — Built-in tools reference
+5. [15-INTERFACES.md](15-INTERFACES.md) — External app integration protocol
+6. [12-TESTING.md](12-TESTING.md) — Test conventions and mock strategies
 
-## Setup & Configuration
+## Specialized Topics
 
-**Setting up Chalie for the first time?** Follow these guides in order:
-1. **[02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md)** — Configure LLM providers (Ollama, Anthropic, OpenAI, Gemini)
+| Document | Contents |
+|---|---|
+| [03-WEB-INTERFACE.md](03-WEB-INTERFACE.md) | UI spec and Radiant design system |
+| [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) | Place inference, attention tracking, event bridge |
+| [17-CURIOSITY-SYSTEM.md](17-CURIOSITY-SYSTEM.md) | Self-directed exploration threads |
+| [18-SIGNAL-CONTRACT.md](18-SIGNAL-CONTRACT.md) | Signal-driven continuous reasoning spec |
 
-## Understanding the System
+## Key Directories
 
-**Want to understand how Chalie works?** Read these in order:
-1. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — Complete system architecture, services, workers, data flow
-2. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual flow diagrams: every path, every MemoryStore/DB hit, every LLM call
-3. **[05-WORKFLOW.md](05-WORKFLOW.md)** — Detailed step-by-step flow of prompt processing
-4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — Deterministic mode router and decision flow
-5. **[06-WORKERS.md](06-WORKERS.md)** — Worker processes and services overview
-6. **[08-DATA-SCHEMAS.md](08-DATA-SCHEMAS.md)** — Data schemas for MemoryStore and SQLite
+```
+backend/
+├── services/          # Business logic
+├── workers/           # Background daemon threads
+├── api/               # REST API blueprints
+├── tools/             # First-party tool modules
+├── prompts/           # LLM prompt templates
+├── tests/             # Test suite
+└── run.py             # Single entry point
 
-## If You're a Developer Exploring the Codebase
-
-Recommended reading order for engineers:
-0. **[00-VISION.md](00-VISION.md)** — Start with why: product vision, design principles, and feature decision filter
-1. **[13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md)** — Visual map of every path, storage hit, and LLM call; fastest way to build a mental model
-
-2. **[05-WORKFLOW.md](05-WORKFLOW.md)** — The full request pipeline in 15 steps; narrative explanation
-3. **[04-ARCHITECTURE.md](04-ARCHITECTURE.md)** — All services, workers, and data flow in one place
-4. **[07-COGNITIVE-ARCHITECTURE.md](07-COGNITIVE-ARCHITECTURE.md)** — The deterministic mode router and decision logic
-5. **[09-TOOLS.md](09-TOOLS.md)** — How to extend Chalie with tools
-6. **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Token optimization and selective context injection
-
-## Tools & Extensions
-
-- **[09-TOOLS.md](09-TOOLS.md)** — Tools system architecture, IPC contract, execution flow, safety guardrails
-- **[14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md)** — First-party tools reference (weather, web search, code eval, docs search)
-- **[15-INTERFACES.md](15-INTERFACES.md)** — External interfaces: pairing protocol, signals, messages, tool execution
-
-## Performance & Optimization
-
-**Optimizing Chalie's performance?**
-- **[10-CONTEXT-RELEVANCE.md](10-CONTEXT-RELEVANCE.md)** — Context relevance pre-parser, selective context injection, configuration tuning
-
-## User Interface
-
-**Building or modifying the web interface?**
-- **[03-WEB-INTERFACE.md](03-WEB-INTERFACE.md)** — Web UI requirements, layout, functionality
+frontend/
+├── interface/         # Main chat UI
+├── brain/             # Admin dashboard
+└── on-boarding/       # Setup wizard
+```
 
 ## Quick Reference
 
-### File Organization
-```
-docs/
-├── INDEX.md                          ← You are here
-├── 00-VISION.md                      ← Product vision & design compass
-├── 01-QUICK-START.md                 ← Getting started
-├── 02-PROVIDERS-SETUP.md             ← LLM provider configuration
-├── 03-WEB-INTERFACE.md               ← Web UI specification
-├── 04-ARCHITECTURE.md                ← System architecture
-├── 05-WORKFLOW.md                    ← Request processing pipeline
-├── 06-WORKERS.md                     ← Worker processes overview
-├── 07-COGNITIVE-ARCHITECTURE.md      ← Mode router & cognition
-├── 08-DATA-SCHEMAS.md                ← Data structures
-├── 09-TOOLS.md                       ← Tools system & creation guide
-├── 10-CONTEXT-RELEVANCE.md           ← Context relevance pre-parser & optimization
-├── 12-TESTING.md                     ← Test conventions, fixtures, mock strategies
-├── 13-MESSAGE-FLOW.md                ← Visual flow diagrams: all paths, MemoryStore/DB, LLM calls
-├── 14-DEFAULT-TOOLS.md               ← First-party tools (TOOL_LIBRARY)
-└── 15-INTERFACES.md                  ← Interface layer architecture
-```
+- **Start Chalie**: `./run.sh` or `python backend/run.py`
+- **Run tests**: `cd backend && pytest`
+- **Database**: `backend/data/chalie.db` (SQLite)
+- **Default port**: 8081
+- **Schema**: `backend/schema.sql`
 
-### Important Project Files (Not in docs/)
-- **`CLAUDE.md`** — Project instructions for Claude Code (development guidance)
-- **`README.md`** — Root-level project overview
-- **`installer/install.sh`** — One-line installer (published at https://chalie.ai/install)
-- **`.env.example`** — Configuration template (PORT — all secrets auto-generate)
+## Other Project Files
 
-### Key Directories
-- **`backend/`** — Python backend (services, workers, API, configs, migrations)
-- **`frontend/interface/`** — Main chat web UI (HTML, CSS, JavaScript)
-- **`frontend/brain/`** — Admin/cognitive dashboard
-- **`frontend/on-boarding/`** — Account setup wizard
-- **`backend/prompts/`** — LLM prompt templates (mode-specific)
-- **`backend/configs/`** — Configuration files and schemas
-- **`backend/migrations/`** — Database migration scripts
-
-## Common Tasks
-
-### Deploying Chalie
-1. `curl -fsSL https://chalie.ai/install | bash`
-2. `chalie` — opens at http://localhost:8081
-3. Complete onboarding to configure your LLM provider (see 02-PROVIDERS-SETUP.md)
-
-### Understanding a Specific Component
-- **Product philosophy?** → See 00-VISION.md — core principles, delegation boundary, behavioral guidelines
-- **Should we build this feature?** → See 00-VISION.md "Decision Filter" — 7 yes/no questions
-- **Memory system?** → See 04-ARCHITECTURE.md "Memory Hierarchy"
-- **How routing works?** → See 07-COGNITIVE-ARCHITECTURE.md
-- **Data flow?** → See 05-WORKFLOW.md or 04-ARCHITECTURE.md "Data Flow Pipeline"
-- **Worker responsibilities?** → See 06-WORKERS.md
-- **Tools & extensions?** → See 09-TOOLS.md
-
-### Configuring a New LLM Provider
-1. Read 02-PROVIDERS-SETUP.md
-2. Use REST API (`POST /providers`) to register provider
-3. Optionally assign to specific jobs (`PUT /providers/jobs/{job_name}`)
-
-### Building/Modifying the Web UI
-1. Read 03-WEB-INTERFACE.md for requirements
-2. All code goes in `frontend/interface/` (HTML, CSS, JS)
-3. UI communicates with backend via REST API at `/chat`
-
-### Adding New Services or Workers
-1. Create file in `backend/services/` or `backend/workers/`
-2. Register in `backend/run.py`
-3. Document in 06-WORKERS.md
-4. Add tests in `backend/tests/`
-
-### Pairing an Interface
-1. Open the brain dashboard and go to Interfaces tab
-2. Click "Generate Pairing Key" to get a one-time key
-3. Enter Chalie's host:port + pairing key into the interface setup
-4. The interface pairs automatically and its capabilities appear as tools
-
-### Creating a New Tool
-1. Read 09-TOOLS.md for architecture and requirements
-2. Create `backend/tools/tool_name/` directory
-3. Add `manifest.json` (metadata, parameters, trigger type)
-4. Implement tool logic in `runner.py` or `runner.sh`
-5. Configure via REST API (`PUT /tools/<name>/config`)
-
-## Architecture Quick Facts
-
-- **Language**: Python 3.9+
-- **Databases**: SQLite (WAL mode + sqlite-vec + FTS5), MemoryStore (in-memory)
-- **Frontend**: Vanilla JavaScript (Radiant design system)
-- **LLM Support**: Ollama, Anthropic, OpenAI, Google Gemini
-- **Port**: 8081 (configurable via `--port=N`)
-- **Configuration**: env vars > .env file > JSON files > hardcoded defaults
-- **Worker Pattern**: Thread-based (PromptQueue) with daemon worker threads
-- **Safety**: Deterministic routing, single authority for learning, bounded parameter updates
-
-## Key Concepts
-
-### Mode Routing
-Chalie selects one of 5 engagement modes for each user message:
-- **UNIFIED** — Give a substantive answer
-- **CLARIFY** — Ask a clarifying question
-- **ACKNOWLEDGE** — Brief social response
-- **ACT** — Execute internal actions (memory, reasoning)
-- **IGNORE** — No response needed
-
-Mode is selected by a fast mathematical router (~5ms) based on observable signals, then the LLM generates a response in that mode-specific style.
-
-### Memory Hierarchy
-Information flows through multiple layers with different timescales:
-1. **Topic Transcript** (persistent, append-only) → Full conversation record per topic
-2. **Compaction** (persistent) → Incremental LLM summary of older transcript entries
-3. **Gists** (30min) → Compressed exchange summaries
-4. **Facts** (24h) → Atomic assertions
-5. **Episodes** (permanent, decaying) → Narrative memories
-6. **Concepts** (permanent, decaying) → Knowledge graph
-7. **Lists** (permanent, no decay) → Deterministic ground-truth state (shopping, to-do, chores)
-
-### Autonomy
-Chalie can generate spontaneous thoughts during idle periods via the Cognitive Drift Engine (Default Mode Network). Thoughts go through three gates (quality, timing, engagement) before being sent to users.
-
-### Safety Boundaries
-- Prompts are immutable (marked as "authoritative")
-- Skills are fixed at startup (no runtime registration)
-- Data scoped by topic (no cross-topic leakage)
-- Hard timeouts on all operations
-- All external actions are async and audited
-
-## Cognitive Terminology Glossary
-
-| Term | Meaning in Chalie |
-|---|---|
-| **Episodic memory** | A stored narrative unit representing a past interaction — what happened, what was felt, what was decided |
-| **Semantic memory** | Knowledge nodes (concepts) and their relationships — facts abstracted away from specific events |
-| **Decay** | Natural fading of memory strength over time; prevents noise accumulation without explicit deletion |
-| **Salience** | How contextually relevant a memory is to the current moment — gates retrieval priority |
-| **Gist** | A compressed summary of a conversation exchange, bridging working memory and episodic storage |
-| **Spreading activation** | When one concept is retrieved, related concepts are activated with lower priority — mimics associative recall |
-| **Mode router** | The deterministic component that selects how Chalie should respond before any LLM is called |
-| **Deterministic routing** | Mode selection via scored signals (~5ms), not via LLM inference — auditable and fast |
-| **ACT loop** | The autonomous task execution cycle: plan → act → observe → continue-or-stop |
-| **Cognitive drift (DMN)** | Spontaneous thought generation during idle periods, inspired by the Default Mode Network |
-
-## What Chalie Is Not
-
-- **Not AGI** — it does not plan or act autonomously without human instruction
-- **Not a surveillance system** — memory decays by design; old facts fade unless reinforced
-- **Not a productivity robot** — it is a thinking aid, not a task manager
-- **Not a cloud service** — every byte stays local unless you configure an external LLM provider
-- **Not a general automation platform** — tools are isolated, audited, and bounded by hard limits
-
-## Support & Development
-
-- **Issues**: Check GitHub issues or project backlog
-- **Contributing**: Create feature branch, add tests, follow existing patterns
-- **Questions**: Review relevant documentation section, check `docs/04-ARCHITECTURE.md` for recent work
-
-## Testing
-
-**Writing or reviewing tests?**
-- **[12-TESTING.md](12-TESTING.md)** — Test conventions, fixture catalog, mock strategies, how to add tests
-
-## Document Status
-
-**Last Updated**: 2026-02-26
-
-All documentation reflects the current state of the codebase as of this date. See `CLAUDE.md` for recent changes and current development focus.
-
-**Recent Additions**:
-- Testing guide: `12-TESTING.md` — conventions, fixtures, mock strategies
-- Observability endpoints: `/system/observability/*` for cognitive legibility
-- Moments API: Pin, list, search, and forget meaningful exchanges
-- Task strip: Persistent background tasks visible in the UI
-- Understanding tab: Brain dashboard cognitive transparency
-- Curiosity Threads: Self-directed exploration threads seeded from cognitive drift
-- 09-TOOLS.md: Comprehensive tools system documentation
-- Document skill: Upload, extract, chunk, embed, and hybrid-search documents (warranties, contracts, manuals) via ACT loop innate skill
+- [CLAUDE.md](../CLAUDE.md) — Development guidance for Claude Code
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — Contribution guidelines
+- [README.md](../README.md) — Project overview
