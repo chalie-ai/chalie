@@ -37,10 +37,9 @@ The tools system provides:
 - Stores API keys, credentials, and parameters as key-value pairs
 - Secrets are masked in API responses (shows `***` instead of actual value)
 
-**Tool Relevance Service**
-- Embedding-based semantic matching between user intent and available tools
-- Caches embeddings for performance (disk-persisted)
-- Threshold-based filtering (default: 0.35 relevance minimum)
+**Tool Profile Service** (`backend/services/tool_profile_service.py`)
+- LLM-generated tool capability profiles with triage triggers and usage scenarios
+- Powers the `find_tools` innate skill (semantic search against capability embeddings)
 
 **REST API** (`backend/api/tools.py`)
 - List tools with status and config schema
@@ -79,13 +78,13 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
 
 1. **List available tools:**
    ```bash
-   curl http://localhost:8080/tools \
+   curl http://localhost:8081/tools \
      -H "Authorization: Bearer YOUR_API_KEY"
    ```
 
 2. **Set configuration (API keys, endpoints):**
    ```bash
-   curl -X PUT http://localhost:8080/tools/my_tool/config \
+   curl -X PUT http://localhost:8081/tools/my_tool/config \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -H "Content-Type: application/json" \
      -d '{"api_key": "sk-...", "endpoint": "https://..."}'
@@ -93,29 +92,29 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
 
 3. **Test configuration:**
    ```bash
-   curl -X POST http://localhost:8080/tools/my_tool/test \
+   curl -X POST http://localhost:8081/tools/my_tool/test \
      -H "Authorization: Bearer YOUR_API_KEY"
    ```
    Returns `{"ok": true, "message": "Configuration looks complete"}` if all required keys are set.
 
 4. **Get configuration (secrets masked):**
    ```bash
-   curl http://localhost:8080/tools/my_tool/config \
+   curl http://localhost:8081/tools/my_tool/config \
      -H "Authorization: Bearer YOUR_API_KEY"
    ```
 
 5. **Delete a config key:**
    ```bash
-   curl -X DELETE http://localhost:8080/tools/my_tool/config/api_key \
+   curl -X DELETE http://localhost:8081/tools/my_tool/config/api_key \
      -H "Authorization: Bearer YOUR_API_KEY"
    ```
 
 ### Tool Execution Flow
 
-When user sends a message that matches ACT mode:
+When the LLM decides to use a tool during the unified generation path:
 
-1. **Semantic Matching** — Tool Relevance Service embeds user intent, scores against all available tools
-2. **Tool Selection** — Mode router picks most relevant tools with relevance > threshold
+1. **Discovery** — LLM uses the `find_tools` innate skill to search available tools by capability
+2. **Selection** — LLM decides which tool to invoke based on capability profiles
 3. **Parameter Extraction** — LLM extracts parameters from conversation context
 4. **Configuration Injection** — ToolConfigService fetches stored API keys/endpoints
 5. **Direct Invocation** — Handler called in-process via `ToolLibraryService.get_handler()`
@@ -168,8 +167,8 @@ Tool name in `TOOL_HANDLERS` must match the name used in `TOOL_METADATA` exactly
 
 ### Configuration Not Being Used
 
-1. Verify config is set: `curl http://localhost:8080/tools/my_tool/config`
-2. Test configuration: `curl -X POST http://localhost:8080/tools/my_tool/test`
+1. Verify config is set: `curl http://localhost:8081/tools/my_tool/config`
+2. Test configuration: `curl -X POST http://localhost:8081/tools/my_tool/test`
 3. Check required keys are present (marked with `"required": true`)
 
 ### Tool Timeout

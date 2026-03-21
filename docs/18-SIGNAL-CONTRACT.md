@@ -44,13 +44,13 @@ Every service belongs to exactly one of three layers. Failures are contained wit
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
 **Cognitive services:**
-DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, RoutingReflection, SelfModel
+DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, GoalInference, SelfModel
 
 **Embodiment services:**
 AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, EpisodicMemoryObserver, ThreadExpiry
 
 **Capability services:**
-ToolRegistry, ToolWorker, ToolContainer, ToolConfig, ToolProfile, ToolPerformance, ToolUpdateChecker, ACTLoop, ACTDispatcher, DocumentService, DocumentProcessing, DocumentPurge, SchedulerService, ListService, PersistentTaskWorker, MomentEnrichment, ProfileEnrichment
+ToolRegistry, ToolWorker, ToolSubprocess, ToolConfig, ToolProfile, ToolPerformance, ACTLoop, ACTDispatcher, DocumentService, DocumentProcessing, DocumentPurge, SchedulerService, ListService, PersistentTaskWorker, MomentEnrichment, ProfileEnrichment
 
 **Cross-layer rules:**
 - Cognitive services never import embodiment or capability services at module level (lazy imports only)
@@ -93,7 +93,6 @@ class ReasoningSignal:
 | `novel_observation` | Surprising tool output stored as episode | experience_assimilation | 0.6 |
 | `ambient_context` | Environment changed (place, attention, energy) | event_bridge | From confidence |
 | `idle_discovery` | Nothing happened, engine self-seeds | reasoning_loop (internal) | 0.4–0.5 |
-| `gist_stored` | Active conversation gists stored | gist_storage | 0.3 |
 | `episode_created` | New narrative episode consolidated | episodic_memory_worker | 0.5 |
 | `trait_changed` | User trait created, updated, or corrected | user_trait_service | 0.3–0.7 |
 | `task_state_changed` | Persistent task state transition | persistent_task_service | 0.5–0.6 |
@@ -128,7 +127,7 @@ New signal types require:
 
 - Emission is always **fire-and-forget** — the emitter never waits for a response
 - Emission is always **wrapped in try/except** — a failed emit is logged at DEBUG, never raised
-- Emission uses **lazy imports** (`from services.cognitive_drift_engine import ...` or `from services.reasoning_loop_service import ...`) to avoid import cycles
+- Emission uses **lazy imports** (`from services.reasoning_loop_service import emit_reasoning_signal, ReasoningSignal`) to avoid import cycles
 - Emitters never instantiate the consumer — they push to the queue and forget
 
 ---
@@ -223,13 +222,13 @@ def run_signal_loop(self):
 | **SemanticConsolidationService** | `new_knowledge`, `memory_pressure` | Queue-driven | 967 |
 | **ExperienceAssimilationService** | `novel_observation` | 60s poll | — |
 | **EventBridgeService** | `ambient_context` | Event-driven | 968 |
-| **GistStorageService** | `gist_stored` | Request-driven | 970 |
 | **EpisodicMemoryWorker** | `episode_created` | Queue-driven | 971 |
 | **UserTraitService** | `trait_changed` | Request-driven | 972 |
 | **PersistentTaskService** | `task_state_changed` | Request/timer | 973 |
 | **SchedulerService** | `schedule_fired` | 60s timer | 974 |
 | **ThreadExpiryService** | `thread_expired` | 5min timer | 975 |
 | **CuriosityPursuitService** | `curiosity_finding` | 6h timer | 976 |
+| **GoalInferenceService** | `goal_inferred` | Idle-time check (6h cooldown) | — |
 
 ### Phase 2 Complete (Signal-Driven, No Timer)
 
@@ -248,7 +247,6 @@ def run_signal_loop(self):
 | PersistentTaskWorker | 30min timer | — | Could react to plan-ready signals |
 | ProfileEnrichmentService | 6h timer | Low | Long cycle, timer is fine |
 | TemporalPatternService | 6h timer | Low | Long cycle, timer is fine |
-| ToolUpdateChecker | 6h timer | Low | Infrastructure, timer is fine |
 | SelfModelService | 30s timer | — | Heartbeat aggregator, timer is natural |
 | DocumentPurgeService | 6h timer | Low | Maintenance, timer is fine |
 | MomentEnrichmentService | 5min timer | Low | Polling for status, timer is fine |

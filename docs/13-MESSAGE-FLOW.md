@@ -19,14 +19,8 @@ This document is the single authoritative visual map of how a user message trave
 
 ```
                             ┌──────────────────────┐
-                            │   User Message POST  │
-                            │     /chat  (HTTP)    │
-                            └──────────┬───────────┘
-                                       │
-                            ┌──────────▼───────────┐
-                            │  WebSocket channel   │
-                            │  ws:{request_id}     │
-                            │  📤 M  ws_pending    │
+                            │  User Message via    │
+                            │    /ws  (WebSocket)  │
                             └──────────┬───────────┘
                                        │ daemon thread
                             ┌──────────▼───────────┐
@@ -62,7 +56,7 @@ This document is the single authoritative visual map of how a user message trave
                                ┌──────▼───────────┐
                                │   PHASE D        │
                                │   Post-Response  │
-                               │   Commit (see §6)│
+                               │   Commit (see §5)│
                                └──────┬───────────┘
                                       │
                                ┌──────▼───────────┐
@@ -72,8 +66,8 @@ This document is the single authoritative visual map of how a user message trave
                                └──────────────────┘
 
 BACKGROUND (always running, independent of user messages):
-  PATH D  ──  Persistent Task Worker  (30min ± jitter)   (see §7)
-  PATH E  ──  Cognitive Drift Engine  (300s, idle-only)   (see §8)
+  PATH D  ──  Persistent Task Worker  (30min ± jitter)   (see §5)
+  PATH E  ──  Reasoning Loop          (600s, idle-only)   (see §7)
 ```
 
 ---
@@ -107,7 +101,7 @@ Runs immediately for every message, before any routing decision.
 │          key: fok:{topic}  (float 0.0–5.0)                         │
 │          ─────────────────────────────────────────────────          │
 │  Step 7  Context Warmth                           ⚡ DET            │
-│          warmth = (wm_score + gist_score + world_score) / 3        │
+│          warmth = (wm_score + world_score) / 2                     │
 │          ─────────────────────────────────────────────────          │
 │  Step 8  Memory Confidence                        ⚡ DET            │
 │          conf = 0.4×fok + 0.4×warmth + 0.2×density                │
@@ -180,19 +174,14 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
 │    Anti-oscillation: hysteresis dampening from prior mode          │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Tie-breaker?                           🧠 LLM  ~100ms      │   │
+│  │  Tie-breaker?                           ⚡ ONNX  ~5ms        │   │
 │  │  Triggered when: top-2 scores within effective_margin       │   │
-│  │  Model:   qwen3:4b                                          │   │
-│  │  Input:   mode descriptions + context summary               │   │
-│  │  Output:  JSON → pick mode A or B                           │   │
+│  │  Model:   mode-tiebreaker (ONNX classifier)                 │   │
+│  │  Output:  pick mode A or B                                  │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
-          ┌────────────────────┬───────────────────┐
-          │                                        │
-       UNIFIED                               ACKNOWLEDGE
-          │                                        │
-          └────────────────────────────────────────┘
+                            UNIFIED
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  FrontalCortexService                        🧠 LLM  ~500ms–2s     │
@@ -207,8 +196,7 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
 │    • Context relevance inclusion map (computed dynamically)         │
 │                                                                     │
 │  Config files:                                                      │
-│    UNIFIED      → frontal-cortex.json (base, uses unified prompt)   │
-│    ACKNOWLEDGE  → frontal-cortex.json (base)                       │
+│    UNIFIED      → frontal-cortex-unified.json                       │
 │                                                                     │
 │  Output: { response: str, confidence: float, mode: str }           │
 └──────────────────────────────┬──────────────────────────────────────┘
@@ -222,8 +210,8 @@ Used by background workers (tool_worker, persistent_task_worker, curiosity_pursu
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  ActLoopService                                                     │
-│  Config: cumulative_timeout=60s  per_action=10s  max_iterations=5  │
+│  ACTOrchestrator                                                    │
+│  Config: cumulative_timeout=60s  per_action=10s  max_iterations=30 │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │  Iteration N                                                 │  │
@@ -234,11 +222,11 @@ Used by background workers (tool_worker, persistent_task_worker, curiosity_pursu
 │  │     Output: [{ type, params, … }, …]                        │  │
 │  │                                                              │  │
 │  │  2. Termination check               ⚡ DET                  │  │
-│  │     • Fatigue budget exceeded?                               │  │
 │  │     • Cumulative timeout reached?                            │  │
 │  │     • Max iterations reached?                                │  │
 │  │     • No actions in plan?                                    │  │
-│  │     • Same action repeated 3× in a row?                     │  │
+│  │     • Semantic repetition detected? (embedding-based)        │  │
+│  │     • Same action type repeated 3× in a row?                │  │
 │  │     If any → exit loop                                       │  │
 │  │                                                              │  │
 │  │  3. Execute actions                  ⚡/🧠 varies           │  │
@@ -251,11 +239,7 @@ Used by background workers (tool_worker, persistent_task_worker, curiosity_pursu
 │  │       (all innate skills available directly)                │  │
 │  │       (+ external tools via tool_worker thread)             │  │
 │  │                                                              │  │
-│  │  4. Accumulate fatigue               ⚡ DET                 │  │
-│  │     cost *= (1.0 + fatigue_growth_rate × iteration)         │  │
-│  │     fatigue += cost                                          │  │
-│  │                                                              │  │
-│  │  5. Log iteration                    📤 DB                  │  │
+│  │  4. Log iteration                    📤 DB                  │  │
 │  │     Table: cortex_iterations                                 │  │
 │  │     Fields: iteration_number, actions_executed,             │  │
 │  │             execution_time_ms, fatigue, mode                │  │
@@ -275,65 +259,7 @@ Used by background workers (tool_worker, persistent_task_worker, curiosity_pursu
 
 ---
 
-## 5. Path B — ACT → Tool Worker (PromptQueue)
-
-Used by background workers for tool execution.
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  _handle_act_triage()                         ⚡ DET               │
-│                                                                     │
-│  1. Create cycle record                         📤 DB              │
-│     Table: cortex_iterations                                        │
-│     Type: 'user_input', source: 'user'                             │
-│                                                                     │
-│  2. Enqueue tool work                           📤 M  (Queue)      │
-│     Queue: tool-queue                                               │
-│     Payload:                                                        │
-│       cycle_id, topic, text, intent                                │
-│       context_snapshot: { warmth, tool_hints, exchange_id }        │
-│                                                                     │
-│  3. Set WS pending flag                         📤 M               │
-│     key: ws_pending:{request_id}  TTL=600s                         │
-│     Tells /chat endpoint: tool_worker will deliver response         │
-│                                                                     │
-│  4. Return empty response (digest_worker done)                     │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                   WebSocket holds open (polling ws_pending)
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│  tool_worker  (daemon thread)                                       │
-│                                                                     │
-│  1. Dequeue from tool-queue                     📥 M  (Queue)      │
-│                                                                     │
-│  2. Get relevant tools                          📥 DB              │
-│     From triage_selected_tools, or compute via relevance           │
-│                                                                     │
-│  3. Dispatch each tool                                              │
-│     ActDispatcherService (generic, no tool-specific branches)      │
-│     Per-tool timeout enforced                                       │
-│     Result: { status, result, execution_time }                     │
-│                                                                     │
-│  4. Post-action critic verification             🧠 LLM  (optional) │
-│     CriticService — lightweight LLM                                │
-│     Safe actions:         silent correction                         │
-│     Consequential actions: pause + escalate to user                │
-│                                                                     │
-│  5. Log results                                 📤 DB              │
-│                                                                     │
-│  6. Publish response                            📤 M  (pub/sub)    │
-│     key: output:{request_id}                                        │
-│     Payload: { metadata: { response, mode, cards, … } }           │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-                        WebSocket receives pub/sub
-                        → streams cards + text to client
-```
-
----
-
-## 6. Phase D — Post-Response Commit
+## 5. Phase D — Post-Response Commit
 
 Runs after every response is generated (Paths A, B, C).
 
@@ -355,10 +281,6 @@ Runs after every response is generated (Paths A, B, C).
 │          Triggers downstream memory consolidation:                  │
 │                                                                     │
 │          ┌──────────────────────────────────────────────────────┐  │
-│          │  memory-chunker-queue (PromptQueue)                  │  │
-│          │    → memory_chunker_worker: gist generation 🧠 LLM  │  │
-│          │    → 📤 M  gist:{topic}  (sorted set)                │  │
-│          │                                                      │  │
 │          │  episodic-memory-queue (PromptQueue)                 │  │
 │          │    → episodic_memory_worker: episode build  🧠 LLM  │  │
 │          │    → 📤 DB  episodes  (with sqlite-vec embedding)    │  │
@@ -376,7 +298,7 @@ Runs after every response is generated (Paths A, B, C).
 
 ---
 
-## 7. Path D — Persistent Task Worker (Background, 30min Cycle)
+## 6. Path D — Persistent Task Worker (Background, 30min Cycle)
 
 Operates completely independently of user messages.
 
@@ -435,13 +357,13 @@ Operates completely independently of user messages.
 
 ---
 
-## 8. Path E — Cognitive Drift Engine (Background, 300s Idle-Only)
+## 7. Path E — Reasoning Loop (Background, 600s Idle-Only)
 
-Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Network.
+Runs only when all PromptQueues are idle. Signal-driven continuous reasoning.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  cognitive_drift_engine  (300s cycles, idle-gated)                 │
+│  reasoning_loop_service  (600s idle timeout, signal-driven)        │
 │                                                                     │
 │  Preconditions:                               ⚡ DET               │
 │    All queues idle?   📥 M  (queue lengths = 0)                    │
@@ -449,8 +371,7 @@ Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Networ
 │    Bail if user is in deep focus           📥 M  focus:{thread_id} │
 │                                                                     │
 │  1. Seed Selection (weighted random)          ⚡ DET               │
-│     Decaying  0.35 │ Recent   0.25 │ Salient 0.15                  │
-│     Insight   0.15 │ Random   0.10                                  │
+│     Salient  0.60 │ Insight  0.40                                   │
 │     Source: 📥 DB  episodes table (by category)                    │
 │                                                                     │
 │  2. Spreading Activation (depth ≤ 2)          ⚡ DET               │
@@ -471,17 +392,17 @@ Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Networ
 │  5. Action Decision Routing                   ⚡ DET               │
 │     Scores registered actions:                                      │
 │                                                                     │
-│     ┌──────────────┬──────────┬──────────────────────────────────┐ │
-│     │  Action      │ Priority │  What it does                    │ │
-│     ├──────────────┼──────────┼──────────────────────────────────┤ │
-│     │  COMMUNICATE │    10    │  Push thought to user (deferred) │ │
-│     │  SUGGEST     │     8    │  Tool recommendation             │ │
-│     │  NURTURE     │     7    │  Engagement nudge                │ │
-│     │  PLAN        │     7    │  Propose persistent task 🧠 LLM  │ │
-│     │  SEED_THREAD │     6    │  Plant new conversation seed     │ │
-│     │  REFLECT     │     5    │  Internal memory consolidation   │ │
-│     │  NOTHING     │     0    │  Always available fallback       │ │
-│     └──────────────┴──────────┴──────────────────────────────────┘ │
+│     ┌───────────────┬──────────┬─────────────────────────────────┐ │
+│     │  Action       │ Priority │  What it does                   │ │
+│     ├───────────────┼──────────┼─────────────────────────────────┤ │
+│     │  COMMUNICATE  │    10    │  Push thought to user (deferred)│ │
+│     │  PLAN         │     7    │  Propose persistent task 🧠 LLM │ │
+│     │  SEED_THREAD  │     6    │  Plant new conversation seed    │ │
+│     │  REFLECT      │     5    │  Internal memory consolidation  │ │
+│     │  RECONCILE    │     4    │  Contradiction resolution       │ │
+│     │  AMBIENT_TOOL │     3    │  Context-triggered tool use     │ │
+│     │  NOTHING      │     0    │  Always available fallback      │ │
+│     └───────────────┴──────────┴─────────────────────────────────┘ │
 │                                                                     │
 │     Winner selected by score (ties broken by priority)             │
 │     PLAN action → calls PlanDecompositionService  🧠 LLM          │
@@ -495,31 +416,24 @@ Runs only when all PromptQueues are idle. Mimics the brain's Default Mode Networ
 
 ---
 
-## 9. Complete Storage Access Map
+## 8. Complete Storage Access Map
 
 ### MemoryStore Keys Reference
 
 ```
 Key Pattern                        TTL        Read    Written by
 ─────────────────────────────────────────────────────────────────────
-wm:{thread_id}                     24h        —       D (legacy fallback)
-gist:{topic}                       30min      A,C     Drift, memory_chunker
-fact:{topic}:{key}                 24h        A       Frontal cortex
 fok:{topic}                        —          A,B     FOK update service
-world_state:{topic}                —          A       World state service
+world_model:items                  —          A       WorldStateService
 topic_streak:{thread_id}           2h         A       Phase A (focus tracking)
 focus:{thread_id}                  variable   A,E     FocusSessionService
-cognitive_drift_activations        —          E       Drift engine
-cognitive_drift_concept_cooldowns  —          E       Drift engine
-cognitive_drift_state              —          E       Drift engine
-ws_pending:{request_id}            600s       /chat   unified_generate
-output:{request_id}                short      /chat   digest_worker, tool_worker
+reasoning_loop:activations         —          E       Reasoning loop
+reasoning_loop:cooldowns           —          E       Reasoning loop
+output:{request_id}                short      /ws     digest_worker
 
 PromptQueues (in-memory, thread-safe):
 prompt-queue                       —          —       run.py → digest_worker
-tool-queue                         —          B       unified_generate
-memory-chunker-queue               —          D       Encode event handler
-episodic-memory-queue              —          D       memory_chunker_worker
+episodic-memory-queue              —          D       encode event handler
 semantic_consolidation_queue       —          D       episodic_memory_worker
 ```
 
@@ -530,21 +444,21 @@ Table                      When Written                    When Read
 ──────────────────────────────────────────────────────────────────────
 interaction_log            Phase D (every message)         observability endpoints
 cortex_iterations          ACT loop, Path B                observability endpoints
-episodes                   memory_chunker (async)          frontal_cortex, drift engine
+episodes                   episodic_memory_worker (async)  frontal_cortex, reasoning loop
 concepts                   semantic_consolidation (async)  drift engine, context assembly
 semantic_relationships     semantic_consolidation          drift engine
 user_traits                IIP hook                        identity service
 persistent_tasks           Path D (task worker)            persistent_task_worker
 topics                     Phase A (new topic)             topic_classifier
 threads                    session management              session_service
-chat_history               Phase D                         frontal_cortex
+topic_transcript           Phase D                         context_assembly
 place_fingerprints         ambient inference               place_learning_service
 curiosity_threads          drift (SEED_THREAD action)      curiosity_pursuit_service
 ```
 
 ---
 
-## 10. LLM Call Inventory
+## 9. LLM Call Inventory
 
 Every LLM call in the system, with typical latency and model used.
 
@@ -552,18 +466,16 @@ Every LLM call in the system, with typical latency and model used.
 Service                      Model            Prompt                   Latency   Triggered by
 ────────────────────────────────────────────────────────────────────────────────────────────────
 TopicClassifierService       lightweight      topic-classifier.md      ~100ms    Every message
-ModeRouterService (tiebreaker) qwen3:4b       mode-tiebreaker.md       ~100ms    Non-user flows only
-FrontalCortex (UNIFIED)      primary model    soul + unified.md        ~500ms-2s Path C
-FrontalCortex (ACKNOWLEDGE)  primary model    soul + acknowledge.md    ~500ms-2s Path C
+ModeRouterService (tiebreaker) ONNX           mode-tiebreaker model    ~5ms      Non-user flows only
+FrontalCortex (UNIFIED)      primary model    soul + unified.md        ~500ms-2s User path
 FrontalCortex (ACT plan)     primary model    frontal-cortex-act.md    ~500ms-2s Path C ACT loop
 FrontalCortex (terminal)     primary model    mode-specific            ~500ms-2s After ACT loop
 CriticService                lightweight      critic.md                ~200ms    Path B (optional)
-CognitiveDrift (thought)     lightweight      cognitive-drift.md       ~100ms    Path E
+ReasoningLoop (thought)      lightweight      cognitive-drift.md       ~100ms    Path E
 PlanDecompositionService     lightweight      plan-decomposition.md    ~300ms    On task creation
-memory_chunker_worker        lightweight      memory-chunker.md        ~100ms    Phase D async
 episodic_memory_worker       lightweight      episodic-memory.md       ~200ms    Phase D async
 semantic_consolidation       lightweight      semantic-extract.md      ~200ms    Phase D async
-RoutingReflectionService     strong model     routing-reflection.md    ~1-2s     Idle-time only
+
 ```
 
 **Deterministic paths (zero LLM):**
@@ -579,7 +491,7 @@ RoutingReflectionService     strong model     routing-reflection.md    ~1-2s    
 
 ---
 
-## 11. Latency Profile by Path
+## 10. Latency Profile by Path
 
 ```
 Path              P50 Latency    Bottleneck
@@ -603,7 +515,7 @@ Component latency breakdown (unified path, typical):
 
 ---
 
-## 12. Five Architectural Principles Visible in the Flow
+## 11. Architectural Principles Visible in the Flow
 
 | Principle | Where it shows up in the flow |
 |-----------|-------------------------------|
@@ -611,8 +523,8 @@ Component latency breakdown (unified path, typical):
 | **Judgment over activity** | Single unified LLM call for user messages; mode router handles non-user flows deterministically |
 | **Tool agnosticism** | `ActDispatcherService` routes all tools generically — no tool names anywhere in the Phase B/C infrastructure |
 | **Continuity over transactions** | Working memory, gists, episodes, concepts all feed every response; drift gists surface even on next message |
-| **Single authority** | Router weights are fixed at deployment; no runtime weight mutation, no tug-of-war possible |
+| **Single authority** | Router weight mutation bounded by single regulator (24h cycle, ±0.02/day max) |
 
 ---
 
-*Last updated: 2026-02-27. See `docs/INDEX.md` for the full documentation map.*
+*Last updated: 2026-03-21. See `docs/INDEX.md` for the full documentation map.*

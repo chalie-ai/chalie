@@ -1,167 +1,96 @@
 # Chalie
 
 > **⚠️ ALPHA SOFTWARE — expect bugs, breaking changes, and rough edges.**
-> This project is in active early development. If you try it, your feedback is genuinely valuable — please [open an issue](https://github.com/chalie-ai/chalie/issues) with anything you find.
+> Your feedback is genuinely valuable — please [open an issue](https://github.com/chalie-ai/chalie/issues) with anything you find.
 
----
+**A personal intelligence layer that remembers, reasons, and acts on your behalf — so you can think less about doing.**
 
-> A personal intelligence layer that protects your attention, executes your intent, and involves you only when it truly matters.
+```bash
+curl -fsSL https://chalie.ai/install | bash
+chalie
+```
 
-Hello. I'm Chalie — a cognitive layer that handles what doesn't require you and involves you when it truly matters. I keep context when it begins to scatter, hold memory when things get busy, and stay alongside you over time.
-
-I don't replace your judgment. I exercise it on your behalf — and defer to yours when it counts.
+That's it. Open **http://localhost:8081**, create an account, pick an LLM provider, and start talking.
 
 <img src="docs/images/cognition.png" width="700" alt="Cognition" />
 
 ---
 
-## How It Works (in 30 seconds)
+## What Is Chalie?
 
-You speak → Chalie retrieves relevant memory → decides how to engage →
-responds → learns from the interaction.
+Most AI tools are fast but forgetful. Conversations reset. Notes pile up without meaning. Automation acts without awareness.
 
-Behind that loop: a layered memory system that decays gracefully, a deterministic
-mode router that decides *how* to respond before any LLM is invoked, and a tool
-framework that can act on your behalf.
+Chalie is different — it's a **persistent cognitive agent** that runs on your machine. It remembers what matters, forgets what doesn't, and builds understanding over time. Every interaction makes it smarter about *you*.
 
----
-
-## What Makes Me Different
-
-Most tools are fast but forgetful. Conversations reset. Notes accumulate without meaning. Automation acts without awareness.
-
-Chalie is different:
-
-- **Persistent memory** across sessions — I remember what matters
-- **Semantic retrieval** — context surfaces when it's relevant, not just when you ask
-- **Adaptive routing** — I choose how to respond based on what the moment actually calls for
-- **Proactive presence** — spontaneous thoughts during idle time (DMN-inspired)
-- **Local-first, privacy-respecting** — your data stays on your machine
+- **Persistent memory** — conversations carry forward across sessions. Context surfaces when it's relevant, not just when you ask.
+- **Acts on your behalf** — manages lists, sets reminders, searches the web, runs code, and connects to external apps.
+- **Thinks on its own** — generates spontaneous insights during idle time, not just when prompted.
+- **Fully private** — everything stays on your machine in a single local database. Zero telemetry, zero analytics.
 
 ---
 
-## Core Features
+## Quick Start
 
-### Memory
-
-Chalie maintains memory across multiple layers, each operating on a different timescale:
-
-| Layer | Storage | TTL | Purpose |
-|---|---|---|---|
-| Working Memory | MemoryStore | 24h / 4 turns | Current conversation context |
-| Gists | MemoryStore | 30min | Compressed exchange summaries |
-| Facts | MemoryStore | 24h | Atomic key-value assertions |
-| Episodes | SQLite + sqlite-vec | Permanent (decaying) | Narrative memory units |
-| Concepts | SQLite + sqlite-vec | Permanent (decaying) | Knowledge nodes and relationships |
-| Traits | SQLite | Permanent (category decay) | Stable personal context |
-
-Memories decay naturally over time — unless reinforced by use, which makes retrieval smarter rather than noisier.
-
-<img src="docs/images/memory-frontend.png" width="680" alt="Memory" />
-
----
-
-### Lists
-
-Deterministic list management built directly into conversation. Tell me to add, remove, or check off items — I'll maintain the list with perfect recall and a full event history.
-
-Supported use cases: shopping lists, to-do lists, chores, any structured collection.
-
-<img src="docs/images/lists-frontend.png" width="480" alt="Lists chat" /> <img src="docs/images/lists-backend.png" width="480" alt="Lists dashboard" />
-
----
-
-### Scheduler
-
-Set reminders and schedule tasks in natural language. Chalie manages the execution cycle — firing reminders at the right moment, tracking history, and surfacing what's coming up.
-
-<img src="docs/images/scheduler-frontend.png" width="480" alt="Scheduler chat" /> <img src="docs/images/scheduler-backend.png" width="480" alt="Scheduler dashboard" />
-
----
-
-### Cognitive Modes
-
-Each message is routed to one of five modes before a response is generated:
-
-- **RESPOND** — substantive answer
-- **CLARIFY** — ask a clarifying question
-- **ACKNOWLEDGE** — brief social response
-- **ACT** — execute a task (memory, scheduling, list management)
-- **IGNORE** — no response needed
-
-Routing is deterministic (~5ms), driven by observable conversation signals. The LLM generates a response shaped by the selected mode.
-
----
-
-### LLM Providers
-
-Chalie works with local and cloud models. Configure one or several — assign different providers to different jobs.
-
-<img src="docs/images/providers.png" width="680" alt="Providers" />
-
-Supported providers:
-- **Ollama** (local, recommended — no API cost, fully private)
-- **OpenAI**
-- **Anthropic**
-- **Google Gemini**
-
----
-
-### Capabilities
-
-Chalie has three tiers of capability, each with different levels of access and trust:
-
-**Innate Skills** — Built-in cognitive capabilities with direct access to Chalie's services, memory, and database. Always available: `recall`, `memorize`, `schedule`, `list`, `document`, `find_tools`, `reflect`, and more.
-
-**Tools** — First-party capabilities committed to the repo. Run as trusted subprocesses with zero access to Chalie internals. Declared in a tool library and loaded at startup:
-
-| Tool | Description |
-|---|---|
-| Weather | Current weather and forecasts (Open-Meteo, no API key) |
-| Web Search | Privacy-focused web search via DuckDuckGo |
-| Code Eval | Python code execution in a restricted sandbox |
-| Programming Docs Search | Official docs for 12 languages and 11 frameworks |
-
-**Interfaces** — External third-party integrations that pair with Chalie via a bluetooth-style protocol. Can expose capabilities and update world state. See [docs/15-INTERFACES.md](docs/15-INTERFACES.md) for the full protocol.
-
-See [docs/09-TOOLS.md](docs/09-TOOLS.md) for the tools architecture.
-
----
-
-## Getting Started
-
+**One-line install:**
 ```bash
 curl -fsSL https://chalie.ai/install | bash
 ```
 
-The installer checks prerequisites (Python 3.9+, Docker optional), downloads the latest release, and installs the `chalie` CLI. Takes about 2 minutes on a typical connection.
-
+**CLI basics:**
 ```bash
 chalie                 # Start → http://localhost:8081
-chalie --port=9000     # Start on a custom port
+chalie --port=9000     # Custom port
 chalie stop            # Stop
-chalie update          # Update to latest release
+chalie update          # Update to latest
 chalie logs            # Follow the log
 ```
 
-Open **http://localhost:8081/on-boarding/** to create an account and configure a provider.
-
-**Recommended provider — Ollama (local, free, private):**
-
+**Recommended: run a local model (free, fully private):**
 ```bash
 ollama pull qwen:8b
-# During onboarding, select Ollama and set endpoint to http://localhost:11434
+# During onboarding, select Ollama → http://localhost:11434
 ```
 
-For full setup instructions, see [docs/01-QUICK-START.md](docs/01-QUICK-START.md).
+Also works with **OpenAI**, **Anthropic**, and **Google Gemini** — configure one or several, assign different providers to different jobs.
+
+<img src="docs/images/providers.png" width="680" alt="Providers" />
+
+For full setup details, see [Quick Start Guide](docs/01-QUICK-START.md).
+
+---
+
+## What Can It Do?
+
+### Remember
+
+Chalie maintains layered memory that decays naturally over time — like human memory. Important things stick around. Noise fades. Retrieval gets smarter with use.
+
+<img src="docs/images/memory-frontend.png" width="680" alt="Memory" />
+
+### Manage Lists & Reminders
+
+Tell Chalie to add items, set reminders, or schedule tasks — all in natural language. It handles the bookkeeping.
+
+<img src="docs/images/lists-frontend.png" width="480" alt="Lists" /> <img src="docs/images/scheduler-frontend.png" width="480" alt="Scheduler" />
+
+### Use Tools
+
+Built-in tools that Chalie can use on its own when needed:
+
+| Tool | What it does |
+|---|---|
+| Weather | Current conditions and forecasts (no API key needed) |
+| Web Search | Privacy-focused search via DuckDuckGo |
+| Code Eval | Run Python snippets in a sandbox |
+| Docs Search | Official docs for 12 languages and 11 frameworks |
+
+### Connect External Apps
+
+Chalie pairs with external applications via a bluetooth-style protocol. Connected apps can expose their own capabilities that Chalie uses as tools. See [Interfaces](docs/15-INTERFACES.md) for the protocol spec.
 
 ---
 
 ## Build from Source
-
-Want to run from source or contribute?
-
-**Prerequisites:** Python 3.9+, git
 
 ```bash
 git clone https://github.com/chalie-ai/chalie.git
@@ -173,20 +102,13 @@ python backend/run.py
 
 Open **http://localhost:8081/on-boarding/** to get started. Run tests with `cd backend && pytest`.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
 ---
 
-## Privacy First
+## Privacy
 
-All memory, conversation history, and learned traits stay on your machine in a
-single SQLite database. Chalie makes zero external calls unless you configure an
-external LLM provider — and even then, only the message being processed is
-transmitted. API keys are encrypted at rest in the local database.
+All memory, conversation history, and learned context stays on your machine in a single SQLite database. Chalie makes zero external calls unless you configure an external LLM provider — and even then, only the current message is transmitted. API keys are encrypted at rest.
 
 No telemetry. No analytics. No background sync. You own your data.
-
-**Before any public deployment:** enable HTTPS and restrict CORS.
 
 ---
 
@@ -194,24 +116,19 @@ No telemetry. No analytics. No background sync. You own your data.
 
 | Document | Contents |
 |---|---|
-| [00-VISION.md](docs/00-VISION.md) | Product vision and design philosophy |
-| [01-QUICK-START.md](docs/01-QUICK-START.md) | Full setup guide, provider config, deployment |
-| [02-PROVIDERS-SETUP.md](docs/02-PROVIDERS-SETUP.md) | Configuring LLM providers in detail |
-| [03-WEB-INTERFACE.md](docs/03-WEB-INTERFACE.md) | UI specification and Radiant design system |
-| [04-ARCHITECTURE.md](docs/04-ARCHITECTURE.md) | System architecture, services, database schema |
-| [05-WORKFLOW.md](docs/05-WORKFLOW.md) | Step-by-step request processing pipeline |
-| [07-COGNITIVE-ARCHITECTURE.md](docs/07-COGNITIVE-ARCHITECTURE.md) | Mode router and cognitive decision flow |
-| [09-TOOLS.md](docs/09-TOOLS.md) | Tools system architecture |
-| [14-DEFAULT-TOOLS.md](docs/14-DEFAULT-TOOLS.md) | First-party tools reference |
-| [15-INTERFACES.md](docs/15-INTERFACES.md) | External interface protocol (signals, messages, tools) |
+| [Vision](docs/00-VISION.md) | Product vision and design philosophy |
+| [Quick Start](docs/01-QUICK-START.md) | Full setup guide and deployment |
+| [Providers](docs/02-PROVIDERS-SETUP.md) | Configuring LLM providers |
+| [Architecture](docs/04-ARCHITECTURE.md) | System architecture and services |
+| [Tools](docs/09-TOOLS.md) | Tools system and how to add new ones |
+| [Interfaces](docs/15-INTERFACES.md) | External app integration protocol |
+| [FAQ](docs/FAQ.md) | Common questions |
 
 ---
 
 ## Contributing
 
-Contributions welcome. Small improvements accumulate.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, or open an issue on [GitHub](https://github.com/chalie-ai/chalie/issues).
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, or [open an issue](https://github.com/chalie-ai/chalie/issues).
 
 ---
 

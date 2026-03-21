@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chalie generates its own questions. During idle periods, the Cognitive Drift Engine can seed a **curiosity thread** — a self-directed line of exploration that Chalie pursues in the background via its ACT loop. This is not task execution driven by user requests; it is exploratory cognition initiated by Chalie itself, shaped by its accumulated memory and identity.
+Chalie generates its own questions. During idle periods, the Reasoning Loop Service can seed a **curiosity thread** — a self-directed line of exploration that Chalie pursues in the background via its ACT loop. This is not task execution driven by user requests; it is exploratory cognition initiated by Chalie itself, shaped by its accumulated memory and identity.
 
 Curiosity threads are one of the mechanisms through which Chalie's knowledge and identity evolve independently. Two instances of Chalie with different conversation histories will form different curiosity threads, explore different topics, and diverge over time.
 
@@ -15,7 +15,7 @@ Curiosity threads are one of the mechanisms through which Chalie's knowledge and
 | `learning` | A topic or concept Chalie encountered but doesn't fully understand | "User mentioned reinforcement learning — I have surface-level knowledge, I should understand it better" |
 | `behavioral` | A pattern in the user's behavior Chalie wants to understand more deeply | "User consistently disengages on Monday mornings — I wonder why" |
 
-Both types follow the same lifecycle but differ in their seeding source: learning threads come from knowledge gaps encountered during conversations; behavioral threads come from pattern observations surfaced by the Temporal Pattern Service and cognitive drift.
+Both types follow the same lifecycle but differ in their seeding source: learning threads come from knowledge gaps encountered during conversations; behavioral threads come from recurring capability gaps surfaced by the Self Model Service (`SelfModelService.get_frequent_gaps`) during each pursuit cycle.
 
 ---
 
@@ -23,13 +23,12 @@ Both types follow the same lifecycle but differ in their seeding source: learnin
 
 ### Curiosity Thread Service (`services/curiosity_thread_service.py`)
 
-CRUD and lifecycle management for curiosity threads. Threads are stored in the `curiosity_threads` SQLite table with state tracking (`open`, `active`, `completed`, `abandoned`).
+CRUD and lifecycle management for curiosity threads. Threads are stored in the `curiosity_threads` SQLite table with state tracking (`active`, `dormant`, `abandoned`).
 
 Core operations:
-- **Seed** — Creates a new thread from a drift observation or knowledge gap signal
-- **Activate** — Marks a thread ready for pursuit; the Curiosity Pursuit Service picks it up
-- **Complete** — Thread resolved; findings stored as semantic concepts or user trait updates
-- **Abandon** — Thread closed without resolution (effort exceeded expected value, or topic became irrelevant after decay)
+- **Seed** — Creates a new thread in `active` state from a drift observation or knowledge gap signal; deduplicated by `seed_topic`
+- **Dormant** — Thread transitions to `dormant` when engagement score drops below 0.2 or the thread goes unexplored for 45 days
+- **Abandon** — Thread transitions to `abandoned` when dormant for 60+ days with engagement still below 0.2
 
 ---
 
@@ -43,36 +42,34 @@ Pursuit looks like any other ACT loop execution:
 - Findings feed back into episodic memory and semantic consolidation
 - If a finding is significant, it may surface as a drift thought in a future conversation
 
-**Budget constraints:** The pursuit service uses a bounded ACT loop — the same fatigue budget and iteration limits as user-triggered tasks. This prevents curiosity from consuming disproportionate resources during low-activity periods.
+**Budget constraints:** The pursuit service uses a bounded ACT loop governed by an iteration cap. The fatigue budget parameter is accepted for call-site compatibility but is ignored at runtime — only the iteration cap constrains execution. The service also self-regulates: it skips cycles when memory richness is below 0.15 or when user-facing worker queues are non-empty.
 
 ---
 
 ## Lifecycle
 
 ```
-[Cognitive Drift Engine] — idle period
+[ReasoningLoopService] — idle period
   |
   +-- Drift action: SeedThreadAction
       |
       Identifies a knowledge gap or behavioral pattern worth exploring
-      Creates curiosity_thread record (state: 'open')
+      Creates curiosity_thread record (state: 'active')
 
-[Curiosity Thread Service]
+[Curiosity Pursuit Service] — 6h cycle (±30% jitter)
   |
-  Thread state: open → active (when pursuit capacity is available)
-
-[Curiosity Pursuit Service] — 6h cycle
+  Also seeds behavioral threads from SelfModelService.get_frequent_gaps()
   |
-  Picks up active threads
+  Picks up active threads eligible for exploration
   |
-  +-- Runs bounded ACT loop:
+  +-- Runs bounded ACT loop (iteration-capped):
       ├── recall (what do I already know?)
       ├── tool invocation (web search, etc.)
       ├── critic evaluation
-      └── findings → episodic memory → semantic consolidation
+      └── findings → learning note → episodic memory → semantic consolidation
   |
-  Thread state: active → completed (if resolved)
-               active → abandoned (if effort > expected value)
+  Thread state: active → dormant (engagement drops below 0.2, or 45 days unexplored)
+               dormant → abandoned (dormant 60+ days AND engagement still < 0.2)
 
 [Findings]
   |
@@ -85,7 +82,7 @@ Pursuit looks like any other ACT loop execution:
 
 ## Seeding: Where Curiosity Comes From
 
-Threads are seeded by the Cognitive Drift Engine during idle periods. The drift engine has a dedicated autonomous action — `SeedThreadAction` — that fires when drift detects a candidate worthy of deeper exploration. Candidates are evaluated against:
+Threads are seeded by the Reasoning Loop Service during idle periods. The reasoning loop has a dedicated autonomous action — `SeedThreadAction` — that fires when the loop detects a candidate worthy of deeper exploration. Additionally, the Curiosity Pursuit Service directly seeds behavioral threads each cycle from recurring capability gaps tracked by `SelfModelService`. Candidates are evaluated against:
 
 1. **Relevance** — Is this connected to topics the user cares about?
 2. **Knowledge gap** — Does Chalie have shallow or uncertain knowledge here?
@@ -122,7 +119,5 @@ Returns active persistent tasks, curiosity threads (with state, type, topic, and
 
 ## Related
 
-- **`07-COGNITIVE-ARCHITECTURE.md`** — cognitive drift engine and autonomous action types
-- **`06-WORKERS.md`** — Curiosity Pursuit Service lifecycle and cycle interval
 - **`04-ARCHITECTURE.md`** — full service listing under "Autonomous Behavior"
 - **`09-TOOLS.md`** — how tools are invoked during curiosity pursuit

@@ -12,7 +12,7 @@ pytest -m unit
 pytest tests/test_mode_router.py
 
 # Run a single test
-pytest tests/test_mode_router.py::TestModeRouter::test_respond_wins_on_warm_question
+pytest tests/test_mode_router.py::TestModeRouter::test_high_warmth_selects_unified
 
 # Verbose output
 pytest -m unit -v
@@ -74,7 +74,7 @@ All fixtures live in `tests/conftest.py`.
 In-memory MemoryStore instance. Patches `MemoryStore` connections. Flushes on teardown.
 
 ### `mock_config`
-Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for memory-chunker, mode-router, fact-store, frontal-cortex.
+Patches `ConfigService.get_agent_config`, `get_agent_prompt`, and `connections`. Provides realistic agent configs for mode-router and frontal-cortex.
 
 ### `mock_ollama`
 Returns `LLMResponse(text='{"gists": [], "scope": "test"}', model='test-model', provider='ollama')`. Also mocks `generate_embedding` → `[0.0] * 256`.
@@ -102,7 +102,7 @@ Full Flask app with all blueprints, auth bypassed, DB/MemoryStore mocked:
 ```python
 def test_endpoint(self, authed_client):
     client, mock_db, mock_store = authed_client
-    response = client.get('/system/health')
+    response = client.get('/health')
     assert response.status_code == 200
 ```
 
@@ -203,8 +203,8 @@ def bypass_auth(self):
 Use `pytest.importorskip` for tools with optional deps:
 
 ```python
-feedparser = pytest.importorskip('feedparser', reason='feedparser not installed')
-from tools.reddit_digest.handler import execute
+some_dep = pytest.importorskip('some_dep', reason='some_dep not installed')
+from tools.my_tool import execute
 ```
 
 ### Module Injection for Missing Packages
@@ -248,10 +248,10 @@ with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}):
 5. Test HTTP status codes, JSON response shape, and key field values
 6. Test validation (400), not-found (404), and error (500) paths
 
-## Adding Tests for a New Tool Handler
+## Adding Tests for a New Tool
 
 1. Create `tests/test_tool_my_tool.py`
-2. Import: `from tools.my_tool.handler import execute`
+2. Import: `from tools.my_tool import execute`
 3. Mock external HTTP calls via `patch('requests.get')`
-4. Test state round-trip: `result['_state']` → feed back as `params['_state']`
+4. Test the `execute(topic, params, config, telemetry)` contract
 5. Test error cases: missing config, API failures, invalid responses
