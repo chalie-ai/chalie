@@ -16,6 +16,9 @@ TOOL_SCHEMA = {
         "Unified memory retrieval across all memory layers in one call. "
         "Searches working memory, episodes, concepts, and user traits. "
         "Use when you need to find what is known about something. "
+        "Set include_transcript=true to also search verbatim conversation history "
+        "(what was actually said). Use transcript_topic=\"global\" to search across "
+        "all topics, not just the current one. "
         "For self-knowledge queries ('what do you know about me?'), use "
         "layers=[\"user_traits\"] with query \"user profile\" — returns all "
         "stored traits organized by category with confidence labels. "
@@ -40,6 +43,35 @@ TOOL_SCHEMA = {
                 "type": "integer",
                 "description": "Max results per layer (default 3, max 10).",
             },
+            "include_transcript": {
+                "type": "boolean",
+                "description": (
+                    "Also search verbatim conversation transcript. "
+                    "Use when you need to find what was actually said, "
+                    "not just what is known. Default false."
+                ),
+            },
+            "transcript_topic": {
+                "type": "string",
+                "description": (
+                    "Topic to search transcript in. Defaults to current topic. "
+                    "Set to \"global\" to search across all topics."
+                ),
+            },
+            "date_range": {
+                "type": "object",
+                "properties": {
+                    "from": {
+                        "type": "string",
+                        "description": "ISO datetime lower bound (inclusive).",
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "ISO datetime upper bound (inclusive).",
+                    },
+                },
+                "description": "Optional date range filter for transcript search.",
+            },
         },
         "required": ["query"],
     },
@@ -63,7 +95,9 @@ def handle_recall(topic: str, params: dict) -> str:
 
     Args:
         topic: Current conversation topic
-        params: {query, layers (optional), limit (optional)}
+        params: {query, layers (optional), limit (optional),
+                 include_transcript (optional), transcript_topic (optional),
+                 date_range (optional)}
 
     Returns:
         Formatted retrieval results with layer labels and confidence metadata
@@ -74,6 +108,7 @@ def handle_recall(topic: str, params: dict) -> str:
 
     layers = params.get("layers", ALL_LAYERS)
     limit = min(params.get("limit", 3), 10)
+    include_transcript = params.get("include_transcript", False)
 
     results = []
     layer_status = {}
@@ -93,6 +128,12 @@ def handle_recall(topic: str, params: dict) -> str:
         layer_status[layer] = status
         results.extend(hits)
 
+    # Transcript search (opt-in)
+    if include_transcript:
+        hits, status = _search_transcript(topic, query, limit, params)
+        layer_status["transcript"] = status
+        results.extend(hits)
+
     # Store partial match count in MemoryStore for FOK signal
     partial_match_count = sum(
         1 for r in results if r.get("confidence", 0) < 0.5
@@ -100,7 +141,8 @@ def handle_recall(topic: str, params: dict) -> str:
     _store_fok_signal(topic, partial_match_count)
 
     if not results:
-        return _format_empty_results(layers, layer_status, query)
+        searched = layers + (["transcript"] if include_transcript else [])
+        return _format_empty_results(searched, layer_status, query)
 
     return _format_results(results, query)
 
@@ -308,6 +350,58 @@ def _search_user_traits(topic: str, query: str, limit: int) -> tuple:
         return [], f"error: {e}"
 
 
+def _search_transcript(topic: str, query: str, limit: int, params: dict) -> tuple:
+    """Search verbatim conversation transcript via transcript_service."""
+    try:
+        from services import transcript_service
+
+        # Determine topic scope
+        transcript_topic_param = params.get("transcript_topic", "")
+        if transcript_topic_param == "global":
+            search_topic = None  # cross-topic
+        elif transcript_topic_param:
+            search_topic = transcript_topic_param  # specific topic
+        else:
+            search_topic = topic  # default: current topic
+
+        # Date range
+        date_range = params.get("date_range") or {}
+        date_from = date_range.get("from")
+        date_to = date_range.get("to")
+
+        results = transcript_service.search(
+            search_topic, query, limit=limit,
+            date_from=date_from, date_to=date_to,
+        )
+
+        if not results:
+            scope = "global" if search_topic is None else search_topic
+            return [], f"0 matches (scope: {scope})"
+
+        hits = []
+        for r in results:
+            content = r.get("content", "")
+            if len(content) > 300:
+                content = content[:300] + "..."
+            role = r.get("role", "unknown")
+            tool_tag = f" [{r['tool_name']}]" if r.get("tool_name") else ""
+            entry_topic = r.get("topic", topic)
+
+            hits.append({
+                "layer": "transcript",
+                "content": f"[{role}{tool_tag}] {content}",
+                "confidence": r.get("similarity", 0.5),
+                "freshness": str(r.get("created_at", "")),
+                "topic": entry_topic,
+            })
+
+        return hits, f"{len(hits)} matches"
+
+    except Exception as e:
+        logger.warning(f"[RECALL] transcript search failed: {e}")
+        return [], f"error: {e}"
+
+
 def _format_trait_hit(key: str, value: str, category: str, confidence: float) -> dict:
     """
     Format a user trait as a standard recall hit dict.
@@ -365,6 +459,8 @@ def _format_results(results: List[Dict], query: str) -> str:
             if "meta" in hit:
                 m = hit["meta"]
                 extra = f", certainty={m.get('confidence_label','')}"
+            if "topic" in hit:
+                extra += f", topic={hit['topic']}"
             lines.append(f"    - {content} (confidence={conf:.2f}{extra})")
 
     return "\n".join(lines)

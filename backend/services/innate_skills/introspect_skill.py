@@ -110,10 +110,13 @@ def _scope_memory_health() -> str:
         # Last consolidation timestamp
         last_consolidation = _query_last_consolidation(db)
 
+        # Semantic layer structure
+        structure = _query_semantic_structure(db)
+
         return (
             f'Memory: {health_label} — {episode_count:,} episodes, '
             f'{concept_count:,} concepts, {wm_depth}/12 working memory slots'
-            f'{last_consolidation}.'
+            f'{last_consolidation}.{structure}'
         )
     except Exception as e:
         logger.debug(f'[INTROSPECT] memory_health scope failed: {e}')
@@ -132,6 +135,58 @@ def _query_last_consolidation(db) -> str:
             return f', last consolidation {rel}'
         return ''
     except Exception:
+        return ''
+
+
+def _query_semantic_structure(db) -> str:
+    """Summarise the concept graph: top domains, relationship count, density."""
+    try:
+        with db.connection() as conn:
+            cursor = conn.cursor()
+
+            # Top concept domains
+            cursor.execute(
+                """
+                SELECT COALESCE(domain, 'unclassified') AS d, COUNT(*) AS c
+                FROM semantic_concepts
+                WHERE deleted_at IS NULL
+                GROUP BY d
+                ORDER BY c DESC
+                LIMIT 5
+                """
+            )
+            domain_rows = cursor.fetchall()
+
+            # Relationship count
+            cursor.execute('SELECT COUNT(*) FROM semantic_relationships')
+            rel_count = cursor.fetchone()[0] or 0
+
+            # Concept count for density
+            cursor.execute(
+                'SELECT COUNT(*) FROM semantic_concepts WHERE deleted_at IS NULL'
+            )
+            concept_count = cursor.fetchone()[0] or 0
+
+            cursor.close()
+
+        if not domain_rows and rel_count == 0:
+            return ''
+
+        parts = []
+        if domain_rows:
+            domain_strs = [f'{row[0]} ({row[1]})' for row in domain_rows]
+            parts.append(f'Top domains: {", ".join(domain_strs)}')
+
+        if concept_count > 0:
+            density = rel_count / concept_count
+            parts.append(
+                f'{rel_count:,} relationships ({density:.1f} per concept)'
+            )
+
+        return '\n' + '; '.join(parts) + '.'
+
+    except Exception as e:
+        logger.debug(f'[INTROSPECT] semantic_structure failed: {e}')
         return ''
 
 

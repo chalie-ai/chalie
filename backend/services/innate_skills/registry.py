@@ -5,7 +5,7 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 14 skills).
+register_innate_skills() in __init__.py (currently 13 skills).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
@@ -13,7 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'persistent_task', 'document',
-    'read', 'reflect', 'transcript', 'find_tools',
+    'read', 'reflect', 'find_tools',
 })
 
 # ── LLM-visible for planning ──────────────────────────────────────────────
@@ -61,7 +61,6 @@ SKILL_DESCRIPTIONS: dict = {
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
-    'transcript': 'Search past conversation turns and working notes for this topic — use when context from earlier has fallen out of the current window',
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
 }
 
@@ -79,7 +78,6 @@ SKILL_EFFORT: dict = {
     'document': 'light',
     'read': 'light',
     'reflect': 'light',
-    'transcript': 'trivial',
     'find_tools': 'trivial',
 }
 
@@ -97,6 +95,5 @@ SKILL_CATEGORIES: dict = {
     'document': 'knowledge',
     'read': 'research',
     'reflect': 'cognition',
-    'transcript': 'memory',
     'find_tools': 'cognition',
 }

@@ -53,8 +53,8 @@ class ActLoopService:
         critic=None,
         dispatcher=None,
         loop_id: str = '',
-        scratchpad_enabled: bool = True,
         execution_gate: bool = True,
+        **kwargs,
     ):
         """
         Initialize ACT loop service.
@@ -67,8 +67,7 @@ class ActLoopService:
             cortex_iteration_service: Service for exploration bonus calculation
             critic: Optional CriticService instance for post-action verification
             dispatcher: Optional ActDispatcherService instance (reused across iterations)
-            loop_id: Unique ID for this loop's scratchpad namespace
-            scratchpad_enabled: Whether to gate large results to scratchpad
+            loop_id: Unique ID for this loop instance
             execution_gate: Whether the dispatcher should apply the autonomous
                 execution gate (passed through to ActDispatcherService)
         """
@@ -84,9 +83,7 @@ class ActLoopService:
         self._dispatcher = dispatcher
 
         # Loop state
-        self.loop_id = loop_id or None  # Set by caller before loop starts
-        self.scratchpad_enabled = scratchpad_enabled
-        self._scratchpad_counter = 0
+        self.loop_id = loop_id or None
         self.iteration_number = 0  # 0-based iteration counter
         self.start_time = time.time()
         self.cumulative_cost = 0.0
@@ -100,15 +97,6 @@ class ActLoopService:
         # Per-loop flags (declared here — not monkey-patched externally)
         self._escalation_hint_injected = False
         self.soft_nudge_injected = False  # True after soft nudge emitted at iteration 10
-
-    def _write_to_scratchpad(self, entry: dict) -> None:
-        if not self.scratchpad_enabled or not self.loop_id:
-            return
-        import json
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        key = f"scratchpad:{self.loop_id}:entries"
-        store.rpush(key, json.dumps(entry))
 
     def can_continue(self, mode: str = 'ACT', max_history_tokens: int = 24000, **kwargs) -> Tuple[bool, Optional[str]]:
         """
@@ -185,45 +173,18 @@ class ActLoopService:
         """
         Append action results to history for context injection.
 
-        Large results (>=1000 estimated tokens) are offloaded to the scratchpad
-        when scratchpad_enabled is True. The inline result is truncated to ~200
-        words with a reference to the scratchpad entry.
-
         Args:
             results: List of action result dictionaries from dispatcher
         """
-        gated = []
-        for result in results:
-            result_text = result.get('result', '')
-            if not isinstance(result_text, str):
-                gated.append(result)
-                continue
-            estimated_tokens = int(len(result_text.split()) * 1.3)
-            if estimated_tokens >= 1000 and self.scratchpad_enabled and self.loop_id:
-                self._scratchpad_counter += 1
-                sp_id = f"sp_{self._scratchpad_counter:03d}"
-                words = result_text.split()
-                summary = ' '.join(words[:200])
-                self._write_to_scratchpad({
-                    'id': sp_id,
-                    'source': result.get('action_type', 'unknown'),
-                    'iteration': self.iteration_number,
-                    'summary': summary,
-                    'full_content': result_text,
-                    'query_hint': result.get('notes', ''),
-                })
-                result = dict(result)
-                result['result'] = ' '.join(words[:200]) + f' ... [full result in notes as {sp_id}]'
-                result['scratchpad_ref'] = sp_id
-            gated.append(result)
-        self.act_history.extend(gated)
+        self.act_history.extend(results)
 
     def get_history_context(self, max_history_tokens: int = 24000) -> str:
         """
         Format ACT history for injection into {{act_history}} prompt placeholder.
 
         When the full history exceeds max_history_tokens (estimated via word_count * 1.3),
-        older entries are moved to the scratchpad and a retrieval hint is prepended.
+        older entries are dropped with a count note. Full content is preserved in
+        topic_transcript for later retrieval via recall(include_transcript=true).
 
         Returns:
             Formatted history string showing executed actions
@@ -257,14 +218,13 @@ class ActLoopService:
 
         full_text = "\n".join(lines)
 
-        # Check token estimate — prune oldest entries to scratchpad when over budget
+        # Check token estimate — drop oldest entries when over budget
         if max_history_tokens > 0:
             estimated_tokens = int(len(full_text.split()) * 1.3)
             if estimated_tokens > max_history_tokens and len(history) > 3:
                 # Find the split point: keep as many recent entries as fit in budget,
-                # always keeping a minimum of 3. Start from the minimum (last 3) and
-                # expand forward until budget is exceeded.
-                keep_start = len(history) - 3  # index of first kept entry (minimum)
+                # always keeping a minimum of 3.
+                keep_start = len(history) - 3
                 for candidate_start in range(len(history) - 3, 0, -1):
                     trial = ["## Internal Cognitive Actions"]
                     for idx, result in enumerate(history[candidate_start:], candidate_start + 1):
@@ -273,25 +233,12 @@ class ActLoopService:
                         keep_start = candidate_start
                         break
 
-                pruned = history[:keep_start]
+                pruned_count = keep_start
                 remaining = history[keep_start:]
 
-                for result in pruned:
-                    result_text = result.get('result', '')
-                    self._scratchpad_counter += 1
-                    self._write_to_scratchpad({
-                        'id': f"sp_pruned_{self._scratchpad_counter:03d}",
-                        'source': 'pruned',
-                        'iteration': result.get('iteration_number', self.iteration_number),
-                        'summary': str(result_text)[:200],
-                        'full_content': str(result_text),
-                        'query_hint': result.get('action_type', ''),
-                    })
-
-                pruned_count = len(pruned)
                 lines = [
                     "## Internal Cognitive Actions",
-                    f"[entries 1-{pruned_count} moved to notes — use notes skill to query]",
+                    f"[entries 1-{pruned_count} dropped — use recall with include_transcript=true to search earlier results]",
                 ]
                 for idx, result in enumerate(remaining, pruned_count + 1):
                     lines.append(_format_entry(idx, result))
