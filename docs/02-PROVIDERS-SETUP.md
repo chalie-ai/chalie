@@ -16,47 +16,40 @@ python backend/run.py
 
 The web interface will be available at `http://localhost:8081`.
 
-### 2. Access Provider Settings
+### 2. Configure During Onboarding
 
-1. Open http://localhost:8081 in your browser
-2. Navigate to the **Settings** or **Providers** section (usually in the dashboard)
-3. Click **Add Provider** or **Configure Provider**
+The onboarding wizard at `http://localhost:8081/on-boarding/` walks you through provider setup step by step. This is the easiest path for first-time setup.
 
-### 3. Add LLM Providers
+### 3. Configure After Onboarding
 
-Fill in the provider form with your chosen provider's information:
+To add or change providers later:
 
-#### For Local Runtime
+1. Open `http://localhost:8081/brain/`
+2. Go to **Settings** → **Providers**
+3. Click **Add Provider**
 
-**Ollama**
-- **Name**: Any identifier (e.g., `ollama-local`, `local-model`, etc.)
+### 4. Provider Options
+
+Each provider needs a **name** (any label you want), the **platform**, a **model ID**, and for cloud providers, an **API key**.
+
+#### Local (free, private)
+
+**Ollama** — Runs entirely on your machine. No API key needed.
 - **Platform**: Ollama
-- **Model**: Your chosen model (e.g., `qwen:8b`, `mistral:latest`, `llama2:latest`, etc.)
 - **Host**: `http://localhost:11434`
+- **Model**: Any model you've pulled (e.g., `qwen:8b`). Run `ollama list` to see available models.
 
-#### For Cloud Runtime
+#### Cloud
 
-Choose one or more of these options:
+| Platform | API Key Source | Example Model |
+|----------|---------------|---------------|
+| **Anthropic** | [console.anthropic.com](https://console.anthropic.com) | Any Claude model ID |
+| **OpenAI** | [platform.openai.com](https://platform.openai.com) | Any GPT model ID |
+| **Google Gemini** | [ai.google.dev](https://ai.google.dev) | Any Gemini model ID |
 
-**Anthropic Claude**
-- **Name**: Any identifier (e.g., `claude-haiku`, `claude-sonnet`, etc.)
-- **Platform**: Anthropic
-- **Model**: Claude model name (e.g., `claude-haiku-4-5-20251001`, `claude-sonnet-4-20250514`, etc.)
-- **API Key**: Your Anthropic API key (from console.anthropic.com)
+Use the exact model ID from your provider's documentation — model names change frequently.
 
-**OpenAI**
-- **Name**: Any identifier (e.g., `gpt-4o`, `gpt-4-turbo`, etc.)
-- **Platform**: OpenAI
-- **Model**: OpenAI model name (e.g., `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo`, etc.)
-- **API Key**: Your OpenAI API key (from platform.openai.com)
-
-**Google Gemini**
-- **Name**: Any identifier (e.g., `gemini-flash`, `gemini-pro`, etc.)
-- **Platform**: Gemini
-- **Model**: Gemini model name (e.g., `gemini-2.0-flash`, `gemini-1.5-pro`, etc.)
-- **API Key**: Your Google Gemini API key (from ai.google.dev)
-
-### 4. Save and Test
+### 5. Save and Test
 
 After entering provider details, click **Save** or **Test Connection** to verify the configuration works.
 
@@ -87,11 +80,13 @@ After entering provider details, click **Save** or **Test Connection** to verify
 - For Ollama: Run `ollama pull <model-name>` to download the model first
 - For cloud providers: Verify the exact model name matches what the provider offers
 
-## Advanced: REST API (for Developers)
+---
 
-For programmatic provider configuration, you can use the REST API directly.
+## REST API Reference
 
-### Create Provider via API
+For programmatic provider configuration (scripts, automation, CI).
+
+### Create Provider
 ```bash
 curl -X POST http://localhost:8081/providers \
   -H "Content-Type: application/json" \
