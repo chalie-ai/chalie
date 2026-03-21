@@ -546,6 +546,27 @@ def observability_delete_trait(trait_key):
         return jsonify({"error": "Failed to delete trait"}), 500
 
 
+@system_bp.route('/system/observability/world-state', methods=['GET'])
+@require_session
+def observability_world_state():
+    """World state as seen by the ACT loop — same data the LLM receives."""
+    try:
+        from services.world_state_service import WorldStateService
+
+        svc = WorldStateService()
+        summary = svc.get_world_model_summary()
+        formatted = svc.get_world_state(topic='', thread_id=None, message_embedding=None)
+
+        return jsonify({
+            'generated_at': _now_iso(),
+            'summary': summary,
+            'formatted': formatted,
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/world-state error: {e}")
+        return jsonify({"error": "Failed to retrieve world state"}), 500
+
+
 @system_bp.route('/system/observability/temporal', methods=['GET'])
 @require_session
 def observability_temporal():

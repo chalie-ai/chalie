@@ -101,9 +101,11 @@ class WorldStateService:
         if cache_items is not None:
             items.extend(cache_items)
         else:
-            items.extend(self._get_salient_scheduled_items(message_embedding))
-            items.extend(self._get_salient_tasks(message_embedding))
-            items.extend(self._get_salient_lists(message_embedding))
+            db_items = []
+            db_items.extend(self._get_salient_scheduled_items(message_embedding))
+            db_items.extend(self._get_salient_tasks(message_embedding))
+            db_items.extend(self._get_salient_lists(message_embedding))
+            items.extend(self._collapse_items(db_items))
 
         # 5. Active conversation topics
         items.extend(self._get_active_topics())
@@ -756,7 +758,51 @@ class WorldStateService:
         else:
             _score_all(None)  # Temporal-only scoring
 
-        return items
+        return self._collapse_items(items)
+
+    @staticmethod
+    def _collapse_items(items: list) -> list:
+        """Collapse items so each type gets at most one entry per unique entity.
+
+        Same bucket pattern as _get_external_signals: group by (type, key),
+        keep the highest-salience label per group.  The key is the entity
+        identity — message text for scheduled items, goal for tasks, name for
+        lists.
+
+        Args:
+            items: Scored item dicts with 'type', 'label', 'salience'.
+
+        Returns:
+            Deduplicated list, one item per unique (type, key).
+        """
+        buckets: dict[tuple[str, str], dict] = {}
+
+        for item in items:
+            item_type = item.get('type', '')
+            label = item.get('label', '')
+            salience = item.get('salience', 0.0)
+
+            # Extract the entity key from the label depending on type.
+            # Strips the prefix tag so "Check TSLA..." matches across
+            # [DONE] and [in 3h] variants.
+            if item_type == 'scheduled':
+                # Label: "[DONE] message" or "[in 3h] message (recurring: ...)"
+                key = label.split('] ', 1)[-1].split(' (recurring:')[0].strip()
+            elif item_type == 'task':
+                # Label: "[COMPLETED] goal" or "[ACTIVE] goal (85%)"
+                key = label.split('] ', 1)[-1].split(' (')[0].strip()
+            elif item_type == 'list':
+                # Label: "[LIST] Name (N items) — updated Xh ago"
+                key = label.split('] ', 1)[-1].split(' (')[0].strip()
+            else:
+                key = label
+
+            bucket_key = (item_type, key)
+            existing = buckets.get(bucket_key)
+            if existing is None or salience > existing['salience']:
+                buckets[bucket_key] = item
+
+        return list(buckets.values())
 
     # ── Ambient / Loop Context Collectors ────────────────────────────────────
 
@@ -880,10 +926,7 @@ class WorldStateService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} get_world_model_summary: cache read failed: {e}")
 
-        # Ambient, topics, reasoning focus from MemoryStore signals
-        for item in self._get_ambient_context():
-            summary['ambient'].append(item['label'])
-
+        # Topics, reasoning focus, external signals from MemoryStore
         for item in self._get_active_topics():
             summary['topics'].append(item['label'])
 

@@ -16,21 +16,26 @@
 <body>
     <!-- Header -->
     <header class="header">
-        <div class="header-inner">
-            <div class="logo">
-                <a href="/" style="display:flex;align-items:center;gap:inherit;text-decoration:none;color:inherit;">
-                    <img src="/icons/icon.png" class="logo-img" alt="Chalie">
+        <nav class="navbar navbar-expand-md" data-bs-theme="dark">
+            <div class="container" style="max-width:1100px">
+                <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+                    <img src="/icons/icon.png" height="28" width="28" alt="Chalie">
                     <span class="logo-badge">Dashboard</span>
                 </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse ms-auto" id="mainNav">
+                    <div class="navbar-nav" id="mainTabs">
+                        <button class="nav-link active" data-tab="providers">Providers</button>
+                        <button class="nav-link" data-tab="cognition">Cognition</button>
+                        <button class="nav-link" data-tab="scheduler">Scheduler</button>
+                        <button class="nav-link" data-tab="lists">Lists</button>
+                        <button class="nav-link" data-tab="documents">Documents</button>
+                    </div>
+                </div>
             </div>
-            <nav class="tabs" id="mainTabs">
-                <button class="tab active" data-tab="providers">Providers</button>
-                <button class="tab" data-tab="cognition">Cognition</button>
-                <button class="tab" data-tab="scheduler">Scheduler</button>
-                <button class="tab" data-tab="lists">Lists</button>
-                <button class="tab" data-tab="documents">Documents</button>
-            </nav>
-        </div>
+        </nav>
     </header>
 
     <!-- Main Content -->
@@ -65,6 +70,7 @@
                 <button class="filter-tab" data-subtab="identity">Identity</button>
                 <button class="filter-tab" data-subtab="tasks">Working On</button>
                 <button class="filter-tab" data-subtab="understanding">Understanding</button>
+                <button class="filter-tab" data-subtab="worldstate">World State</button>
             </div>
 
             <!-- Jobs sub-panel (existing content, unchanged) -->
@@ -98,6 +104,11 @@
             <!-- Understanding sub-panel -->
             <div class="cognition-subpanel" id="subtab-understanding">
                 <div id="understandingContent"></div>
+            </div>
+
+            <!-- World State sub-panel -->
+            <div class="cognition-subpanel" id="subtab-worldstate">
+                <div id="worldStateContent"></div>
             </div>
         </div>
 

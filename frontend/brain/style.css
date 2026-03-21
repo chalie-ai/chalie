@@ -37,28 +37,6 @@ body::before {
     z-index: 100;
 }
 
-.header-inner {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 0 24px;
-    height: 56px;
-    display: flex;
-    align-items: center;
-    gap: 32px;
-}
-
-.logo {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.logo-img {
-    height: 28px;
-    width: 28px;
-    object-fit: contain;
-}
-
 .logo-badge {
     background: rgba(138, 92, 255, 0.10);
     color: var(--accent-primary);
@@ -70,32 +48,10 @@ body::before {
     letter-spacing: 0.5px;
 }
 
-/* Custom tab system (header nav) ---------------------- */
-.tabs {
-    display: flex;
-    gap: 4px;
-}
-
-.tab {
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    padding: 6px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    transition: all 0.15s;
-}
-
-.tab:hover {
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.04);
-}
-
-.tab.active {
+.navbar-nav .nav-link.active {
     color: var(--text-primary);
     background: rgba(138, 92, 255, 0.08);
+    border-radius: 6px;
 }
 
 /* Main content area ----------------------------------- */
@@ -1377,8 +1333,7 @@ body::before {
    ===================================================== */
 
 @media (max-width: 640px) {
-    .header-inner { padding: 0 16px; }
-    .main         { padding: 20px 16px; }
+    .main { padding: 20px 16px; }
 
     .job-card__top  { flex-wrap: wrap; }
     .job-card__meta { flex-wrap: wrap; }
@@ -1402,4 +1357,30 @@ body::before {
 
     .list-card__header { flex-wrap: wrap; gap: 10px; }
     .list-card__header-actions { width: 100%; justify-content: flex-end; }
+}
+
+/* ── World State observability ─────────────────────── */
+.obs-world-state-raw {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.75);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+    margin-bottom: 20px;
+}
+
+.obs-world-state-item {
+    padding: 8px 12px;
+    margin-bottom: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 2px solid rgba(139, 92, 246, 0.4);
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
 }

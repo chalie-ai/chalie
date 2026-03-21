@@ -95,17 +95,8 @@ export class ApiClient {
     return this._get(`/conversation/recent?limit=${limit}&offset=${offset}`);
   }
 
-  /** @returns {Promise<{today: Array, this_week: Array, older_highlights: Array}>} */
-  getConversationSummary() {
-    return this._get('/conversation/summary');
-  }
 
-  /** @returns {Promise<{traits_summary: string, facts: Array, significant_episodes: Array, concepts: Array}>} */
-  getMemoryContext() {
-    return this._get('/memory/context');
-  }
-
-  /** @returns {Promise<{tools: Array}>} */
+/** @returns {Promise<{tools: Array}>} */
   getTools() {
     return this._get('/tools');
   }
