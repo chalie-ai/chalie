@@ -280,13 +280,15 @@ function renderMain() {
 // Tab switching
 // ==========================================
 document.getElementById('mainTabs').addEventListener('click', (e) => {
-    const tab = e.target.closest('.tab');
+    const tab = e.target.closest('.nav-link');
     if (!tab) return;
     const tabName = tab.dataset.tab;
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#mainTabs .nav-link').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.getElementById(`tab-${tabName}`).classList.add('active');
+    const navEl = document.getElementById('mainNav');
+    if (navEl.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(navEl).hide();
 
     // Load content when tabs are clicked
     if (tabName === 'cognition') {
@@ -1695,6 +1697,7 @@ function loadCognitionSubtab(subtab) {
         identity: loadIdentityObs,
         tasks: loadTasksObs,
         understanding: loadUnderstandingObs,
+        worldstate: loadWorldStateObs,
     };
     if (loaders[subtab]) loaders[subtab]();
 }
@@ -2097,6 +2100,63 @@ async function loadUnderstandingObs() {
         });
     } catch (e) {
         el.innerHTML = '<div class="obs-empty">Could not load understanding data.</div>';
+    }
+}
+
+async function loadWorldStateObs() {
+    const el = document.getElementById('worldStateContent');
+    el.innerHTML = obsSkeletonBlock(60) + obsSkeletonBlock(120);
+
+    try {
+        const res = await apiFetch('/system/observability/world-state');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        obsData.worldstate = data;
+        obsLoaded.worldstate = true;
+        obsSetTimestamp(data.generated_at);
+
+        const summary = data.summary || {};
+        const formatted = data.formatted || '';
+
+        let html = '';
+
+        // ── Formatted prompt block (what the LLM sees) ──
+        html += '<div class="obs-section-title">Prompt Injection (what the LLM sees)</div>';
+        if (formatted) {
+            html += `<pre class="obs-world-state-raw">${escapeHtml(formatted)}</pre>`;
+        } else {
+            html += '<div class="obs-empty">World state is empty — nothing salient right now.</div>';
+        }
+
+        // ── Breakdown by category ──
+        const categories = [
+            { key: 'scheduled', label: 'Scheduled Items', icon: '⏰' },
+            { key: 'tasks', label: 'Persistent Tasks', icon: '⚡' },
+            { key: 'lists', label: 'Lists', icon: '📋' },
+            { key: 'topics', label: 'Active Topics', icon: '💬' },
+            { key: 'reasoning_focus', label: 'Reasoning Focus', icon: '🧠' },
+            { key: 'ambient', label: 'Ambient Context', icon: '🌐' },
+            { key: 'external_signals', label: 'External Signals', icon: '📡' },
+        ];
+
+        html += '<div class="obs-section-title">Breakdown</div>';
+        let hasAny = false;
+        for (const cat of categories) {
+            const items = summary[cat.key] || [];
+            if (items.length === 0) continue;
+            hasAny = true;
+            html += `<div class="obs-section-title" style="font-size:13px;margin-top:16px">${cat.label} (${items.length})</div>`;
+            for (const item of items) {
+                html += `<div class="obs-world-state-item">${escapeHtml(item)}</div>`;
+            }
+        }
+        if (!hasAny) {
+            html += '<div class="obs-empty">No items in any category.</div>';
+        }
+
+        el.innerHTML = html;
+    } catch (e) {
+        el.innerHTML = '<div class="obs-empty">Could not load world state data.</div>';
     }
 }
 

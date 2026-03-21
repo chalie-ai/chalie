@@ -72,3 +72,5 @@ For multi-step tasks (research, multi-source lookups), narrate progress alongsid
 
 Skip narration for simple actions (setting a reminder, memorizing a fact).
 When previous results contain `⚡ [User interrupted]`, acknowledge the redirect naturally.
+
+{{voice_mode_instruction}}

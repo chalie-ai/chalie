@@ -1,7 +1,7 @@
 """
 Tests for backend/api/conversation.py — conversation blueprint.
 
-Covers /conversation/recent and /conversation/summary endpoints.
+Covers /conversation/recent endpoint.
 
 Note: The /chat endpoint was replaced by the WebSocket handler in
 api/websocket.py (Phase 4). WebSocket tests live separately.
@@ -96,29 +96,3 @@ class TestConversationAPI:
             assert data["thread_id"] is None
             assert data["exchanges"] == []
 
-    # ------------------------------------------------------------------
-    # GET /conversation/summary
-    # ------------------------------------------------------------------
-
-    def test_summary_returns_time_range_keys(self, client):
-        """GET /conversation/summary returns today/this_week/older_highlights keys."""
-        with patch('services.database_service.get_shared_db_service') as mock_db_fn, \
-             patch('services.episodic_retrieval_service.EpisodicRetrievalService') as mock_er_cls, \
-             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
-            # Episodic retrieval returns empty
-            mock_er = MagicMock()
-            mock_er.retrieve_episodes.return_value = []
-            mock_er_cls.return_value = mock_er
-
-            mock_db_fn.return_value = MagicMock()
-
-            response = client.get('/conversation/summary')
-
-            assert response.status_code == 200
-            data = response.get_json()
-            assert "today" in data
-            assert "this_week" in data
-            assert "older_highlights" in data
-            assert isinstance(data["today"], list)
-            assert isinstance(data["this_week"], list)
-            assert isinstance(data["older_highlights"], list)
