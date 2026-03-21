@@ -145,7 +145,7 @@ Offers perspective and advice when appropriate, supports decision clarity.
 - Summarization and prioritization
 - Execution of clear intent
 
-*Maps to: message gate routing to ACT pipeline, tool dispatch, persistent tasks running in background.*
+*Maps to: unified generation path routing to ACT loop, tool dispatch, persistent tasks running in background.*
 
 ### Chalie must escalate when:
 - Values or identity are involved
@@ -162,7 +162,7 @@ Offers perspective and advice when appropriate, supports decision clarity.
 ### 1. Judgment Over Activity
 Do not act unless action improves outcomes. Fewer high-quality actions are better than many low-confidence ones.
 
-*Codebase anchor: critic service's post-execution learning signal — EMA confidence calibration tracks action quality over time. The message gate's deterministic ONNX scoring and the ACT loop's iteration budget embody this principle at runtime.*
+*Codebase anchor: critic service's post-execution learning signal — EMA confidence calibration tracks action quality over time. The mode router's deterministic scoring and the ACT loop's termination model embody this principle at runtime.*
 
 ### 2. Protect Attention Ruthlessly
 Reducing noise is as valuable as completing tasks. Every notification, prompt, and interruption must justify its existence.
@@ -177,7 +177,7 @@ Escalate based on importance and ambiguity, not system convenience. Silent auton
 ### 4. Intent to Execution
 Users express direction; Chalie handles operations. The gap between "I want X" and "X is done" should be as small as possible.
 
-*Codebase anchor: ACT loop (plan → act → observe → continue-or-stop), tool dispatch via sandboxed containers, persistent tasks for multi-session execution, autonomous execution gate for goal auto-acceptance.*
+*Codebase anchor: ACT loop (plan → act → observe → continue-or-stop), in-process tool dispatch, persistent tasks for multi-session execution, autonomous execution gate for goal auto-acceptance.*
 
 ### 5. Calm Intelligence
 Brevity, timing, and restraint build trust. Verbosity erodes it.
@@ -239,7 +239,7 @@ Stage 7 builds the **binding layer**: a continuously updated situation model tha
 
 **What it requires:** SituationModelService (deterministic, <1ms), conversation phase tracking, behavioral adaptation rules, situation-aware prompt injection. Optional: ONNX emotion/engagement/tone models for richer signals. No new external data sources — this stage works with signals Chalie already has.
 
-**Plan:** `plans/situational-awareness-7-10.md` (Waves 1-4)
+**Status:** In progress. SituationModelService, ConversationPhaseService, GoalInferenceService, and WorldStateService are implemented.
 
 ### Stage 8: Expanded Perception
 

@@ -14,11 +14,11 @@ Providers define which LLM backends (Ollama, Anthropic, OpenAI, Gemini, etc.) ar
 python backend/run.py
 ```
 
-The web interface will be available at `http://localhost:8080`.
+The web interface will be available at `http://localhost:8081`.
 
 ### 2. Access Provider Settings
 
-1. Open http://localhost:8080 in your browser
+1. Open http://localhost:8081 in your browser
 2. Navigate to the **Settings** or **Providers** section (usually in the dashboard)
 3. Click **Add Provider** or **Configure Provider**
 
@@ -93,7 +93,7 @@ For programmatic provider configuration, you can use the REST API directly.
 
 ### Create Provider via API
 ```bash
-curl -X POST http://localhost:8080/providers \
+curl -X POST http://localhost:8081/providers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
@@ -107,26 +107,26 @@ curl -X POST http://localhost:8080/providers \
 
 ### List All Providers
 ```bash
-curl http://localhost:8080/providers \
+curl http://localhost:8081/providers \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
 ### Update Provider
 ```bash
-curl -X PUT http://localhost:8080/providers/{id} \
+curl -X PUT http://localhost:8081/providers/{id} \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"api_key": "sk-..."}'
 ```
 
 ### Delete Provider
 ```bash
-curl -X DELETE http://localhost:8080/providers/{id} \
+curl -X DELETE http://localhost:8081/providers/{id} \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
 ### Assign Provider to Job
 ```bash
-curl -X PUT http://localhost:8080/providers/jobs/frontal-cortex \
+curl -X PUT http://localhost:8081/providers/jobs/frontal-cortex \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"provider_id": 1}'
 ```
@@ -148,9 +148,4 @@ curl -X PUT http://localhost:8080/providers/jobs/frontal-cortex \
 
 ## Embedding Models
 
-If you need to use embedding models (e.g., `embeddinggemma` from Ollama):
-
-1. Configure the embedding provider in the UI or via API
-2. Set the model name (e.g., `embeddinggemma:latest`)
-3. Set dimensions to match the model's output (usually 768)
-4. Ensure the system is configured to use this provider for embeddings
+Chalie runs embeddings locally via ONNX (`gte-modernbert-base`, 768 dimensions). The model downloads automatically on first run (~300MB) and requires no configuration. No LLM provider is used for embeddings.

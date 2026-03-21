@@ -78,7 +78,7 @@ Chalie will **not** take irreversible or destructive actions autonomously. Conse
 
 ## What are "tools" in Chalie?
 
-Tools extend Chalie's ability to take action in the world: web search, weather, code execution, etc. Tools are isolated capsules — they run as subprocesses or via the interface protocol, with zero access to Chalie's internal services. Chalie's infrastructure is tool-agnostic: it doesn't know or care what specific tools are installed.
+Tools extend Chalie's ability to take action in the world: web search, weather, code execution, etc. First-party tools are simple Python modules invoked directly in-process. External apps can also expose tools via the interface protocol. Chalie's infrastructure is tool-agnostic: it doesn't know or care what specific tools are installed.
 
 See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the tools installed by default.
 
@@ -114,13 +114,13 @@ Everything is in a single SQLite database at `backend/data/chalie.db`. No cloud 
 
 ## Is Docker required?
 
-No. Docker is only used for deploying Chalie itself (via the provided Dockerfile and docker-compose.yml). All tools run as subprocesses. The core runtime, voice features, and all cognitive services run natively without Docker.
+No. Docker is optional — it's only used for deploying Chalie itself (via the provided Dockerfile and docker-compose.yml). All tools run in-process. The core runtime, voice features, and all cognitive services run natively without Docker.
 
 ---
 
 ## Does Chalie support voice?
 
-Yes — native speech-to-text (faster-whisper) and text-to-speech (KittenTTS) are built in and auto-detect their dependencies on startup. No Docker required. The voice service degrades gracefully (returns 503) if dependencies aren't installed.
+Yes — native speech-to-text (Moonshine Voice, ONNX) and text-to-speech (Kokoro 82M, ONNX) are built in and auto-detect their dependencies on startup. No Docker required. The voice service degrades gracefully (returns 503) if dependencies aren't installed.
 
 ---
 
