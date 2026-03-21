@@ -1,12 +1,11 @@
-"""Tests for Phase 4B: Transcript Service.
+"""Tests for Transcript Service.
 
 Tests cover:
 - append() and append_batch()
 - get_recent() with and without since_id
 - get_latest_id()
-- search() (keyword fallback path)
+- search() (keyword fallback path, cross-topic, date range)
 - prune_old()
-- Transcript skill (handle_notes)
 """
 
 import pytest
@@ -214,37 +213,36 @@ class TestKeywordSearch:
         assert len(results) == 1
         assert 'programming' in results[0]['content']
 
+    def test_keyword_search_global(self, transcript_db):
+        from services.transcript_service import _keyword_search, append
 
-class TestTranscriptSkill:
-    def test_empty_query_returns_error(self):
-        from services.innate_skills.notes_skill import handle_notes
-        result = handle_notes('test', {'query': ''})
-        assert 'query' in result.lower()
+        with patch('services.transcript_service._embed_entry'):
+            append('topic-a', 'user', 'Python programming')
+            append('topic-b', 'user', 'Python snakes')
 
-    def test_no_results_returns_message(self, transcript_db):
-        from services.innate_skills.notes_skill import handle_notes
+        results = _keyword_search(None, 'Python', limit=5)
+        assert len(results) == 2
 
-        # Patch the search to return empty
-        with patch('services.transcript_service.search', return_value=[]):
-            result = handle_notes('test', {'query': 'nonexistent'})
-        assert 'No transcript entries' in result
+    def test_keyword_search_with_topic_field(self, transcript_db):
+        from services.transcript_service import _keyword_search, append
 
-    def test_formats_results(self, transcript_db):
-        from services.innate_skills.notes_skill import handle_notes
+        with patch('services.transcript_service._embed_entry'):
+            append('topic-a', 'user', 'Malta weather')
 
-        mock_results = [
-            {
-                'id': 1,
-                'role': 'user',
-                'content': 'Test message content',
-                'tool_name': None,
-                'created_at': '2026-03-20 10:00:00',
-                'similarity': 0.85,
-            },
-        ]
-        with patch('services.transcript_service.search', return_value=mock_results):
-            result = handle_notes('test', {'query': 'test message'})
+        results = _keyword_search('topic-a', 'Malta', limit=5)
+        assert results[0]['topic'] == 'topic-a'
 
-        assert 'Test message content' in result
-        assert '85%' in result
-        assert '[user]' in result
+    def test_keyword_search_date_range(self, transcript_db):
+        from services.transcript_service import _keyword_search, append
+
+        with patch('services.transcript_service._embed_entry'):
+            append('test', 'user', 'Old message about Python')
+            append('test', 'user', 'New message about Python')
+
+        # All results (no date filter)
+        results = _keyword_search('test', 'Python', limit=5)
+        assert len(results) == 2
+
+        # With a future date_from — should exclude everything
+        results = _keyword_search('test', 'Python', limit=5, date_from='2099-01-01')
+        assert len(results) == 0

@@ -27,7 +27,6 @@ from services.innate_skills.persistent_task_skill import handle_persistent_task
 from services.innate_skills.document_skill import handle_document
 from services.innate_skills.read_skill import handle_read
 from services.innate_skills.reflect_skill import handle_reflect
-from services.innate_skills.notes_skill import handle_notes
 from services.innate_skills.find_tools_skill import handle_find_tools
 
 
@@ -44,7 +43,6 @@ _SKILL_HANDLERS = {
     'document': handle_document,
     'read': handle_read,
     'reflect': handle_reflect,
-    'transcript': handle_notes,
     'find_tools': handle_find_tools,
 }
 
@@ -74,8 +72,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)
     dispatcher.handlers["read"] = lambda topic, action: handle_read(topic, action)
     dispatcher.handlers["reflect"] = lambda topic, action: handle_reflect(topic, action)
-    dispatcher.handlers["transcript"] = lambda topic, action: handle_notes(topic, action)
-    dispatcher.handlers["notes"] = lambda topic, action: handle_notes(topic, action)  # backward compat
     dispatcher.handlers["find_tools"] = lambda topic, action: handle_find_tools(topic, action)
 
     # Backward-compatibility aliases (old name -> new handler)
