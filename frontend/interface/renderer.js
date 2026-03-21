@@ -3,15 +3,16 @@
  */
 import { BlockRenderer } from './blocks.js';
 
-const SPEAK_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-</svg>`;
-
 const REMEMBER_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z"></path>
+</svg>`;
+
+const SPEAK_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
 </svg>`;
 
 export class Renderer {
@@ -22,14 +23,8 @@ export class Renderer {
     this._spine = spine;
     this._blockRenderer = new BlockRenderer();
     this._userScrolledUp = false;
-    this._ttsEnabled = false;
     this._activeForm = null;
     this._initScrollTracking();
-  }
-
-  /** Enable or disable the TTS speaker button on Chalie messages. */
-  setTtsEnabled(enabled) {
-    this._ttsEnabled = enabled;
   }
 
   // ---------------------------------------------------------------------------
@@ -315,28 +310,6 @@ export class Renderer {
       metaRow.appendChild(dot);
     }
 
-    // TTS speak button — only shown when TTS is configured
-    if (this._ttsEnabled) {
-      const speakBtn = this._createEl('button', 'speech-form__speak-btn');
-      speakBtn.setAttribute('aria-label', 'Read aloud');
-      speakBtn.innerHTML = SPEAK_ICON;
-      speakBtn.addEventListener('click', () => {
-        if (speakBtn.disabled) return;
-        speakBtn.disabled = true;
-        speakBtn.classList.add('speaking--loading');
-        const onDone = () => {
-          speakBtn.disabled = false;
-          speakBtn.classList.remove('speaking--loading');
-          document.removeEventListener('chalie:speak:done', onDone);
-          document.removeEventListener('chalie:speak:error', onDone);
-        };
-        document.addEventListener('chalie:speak:done', onDone);
-        document.addEventListener('chalie:speak:error', onDone);
-        document.dispatchEvent(new CustomEvent('chalie:speak', { detail: { text } }));
-      });
-      metaRow.appendChild(speakBtn);
-    }
-
     // Remember (pin) button — always shown on Chalie messages
     const rememberBtn = this._createEl('button', 'speech-form__remember-btn');
     rememberBtn.setAttribute('aria-label', 'Remember this');
@@ -353,6 +326,19 @@ export class Renderer {
       }, 150);
     });
     metaRow.appendChild(rememberBtn);
+
+    // Speak button — enters voice mode and plays this message
+    if (text) {
+      const speakBtn = this._createEl('button', 'speech-form__speak-btn');
+      speakBtn.setAttribute('aria-label', 'Listen to this message');
+      speakBtn.innerHTML = SPEAK_ICON;
+      speakBtn.addEventListener('click', () => {
+        document.dispatchEvent(new CustomEvent('chalie:speak-message', {
+          detail: { text }
+        }));
+      });
+      metaRow.appendChild(speakBtn);
+    }
 
     return metaRow;
   }

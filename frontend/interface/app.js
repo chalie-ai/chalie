@@ -176,8 +176,11 @@ class ChalieApp {
       this._dismissLoadingOverlay();
       this.presence.setState('resting');
       const voiceReady = await this.voice.init();
-      if (voiceReady.stt) document.getElementById('micBtn')?.classList.remove('hidden');
-      this.renderer.setTtsEnabled(voiceReady.tts);
+      if (voiceReady.stt) {
+        document.body.classList.add('voice-available');
+        document.getElementById('voiceModeBtn')?.classList.remove('hidden');
+        if (_lsGet('chalie_voice_mode')) this._enterVoiceMode();
+      }
       await this._loadRecentConversation();
       this._loadActiveTasks();
       // Poll every 60s as a safety net for tasks that complete without a drift event
@@ -235,15 +238,233 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _initVoice() {
-    this.voice = new VoiceIO({
-      micBtn: document.getElementById('micBtn'),
-      recordingOverlay: document.getElementById('recordingOverlay'),
-      stopRecordingBtn: document.getElementById('stopRecordingBtn'),
-      audioPlayer: document.getElementById('audioPlayer'),
-      audioPlayPause: document.getElementById('audioPlayPause'),
-      audioTime: document.getElementById('audioTime'),
-      audioClose: document.getElementById('audioClose'),
-      micError: document.getElementById('micError'),
+    this.voice = new VoiceIO(() => this._backendHost);
+    this._voiceMode = false;
+    this._initVoiceMode();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Voice Mode
+  // ---------------------------------------------------------------------------
+
+  _initVoiceMode() {
+    document.getElementById('voiceModeBtn')?.addEventListener('click', () => {
+      if (this._voiceMode) this._exitVoiceMode();
+      else this._enterVoiceMode();
+    });
+
+    document.getElementById('voiceModeExit')?.addEventListener('click', () => {
+      this._exitVoiceMode();
+    });
+
+    // Orb click — state machine
+    document.getElementById('voiceOrb')?.addEventListener('click', async () => {
+      // Unlock autoplay on every user gesture so TTS can play later
+      this.voice.unlockAudio();
+
+      const orb = document.getElementById('voiceOrb');
+      const state = orb?.dataset.state;
+
+      if (state === 'idle') {
+        this._lastVoiceText = null;
+        const sub = document.getElementById('voiceSubtitle');
+        if (sub) { sub.textContent = ''; sub.classList.add('hidden'); }
+        await this.voice.startRecording();
+        if (this.voice._isRecording) this._setOrbState('listening');
+      } else if (state === 'listening') {
+        this._setOrbState('thinking');
+        const text = await this.voice.stopRecording();
+        if (text) {
+          this._sendVoiceMessage(text);
+        } else {
+          this._setOrbState('idle');
+        }
+      }
+    });
+
+    // Auto-stop at 10-minute limit
+    document.addEventListener('chalie:recording:maxed', async () => {
+      if (!this._voiceMode) return;
+      this._showToast('10-min max per voice message');
+      this._setOrbState('thinking');
+      const text = await this.voice.stopRecording();
+      if (text) {
+        this._sendVoiceMessage(text);
+      } else {
+        this._setOrbState('idle');
+      }
+    });
+
+    // Subtitle: show current sentence during playback
+    document.addEventListener('chalie:speak:chunk', (e) => {
+      if (!this._voiceMode) return;
+      const el = document.getElementById('voiceSubtitle');
+      if (el) {
+        el.textContent = e.detail.text;
+        el.classList.remove('hidden');
+      }
+    });
+
+    // TTS finished — back to idle (controls stay visible for re-listen)
+    document.addEventListener('chalie:speak:done', () => {
+      if (this._voiceMode) {
+        this._setOrbState('idle');
+        this._setPlayPauseIcon(false);
+      }
+    });
+    document.addEventListener('chalie:speak:error', () => {
+      if (this._voiceMode) {
+        this._hasPlayback = false;
+        this._setOrbState('idle');
+        const sub = document.getElementById('voiceSubtitle');
+        if (sub) { sub.textContent = ''; sub.classList.add('hidden'); }
+      }
+    });
+
+    // Media controls
+    document.getElementById('voiceCtrlForward')?.addEventListener('click', () => this.voice.skipForward());
+    document.getElementById('voiceCtrlBack')?.addEventListener('click', () => this.voice.skipBack());
+    document.getElementById('voiceCtrlPause')?.addEventListener('click', () => {
+      this.voice.unlockAudio();
+
+      // If playback finished and user presses play — replay from start
+      if (!this.voice._speaking && this._hasPlayback && this._lastVoiceText) {
+        this._setOrbState('speaking');
+        this._setPlayPauseIcon(true);
+        this.voice.speak(this._lastVoiceText);
+        return;
+      }
+
+      const playing = this.voice.togglePause();
+      this._setPlayPauseIcon(playing);
+    });
+
+    // Speak button on chat messages — enter voice mode and play
+    document.addEventListener('chalie:speak-message', (e) => {
+      const text = e.detail?.text;
+      if (!text || !this.voice._available) return;
+      this.voice.unlockAudio();
+      this._enterVoiceMode();
+      this._lastVoiceText = text;
+      this._setOrbState('speaking');
+      this._setPlayPauseIcon(true);
+      this.voice.speak(text);
+    });
+  }
+
+  _enterVoiceMode() {
+    if (!this.voice._available) return;
+    this._voiceMode = true;
+    _lsSet('chalie_voice_mode', '1');
+
+    document.getElementById('voiceModeOverlay')?.classList.remove('hidden');
+    document.getElementById('conversationSpine')?.classList.add('hidden');
+    document.querySelector('.input-dock')?.classList.add('hidden');
+    document.getElementById('taskStrip')?.classList.add('hidden');
+    document.getElementById('voiceModeBtn')?.classList.add('active');
+
+    this._setOrbState('idle');
+  }
+
+  _exitVoiceMode() {
+    this._voiceMode = false;
+    _lsSet('chalie_voice_mode', '');
+
+    // Stop any active recording or playback
+    if (this.voice._isRecording) this.voice.stopRecording();
+    this.voice.stopAudio();
+
+    document.getElementById('voiceModeOverlay')?.classList.add('hidden');
+    document.getElementById('conversationSpine')?.classList.remove('hidden');
+    document.querySelector('.input-dock')?.classList.remove('hidden');
+    document.getElementById('voiceModeBtn')?.classList.remove('active');
+
+    this._loadActiveTasks();
+  }
+
+  _setOrbState(state) {
+    const orb = document.getElementById('voiceOrb');
+    const controls = document.getElementById('voiceModeControls');
+    const label = document.getElementById('voiceModeLabel');
+
+    if (orb) orb.dataset.state = state;
+    if (label) {
+      const labels = { idle: '', listening: 'Listening...', thinking: 'Thinking...', speaking: '' };
+      label.textContent = labels[state] || '';
+    }
+
+    if (controls) {
+      if (state === 'speaking') {
+        this._hasPlayback = true;
+        controls.classList.remove('hidden');
+      } else if (state === 'listening' || state === 'thinking') {
+        this._hasPlayback = false;
+        controls.classList.add('hidden');
+      }
+    }
+
+    // Audio-reactive visualizer
+    if (state === 'speaking' && orb) {
+      this.voice.startVisualizer(orb);
+    } else {
+      this.voice.stopVisualizer();
+      if (orb) {
+        orb.style.removeProperty('--orb-energy');
+        orb.style.removeProperty('--orb-bass');
+      }
+    }
+  }
+
+  _setPlayPauseIcon(playing) {
+    const btn = document.getElementById('voiceCtrlPause');
+    if (!btn) return;
+    btn.innerHTML = playing
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+  }
+
+  _sendVoiceMessage(text) {
+    this.presence.setState('processing');
+
+    // Render user message in the hidden spine (preserves history)
+    const ts = new Date();
+    this.renderer.appendUserForm(text, ts);
+
+    let responseBlocks = [];
+
+    this.ws.send(text, 'voice', {
+      onStatus: (stage) => {
+        this.presence.setState(stage);
+      },
+      onNarration: (data) => {
+        this.renderer.appendNarrationBubble?.(data.text, data.step);
+      },
+      onMessage: (data) => {
+        responseBlocks = data.blocks || [];
+      },
+      onError: () => {
+        this._setOrbState('idle');
+      },
+      onDone: (data) => {
+        // Render to spine for history
+        if (responseBlocks.length) {
+          this.renderer.appendChalieForm(responseBlocks, {
+            topic: '', mode: '', confidence: 0, ts, duration_ms: data.duration_ms,
+          });
+        }
+        this.presence.setState('resting');
+
+        // Auto-TTS
+        const plainText = this.renderer._extractPlainText(responseBlocks);
+        if (plainText) {
+          this._lastVoiceText = plainText;
+          this._setOrbState('speaking');
+          this._setPlayPauseIcon(true);
+          this.voice.speak(plainText);
+        } else {
+          this._setOrbState('idle');
+        }
+      },
     });
   }
 
@@ -1178,7 +1399,6 @@ class ChalieApp {
   _initInput() {
     const textarea = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
-    const micBtn = document.getElementById('micBtn');
 
     // Auto-resize textarea
     textarea.addEventListener('input', () => {
@@ -1197,50 +1417,6 @@ class ChalieApp {
 
     // Send button click
     sendBtn.addEventListener('click', () => this._sendMessage());
-
-    // Shared stop-and-transcribe logic
-    const stopAndTranscribe = async () => {
-      // Show transcribing state
-      textarea.value = '';
-      textarea.placeholder = 'Transcribing...';
-      textarea.disabled = true;
-      textarea.classList.add('transcribing');
-      sendBtn.disabled = true;
-
-      const text = await this.voice.stopRecording();
-
-      // Restore textarea
-      textarea.disabled = false;
-      textarea.classList.remove('transcribing');
-      textarea.placeholder = 'Message Chalie...';
-
-      if (text) {
-        textarea.value = text;
-        textarea.style.height = 'auto';
-        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-        sendBtn.disabled = false;
-        textarea.focus();
-      } else {
-        textarea.placeholder = 'Could not transcribe — try again';
-        setTimeout(() => { textarea.placeholder = 'Message Chalie...'; }, 2500);
-      }
-    };
-
-    // Mic button
-    micBtn.addEventListener('click', async () => {
-      if (this.voice._isRecording) {
-        await stopAndTranscribe();
-      } else {
-        await this.voice.startRecording();
-      }
-    });
-
-    // Stop recording button in overlay
-    document.getElementById('stopRecordingBtn')?.addEventListener('click', async () => {
-      if (this.voice._isRecording) {
-        await stopAndTranscribe();
-      }
-    });
   }
 
   async _sendMessage(source = 'text') {
@@ -1513,6 +1689,16 @@ class ChalieApp {
     // Task progress/completion — refresh the task strip (sticky bar only)
     if (data.type === 'task') {
       this._loadActiveTasks();
+      return;
+    }
+
+    // TTS audio chunks pushed via WebSocket (replaces HTTP streaming)
+    if (data.type === 'tts_chunk') {
+      this.voice?.handleTtsChunk(data);
+      return;
+    }
+    if (data.type === 'tts_done') {
+      this.voice?.handleTtsDone();
       return;
     }
 

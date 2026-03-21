@@ -17,7 +17,7 @@ import struct
 import tempfile
 import threading
 
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ voice_bp = Blueprint("voice", __name__)
 
 MOONSHINE_LANG = "en"
 KOKORO_VOICE = "af_heart"
-MAX_AUDIO_SECONDS = 60
+MAX_AUDIO_SECONDS = 660
 STT_CONCURRENCY = 1
 TTS_CONCURRENCY = 2
 
@@ -337,12 +337,12 @@ def voice_health():
 def voice_synthesize():
     """Generate speech from text.
 
-    Streams length-prefixed WAV chunks so the client can start playback as
-    soon as the first sentence is synthesized instead of waiting for the
-    entire message.  Wire format::
+    Synthesizes sentence-by-sentence in a background thread and pushes each
+    WAV chunk as a ``tts_chunk`` event through the ``output:events`` pub/sub
+    channel (picked up by the WebSocket and forwarded to the client).
 
-        [uint32 BE length][WAV bytes]   ← one per sentence chunk
-        [uint32 BE 0]                   ← end-of-stream marker
+    Returns immediately with ``{"ok": true, "total": N}`` so the caller knows
+    how many chunks to expect.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({"error": "Voice dependencies not installed"}), 503
@@ -362,13 +362,19 @@ def voice_synthesize():
         return jsonify({"error": "Text is required"}), 400
 
     chunks = _split_sentences(text)
+    total = len(chunks)
 
     if not _tts_sem.acquire(blocking=False):
         return jsonify({"error": "TTS busy — try again shortly"}), 503
 
-    def _stream_chunks():
-        """Yield length-prefixed WAV frames, one per sentence chunk."""
+    def _synthesize_and_push():
+        """Synthesize each sentence and publish WAV chunks via pub/sub."""
+        import base64
+        import json
         import numpy as np
+        from services.memory_client import MemoryClientService
+
+        store = MemoryClientService.create_connection()
         silence = np.zeros(int(24000 * 0.3), dtype=np.float32)
         try:
             for i, chunk in enumerate(chunks):
@@ -380,17 +386,28 @@ def voice_synthesize():
                     if i < len(chunks) - 1:
                         samples = np.concatenate([samples, silence])
                     wav_bytes = _audio_to_wav_bytes(samples)
-                    yield struct.pack(">I", len(wav_bytes)) + wav_bytes
+                    store.publish("output:events", json.dumps({
+                        "type": "tts_chunk",
+                        "index": i,
+                        "total": total,
+                        "text": chunk,
+                        "audio": base64.b64encode(wav_bytes).decode("ascii"),
+                    }))
                 except Exception as chunk_err:
                     logger.warning("[Voice] TTS chunk failed (%d chars): %s — text: %.80s",
                                    len(chunk), chunk_err, chunk)
                     continue
             # End-of-stream marker
-            yield struct.pack(">I", 0)
+            store.publish("output:events", json.dumps({
+                "type": "tts_done",
+            }))
         finally:
             _tts_sem.release()
 
-    return Response(_stream_chunks(), mimetype="application/octet-stream")
+    thread = threading.Thread(target=_synthesize_and_push, daemon=True)
+    thread.start()
+
+    return jsonify({"ok": True, "total": total})
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])

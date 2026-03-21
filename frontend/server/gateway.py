@@ -17,6 +17,8 @@ Routes:
 import json
 import logging
 import os
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -41,6 +43,37 @@ def init_gateway(chalie_client, dashboard_port: int, data_dir: str = "") -> None
     _chalie_client = chalie_client
     _dashboard_port = dashboard_port
     _data_dir = data_dir
+
+
+def _deferred_chalie_register(dashboard_iface_id: str, name: str, host: str, port: int,
+                               chalie_iface_id: str | None = None, delay: float = 3.0):
+    """Register or refresh an interface with Chalie after a short delay.
+
+    Runs in a background daemon thread. The delay gives the daemon time to
+    start listening on its port before Chalie tries to health-check it.
+    """
+    from . import db
+
+    def _run():
+        time.sleep(delay)
+        try:
+            if chalie_iface_id:
+                _chalie_client.refresh_capabilities(chalie_iface_id)
+                logger.info("[Gateway] Refreshed capabilities for '%s'", name)
+            else:
+                result = _chalie_client.register_interface(name, host, port)
+                new_id = result.get("interface_id")
+                if new_id:
+                    db.update_interface(dashboard_iface_id, chalie_interface_id=new_id)
+                    logger.info("[Gateway] Chalie registration succeeded for '%s' → %s", name, new_id)
+                else:
+                    logger.warning("[Gateway] Chalie registration failed for '%s': %s",
+                                   name, result.get("error"))
+        except Exception as e:
+            logger.warning("[Gateway] Chalie registration failed for '%s': %s", name, e)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
 
 
 def _daemon_data_dir(interface_id: str) -> str:
@@ -147,14 +180,13 @@ def register_daemon():
                 status="online",
             )
 
-            # Re-register capabilities so they reach the tool profiler
-            # (covers Chalie restart where in-memory state was lost).
+            # Ensure Chalie knows about this interface's tools.
+            # Deferred: the daemon may not be listening on its port yet.
             chalie_iface_id = iface.get("chalie_interface_id")
-            if chalie_iface_id and _chalie_client:
-                try:
-                    _chalie_client.refresh_capabilities(chalie_iface_id)
-                except Exception:
-                    pass
+            if _chalie_client:
+                _deferred_chalie_register(
+                    iface["id"], name, str(host), port, chalie_iface_id,
+                )
 
             return jsonify({
                 "gateway_url": gateway_url,
@@ -168,19 +200,6 @@ def register_daemon():
 
     scopes = body.get("scopes", {})
 
-    # Register with Chalie so tools appear in ACT loop
-    chalie_interface_id = None
-    try:
-        chalie_result = _chalie_client.register_interface(name, str(host), port)
-        chalie_interface_id = chalie_result.get("interface_id")
-        if not chalie_interface_id:
-            logger.warning(
-                "[Gateway] Chalie registration failed for '%s': %s",
-                name, chalie_result.get("error"),
-            )
-    except Exception as e:
-        logger.warning("[Gateway] Chalie registration failed for '%s': %s", name, e)
-
     # Store in dashboard DB — scopes NOT approved yet (pending user approval)
     db.insert_interface({
         "id": interface_id,
@@ -193,10 +212,15 @@ def register_daemon():
         "author": body.get("author"),
         "requested_scopes": scopes,
         "approved_scopes": {},  # Empty until user approves
-        "chalie_interface_id": chalie_interface_id,
+        "chalie_interface_id": None,
         "paired_at": now,
         "last_seen_at": now,
     })
+
+    # Register with Chalie so tools appear in ACT loop.
+    # Deferred: the daemon hasn't started listening on its port yet.
+    if _chalie_client:
+        _deferred_chalie_register(interface_id, name, str(host), port)
 
     # Create daemon's data folder
     _daemon_data_dir(interface_id)

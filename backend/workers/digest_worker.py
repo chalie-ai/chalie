@@ -704,6 +704,16 @@ def unified_generate(topic, text, classification, thread_conv_service,
         returning_from_silence=returning_from_silence,
         inclusion_map=inclusion_map,
     )
+
+    # Voice mode: inject plain-text-only instruction for TTS-friendly responses
+    if (metadata or {}).get('source') == 'voice':
+        system_prompt = system_prompt.replace('{{voice_mode_instruction}}',
+            '\n\nIMPORTANT: The user is in voice mode. Your response will be spoken aloud via TTS. '
+            'Respond in plain conversational text only. No markdown formatting, code blocks, '
+            'tables, bullet lists, links, or structured formatting. Write as you would speak.')
+    else:
+        system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
+
     first_messages = [{"role": "user", "content": text}]
 
     # First LLM call with native tools — model either responds with text or calls tools

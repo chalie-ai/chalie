@@ -1,5 +1,5 @@
 """
-Conversation blueprint — /conversation/recent, /conversation/summary.
+Conversation blueprint — /conversation/recent.
 
 The /chat endpoint has been replaced by the WebSocket handler in api/websocket.py.
 """
@@ -105,50 +105,3 @@ def conversation_recent():
         return jsonify({"error": "Failed to retrieve conversation"}), 500
 
 
-@conversation_bp.route('/conversation/summary', methods=['GET'])
-@require_session
-def conversation_summary():
-    """Return compressed conversation summaries across time ranges."""
-    try:
-        from datetime import datetime, timedelta, timezone
-        from services.time_utils import parse_utc
-        from services.database_service import get_shared_db_service
-        from services.episodic_retrieval_service import EpisodicRetrievalService
-        from services.config_service import ConfigService
-
-        result = {"today": [], "this_week": [], "older_highlights": []}
-
-        # Episodes for this week and older
-        try:
-            db = get_shared_db_service()
-            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            retrieval = EpisodicRetrievalService(db, episodic_config)
-            episodes = retrieval.retrieve_episodes("conversation summary", limit=10)
-
-            now = datetime.now(timezone.utc)
-            week_ago = now - timedelta(days=7)
-
-            for ep in episodes:
-                created = ep.get("created_at")
-                entry = {
-                    "gist": ep.get("gist", ""),
-                    "topic": ep.get("topic", ""),
-                    "salience": ep.get("salience", 0),
-                    "created_at": str(created) if created else "",
-                }
-                if created:
-                    created_aware = parse_utc(created)
-                    if created_aware >= week_ago:
-                        result["this_week"].append(entry)
-                    else:
-                        result["older_highlights"].append(entry)
-                else:
-                    result["this_week"].append(entry)
-        except Exception as e:
-            logger.warning(f"[REST API] Episode retrieval failed: {e}")
-
-        return jsonify(result), 200
-
-    except Exception as e:
-        logger.error(f"[REST API] conversation/summary error: {e}", exc_info=True)
-        return jsonify({"error": "Failed to retrieve summary"}), 500

@@ -8,30 +8,98 @@
 
 const _TTS_PATH = '/voice/synthesize';
 const _STT_PATH = '/voice/transcribe';
+const _MAX_RECORD_MS = 10 * 60 * 1000; // 10 minutes
 
 export class VoiceIO {
   /**
-   * @param {object} els — DOM elements
-   * @param {HTMLElement} els.micBtn
-   * @param {HTMLElement} els.recordingOverlay
-   * @param {HTMLElement} els.stopRecordingBtn
-   * @param {HTMLElement} els.audioPlayer
-   * @param {HTMLElement} els.audioPlayPause
-   * @param {HTMLElement} els.audioTime
-   * @param {HTMLElement} els.audioClose
-   * @param {HTMLElement} els.micError
+   * @param {() => string} [getHost] — returns the current backend host
    */
-  constructor(els) {
-    this._els = els;
+  constructor(getHost) {
+    this._getHost = getHost;
     this._mediaRecorder = null;
     this._audioChunks = [];
     this._isRecording = false;
     this._currentAudio = null;
-    this._micDisabled = false;
     this._speaking = false;
     this._available = false;
+    this._audioCtx = null;
+    this._analyser = null;
+    this._analyserData = null;
+    this._vizTarget = null;
+    this._vizRaf = null;
+  }
 
-    this._bindEvents();
+  /**
+   * Unlock browser autoplay by creating/resuming an AudioContext + AnalyserNode.
+   * Must be called from a user gesture (click/tap) before TTS playback.
+   */
+  unlockAudio() {
+    if (!this._audioCtx) {
+      this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      this._analyser = this._audioCtx.createAnalyser();
+      this._analyser.fftSize = 256;
+      this._analyser.smoothingTimeConstant = 0.82;
+      this._analyserData = new Uint8Array(this._analyser.frequencyBinCount);
+      this._analyser.connect(this._audioCtx.destination);
+    }
+    if (this._audioCtx.state === 'suspended') {
+      this._audioCtx.resume();
+    }
+  }
+
+  /**
+   * Start the audio-reactive visualizer loop.
+   * Sets --orb-energy (0-1) and --orb-bass (0-1) on the target element each frame.
+   * @param {HTMLElement} orbEl — the orb element to drive
+   */
+  startVisualizer(orbEl) {
+    this._vizTarget = orbEl;
+    if (!this._vizRaf) this._vizLoop();
+  }
+
+  /** Stop the visualizer loop and reset custom properties. */
+  stopVisualizer() {
+    this._vizTarget = null;
+    if (this._vizRaf) {
+      cancelAnimationFrame(this._vizRaf);
+      this._vizRaf = null;
+    }
+  }
+
+  /** @private RAF loop — reads analyser data, sets CSS custom properties. */
+  _vizLoop() {
+    if (!this._vizTarget || !this._analyser) {
+      this._vizRaf = null;
+      return;
+    }
+
+    this._analyser.getByteFrequencyData(this._analyserData);
+
+    const data = this._analyserData;
+    const len = data.length;
+    const bassEnd = Math.floor(len * 0.15);
+    const midEnd = Math.floor(len * 0.5);
+
+    let bass = 0, mid = 0, treble = 0;
+    for (let i = 0; i < bassEnd; i++) bass += data[i];
+    for (let i = bassEnd; i < midEnd; i++) mid += data[i];
+    for (let i = midEnd; i < len; i++) treble += data[i];
+
+    bass = bass / (bassEnd * 255);
+    mid = mid / ((midEnd - bassEnd) * 255);
+    treble = treble / ((len - midEnd) * 255);
+
+    const energy = bass * 0.5 + mid * 0.35 + treble * 0.15;
+
+    this._vizTarget.style.setProperty('--orb-energy', energy.toFixed(3));
+    this._vizTarget.style.setProperty('--orb-bass', bass.toFixed(3));
+
+    this._vizRaf = requestAnimationFrame(() => this._vizLoop());
+  }
+
+  _buildUrl(path) {
+    const host = this._getHost?.();
+    return host ? host.replace(/\/$/, '') + path : path;
   }
 
   /**
@@ -40,10 +108,10 @@ export class VoiceIO {
    */
   async init() {
     try {
-      const res = await fetch('/voice/health', { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(this._buildUrl('/voice/health'), { signal: AbortSignal.timeout(3000) });
       if (res.ok) {
         const data = await res.json();
-        if (data.status !== 'unavailable') {
+        if (data.status === 'ok') {
           this._available = true;
           return { tts: true, stt: true };
         }
@@ -61,10 +129,10 @@ export class VoiceIO {
 
   async startRecording() {
     if (!this._available) return;
-    if (this._isRecording || this._micDisabled) return;
+    if (this._isRecording) return;
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      this._handleMicError(new Error('getUserMedia not available — requires HTTPS'));
+      console.error('getUserMedia not available — requires HTTPS');
       return;
     }
 
@@ -72,7 +140,7 @@ export class VoiceIO {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      this._handleMicError(err);
+      console.error('Mic error:', err);
       return;
     }
 
@@ -88,8 +156,13 @@ export class VoiceIO {
 
     this._mediaRecorder.start(250); // collect chunks every 250ms
     this._isRecording = true;
-    this._els.micBtn.classList.add('recording');
-    this._els.recordingOverlay.classList.remove('hidden');
+
+    // Auto-stop at 10 minutes — recording still goes through
+    this._maxRecordTimer = setTimeout(() => {
+      if (this._isRecording) {
+        document.dispatchEvent(new CustomEvent('chalie:recording:maxed'));
+      }
+    }, _MAX_RECORD_MS);
   }
 
   /**
@@ -105,8 +178,7 @@ export class VoiceIO {
       recorder.onstop = () => {
         recorder.stream.getTracks().forEach(t => t.stop());
         this._isRecording = false;
-        this._els.micBtn.classList.remove('recording');
-        this._els.recordingOverlay.classList.add('hidden');
+        if (this._maxRecordTimer) { clearTimeout(this._maxRecordTimer); this._maxRecordTimer = null; }
 
         // iOS Safari can fire onstop before the final ondataavailable chunk.
         // A small defer lets the event queue flush first.
@@ -142,79 +214,118 @@ export class VoiceIO {
 
   /**
    * Speak text via TTS endpoint.
-   * Streams chunked WAV from the server and begins playback as soon as
-   * the first sentence is synthesized — no waiting for the full message.
-   * Must be called from a user gesture context (click handler).
+   * Kicks off background synthesis on the server; individual WAV chunks
+   * arrive as WebSocket messages (tts_chunk / tts_done) and are queued
+   * for progressive playback.
    * @param {string} text
    */
   async speak(text) {
     if (!this._available) return;
     if (this._speaking) return;
-    this._speaking = true;
 
     // Stop any current playback and reset stream state
-    this._stopAudio();
+    this.stopAudio();
 
+    // Set _speaking AFTER stopAudio() (which resets it to false)
+    this._speaking = true;
     this._chunkQueue = [];
+    this._chunkTexts = [];
     this._chunkIdx = 0;
     this._streamDone = false;
     this._cumulativeTime = 0;
-    this._abortCtrl = new AbortController();
-
-    this._els.audioPlayer.classList.remove('hidden');
-    this._updatePlayPauseIcon(false);
 
     try {
-      const response = await fetch(_TTS_PATH, {
+      const response = await fetch(this._buildUrl(_TTS_PATH), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
-        signal: this._abortCtrl.signal,
       });
 
       if (!response.ok) throw new Error(`TTS error: ${response.status}`);
-
-      // Read the streamed length-prefixed WAV chunks
-      const reader = response.body.getReader();
-      let buffer = new Uint8Array(0);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        // Append received bytes
-        const merged = new Uint8Array(buffer.length + value.length);
-        merged.set(buffer);
-        merged.set(value, buffer.length);
-        buffer = merged;
-
-        // Extract complete frames: [uint32 BE length][WAV bytes]
-        while (buffer.length >= 4) {
-          const len = new DataView(buffer.buffer, buffer.byteOffset, 4).getUint32(0, false);
-          if (len === 0) { this._streamDone = true; break; }
-          if (buffer.length < 4 + len) break;
-
-          const wavData = buffer.slice(4, 4 + len);
-          buffer = buffer.slice(4 + len);
-
-          const blob = new Blob([wavData], { type: 'audio/wav' });
-          this._chunkQueue.push(URL.createObjectURL(blob));
-
-          // Start playback as soon as first chunk arrives
-          if (this._chunkQueue.length === 1) this._playNextChunk();
-        }
-        if (this._streamDone) break;
-      }
-
-      this._streamDone = true;
-      this._checkStreamDone();
+      // Chunks will arrive via WebSocket — nothing more to do here
     } catch (err) {
-      if (err.name === 'AbortError') return; // user stopped — not an error
       this._speaking = false;
-      this._els.audioPlayer.classList.add('hidden');
       document.dispatchEvent(new CustomEvent('chalie:speak:error', { detail: { err } }));
     }
   }
+
+  /**
+   * Handle a TTS chunk pushed via WebSocket.
+   * @param {{audio: string, index: number, total: number, text?: string}} data
+   */
+  handleTtsChunk(data) {
+    if (!this._speaking) return;
+
+    const raw = atob(data.audio);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+    const blob = new Blob([bytes], { type: 'audio/wav' });
+    this._chunkQueue.push(URL.createObjectURL(blob));
+    this._chunkTexts.push(data.text || '');
+
+    // Start playback as soon as first chunk arrives
+    if (this._chunkQueue.length === 1) this._playNextChunk();
+  }
+
+  /**
+   * Handle TTS stream completion pushed via WebSocket.
+   */
+  handleTtsDone() {
+    this._streamDone = true;
+    this._checkStreamDone();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chunk Navigation
+  // ---------------------------------------------------------------------------
+
+  /** Skip to next chunk. */
+  skipForward() {
+    if (!this._speaking || !this._currentAudio) return;
+    this._cumulativeTime += this._currentAudio.currentTime;
+    this._currentAudio.pause();
+    URL.revokeObjectURL(this._chunkQueue[this._chunkIdx]);
+    if (this._currentAudio.parentNode) this._currentAudio.parentNode.removeChild(this._currentAudio);
+    this._chunkIdx++;
+    this._playNextChunk();
+  }
+
+  /** Restart current chunk, or go to previous if near the start. */
+  skipBack() {
+    if (!this._speaking || !this._currentAudio) return;
+
+    // If more than 2s in, just restart current chunk
+    if (this._currentAudio.currentTime > 2) {
+      this._currentAudio.currentTime = 0;
+      return;
+    }
+
+    // Otherwise go to previous chunk
+    if (this._chunkIdx > 0) {
+      this._currentAudio.pause();
+      if (this._currentAudio.parentNode) this._currentAudio.parentNode.removeChild(this._currentAudio);
+      this._chunkIdx--;
+      this._cumulativeTime = 0;
+      this._playNextChunk();
+    }
+  }
+
+  /** Toggle pause/resume on current chunk. Returns true if now playing. */
+  togglePause() {
+    if (!this._speaking || !this._currentAudio) return false;
+    if (this._currentAudio.paused) {
+      this._currentAudio.play();
+      return true;
+    } else {
+      this._currentAudio.pause();
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private
+  // ---------------------------------------------------------------------------
 
   /** Play the next queued WAV chunk. */
   _playNextChunk() {
@@ -224,16 +335,21 @@ export class VoiceIO {
     }
 
     const url = this._chunkQueue[this._chunkIdx];
+    const text = this._chunkTexts[this._chunkIdx] || '';
     const audio = new Audio(url);
+    // crossOrigin not needed for blob URLs but harmless
     document.body.appendChild(audio);
     this._currentAudio = audio;
 
-    audio.addEventListener('timeupdate', () => {
-      const total = this._cumulativeTime + audio.currentTime;
-      const m = Math.floor(total / 60);
-      const s = Math.floor(total % 60);
-      this._els.audioTime.textContent = `${m}:${s < 10 ? '0' : ''}${s}`;
-    });
+    // Route through AnalyserNode for visualizer
+    if (this._audioCtx && this._analyser) {
+      try {
+        const source = this._audioCtx.createMediaElementSource(audio);
+        source.connect(this._analyser);
+      } catch (_) { /* already connected or no context */ }
+    }
+
+    document.dispatchEvent(new CustomEvent('chalie:speak:chunk', { detail: { text, index: this._chunkIdx } }));
 
     audio.addEventListener('ended', () => {
       this._cumulativeTime += audio.duration;
@@ -253,44 +369,11 @@ export class VoiceIO {
   _checkStreamDone() {
     if (this._streamDone && this._chunkIdx >= this._chunkQueue.length) {
       this._speaking = false;
-      this._updatePlayPauseIcon(true);
       document.dispatchEvent(new CustomEvent('chalie:speak:done'));
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Private
-  // ---------------------------------------------------------------------------
-
-  _bindEvents() {
-    // Note: stopRecordingBtn click is handled by app.js for transcribing UI flow
-
-    // Audio player controls
-    this._els.audioPlayPause.addEventListener('click', () => {
-      if (!this._currentAudio) return;
-      if (this._currentAudio.paused) {
-        this._currentAudio.play();
-        this._updatePlayPauseIcon(false);
-      } else {
-        this._currentAudio.pause();
-        this._updatePlayPauseIcon(true);
-      }
-    });
-
-    this._els.audioClose.addEventListener('click', () => {
-      this._stopAudio();
-    });
-
-    // Listen for chalie:speak custom events
-    document.addEventListener('chalie:speak', (e) => {
-      this.speak(e.detail.text);
-    });
-  }
-
-  _stopAudio() {
-    // Cancel in-flight stream
-    if (this._abortCtrl) { this._abortCtrl.abort(); this._abortCtrl = null; }
-
+  stopAudio() {
     if (this._currentAudio) {
       this._currentAudio.pause();
       if (this._currentAudio.src) URL.revokeObjectURL(this._currentAudio.src);
@@ -309,29 +392,6 @@ export class VoiceIO {
     this._streamDone = false;
     this._cumulativeTime = 0;
     this._speaking = false;
-    this._els.audioPlayer.classList.add('hidden');
-    this._els.audioTime.textContent = '0:00';
-  }
-
-  _updatePlayPauseIcon(showPlay) {
-    const btn = this._els.audioPlayPause;
-    if (showPlay) {
-      btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <polygon points="5 3 19 12 5 21 5 3"></polygon>
-      </svg>`;
-    } else {
-      btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="6" y="4" width="4" height="16"></rect>
-        <rect x="14" y="4" width="4" height="16"></rect>
-      </svg>`;
-    }
-  }
-
-  _handleMicError(err) {
-    console.error('Mic error:', err);
-    this._micDisabled = true;
-    this._els.micBtn.classList.add('disabled');
-    this._els.micError.classList.remove('hidden');
   }
 
   /**
@@ -394,7 +454,7 @@ export class VoiceIO {
     const formData = new FormData();
     formData.append('file', blob, filename);
 
-    const response = await fetch(_STT_PATH, {
+    const response = await fetch(this._buildUrl(_STT_PATH), {
       method: 'POST',
       body: formData,
     });
