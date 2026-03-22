@@ -58,26 +58,25 @@ class TestAPIEndpointExistence:
         """Absorbs scenario 070 (response-structure half): endpoint returns JSON with a 'status' key."""
         client, mock_db, mock_store = authed_client
 
-        # The endpoint may call DB; return safe empty defaults so it doesn't crash.
+        # The endpoint may call DB and MemoryStore; return safe defaults.
         mock_db._test_cursor.fetchone.return_value = None
         mock_db._test_cursor.fetchall.return_value = []
         mock_db._test_session_result.fetchone.return_value = None
         mock_db._test_session_result.fetchall.return_value = []
+        mock_store.llen.return_value = 0
+        mock_store.get.return_value = None
 
         response = client.get('/system/status')
 
-        # Route must exist (404 would mean the blueprint was not registered).
-        assert response.status_code != 404, (
-            "/system/status returned 404 — route not registered or blueprint missing"
+        assert response.status_code == 200, (
+            f"/system/status returned {response.status_code}, expected 200"
         )
 
-        # When it does respond successfully, the body must contain 'status'.
-        if response.status_code == 200:
-            data = response.get_json()
-            assert data is not None, "/system/status did not return JSON"
-            assert 'status' in data, (
-                f"/system/status JSON missing 'status' key; got keys: {list(data.keys())}"
-            )
+        data = response.get_json()
+        assert data is not None, "/system/status did not return JSON"
+        assert 'status' in data, (
+            f"/system/status JSON missing 'status' key; got keys: {list(data.keys())}"
+        )
 
     # ------------------------------------------------------------------
     # scenario 074 — /system/observability/tasks
@@ -175,33 +174,37 @@ class TestAPIEndpointExistence:
         mock_db._test_cursor.fetchone.return_value = None
         mock_db._test_session_result.fetchall.return_value = []
         mock_db._test_session_result.fetchone.return_value = None
+        # TemporalPatternService.get_observation_stats() uses db.fetch_all()
+        mock_db.fetch_all.return_value = []
+        mock_store.get.return_value = None
 
         response = client.get('/system/observability/temporal')
 
-        # Route must be registered.
-        assert response.status_code != 404, (
-            "/system/observability/temporal returned 404 — blueprint not registered"
+        assert response.status_code == 200, (
+            f"/system/observability/temporal returned {response.status_code}, expected 200"
         )
 
-        if response.status_code == 200:
-            data = response.get_json()
-            assert data is not None, (
-                "/system/observability/temporal did not return JSON"
-            )
+        data = response.get_json()
+        assert data is not None, (
+            "/system/observability/temporal did not return JSON"
+        )
 
-            # Accepted temporal metric keys — at least one must be present.
-            temporal_keys = {
-                'observations_count',
-                'place_observations',
-                'temporal_observations',
-                'total_observations',
-                'circadian_data',
-                'temporal_metrics',
-                'place_fingerprints',
-                'observations',
-            }
-            present = temporal_keys & set(data.keys())
-            assert present, (
-                f"/system/observability/temporal JSON has no recognised temporal metric key; "
-                f"got keys: {list(data.keys())}"
-            )
+        # Accepted temporal metric keys — at least one must be present.
+        temporal_keys = {
+            'observation_count',
+            'observations_count',
+            'place_observations',
+            'temporal_observations',
+            'total_observations',
+            'circadian_data',
+            'temporal_metrics',
+            'place_fingerprints',
+            'observations',
+            'patterns_discovered',
+            'predictions_available',
+        }
+        present = temporal_keys & set(data.keys())
+        assert present, (
+            f"/system/observability/temporal JSON has no recognised temporal metric key; "
+            f"got keys: {list(data.keys())}"
+        )

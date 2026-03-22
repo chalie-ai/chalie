@@ -6,11 +6,12 @@ Run after implementation to verify basic operation.
 import sys
 sys.path.insert(0, 'src')
 
+import logging
+
 from services.act_loop_service import ActLoopService
 from services.act_dispatcher_service import ActDispatcherService
-from services.logger_service import LoggerService
 
-logger = LoggerService.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Test 1: ActLoopService basic operations
 logger.info("Test 1: ActLoopService initialization...")

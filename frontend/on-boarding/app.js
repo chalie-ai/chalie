@@ -20,22 +20,22 @@ const PLATFORM_CONFIG = {
         desc: 'API key from <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>',
         hasHost: false,
         hasApiKey: true,
-        modelPlaceholder: 'e.g. claude-sonnet-4-6',
-        models: [],
+        modelPlaceholder: 'e.g. claude-sonnet-4-20250514',
+        models: ['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'],
     },
     openai: {
         desc: 'API key from <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>',
         hasHost: false,
         hasApiKey: true,
         modelPlaceholder: 'e.g. gpt-4o',
-        models: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'],
+        models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3-mini'],
     },
     gemini: {
         desc: 'Free tier available — API key from <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>',
         hasHost: false,
         hasApiKey: true,
         modelPlaceholder: 'e.g. gemini-2.5-flash',
-        models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash-lite'],
+        models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
     },
 };
 
@@ -211,30 +211,62 @@ async function fetchAnthropicModels(key, datalistId) {
 }
 
 // ==========================================
-// Ollama Connection Test
+// Connection Test (all providers via backend)
 // ==========================================
-async function testOllamaConnection(hostInputId, statusId) {
-    const host = document.getElementById(hostInputId).value.trim() || 'http://localhost:11434';
-    const statusEl = document.getElementById(statusId);
+async function testProviderConnection() {
+    const statusEl = document.getElementById('connectionStatus');
     statusEl.textContent = 'Testing...';
     statusEl.className = '';
 
+    const platform = currentPlatform;
+    const config = PLATFORM_CONFIG[platform];
+    const body = { platform };
+
+    const model = document.getElementById('setupModel').value.trim();
+    if (model) body.model = model;
+
+    if (config.hasHost) {
+        body.host = document.getElementById('setupHost').value.trim() || 'http://localhost:11434';
+    }
+    if (config.hasApiKey) {
+        const key = document.getElementById('setupApiKey').value.trim();
+        if (key) body.api_key = key;
+    }
+
+    // Quick client-side validation
+    if (!body.model) {
+        statusEl.textContent = '✗ Enter a model name first';
+        statusEl.className = 'status-err';
+        return;
+    }
+    if (config.hasApiKey && !body.api_key) {
+        statusEl.textContent = '✗ Enter an API key first';
+        statusEl.className = 'status-err';
+        return;
+    }
+
     try {
-        const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(5000) });
+        const res = await apiFetch('/providers/test', {
+            method: 'POST',
+            body: JSON.stringify(body),
+        });
+
         if (res.ok) {
             const data = await res.json();
-            statusEl.textContent = '✓ Connected';
-            statusEl.className = 'status-ok';
-            return data.models || [];
+            if (data.success) {
+                statusEl.textContent = `✓ ${data.message || 'Connected'}`;
+                statusEl.className = 'status-ok';
+            } else {
+                statusEl.textContent = `✗ ${data.error || 'Test failed'}`;
+                statusEl.className = 'status-err';
+            }
         } else {
-            statusEl.textContent = '✗ Connection failed';
+            statusEl.textContent = '✗ Test request failed';
             statusEl.className = 'status-err';
-            return [];
         }
     } catch (e) {
-        statusEl.textContent = '✗ Cannot reach Ollama';
+        statusEl.textContent = '✗ Network error — cannot reach backend';
         statusEl.className = 'status-err';
-        return [];
     }
 }
 
@@ -255,17 +287,8 @@ function setupEventListeners() {
     });
 
     // Test connection button
-    document.getElementById('testConnectionBtn').addEventListener('click', async () => {
-        const models = await testOllamaConnection('setupHost', 'connectionStatus');
-        if (models.length > 0) {
-            const datalist = document.getElementById('modelSuggestions');
-            datalist.innerHTML = '';
-            models.forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m.name || m.model || m;
-                datalist.appendChild(opt);
-            });
-        }
+    document.getElementById('testConnectionBtn').addEventListener('click', () => {
+        testProviderConnection();
     });
 
     // Setup form submit

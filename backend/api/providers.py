@@ -204,7 +204,7 @@ def test_provider():
         if platform == 'ollama':
             host = config.get('host', 'http://localhost:11434')
             try:
-                r = req.get(f"{host}/api/tags", timeout=5)
+                r = req.get(f"{host}/api/tags", timeout=10)
                 r.raise_for_status()
                 models_data = r.json()
                 available = [m.get('name') or m.get('model', '') for m in (models_data.get('models') or [])]
@@ -241,14 +241,12 @@ def test_provider():
             except req.exceptions.ConnectionError:
                 return jsonify({
                     "success": False,
-                    "error": f"Cannot connect to Ollama at {host}",
-                    "hint": "Make sure Ollama is running: ollama serve"
+                    "error": f"Cannot connect to {host} — is the service running?"
                 }), 200
             except req.exceptions.Timeout:
                 return jsonify({
                     "success": False,
-                    "error": "Connection timed out",
-                    "hint": f"Check that {host} is reachable"
+                    "error": f"Connection to {host} timed out after 10s"
                 }), 200
             except Exception as e:
                 return jsonify({"success": False, "error": str(e)}), 200
@@ -269,7 +267,7 @@ def test_provider():
                     'model': model,
                     'api_key': api_key,
                     'max_tokens': 1,
-                    'timeout': 15,
+                    'timeout': 10,
                 }
                 from services.llm_service import create_llm_service
                 llm = create_llm_service(test_config)
@@ -285,19 +283,22 @@ def test_provider():
             except Exception as e:
                 error_str = str(e)
                 el = error_str.lower()
-                hint = None
+                error_msg = error_str[:300]
                 if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
-                    hint = "Your API key appears to be invalid or expired"
+                    error_msg = "Invalid API key"
                 elif any(k in el for k in ('model_not_found', 'not found', 'does not exist', 'no such model', '404')):
-                    hint = f"Model '{model}' may not be available — check the model name"
+                    error_msg = f"Model '{model}' not found — check the model name"
                 elif any(k in el for k in ('quota', 'rate_limit', 'rate limit', '429', 'too many')):
-                    hint = "API quota exceeded or rate limited — try again later"
-                elif any(k in el for k in ('connect', 'timeout', 'network', 'ssl')):
-                    hint = "Network error — check your internet connection"
+                    error_msg = "API quota exceeded or rate limited — try again later"
+                elif any(k in el for k in ('timeout', 'timed out')):
+                    error_msg = f"Connection to {platform} timed out after 10s"
+                elif any(k in el for k in ('connectionerror', 'connection refused', 'connect')):
+                    error_msg = f"Cannot connect to {platform} — is the service running?"
+                elif any(k in el for k in ('network', 'ssl')):
+                    error_msg = "Network error — check your internet connection"
                 return jsonify({
                     "success": False,
-                    "error": error_str[:300],
-                    "hint": hint
+                    "error": error_msg,
                 }), 200
 
     except Exception as e:
