@@ -283,6 +283,7 @@ CREATE INDEX IF NOT EXISTS idx_user_traits_category ON user_traits(category);
 CREATE INDEX IF NOT EXISTS idx_user_traits_confidence ON user_traits(confidence);
 
 -- ────────────────────────────────────────────────────────────────
+-- DEPRECATED: unused, scheduled for removal
 -- MESSAGE CYCLES — processing unit tracking
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS message_cycles (

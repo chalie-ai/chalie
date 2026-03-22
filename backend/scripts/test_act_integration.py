@@ -6,9 +6,9 @@ Tests the full flow without actually calling the LLM.
 import sys
 sys.path.insert(0, 'src')
 
-from services.logger_service import LoggerService
+import logging
 
-logger = LoggerService.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 logger.info("Test 1: Import all required modules...")
 try:
