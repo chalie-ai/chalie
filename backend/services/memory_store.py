@@ -1272,3 +1272,24 @@ class PipelineProxy:
     def __exit__(self, *args):
         """Exit context manager; commands are not automatically executed on exit."""
         pass
+
+
+# ── Shared singleton ─────────────────────────────────────────────────────────
+
+_shared_store = None
+_shared_store_lock = threading.Lock()
+
+
+def get_shared_store() -> MemoryStore:
+    """Return the process-wide MemoryStore singleton (thread-safe).
+
+    This is the canonical way to obtain the shared store.  All callers that
+    previously went through ``MemoryClientService.create_connection()`` should
+    use this instead.
+    """
+    global _shared_store
+    if _shared_store is None:
+        with _shared_store_lock:
+            if _shared_store is None:
+                _shared_store = MemoryStore()
+    return _shared_store

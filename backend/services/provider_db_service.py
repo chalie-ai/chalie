@@ -21,43 +21,32 @@ class ProviderDbService:
         return self._enc_key
 
     def _encrypt(self, value: str) -> str:
-        """Encrypt a value using the encryption key (Python-level, HMAC-based obfuscation).
+        """Encrypt a value using Fernet (symmetric, HMAC-authenticated).
 
-        Uses Fernet-style encryption via the standard library.
-        Falls back to base64 encoding if cryptography is not available.
+        Requires the ``cryptography`` package (mandatory dependency).
         """
         if value is None:
             return None
-        try:
-            import base64
-            import hashlib
-            from cryptography.fernet import Fernet
-            # Derive a Fernet-compatible key from the encryption key
-            key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
-            fernet_key = base64.urlsafe_b64encode(key_bytes)
-            f = Fernet(fernet_key)
-            return f.encrypt(value.encode()).decode()
-        except ImportError:
-            # Fallback: base64 encode (not truly secure, but preserves data)
-            # TODO: Install cryptography package for proper encryption
-            import base64
-            return base64.urlsafe_b64encode(value.encode()).decode()
+        import base64
+        import hashlib
+        from cryptography.fernet import Fernet
+        # Derive a Fernet-compatible key from the encryption key
+        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_bytes)
+        f = Fernet(fernet_key)
+        return f.encrypt(value.encode()).decode()
 
     def _decrypt(self, value: str) -> str:
         """Decrypt a value encrypted by _encrypt."""
         if value is None:
             return None
-        try:
-            import base64
-            import hashlib
-            from cryptography.fernet import Fernet
-            key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
-            fernet_key = base64.urlsafe_b64encode(key_bytes)
-            f = Fernet(fernet_key)
-            return f.decrypt(value.encode()).decode()
-        except ImportError:
-            import base64
-            return base64.urlsafe_b64decode(value.encode()).decode()
+        import base64
+        import hashlib
+        from cryptography.fernet import Fernet
+        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_bytes)
+        f = Fernet(fernet_key)
+        return f.decrypt(value.encode()).decode()
 
     def _row_to_provider(self, row) -> Dict[str, Any]:
         """Convert a database row to a provider dict, decrypting api_key."""

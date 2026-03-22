@@ -31,12 +31,34 @@ class SettingsService:
         return self._enc_key
 
     def _encrypt(self, value: str) -> str:
-        """Encrypt a value using base64 encoding (local single-user app)."""
-        return base64.b64encode(value.encode('utf-8')).decode('utf-8')
+        """Encrypt a value using Fernet (symmetric, HMAC-authenticated).
+
+        Requires the ``cryptography`` package (mandatory dependency).
+        """
+        import hashlib
+        from cryptography.fernet import Fernet
+        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_bytes)
+        f = Fernet(fernet_key)
+        return f.encrypt(value.encode('utf-8')).decode('utf-8')
 
     def _decrypt(self, value: str) -> str:
-        """Decrypt a base64-encoded value."""
-        return base64.b64decode(value).decode('utf-8')
+        """Decrypt a value encrypted by _encrypt.
+
+        Handles legacy base64-only values (pre-Fernet) gracefully:
+        if Fernet decryption fails, falls back to base64 decode so
+        existing settings are not lost on upgrade.
+        """
+        import hashlib
+        from cryptography.fernet import Fernet
+        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(key_bytes)
+        f = Fernet(fernet_key)
+        try:
+            return f.decrypt(value.encode('utf-8')).decode('utf-8')
+        except Exception:
+            # Legacy fallback: value was stored as plain base64 before Fernet
+            return base64.b64decode(value).decode('utf-8')
 
     def get(self, key: str) -> Optional[str]:
         """Get a setting value by key."""
