@@ -329,6 +329,7 @@ class TestActionableTransitionInRecalculate:
             '[]',         # identity_links
             '2026-03-20T10:00:00+00:00',  # created_at
             '2026-03-22T09:00:00+00:00',  # last_reinforced_at
+            None,         # lineage_parent_id
         )
         # Second fetchone: distinct signal_type count
         distinct_row = (3,)
@@ -420,3 +421,63 @@ class TestActionableTransitionInRecalculate:
         assert len(spawned_threads) == 0, (
             "Should NOT re-spawn strategy thread when goal is already actionable"
         )
+
+
+# ---------------------------------------------------------------------------
+# Rejected strategy history
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRejectedStrategyHistory:
+    """Test rejected strategy history integration."""
+
+    def test_gather_rejected_strategies_empty(self, mock_store):
+        """No rejected strategies returns empty string."""
+        from services.goal_strategy_service import _gather_rejected_strategies
+        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = ('[]',)
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            result = _gather_rejected_strategies('test-id')
+        assert result == ""
+
+    def test_gather_rejected_strategies_with_history(self, mock_store):
+        """Failed strategies returned as formatted list."""
+        import json
+        feedback = json.dumps([
+            {'event': 'strategy_failed', 'strategy': 'Research directly', 'rejection_count': 2},
+            {'response': 'engaged', 'timestamp': '2026-03-20'},
+        ])
+        from services.goal_strategy_service import _gather_rejected_strategies
+        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (feedback,)
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            result = _gather_rejected_strategies('test-id')
+        assert 'Research directly' in result
+        assert 'rejected' in result.lower()
+        assert 'different approach' in result.lower()
+
+    def test_strategy_llm_includes_rejected_history(self, mock_store):
+        """Strategy LLM prompt includes rejected history when available."""
+        from services.goal_strategy_service import _call_strategy_llm
+        with patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
+            mock_response = MagicMock()
+            mock_response.text = "New approach"
+            MockProxy.return_value.send_message.return_value = mock_response
+
+            rejected = "Previous approaches rejected:\n1. \"Research directly\" (rejected 2 times)"
+            result = _call_strategy_llm("Learn Rust", "stated", "evidence", "context", rejected)
+
+        call_args = MockProxy.return_value.send_message.call_args
+        assert 'Research directly' in call_args[0][1]  # user_message includes rejected history

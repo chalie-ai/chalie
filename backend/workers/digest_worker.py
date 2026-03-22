@@ -2347,7 +2347,7 @@ def _classify_engagement(text: str) -> str:
     if not text_lower:
         return 'ignored'
 
-    # Acknowledgment patterns (short, non-substantive) — check before length gate
+    # Acknowledgment patterns (short, non-substantive) — check first
     ack = re.compile(
         r'^(ok|okay|sure|thanks|cool|got it|noted|yep|yeah|alright|'
         r'fine|roger|k|ty|thx|ack)\s*[.!]*$', re.IGNORECASE
@@ -2358,19 +2358,36 @@ def _classify_engagement(text: str) -> str:
     if len(text_lower) < 3:
         return 'ignored'
 
-    # Rejection patterns
-    rejection = re.compile(
+    # For substantive messages (>20 chars), check engagement BEFORE rejection
+    # This handles "I don't think that's right but tell me more" correctly
+    engagement_pattern = re.compile(
+        r'\b(yes|please|tell me|show|how|what|why|when|do it|go ahead|'
+        r'more|explain|help|interesting|continue|elaborate)\b', re.IGNORECASE
+    )
+
+    rejection_pattern = re.compile(
         r'\b(stop|don.t|no thanks|not interested|shut up|leave me|go away|'
         r'not now|quit|enough|annoying)\b', re.IGNORECASE
     )
-    if rejection.search(text_lower):
+
+    has_engagement = engagement_pattern.search(text_lower)
+    has_rejection = rejection_pattern.search(text_lower)
+
+    # For longer messages with both signals, engagement wins
+    # (user is still engaging even if they disagree)
+    if len(text_lower) > 20 and has_engagement and has_rejection:
+        # Check if rejection is followed by a "but" clause with engagement
+        if re.search(r'\b(but|however|though|although)\b', text_lower):
+            return 'engaged'
+        # For longer messages, engagement signal wins by default
+        return 'engaged'
+
+    # Pure rejection (short or unambiguous)
+    if has_rejection:
         return 'rejected'
 
     # Engaged: longer response, question, or action words
-    if len(text_lower) > 20 or '?' in text or re.search(
-        r'\b(yes|please|tell me|show|how|what|why|when|do it|go ahead)\b',
-        text_lower
-    ):
+    if len(text_lower) > 20 or '?' in text or has_engagement:
         return 'engaged'
 
     return 'acknowledged'

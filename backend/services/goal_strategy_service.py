@@ -52,7 +52,8 @@ def generate_strategy(goal: dict) -> Optional[str]:
     try:
         evidence_context = _gather_evidence_context(goal_id)
         user_context = _get_user_context()
-        strategy = _call_strategy_llm(description, goal_type, evidence_context, user_context)
+        rejected_history = _gather_rejected_strategies(goal_id)
+        strategy = _call_strategy_llm(description, goal_type, evidence_context, user_context, rejected_history)
 
         if not strategy:
             logger.warning(f"{LOG_PREFIX} LLM returned empty strategy for goal {goal_id[:8]}")
@@ -166,11 +167,51 @@ def _get_user_context() -> str:
         return ""
 
 
+def _gather_rejected_strategies(goal_id: str) -> str:
+    """Fetch previously rejected strategies from outcome_feedback."""
+    try:
+        from services.database_service import get_lightweight_db_service
+        db = get_lightweight_db_service()
+
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT outcome_feedback FROM goals WHERE id = ?", (goal_id,)
+            )
+            row = cursor.fetchone()
+            cursor.close()
+
+        if not row or not row[0]:
+            return ""
+
+        import json
+        feedback = json.loads(row[0])
+        failed = [
+            f for f in feedback
+            if isinstance(f, dict) and f.get('event') == 'strategy_failed'
+        ]
+
+        if not failed:
+            return ""
+
+        lines = ["Previous approaches that were rejected by the user:"]
+        for i, f in enumerate(failed[-3:], 1):  # Last 3 failed strategies
+            lines.append(f"{i}. \"{f.get('strategy', 'unknown')}\" (rejected {f.get('rejection_count', 0)} times)")
+        lines.append("\nGenerate a different approach that avoids these rejected patterns.")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Rejected strategy fetch failed: {e}")
+        return ""
+
+
 def _call_strategy_llm(
     description: str,
     goal_type: str,
     evidence_context: str,
     user_context: str,
+    rejected_history: str = "",
 ) -> Optional[str]:
     """
     Make a lightweight LLM call to generate a 1-3 sentence strategy.
@@ -201,6 +242,12 @@ def _call_strategy_llm(
                 "",
                 "User context (from autobiography):",
                 user_context,
+            ]
+
+        if rejected_history:
+            user_message_parts += [
+                "",
+                rejected_history,
             ]
 
         user_message = "\n".join(user_message_parts)

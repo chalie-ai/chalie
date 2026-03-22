@@ -582,6 +582,11 @@ class GoalEcologyService:
         Record user feedback on a proactive goal action.
 
         response_type: engaged|acknowledged|ignored|rejected
+
+        Strategy evolution:
+        - 3+ engaged outcomes: strategy marked as confirmed (add strategy_confirmed flag)
+        - 2+ rejected outcomes for current strategy: archive old strategy, null it out
+          (next drift cycle will regenerate with rejection history in prompt)
         """
         now = utc_now()
 
@@ -599,32 +604,69 @@ class GoalEcologyService:
 
             # Get current values
             cursor.execute("""
-                SELECT confidence, salience, outcome_feedback FROM goals WHERE id = ?
+                SELECT confidence, salience, outcome_feedback, strategy FROM goals WHERE id = ?
             """, (goal_id,))
             row = cursor.fetchone()
             if not row:
                 cursor.close()
                 return
 
-            confidence, salience, feedback_json = row
+            confidence, salience, feedback_json, current_strategy = row
             feedback = json.loads(feedback_json) if feedback_json else []
 
             # Apply deltas
             new_confidence = min(1.0, max(0.0, confidence + effect['confidence_delta']))
             new_salience = min(1.0, max(0.0, salience + effect['salience_delta']))
 
-            # Append feedback entry
-            feedback.append({
+            # Append feedback entry with strategy version tracking
+            feedback_entry = {
                 'response': response_type,
                 'timestamp': now.isoformat(),
-            })
+            }
+            if current_strategy:
+                feedback_entry['strategy_hash'] = hash(current_strategy) % 10000
+            feedback.append(feedback_entry)
 
-            # For rejected goals, clear strategy
+            # Strategy evolution logic
             strategy_update = ""
-            params = [new_confidence, new_salience, json.dumps(feedback), now.isoformat(), goal_id]
-            if response_type == 'rejected':
-                strategy_update = ", strategy = NULL"
+            if current_strategy:
+                current_hash = hash(current_strategy) % 10000
+                # Count rejections against current strategy
+                rejections_for_current = sum(
+                    1 for f in feedback
+                    if f.get('response') == 'rejected'
+                    and f.get('strategy_hash') == current_hash
+                )
 
+                if rejections_for_current >= 2:
+                    # Archive failed strategy in feedback history
+                    feedback.append({
+                        'event': 'strategy_failed',
+                        'strategy': current_strategy[:200],
+                        'rejection_count': rejections_for_current,
+                        'timestamp': now.isoformat(),
+                    })
+                    strategy_update = ", strategy = NULL"
+                    logger.info(
+                        f"{LOG_PREFIX} Strategy invalidated for goal {goal_id[:8]} "
+                        f"after {rejections_for_current} rejections"
+                    )
+
+                # Track engagement confirmations
+                engagements_for_current = sum(
+                    1 for f in feedback
+                    if f.get('response') == 'engaged'
+                    and f.get('strategy_hash') == current_hash
+                )
+                if engagements_for_current >= 3:
+                    feedback.append({
+                        'event': 'strategy_confirmed',
+                        'strategy': current_strategy[:200],
+                        'engagement_count': engagements_for_current,
+                        'timestamp': now.isoformat(),
+                    })
+
+            params = [new_confidence, new_salience, json.dumps(feedback), now.isoformat(), goal_id]
             cursor.execute(f"""
                 UPDATE goals
                 SET confidence = ?, salience = ?, outcome_feedback = ?,
