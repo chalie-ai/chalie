@@ -29,10 +29,16 @@ def _no_capability_gap_writes():
 
 @pytest.fixture
 def mock_store():
-    """Isolated MemoryStore — same implementation used in production."""
+    """Isolated MemoryStore — same implementation used in production.
+
+    Patches both the canonical ``get_shared_store()`` in memory_store and the
+    legacy ``MemoryClientService.create_connection()`` shim so every code path
+    sees the same isolated instance.
+    """
     from services.memory_store import MemoryStore
     store = MemoryStore()
-    with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+    with patch('services.memory_store.get_shared_store', return_value=store), \
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
         yield store
 
 
@@ -235,6 +241,7 @@ def authed_client():
 
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.database_service.get_shared_db_service', return_value=mock_db), \
+         patch('services.memory_store.get_shared_store', return_value=mock_store), \
          patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
          patch('api._init_dashboard_gateway'):
         app = create_app()
