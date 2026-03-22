@@ -10,7 +10,6 @@ from services.innate_skills.registry import (
     COGNITIVE_PRIMITIVES,
     CONTEXTUAL_SKILLS,
     TRIAGE_VALID_SKILLS,
-    PROCEDURAL_MEMORY_SKILLS,
     SKILL_DESCRIPTIONS,
     COGNITIVE_PRIMITIVES_ORDERED,
 )
@@ -63,9 +62,6 @@ class TestSkillRegistry:
     def test_deterministic_actions_subset_of_all(self):
         assert DETERMINISTIC_ACTIONS <= ALL_SKILL_NAMES
 
-    def test_procedural_memory_skills_subset_of_all(self):
-        assert PROCEDURAL_MEMORY_SKILLS <= ALL_SKILL_NAMES
-
     def test_skill_descriptions_covers_all_skills(self):
         assert set(SKILL_DESCRIPTIONS.keys()) == ALL_SKILL_NAMES
 
@@ -81,7 +77,6 @@ class TestSkillRegistry:
             ('COGNITIVE_PRIMITIVES', COGNITIVE_PRIMITIVES),
             ('CONTEXTUAL_SKILLS', CONTEXTUAL_SKILLS),
             ('TRIAGE_VALID_SKILLS', TRIAGE_VALID_SKILLS),
-            ('PROCEDURAL_MEMORY_SKILLS', PROCEDURAL_MEMORY_SKILLS),
             ('READ_ACTIONS', READ_ACTIONS),
             ('DETERMINISTIC_ACTIONS', DETERMINISTIC_ACTIONS),
             ('SAFE_ACTIONS', SAFE_ACTIONS),

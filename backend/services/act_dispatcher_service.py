@@ -206,9 +206,11 @@ class ActDispatcherService:
             thread.join(timeout=self.timeout)
 
             execution_time = time.time() - start_time
+            elapsed_ms = int(execution_time * 1000)
 
             # Check results
             if thread.is_alive():
+                self._track_skill(action_type, False, elapsed_ms, topic, failure_class='timeout')
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
@@ -219,6 +221,7 @@ class ActDispatcherService:
                 }
 
             if result_container['error']:
+                self._track_skill(action_type, False, elapsed_ms, topic, failure_class='internal')
                 return {
                     'action_type': action_type,
                     'status': 'error',
@@ -243,6 +246,8 @@ class ActDispatcherService:
             # Append COMMIT-tier warning to notes so the ACT loop prompt sees it
             if _commit_warning:
                 notes = (_commit_warning + '; ' + notes) if notes else _commit_warning
+
+            self._track_skill(action_type, True, elapsed_ms, topic, result=str(raw_result)[:500])
 
             dispatch_result = {
                 'action_type': action_type,
@@ -287,6 +292,7 @@ class ActDispatcherService:
 
         except Exception as e:
             execution_time = time.time() - start_time
+            self._track_skill(action_type, False, int(execution_time * 1000), topic, failure_class='internal')
             logging.exception(f"[ACT DISPATCH] Unexpected error in {action_type}:")
             return {
                 'action_type': action_type,
@@ -296,6 +302,29 @@ class ActDispatcherService:
                 'confidence': 0.0,
                 'notes': '',
             }
+
+    def _track_skill(self, action_type: str, success: bool, latency_ms: int,
+                     topic: str = '', failure_class: str | None = None, result: str = '') -> None:
+        """Track innate skill invocations via the unified tracker.
+
+        Tools are skipped here — they self-track inside ToolRegistryService.invoke().
+        This avoids double-counting while keeping a single tracker for all paths.
+        """
+        from services.innate_skills.registry import ALL_SKILL_NAMES
+        if action_type not in ALL_SKILL_NAMES:
+            return
+        try:
+            from services.invocation_tracker import track
+            track(
+                name=action_type,
+                success=success,
+                latency_ms=latency_ms,
+                topic=topic,
+                failure_class=failure_class,
+                result=result,
+            )
+        except Exception as e:
+            logging.debug(f"[ACT DISPATCH] Tracking failed for {action_type}: {e}")
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

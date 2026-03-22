@@ -40,13 +40,6 @@ TRIAGE_VALID_SKILLS: frozenset = PLANNING_SKILLS
 #    (e.g., prepending to skill lists in triage) ───────────────────────────
 COGNITIVE_PRIMITIVES_ORDERED: list = ['recall', 'memorize', 'associate', 'find_tools']
 
-# ── Skills tracked by procedural memory (skill_outcome_recorder).
-#    Only the 4 core primitives — dynamic tools are tracked separately
-#    by ToolRegistryService._log_outcome. ──────────────────────────────────
-PROCEDURAL_MEMORY_SKILLS: frozenset = frozenset({
-    'recall', 'memorize', 'introspect', 'associate',
-})
-
 # ── Skill descriptions for tool profile bootstrapping ─────────────────────
 SKILL_DESCRIPTIONS: dict = {
     'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',
