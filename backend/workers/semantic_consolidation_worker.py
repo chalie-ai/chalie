@@ -100,6 +100,21 @@ class SemanticConsolidationWorker:
                 f"{len(concept_name_to_id)} concepts, {relationships_created} relationships"
             )
 
+            # Route new knowledge as cognitive signal for goal ecology
+            try:
+                from services.goal_signal_service import route_cognitive_signal
+                _topic = episode.get('topic', 'unknown')
+                for _concept in extracted.get('concepts', []):
+                    _content = _concept.get('name', '') or _concept.get('description', '')
+                    if _content:
+                        route_cognitive_signal({
+                            'signal_type': 'new_knowledge',
+                            'payload': {'content': _content},
+                            'source_id': f'semantic_consolidation:{_topic}',
+                        })
+            except Exception as e:
+                logging.debug(f"[SEMANTIC] Cognitive signal routing non-fatal: {e}")
+
             return {
                 'status': 'success',
                 'episode_id': episode_id,
