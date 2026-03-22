@@ -22,11 +22,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CURIOSITY THREAD]"
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list of floats into a binary blob for sqlite-vec."""
-    if embedding is None:
-        return None
-    return struct.pack(f'{len(embedding)}f', *embedding)
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class CuriosityThreadService:

@@ -37,16 +37,7 @@ _DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "docu
 DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
 
 
-def _pack_embedding(embedding):
-    """Pack a list of floats into a binary blob for sqlite-vec storage.
-
-    Args:
-        embedding: List of float values representing the embedding vector.
-
-    Returns:
-        Bytes object in little-endian 32-bit float format.
-    """
-    return struct.pack(f'{len(embedding)}f', *embedding)
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class DocumentService:

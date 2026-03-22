@@ -36,18 +36,7 @@ def _get_embed_service():
     return _EMBED_SERVICE
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list/ndarray of floats into a binary blob for sqlite-vec."""
-    if embedding is None:
-        return None
-    if isinstance(embedding, bytes):
-        return embedding
-    if hasattr(embedding, 'tolist'):
-        flat = embedding.tolist()
-        return struct.pack(f'{len(flat)}f', *flat)
-    if isinstance(embedding, (list, tuple)):
-        return struct.pack(f'{len(embedding)}f', *embedding)
-    return embedding
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 def generate_embedding(text: str) -> np.ndarray:

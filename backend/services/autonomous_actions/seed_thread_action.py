@@ -35,18 +35,7 @@ SEED_COOLDOWN_KEY = "curiosity:seed_cooldown"
 SEED_COOLDOWN_TTL = 86400  # 24 hours
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
-    if embedding is None:
-        return None
-    if isinstance(embedding, bytes):
-        return embedding
-    if isinstance(embedding, (list, tuple)):
-        return struct.pack(f'{len(embedding)}f', *embedding)
-    if hasattr(embedding, 'tolist'):
-        flat = embedding.tolist()
-        return struct.pack(f'{len(flat)}f', *flat)
-    return embedding
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class SeedThreadAction(AutonomousAction):
