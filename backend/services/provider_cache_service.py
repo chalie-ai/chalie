@@ -92,15 +92,24 @@ class ProviderCacheService:
             except Exception as e:
                 logger.debug(f"[ProviderCache] Could not load job assignments: {e}")
 
-            # Store in local cache
-            ProviderCacheService._providers = providers_dict
-            ProviderCacheService._job_assignments = job_assignments
-            ProviderCacheService._version = current_version
+            # Store in local cache — but only if we got results.
+            # An empty fetch (boot race or genuinely no providers) must NOT
+            # be cached, otherwise version 0 == 0 means we never retry.
+            if providers_dict:
+                ProviderCacheService._providers = providers_dict
+                ProviderCacheService._job_assignments = job_assignments
+                ProviderCacheService._version = current_version
+                logger.debug(f"[ProviderCache] Loaded {len(providers_dict)} providers and {len(job_assignments)} job assignments from DB")
+            else:
+                # Reset version so next call retries the DB fetch
+                ProviderCacheService._version = None
+                logger.debug("[ProviderCache] No providers found, will retry on next call")
 
-            logger.debug(f"[ProviderCache] Loaded {len(providers_dict)} providers and {len(job_assignments)} job assignments from DB")
             return providers_dict
 
         except Exception as e:
+            # Don't cache failures — reset version so next call retries
+            ProviderCacheService._version = None
             logger.warning(f"[ProviderCache] DB fetch failed: {e}, returning empty dict")
             return {}
 
