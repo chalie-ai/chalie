@@ -474,20 +474,29 @@ class ToolRegistryService:
         Uses InterfaceRegistryService.execute_capability() which does:
         POST interface_host:port/execute {capability, params}
         """
+        from services.invocation_tracker import track
+
         interface_id = tool.get("interface_id")
         if not interface_id:
             return f"[TOOL:{tool_name}] No interface_id for interface tool [/TOOL]"
 
+        start_time = time.time()
         try:
             from services.interface_registry_service import InterfaceRegistryService
             result = InterfaceRegistryService().execute_capability(interface_id, tool_name, params)
         except Exception as e:
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
             return f"[TOOL:{tool_name}] Interface execution error: {e} [/TOOL]"
 
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
         if not isinstance(result, dict):
+            track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
             return f"[TOOL:{tool_name}] {result} [/TOOL]"
 
         if result.get("error"):
+            track(name=tool_name, success=False, latency_ms=elapsed_ms, failure_class='external')
             return f"[TOOL:{tool_name}] Error: {result['error']} [/TOOL]"
 
         # Format result like any other tool
@@ -506,6 +515,7 @@ class ToolRegistryService:
         if len(output) > self.MAX_OUTPUT_CHARS:
             output = output[:self.MAX_OUTPUT_CHARS] + "\n...(truncated)"
 
+        track(name=tool_name, success=True, latency_ms=elapsed_ms)
         return f"[TOOL:{tool_name}] {output} [/TOOL]"
 
     def invoke(self, tool_name: str, topic: str, params: dict, exchange_id: str = '') -> str:
@@ -667,43 +677,16 @@ class ToolRegistryService:
         return format_tool_result(result)
 
     def _log_outcome(self, tool_name: str, success: bool, topic: str, elapsed_ms: int, failure_class: str = None, exchange_id: str = ''):
-        """Log tool invocation outcome to procedural memory and performance metrics.
-
-        Args:
-            failure_class: 'external' for rate limits / network / upstream errors;
-                           'internal' for subprocess crashes / tool bugs.
-                           None implies success. External failures receive an
-                           attenuated penalty to avoid unjust weight degradation.
-            exchange_id: Optional exchange ID for cross-referencing with interactions.
-        """
-        try:
-            from services.procedural_memory_service import ProceduralMemoryService
-            from services.database_service import get_shared_db_service
-            db_service = get_shared_db_service()
-            service = ProceduralMemoryService(db_service)
-            if success:
-                reward = 0.3
-            elif failure_class == "external":
-                reward = -0.05
-            else:
-                reward = -0.2
-            service.record_action_outcome(tool_name, success, reward, topic, failure_class=failure_class)
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to log outcome: {e}")
-
-        # Also record to tool_performance_metrics so ToolPerformanceService
-        # has complete observability — including registry-level failures.
-        try:
-            from services.tool_performance_service import ToolPerformanceService
-            ToolPerformanceService().record_invocation(
-                tool_name=tool_name,
-                exchange_id=exchange_id,
-                success=success,
-                latency_ms=float(elapsed_ms),
-                cost=0.0,
-            )
-        except Exception as e:
-            logger.debug(f"[TOOL REGISTRY] Failed to record performance metric: {e}")
+        """Log tool invocation outcome via unified tracker."""
+        from services.invocation_tracker import track
+        track(
+            name=tool_name,
+            success=success,
+            latency_ms=elapsed_ms,
+            topic=topic,
+            exchange_id=exchange_id,
+            failure_class=failure_class,
+        )
 
     def unregister_tool(self, tool_name: str):
         """Unregister a tool from the registry (e.g., when disabling it)."""

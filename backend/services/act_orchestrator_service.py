@@ -547,13 +547,6 @@ class ACTOrchestrator:
                     )
                     termination_reason = 'persistent_task_dispatched'
 
-            # ── Record skill outcomes ───────────────────────────────────
-            try:
-                from services.skill_outcome_recorder import record_skill_outcomes
-                record_skill_outcomes(actions_executed, topic)
-            except Exception:
-                pass
-
             # ── Check timeout/max_iterations if no reason yet ───────────
             if not termination_reason:
                 can_continue, exit_reason = act_loop.can_continue()
