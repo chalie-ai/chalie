@@ -64,10 +64,6 @@ def main():
         config["models_dir"] = args.models_dir
     runtime_config.set(config)
 
-    # Ensure encryption key
-    from services.encryption_key_service import get_encryption_key
-    get_encryption_key()
-
     # Preload embedding model in a background thread so Flask starts immediately.
     # On first run the model (~438MB) may need to download from HuggingFace;
     # blocking here would prevent the onboarding page from loading for 5+ minutes.
@@ -136,6 +132,12 @@ def main():
     # Run pending migrations
     logger.info("Checking for pending database migrations...")
     database_service.run_pending_migrations()
+
+    # Ensure encryption key — must run AFTER database init so the key can be
+    # stored in the DB itself (co-located with encrypted data, never lost).
+    # Migrates from legacy .key file on first run after upgrade.
+    from services.encryption_key_service import get_encryption_key
+    get_encryption_key(database_service)
 
     # Initialize API key
     try:
