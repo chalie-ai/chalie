@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -298,14 +298,13 @@ class TestTransitions:
         # Use a fixed weekday + hour so the test passes regardless of when it runs.
         fixed_hour = 10
         next_hour = 11
-        fixed_monday = datetime(2026, 3, 2, fixed_hour, 0, 0)  # known Monday
+        fixed_monday = datetime(2026, 3, 2, fixed_hour, 0, 0, tzinfo=timezone.utc)  # known Monday
 
         for d in range(5):
             seed_aggregate(memdb, 'energy', 'high', d, fixed_hour, 20)
             seed_aggregate(memdb, 'energy', 'low', d, next_hour, 20)
 
-        with patch('services.temporal_pattern_service.datetime') as mock_dt:
-            mock_dt.utcnow.return_value = fixed_monday
+        with patch('services.temporal_pattern_service.utc_now', return_value=fixed_monday):
             transitions = svc.get_upcoming_transitions(lookahead_minutes=120)
 
         energy_t = [t for t in transitions if t['obs_type'] == 'energy']

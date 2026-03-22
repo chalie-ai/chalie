@@ -27,6 +27,8 @@ import re
 import threading
 import time as _time
 from datetime import datetime, timedelta
+
+from services.time_utils import utc_now
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -172,7 +174,7 @@ class TemporalObservationBuffer:
                 )
 
                 # 2. UPSERT aggregate counts
-                now_iso = datetime.utcnow().isoformat()
+                now_iso = utc_now().isoformat()
                 for o in batch:
                     cursor.execute(
                         """
@@ -241,7 +243,7 @@ class TemporalPatternService:
             persistence is handled internally.
         """
         start = _time.monotonic()
-        cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+        cutoff = utc_now() - timedelta(days=lookback_days)
 
         patterns = []
 
@@ -292,7 +294,7 @@ class TemporalPatternService:
         if obs_type not in OBSERVATION_TYPES:
             return None
 
-        now = datetime.utcnow()
+        now = utc_now()
         if day is None:
             day = now.weekday()
         if hour is None:
@@ -351,7 +353,7 @@ class TemporalPatternService:
             ``obs_type``, ``from_value``, ``to_value``, ``expected_hour``,
             and ``confidence``. Empty if no transitions are predicted.
         """
-        now = datetime.utcnow()
+        now = utc_now()
         current_day = now.weekday()
         current_hour = now.hour
 
@@ -483,7 +485,7 @@ class TemporalPatternService:
             retention_days: Observations older than this many days are deleted.
                 Defaults to ``DEFAULT_RETENTION_DAYS`` (90).
         """
-        cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+        cutoff = (utc_now() - timedelta(days=retention_days)).isoformat()
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -771,7 +773,7 @@ class TemporalPatternService:
                                day: Optional[int] = None,
                                hour: Optional[int] = None) -> float:
         """Get Laplace-smoothed probability of a specific value in a bucket."""
-        now = datetime.utcnow()
+        now = utc_now()
         if day is None:
             day = now.weekday()
         if hour is None:
@@ -1097,7 +1099,7 @@ def temporal_pattern_worker(shared_state):
 
                 # 4. Store last run time for observability
                 store.setex("temporal:last_mining_run",
-                            86400, datetime.utcnow().isoformat())
+                            86400, utc_now().isoformat())
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} Mining cycle failed: {e}")
