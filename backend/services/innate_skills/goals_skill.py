@@ -1,7 +1,7 @@
 """
 Goals Skill — Natural language goal management via the ACT loop.
 
-Actions: list, view, confirm, complete, dismiss, adjust, mute, unmute
+Actions: list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate
 """
 
 import json
@@ -45,8 +45,10 @@ def handle_goals(topic: str, params: dict) -> str:
             return _handle_mute(ecology, params.get('goal_id'))
         elif action == 'unmute':
             return _handle_unmute(ecology, params.get('goal_id'))
+        elif action == 'narrate':
+            return _handle_narrate(ecology, params)
         else:
-            return f"[GOALS] Unknown action: {action}. Valid: list, view, confirm, complete, dismiss, adjust, mute, unmute"
+            return f"[GOALS] Unknown action: {action}. Valid: list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate"
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error: {e}", exc_info=True)
@@ -221,3 +223,133 @@ def _handle_unmute(ecology, goal_id: str) -> str:
     if ecology.unmute_goal(goal_id):
         return f"[GOALS] Goal {goal_id} unmuted. Proactive actions re-enabled."
     return f"[GOALS] Goal {goal_id} not found."
+
+
+def _handle_narrate(ecology, params: dict) -> str:
+    """Generate a narrative synthesis of goal evolution via LLM."""
+    goals = ecology.get_active_stack(limit=5)
+    if not goals:
+        return "[GOALS] No active goals to narrate."
+
+    # Gather evidence timelines and lineage for each goal
+    narratives_data = []
+    for g in goals:
+        evidence = _get_evidence_for_goal(g['id'], limit=10)
+        parent_desc = None
+        if g.get('lineage_parent_id'):
+            parent = ecology.get_goal(g['lineage_parent_id'])
+            if parent:
+                parent_desc = parent.get('description', '')
+
+        children = []
+        try:
+            children = ecology.get_children(g['id'])
+        except Exception:
+            pass
+
+        narratives_data.append({
+            'description': g['description'],
+            'type': g['type'],
+            'status': g['status'],
+            'salience': g['salience'],
+            'confidence': g['confidence'],
+            'evidence_count': g.get('evidence_count', 0),
+            'timescale': g.get('timescale', 'medium_term'),
+            'created_at': g.get('created_at', ''),
+            'strategy': g.get('strategy', ''),
+            'parent_goal': parent_desc,
+            'child_count': len(children),
+            'evidence_timeline': evidence,
+            'outcome_feedback': g.get('outcome_feedback', []),
+        })
+
+    return _synthesize_narrative(narratives_data)
+
+
+def _get_evidence_for_goal(goal_id: str, limit: int = 10) -> list:
+    """Fetch recent evidence for a goal."""
+    try:
+        from services.database_service import get_lightweight_db_service
+        db = get_lightweight_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT signal_type, content, source, created_at
+                FROM goal_evidence
+                WHERE goal_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (goal_id, limit))
+            rows = cursor.fetchall()
+            cursor.close()
+        return [{'signal_type': r[0], 'content': r[1], 'source': r[2], 'timestamp': r[3]} for r in rows]
+    except Exception:
+        return []
+
+
+def _synthesize_narrative(goals_data: list) -> str:
+    """Generate a narrative synthesis via lightweight LLM call."""
+    try:
+        from services.background_llm_queue import create_background_llm_proxy
+        proxy = create_background_llm_proxy("goal-strategy")
+
+        system_prompt = (
+            "You are synthesizing the story of this user's goals. Write in second person "
+            '("you\'ve been..."). Be warm but precise. Highlight:\n'
+            "- How goals formed (from explicit statements vs emerged from patterns)\n"
+            "- How they've evolved over time (evidence accumulation, confidence changes)\n"
+            "- Connections between goals (parent-child hierarchies, shared themes)\n"
+            "- What the system has done or plans to do about them (strategies, proactive actions)\n"
+            "Keep it to 2-4 paragraphs. This is a narrative, not a list.\n"
+            "Do not use corporate language. Speak as someone who has genuinely been thinking about this.\n"
+            "Anchor all statements in evidence — reference specific counts and patterns, not speculation."
+        )
+
+        # Build context
+        lines = []
+        for i, g in enumerate(goals_data, 1):
+            lines.append(f"Goal {i}: {g['description']}")
+            lines.append(f"  Type: {g['type']} | Status: {g['status']} | Timescale: {g['timescale']}")
+            lines.append(f"  Salience: {g['salience']:.0%} | Confidence: {g['confidence']:.0%}")
+            lines.append(f"  Evidence count: {g['evidence_count']} | Created: {g['created_at']}")
+            if g.get('strategy'):
+                lines.append(f"  Strategy: {g['strategy'][:150]}")
+            if g.get('parent_goal'):
+                lines.append(f"  Serves larger goal: {g['parent_goal']}")
+            if g['child_count'] > 0:
+                lines.append(f"  Has {g['child_count']} sub-goal(s)")
+
+            if g['evidence_timeline']:
+                lines.append(f"  Evidence timeline ({len(g['evidence_timeline'])} recent):")
+                for e in g['evidence_timeline'][:5]:
+                    lines.append(f"    - [{e['signal_type']}] {e['content'][:80]} ({e['timestamp']})")
+
+            feedback = g.get('outcome_feedback', [])
+            if isinstance(feedback, str):
+                try:
+                    import json as _json
+                    feedback = _json.loads(feedback)
+                except Exception:
+                    feedback = []
+            if feedback:
+                engaged = sum(1 for f in feedback if f.get('response') == 'engaged')
+                rejected = sum(1 for f in feedback if f.get('response') == 'rejected')
+                lines.append(f"  Feedback: {engaged} engaged, {rejected} rejected")
+            lines.append("")
+
+        user_message = "\n".join(lines)
+
+        response = proxy.send_message(system_prompt, user_message)
+        if not response or not response.text.strip():
+            return "[GOALS] Unable to generate narrative at this time."
+
+        narrative = response.text.strip()
+        # Cap at ~2000 chars to keep response reasonable
+        if len(narrative) > 2000:
+            narrative = narrative[:2000] + "..."
+
+        return f"[GOALS NARRATIVE]\n{narrative}"
+
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Narrative synthesis failed: {e}")
+        return "[GOALS] Unable to generate narrative at this time. Try the 'list' action for a structured view."
