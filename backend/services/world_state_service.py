@@ -17,7 +17,8 @@ Ambient context, active topics, and reasoning focus are also surfaced.
 import json
 import logging
 import math
-import struct
+
+from services.embedding_utils import pack_embedding
 import time
 
 from services.time_utils import utc_now, parse_utc
@@ -1199,7 +1200,7 @@ class WorldStateService:
         rowid is in the results.  Falls back to 0.0 on any error.
         """
         try:
-            packed = struct.pack(f'{len(message_embedding)}f', *message_embedding)
+            packed = pack_embedding(message_embedding)
             cursor = conn.cursor()
 
             cursor.execute(
@@ -1239,7 +1240,7 @@ class WorldStateService:
         Falls back to 0.0 on any error.
         """
         try:
-            packed = struct.pack(f'{len(message_embedding)}f', *message_embedding)
+            packed = pack_embedding(message_embedding)
             cursor = conn.cursor()
 
             # KNN search: retrieve up to MAX_TASK_CANDIDATES nearest neighbours
@@ -1270,7 +1271,7 @@ class WorldStateService:
         Falls back to 0.0 on any error.
         """
         try:
-            packed = struct.pack(f'{len(message_embedding)}f', *message_embedding)
+            packed = pack_embedding(message_embedding)
             cursor = conn.cursor()
 
             cursor.execute(

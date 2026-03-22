@@ -37,7 +37,13 @@ class ProviderDbService:
         return f.encrypt(value.encode()).decode()
 
     def _decrypt(self, value: str) -> str:
-        """Decrypt a value encrypted by _encrypt."""
+        """Decrypt a value encrypted by _encrypt.
+
+        Handles legacy values gracefully: if Fernet decryption fails
+        (e.g. value was stored as plain base64 or plaintext before Fernet
+        was enforced), falls back to base64 decode, then returns raw value
+        so existing installations are not bricked on upgrade.
+        """
         if value is None:
             return None
         import base64
@@ -46,7 +52,14 @@ class ProviderDbService:
         key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
         fernet_key = base64.urlsafe_b64encode(key_bytes)
         f = Fernet(fernet_key)
-        return f.decrypt(value.encode()).decode()
+        try:
+            return f.decrypt(value.encode()).decode()
+        except Exception:
+            # Legacy fallback: try base64 decode, then return raw
+            try:
+                return base64.b64decode(value).decode()
+            except Exception:
+                return value
 
     def _row_to_provider(self, row) -> Dict[str, Any]:
         """Convert a database row to a provider dict, decrypting api_key."""

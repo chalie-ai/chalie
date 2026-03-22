@@ -9,8 +9,9 @@ Entry point: scheduler_worker(shared_state=None) registered in run.py.
 """
 
 import logging
-import struct
 import time
+
+from services.embedding_utils import pack_embedding
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
         if not embedding:
             return
 
-        packed = struct.pack(f'{len(embedding)}f', *embedding)
+        packed = pack_embedding(embedding)
 
         with db.connection() as conn:
             cursor = conn.cursor()

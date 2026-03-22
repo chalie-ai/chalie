@@ -296,10 +296,10 @@ class IdleConsolidationService:
         Uses sqlite-vec cosine distance. Returns the most similar episode
         if similarity >= threshold, else None.
         """
-        import struct
+        from services.embedding_utils import pack_embedding
 
         try:
-            blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+            blob = pack_embedding(query_embedding)
 
             with db_service.connection() as conn:
                 cursor = conn.cursor()
