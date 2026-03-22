@@ -1155,3 +1155,139 @@ class GoalEcologyService:
 
         logger.info(f"{LOG_PREFIX} Goal {goal_id[:8]} unmuted")
         return True
+
+    # ── Cross-Goal Inference ─────────────────────────────────────────────────
+
+    def detect_goal_clusters(self) -> List[Dict[str, Any]]:
+        """
+        Detect clusters of thematically related goals.
+
+        Computes pairwise embedding similarity between active goals.
+        If 3+ goals have mutual similarity > 0.55, returns them as a cluster
+        with a suggested consolidated description.
+
+        Returns:
+            List of cluster dicts: [{'goals': [...], 'suggested_description': '...'}]
+        """
+        try:
+            # Get all active goals
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, description, type, salience, confidence, timescale
+                    FROM goals
+                    WHERE status NOT IN ('completed', 'decayed', 'evolved')
+                    ORDER BY salience DESC
+                    LIMIT 20
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+
+            if len(rows) < 3:
+                return []
+
+            goals = [
+                {'id': r[0], 'description': r[1], 'type': r[2],
+                 'salience': r[3], 'confidence': r[4], 'timescale': r[5]}
+                for r in rows
+            ]
+
+            # Compute embeddings
+            from services.embedding_service import get_embedding_service
+            import numpy as np
+            embedding_service = get_embedding_service()
+
+            embeddings = []
+            for g in goals:
+                emb = embedding_service.generate_embedding_np(g['description'])
+                embeddings.append(emb)
+
+            # Build similarity matrix
+            n = len(goals)
+            sim_matrix = [[0.0] * n for _ in range(n)]
+            for i in range(n):
+                for j in range(i + 1, n):
+                    sim = float(np.dot(embeddings[i], embeddings[j]))
+                    sim_matrix[i][j] = sim
+                    sim_matrix[j][i] = sim
+
+            # Find clusters: greedy, require 3+ goals with pairwise > 0.55
+            used = set()
+            clusters = []
+
+            for i in range(n):
+                if i in used:
+                    continue
+
+                cluster = [i]
+                for j in range(i + 1, n):
+                    if j in used:
+                        continue
+                    # Check similarity with ALL current cluster members
+                    if all(sim_matrix[j][k] > 0.55 for k in cluster):
+                        cluster.append(j)
+
+                if len(cluster) >= 3:
+                    clusters.append(cluster)
+                    used.update(cluster)
+
+            if not clusters:
+                return []
+
+            # Check cooldown: don't re-detect clusters too frequently
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+
+            results = []
+            for cluster_indices in clusters:
+                cluster_goals = [goals[i] for i in cluster_indices]
+                cluster_ids = sorted([g['id'] for g in cluster_goals])
+                cluster_key = f"goal_cluster:{'|'.join(cluster_ids[:5])}"
+
+                # Skip if this cluster was recently detected or dismissed
+                if store.get(f"{cluster_key}:cooldown"):
+                    continue
+
+                # Generate consolidated description via LLM
+                suggested = _generate_cluster_description(cluster_goals)
+
+                results.append({
+                    'goals': cluster_goals,
+                    'suggested_description': suggested,
+                    'cluster_key': cluster_key,
+                })
+
+            return results
+
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Cross-goal detection failed: {e}")
+            return []
+
+
+def _generate_cluster_description(goals: list) -> str:
+    """Generate a consolidated description for a goal cluster via LLM."""
+    try:
+        from services.background_llm_queue import create_background_llm_proxy
+        proxy = create_background_llm_proxy("goal-strategy")
+
+        system_prompt = (
+            "Given these related goals, propose a single higher-order goal that "
+            "encompasses all of them. Output ONLY the goal description in one sentence. "
+            "Be specific and concrete, not vague."
+        )
+
+        goal_lines = []
+        for i, g in enumerate(goals, 1):
+            goal_lines.append(f"{i}. [{g['type']}] {g['description']}")
+        user_message = "Related goals:\n" + "\n".join(goal_lines)
+
+        response = proxy.send_message(system_prompt, user_message)
+        if response and response.text.strip():
+            return response.text.strip()[:300]
+
+        # Fallback: longest description
+        return max((g['description'] for g in goals), key=len)
+
+    except Exception as e:
+        logging.debug(f"[GOAL ECOLOGY] Cluster description generation failed: {e}")
+        return max((g['description'] for g in goals), key=len)

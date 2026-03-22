@@ -1753,3 +1753,147 @@ class TestTimescaleInference:
             {'content': 'd'},
         ]
         assert _infer_timescale_from_signals(signals) == 'medium_term'
+
+
+class TestCrossGoalInference:
+    """Test cross-goal cluster detection."""
+
+    def test_detect_clusters_requires_3_plus_goals(self, mock_store):
+        """Less than 3 active goals returns no clusters."""
+        db, conn = _make_db()
+        svc = GoalEcologyService(db_service=db)
+        now = utc_now().isoformat()
+        cursor = conn.cursor()
+        for i in range(2):
+            cursor.execute("""
+                INSERT INTO goals (id, type, status, description, confidence, salience,
+                    commitment, urgency, timescale, evidence_count,
+                    last_reinforced_at, outcome_feedback, created_at, updated_at)
+                VALUES (?, 'stated', 'actionable', ?, 0.8, 0.7,
+                    0.0, 0.5, 'short_term', 1, ?, '[]', ?, ?)
+            """, (f'g{i}', f'Goal {i}', now, now, now))
+        conn.commit()
+        cursor.close()
+
+        result = svc.detect_goal_clusters()
+        assert result == []
+
+    def test_detect_clusters_returns_empty_when_no_similarity(self, mock_store):
+        """Goals with low similarity should not cluster."""
+        db, conn = _make_db()
+        svc = GoalEcologyService(db_service=db)
+        now = utc_now().isoformat()
+
+        cursor = conn.cursor()
+        goals = [
+            ('g1', 'Learn quantum physics deeply'),
+            ('g2', 'Cook Italian pasta recipes'),
+            ('g3', 'Build a treehouse for kids'),
+        ]
+        for gid, desc in goals:
+            cursor.execute("""
+                INSERT INTO goals (id, type, status, description, confidence, salience,
+                    commitment, urgency, timescale, evidence_count,
+                    last_reinforced_at, outcome_feedback, created_at, updated_at)
+                VALUES (?, 'stated', 'actionable', ?, 0.8, 0.7,
+                    0.0, 0.5, 'short_term', 1, ?, '[]', ?, ?)
+            """, (gid, desc, now, now, now))
+        conn.commit()
+        cursor.close()
+
+        # Mock embedding service to return orthogonal vectors
+        import numpy as np
+        embeddings = {
+            'Learn quantum physics deeply': np.array([1.0, 0.0, 0.0]),
+            'Cook Italian pasta recipes': np.array([0.0, 1.0, 0.0]),
+            'Build a treehouse for kids': np.array([0.0, 0.0, 1.0]),
+        }
+        with patch('services.embedding_service.get_embedding_service') as MockEmb:
+            MockEmb.return_value.generate_embedding_np.side_effect = (
+                lambda text: embeddings.get(text, np.zeros(3))
+            )
+            result = svc.detect_goal_clusters()
+
+        assert result == []
+
+    def test_detect_clusters_finds_similar_goals(self, mock_store):
+        """3+ goals with high similarity should form a cluster."""
+        db, conn = _make_db()
+        svc = GoalEcologyService(db_service=db)
+        now = utc_now().isoformat()
+
+        cursor = conn.cursor()
+        goals = [
+            ('g1', 'Learn to cook pasta'),
+            ('g2', 'Master pizza making'),
+            ('g3', 'Study Italian cuisine techniques'),
+            ('g4', 'Completely unrelated goal about space'),
+        ]
+        for gid, desc in goals:
+            cursor.execute("""
+                INSERT INTO goals (id, type, status, description, confidence, salience,
+                    commitment, urgency, timescale, evidence_count,
+                    last_reinforced_at, outcome_feedback, created_at, updated_at)
+                VALUES (?, 'stated', 'actionable', ?, 0.8, 0.7,
+                    0.0, 0.5, 'short_term', 1, ?, '[]', ?, ?)
+            """, (gid, desc, now, now, now))
+        conn.commit()
+        cursor.close()
+
+        # Mock embeddings: first 3 are similar, 4th is different
+        import numpy as np
+        embeddings = {
+            'Learn to cook pasta': np.array([0.9, 0.3, 0.1]),
+            'Master pizza making': np.array([0.85, 0.35, 0.15]),
+            'Study Italian cuisine techniques': np.array([0.88, 0.32, 0.12]),
+            'Completely unrelated goal about space': np.array([0.0, 0.0, 1.0]),
+        }
+        # Normalize for cosine similarity
+        for k in embeddings:
+            embeddings[k] = embeddings[k] / np.linalg.norm(embeddings[k])
+
+        with patch('services.embedding_service.get_embedding_service') as MockEmb, \
+             patch('services.goal_ecology_service._generate_cluster_description',
+                   return_value='Master Italian cooking'):
+            MockEmb.return_value.generate_embedding_np.side_effect = (
+                lambda text: embeddings.get(text, np.zeros(3))
+            )
+            result = svc.detect_goal_clusters()
+
+        assert len(result) == 1
+        assert len(result[0]['goals']) == 3
+        assert result[0]['suggested_description'] == 'Master Italian cooking'
+        # Space goal should not be in the cluster
+        cluster_ids = [g['id'] for g in result[0]['goals']]
+        assert 'g4' not in cluster_ids
+
+    def test_detect_clusters_respects_cooldown(self, mock_store):
+        """Clusters with active cooldown should be skipped."""
+        db, conn = _make_db()
+        svc = GoalEcologyService(db_service=db)
+        now = utc_now().isoformat()
+
+        cursor = conn.cursor()
+        for i in range(3):
+            cursor.execute("""
+                INSERT INTO goals (id, type, status, description, confidence, salience,
+                    commitment, urgency, timescale, evidence_count,
+                    last_reinforced_at, outcome_feedback, created_at, updated_at)
+                VALUES (?, 'stated', 'actionable', ?, 0.8, 0.7,
+                    0.0, 0.5, 'short_term', 1, ?, '[]', ?, ?)
+            """, (f'g{i}', f'Cooking goal {i}', now, now, now))
+        conn.commit()
+        cursor.close()
+
+        # Set cooldown for this cluster
+        mock_store.setex("goal_cluster:g0|g1|g2:cooldown", 86400, "dismissed")
+
+        import numpy as np
+        similar = np.array([0.9, 0.1, 0.0])
+        similar = similar / np.linalg.norm(similar)
+
+        with patch('services.embedding_service.get_embedding_service') as MockEmb:
+            MockEmb.return_value.generate_embedding_np.return_value = similar
+            result = svc.detect_goal_clusters()
+
+        assert result == []

@@ -542,3 +542,84 @@ class TestGoalsSkillNarrate:
         call_args = MockProxy.return_value.send_message.call_args
         assert '2 engaged' in call_args[0][1]
         assert '1 rejected' in call_args[0][1]
+
+
+@pytest.mark.unit
+class TestGoalsSkillClusters:
+    """Test goals skill cluster_confirm and cluster_dismiss actions."""
+
+    def test_cluster_confirm_creates_parent_and_links(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
+            svc = MockEcology.return_value
+            svc.get_goal.return_value = {
+                'id': 'g1', 'type': 'stated', 'timescale': 'short_term',
+                'description': 'Learn pasta', 'status': 'actionable',
+            }
+            svc.TIMESCALE_ORDER = {
+                'immediate': 0, 'short_term': 1,
+                'medium_term': 2, 'long_term': 3,
+            }
+            svc.create_goal.return_value = {
+                'id': 'parent1', 'description': 'Master Italian cooking',
+                'type': 'stated', 'status': 'actionable',
+            }
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.rowcount = 1
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            svc.db.connection.return_value = mock_conn
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {
+                'action': 'cluster_confirm',
+                'goal_ids': ['g1', 'g2', 'g3'],
+                'description': 'Master Italian cooking',
+            })
+
+        assert 'Cluster confirmed' in result
+        assert 'Master Italian cooking' in result
+        svc.create_goal.assert_called_once()
+
+    def test_cluster_confirm_missing_ids(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService'):
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {
+                'action': 'cluster_confirm',
+                'goal_ids': [],
+                'description': 'Test',
+            })
+        assert 'requires' in result.lower()
+
+    def test_cluster_confirm_missing_description(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService'):
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {
+                'action': 'cluster_confirm',
+                'goal_ids': ['g1', 'g2', 'g3'],
+                'description': '',
+            })
+        assert 'requires' in result.lower()
+
+    def test_cluster_dismiss_sets_cooldown(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService'):
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {
+                'action': 'cluster_dismiss',
+                'goal_ids': ['g1', 'g2', 'g3'],
+            })
+
+        assert 'dismissed' in result.lower()
+        # Check cooldown was set
+        key = "goal_cluster:g1|g2|g3:cooldown"
+        assert mock_store.get(key) is not None
+
+    def test_cluster_dismiss_missing_ids(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService'):
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {
+                'action': 'cluster_dismiss',
+                'goal_ids': [],
+            })
+        assert 'requires' in result.lower()
