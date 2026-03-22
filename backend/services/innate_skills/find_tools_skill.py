@@ -14,8 +14,9 @@ Zero-tool-name references in infrastructure — fully tool-agnostic.
 """
 
 import logging
-import struct
 from typing import List, Dict
+
+from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def handle_find_tools(topic: str, params: dict) -> dict:
         logger.warning(f"{LOG_PREFIX} Embedding generation failed: {e}")
         return _fallback_keyword_search(query, limit)
 
-    blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+    blob = pack_embedding(query_embedding)
 
     # Query tool_capability_profiles_vec for nearest neighbors
     try:

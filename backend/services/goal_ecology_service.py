@@ -19,6 +19,8 @@ import json
 import logging
 import struct
 import threading
+
+from services.embedding_utils import pack_embedding
 import uuid
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
@@ -264,7 +266,7 @@ class GoalEcologyService:
             if not embedding:
                 return
 
-            packed = struct.pack(f'{len(embedding)}f', *embedding)
+            packed = pack_embedding(embedding)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -329,7 +331,7 @@ class GoalEcologyService:
             if not embedding:
                 return []
 
-            packed = struct.pack(f'{len(embedding)}f', *embedding)
+            packed = pack_embedding(embedding)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -1015,7 +1017,7 @@ class GoalEcologyService:
             if not embedding:
                 return None
 
-            packed = struct.pack(f'{len(embedding)}f', *embedding)
+            packed = pack_embedding(embedding)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()

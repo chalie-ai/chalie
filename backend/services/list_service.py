@@ -18,12 +18,12 @@ def embed_list(list_id: str, name: str, db=None) -> None:
     """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
     try:
         from services.embedding_service import EmbeddingService
-        import struct
+        from services.embedding_utils import pack_embedding
         if db is None:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
         embedding = EmbeddingService().generate_embedding(name)
-        packed = struct.pack(f'{len(embedding)}f', *embedding)
+        packed = pack_embedding(embedding)
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT rowid FROM lists WHERE id = ?", (list_id,))

@@ -16,8 +16,9 @@ import hashlib
 import logging
 import os
 import sqlite3
-import struct
 import threading
+
+from services.embedding_utils import pack_embedding
 import time
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ def route_query(query: str) -> list:
         logger.warning(f'[SEARCH] embedding failed for routing: {e}')
         return []
 
-    blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+    blob = pack_embedding(query_embedding)
 
     try:
         conn = sqlite3.connect(_CACHE_DB)
@@ -294,7 +295,7 @@ def _generate_cache(model_hash: str) -> None:
         for example_id, query_text in batch:
             try:
                 embedding = emb_service.generate_embedding(query_text)
-                blob = struct.pack(f'{len(embedding)}f', *embedding)
+                blob = pack_embedding(embedding)
                 conn.execute(
                     'INSERT INTO example_embeddings (rowid, embedding) VALUES (?, ?)',
                     (example_id, blob),

@@ -304,11 +304,6 @@ class EpisodicService:
 
     # ── Retrieval ────────────────────────────────────────────────────
 
-    @staticmethod
-    def _pack_embedding(embedding: List[float]) -> bytes:
-        """Convert a list of floats to a binary blob for sqlite-vec MATCH queries."""
-        return struct.pack(f'{len(embedding)}f', *embedding)
-
     def retrieve_episodes(self, query_text: str, topic: str = None,
                          intent: str = None, limit: int = 3,
                          weights: dict = None, semantic_concepts: List[Dict] = None,
@@ -435,7 +430,7 @@ class EpisodicService:
                     WHERE v.embedding MATCH ? AND k = ?
                       AND e.deleted_at IS NULL
                 """
-                vector_params = [self._pack_embedding(query_embedding), limit]
+                vector_params = [pack_embedding(query_embedding), limit]
 
                 if topic:
                     vector_query += " AND e.topic = ?"

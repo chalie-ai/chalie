@@ -11,9 +11,10 @@ Key operations:
 - prune_old(): Delete entries older than TTL (90 days default)
 """
 
-import struct
 import logging
 from typing import List, Dict, Optional
+
+from services.embedding_utils import pack_embedding
 
 from services.llm_service import estimate_tokens
 
@@ -158,7 +159,7 @@ def search(
         logger.warning(f"{LOG_PREFIX} Embedding failed, falling back to keyword: {e}")
         return _keyword_search(topic, query, limit, date_from, date_to)
 
-    blob = struct.pack(f'{len(query_embedding)}f', *query_embedding)
+    blob = pack_embedding(query_embedding)
 
     try:
         from services.database_service import get_shared_db_service
@@ -364,7 +365,7 @@ def _embed_entry(rowid: int, content: str) -> None:
         from services.embedding_service import EmbeddingService
         emb_service = EmbeddingService()
         embedding = emb_service.generate_embedding(content)
-        blob = struct.pack(f'{len(embedding)}f', *embedding)
+        blob = pack_embedding(embedding)
 
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()

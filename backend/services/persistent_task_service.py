@@ -14,11 +14,12 @@ Fairness: max 3 cycles per task per hour, max 5 active tasks per user.
 """
 
 import json
-import struct
 import time
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple
+
+from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PERSISTENT TASK]"
@@ -483,7 +484,7 @@ class PersistentTaskService:
             if not embedding:
                 return
 
-            packed = struct.pack(f'{len(embedding)}f', *embedding)
+            packed = pack_embedding(embedding)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
