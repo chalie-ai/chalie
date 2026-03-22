@@ -2642,6 +2642,15 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             thread_id=thread_id,
         )
 
+    # Step 3b.0: Track message pace for proactive timing
+    try:
+        from services.time_utils import utc_now as _pace_utc_now
+        _busy_store.set('last_user_message_ts', _pace_utc_now().isoformat())
+        _current_count = int(_busy_store.get('recent_message_count_5min') or 0)
+        _busy_store.setex('recent_message_count_5min', 300, str(_current_count + 1))
+    except Exception:
+        pass
+
     # Step 3b.1: Check for save trigger (completion/deferral signal)
     try:
         from services.save_suggestion_service import SaveSuggestionService
