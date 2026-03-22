@@ -64,7 +64,7 @@ SKILL_DESCRIPTIONS: dict = {
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
-    'goals': 'View, confirm, complete, or dismiss tracked goals and see accumulated evidence',
+    'goals': 'View, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─

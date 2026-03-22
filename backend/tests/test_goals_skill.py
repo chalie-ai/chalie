@@ -348,3 +348,197 @@ class TestGoalsSkillViewLineage:
 
         assert 'Parent Goal' not in result
         assert 'Child Goals' not in result
+
+
+@pytest.mark.unit
+class TestGoalsSkillNarrate:
+    """Test goals skill narrate action."""
+
+    def test_narrate_no_goals(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
+            svc = MockEcology.return_value
+            svc.get_active_stack.return_value = []
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'narrate'})
+
+        assert 'No active goals' in result
+
+    def test_narrate_calls_llm_with_goal_context(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
+            svc = MockEcology.return_value
+            svc.get_active_stack.return_value = [
+                {'id': 'g1', 'type': 'stated', 'description': 'Plan dinner for 20',
+                 'salience': 0.85, 'confidence': 0.9, 'evidence_count': 5,
+                 'timescale': 'short_term', 'status': 'actionable',
+                 'strategy': 'Research menus and venues', 'created_at': '2026-03-20',
+                 'lineage_parent_id': None, 'outcome_feedback': []},
+            ]
+            svc.get_children.return_value = []
+
+            # Mock DB for evidence query
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = [
+                ('explicit_statement', 'User said they need to plan dinner', 'conversation', '2026-03-20'),
+            ]
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            # Mock LLM response
+            mock_response = MagicMock()
+            mock_response.text = "You've been focused on planning a dinner for 20 people..."
+            MockProxy.return_value.send_message.return_value = mock_response
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'narrate'})
+
+        assert 'GOALS NARRATIVE' in result
+        assert 'dinner' in result.lower()
+        MockProxy.return_value.send_message.assert_called_once()
+
+    def test_narrate_with_hierarchy(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
+            svc = MockEcology.return_value
+            svc.get_active_stack.return_value = [
+                {'id': 'g1', 'type': 'stated', 'description': 'Plan dinner for 20',
+                 'salience': 0.85, 'confidence': 0.9, 'evidence_count': 5,
+                 'timescale': 'short_term', 'status': 'actionable',
+                 'strategy': None, 'created_at': '2026-03-20',
+                 'lineage_parent_id': 'g2', 'outcome_feedback': []},
+            ]
+            # Parent goal
+            svc.get_goal.return_value = {
+                'id': 'g2', 'description': 'Build reputation as exceptional host',
+                'type': 'developmental', 'status': 'strengthening',
+                'salience': 0.6, 'confidence': 0.65,
+            }
+            svc.get_children.return_value = []
+
+            # Mock DB
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = []
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            mock_response = MagicMock()
+            mock_response.text = "Your dinner planning connects to a broader aspiration..."
+            MockProxy.return_value.send_message.return_value = mock_response
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'narrate'})
+
+        assert 'GOALS NARRATIVE' in result
+        # Verify parent goal description was passed to LLM
+        call_args = MockProxy.return_value.send_message.call_args
+        assert 'Build reputation' in call_args[0][1]  # user_message
+
+    def test_narrate_llm_failure_returns_fallback(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
+            svc = MockEcology.return_value
+            svc.get_active_stack.return_value = [
+                {'id': 'g1', 'type': 'stated', 'description': 'Test goal',
+                 'salience': 0.5, 'confidence': 0.5, 'evidence_count': 1,
+                 'timescale': 'short_term', 'status': 'strengthening',
+                 'strategy': None, 'created_at': '2026-03-20',
+                 'lineage_parent_id': None, 'outcome_feedback': []},
+            ]
+            svc.get_children.return_value = []
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = []
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            MockProxy.return_value.send_message.side_effect = Exception("LLM unavailable")
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'narrate'})
+
+        assert 'Unable to generate narrative' in result
+
+    def test_narrate_truncates_long_response(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
+            svc = MockEcology.return_value
+            svc.get_active_stack.return_value = [
+                {'id': 'g1', 'type': 'stated', 'description': 'Test goal',
+                 'salience': 0.5, 'confidence': 0.5, 'evidence_count': 1,
+                 'timescale': 'short_term', 'status': 'strengthening',
+                 'strategy': None, 'created_at': '2026-03-20',
+                 'lineage_parent_id': None, 'outcome_feedback': []},
+            ]
+            svc.get_children.return_value = []
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = []
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            mock_response = MagicMock()
+            mock_response.text = "x" * 3000
+            MockProxy.return_value.send_message.return_value = mock_response
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'narrate'})
+
+        assert 'GOALS NARRATIVE' in result
+        # Should be truncated to ~2000 + prefix
+        assert len(result) < 2100
+
+    def test_narrate_with_feedback_history(self, mock_store):
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
+            svc = MockEcology.return_value
+            svc.get_active_stack.return_value = [
+                {'id': 'g1', 'type': 'stated', 'description': 'Learn Rust',
+                 'salience': 0.7, 'confidence': 0.8, 'evidence_count': 10,
+                 'timescale': 'medium_term', 'status': 'actionable',
+                 'strategy': 'Start with the Rust book', 'created_at': '2026-03-15',
+                 'lineage_parent_id': None,
+                 'outcome_feedback': [
+                     {'response': 'engaged', 'timestamp': '2026-03-18'},
+                     {'response': 'engaged', 'timestamp': '2026-03-19'},
+                     {'response': 'rejected', 'timestamp': '2026-03-20'},
+                 ]},
+            ]
+            svc.get_children.return_value = []
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = []
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            mock_response = MagicMock()
+            mock_response.text = "Your journey with Rust has been interesting..."
+            MockProxy.return_value.send_message.return_value = mock_response
+
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'narrate'})
+
+        # Verify feedback was passed to LLM
+        call_args = MockProxy.return_value.send_message.call_args
+        assert '2 engaged' in call_args[0][1]
+        assert '1 rejected' in call_args[0][1]
