@@ -116,6 +116,26 @@ def _handle_view(ecology, goal_id: str) -> str:
     except Exception:
         pass
 
+    # Show parent goal
+    if goal.get('lineage_parent_id'):
+        try:
+            parent = ecology.get_goal(goal['lineage_parent_id'])
+            if parent:
+                lines.append(f"\nParent Goal: [{parent['type']}] {parent['description']}")
+                lines.append(f"  Salience: {parent['salience']:.0%}, Confidence: {parent['confidence']:.0%}")
+        except Exception:
+            pass
+
+    # Show child goals
+    try:
+        children = ecology.get_children(goal_id)
+        if children:
+            lines.append(f"\nChild Goals ({len(children)}):")
+            for child in children:
+                lines.append(f"  - [{child['type']}] {child['description'][:80]} ({child['status']})")
+    except Exception:
+        pass
+
     # Outcome feedback
     feedback = goal.get('outcome_feedback', [])
     if isinstance(feedback, str):
