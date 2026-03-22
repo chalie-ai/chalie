@@ -519,7 +519,7 @@ body {
 .conversation-spine {
   position: relative;
   z-index: 10;
-  max-width: 680px;
+  max-width: min(80%, 1200px);
   margin: 0 auto;
   padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
   display: flex;
@@ -1100,7 +1100,7 @@ body.voice-available .speech-form__speak-btn {
 }
 
 .input-dock__outer {
-  max-width: 680px;
+  max-width: min(80%, 1200px);
   margin: 0 auto;
   display: flex;
   align-items: stretch;
@@ -1152,7 +1152,7 @@ body.voice-available .speech-form__speak-btn {
 }
 
 .input-dock__mic-error {
-  max-width: 680px;
+  max-width: min(80%, 1200px);
   margin: var(--space-sm) auto 0;
   font-size: var(--font-size-sm);
   color: var(--error);
