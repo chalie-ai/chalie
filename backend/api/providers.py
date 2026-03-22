@@ -66,7 +66,7 @@ def create_provider():
                 'semantic-memory', 'cognitive-triage', 'experience-assimilation',
                 'fact-store', 'memory-chunker',
                 'moment-enrichment', 'document-synthesis',
-                'document-classification',
+                'document-classification', 'goal-strategy',
             ]
             try:
                 for job in all_jobs:

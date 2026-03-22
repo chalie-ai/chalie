@@ -1266,16 +1266,13 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 thread_id, response_data['response'], response_data['generation_time']
             )
 
-        # Store proactive_id in MemoryStore for engagement correlation
-        if proactive_id:
+        # Store goal_id in MemoryStore for engagement correlation
+        goal_id = metadata.get('goal_id') or proactive_id
+        if goal_id:
             try:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()
-                store.setex(
-                    f"proactive_response_tag:{topic}",
-                    14400,  # 4h TTL
-                    proactive_id,
-                )
+                store.setex(f"proactive_response_tag:{topic}", 14400, goal_id)
             except Exception:
                 pass
 
@@ -2338,23 +2335,84 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
         logging.warning(f"[BELIEF CORRECTION] Hook failed (non-fatal): {e}")
 
 
+def _classify_engagement(text: str) -> str:
+    """
+    Classify user engagement with a proactive message.
+    Deterministic, no LLM. Pattern-based classification.
+    Returns: engaged|acknowledged|rejected|ignored
+    """
+    import re
+    text_lower = text.strip().lower()
+
+    if not text_lower:
+        return 'ignored'
+
+    # Acknowledgment patterns (short, non-substantive) — check before length gate
+    ack = re.compile(
+        r'^(ok|okay|sure|thanks|cool|got it|noted|yep|yeah|alright|'
+        r'fine|roger|k|ty|thx|ack)\s*[.!]*$', re.IGNORECASE
+    )
+    if ack.match(text_lower):
+        return 'acknowledged'
+
+    if len(text_lower) < 3:
+        return 'ignored'
+
+    # Rejection patterns
+    rejection = re.compile(
+        r'\b(stop|don.t|no thanks|not interested|shut up|leave me|go away|'
+        r'not now|quit|enough|annoying)\b', re.IGNORECASE
+    )
+    if rejection.search(text_lower):
+        return 'rejected'
+
+    # Engaged: longer response, question, or action words
+    if len(text_lower) > 20 or '?' in text or re.search(
+        r'\b(yes|please|tell me|show|how|what|why|when|do it|go ahead)\b',
+        text_lower
+    ):
+        return 'engaged'
+
+    return 'acknowledged'
+
+
 def _try_proactive_engagement_correlation(text: str, topic: str):
     """
-    Check if the user is responding to a proactive message and score engagement.
-
-    Called during Phase A of the normal digest pipeline.
+    Check if user is responding to a proactive message and classify engagement.
+    Uses proactive_response_tag stored in MemoryStore (4h TTL).
     """
     try:
-        from services.autonomous_actions.engagement_tracker import EngagementTracker
-        tracker = EngagementTracker()
-        result = tracker.check_and_score(user_message=text, topic=topic)
-        if result:
-            logging.info(
-                f"[PROACTIVE ENGAGEMENT] Scored response to proactive message: "
-                f"{result['outcome']} (similarity={result['similarity']:.3f})"
-            )
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+
+        tag_key = f"proactive_response_tag:{topic}"
+        goal_id = store.get(tag_key)
+        if not goal_id:
+            return
+
+        # Consume the tag (one-shot correlation)
+        store.delete(tag_key)
+
+        response_type = _classify_engagement(text)
+
+        from services.goal_ecology_service import GoalEcologyService
+        ecology = GoalEcologyService()
+        ecology.record_outcome(goal_id, response_type)
+
+        # Track ignored count for social cost calculation
+        if response_type == 'ignored':
+            ignored_key = 'goal:recent_ignored_count'
+            current = int(store.get(ignored_key) or 0)
+            store.setex(ignored_key, 86400, str(current + 1))
+        elif response_type in ('engaged', 'acknowledged'):
+            store.delete('goal:recent_ignored_count')
+
+        logging.info(
+            f"[DIGEST] Proactive engagement: {response_type} "
+            f"for goal {goal_id[:8]}"
+        )
     except Exception as e:
-        logging.debug(f"[PROACTIVE ENGAGEMENT] Correlation failed: {e}")
+        logging.debug(f"[DIGEST] Proactive engagement correlation failed: {e}")
 
 
 _FORK_RESPONSE_PATTERNS = {

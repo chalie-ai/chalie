@@ -1,0 +1,10 @@
+{
+  "temperature": 0.4,
+  "max_tokens": 200,
+  "timeout": 30,
+  "comments": {
+    "temperature": "Moderate temperature (0.4) for specific, actionable strategies — avoids generic phrasing",
+    "max_tokens": "Short cap — strategy is 1-3 sentences only, keeps call lightweight",
+    "timeout": "Short timeout — strategy generation is background work, non-blocking"
+  }
+}
