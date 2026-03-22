@@ -12,6 +12,8 @@ export class EventRouter {
     this._onImageReady = null;
     this._onNotification = null;
     this._onBackgroundContent = null;
+    this._onTtsChunk = null;
+    this._onTtsDone = null;
     this._isSendingGetter = () => false;
   }
 
@@ -26,6 +28,12 @@ export class EventRouter {
 
   /** Register handler for 'notification' events. */
   onNotification(cb) { this._onNotification = cb; }
+
+  /** Register handler for TTS audio chunks pushed via WebSocket. */
+  onTtsChunk(cb) { this._onTtsChunk = cb; }
+
+  /** Register handler for TTS stream completion. */
+  onTtsDone(cb) { this._onTtsDone = cb; }
 
   /**
    * Register handler for background drift/response/escalation content.
@@ -59,6 +67,16 @@ export class EventRouter {
     // Task progress/completion — refresh the task strip
     if (data.type === 'task') {
       if (this._onTask) this._onTask(data);
+      return;
+    }
+
+    // TTS audio chunks pushed via WebSocket (replaces HTTP streaming)
+    if (data.type === 'tts_chunk') {
+      if (this._onTtsChunk) this._onTtsChunk(data);
+      return;
+    }
+    if (data.type === 'tts_done') {
+      if (this._onTtsDone) this._onTtsDone();
       return;
     }
 
