@@ -3403,6 +3403,15 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         except Exception as _save_e:
             logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
 
+    # ── Phase D Step 11f: Goal signal extraction ──
+    try:
+        from services.goal_signal_service import extract_and_route_signals
+        _goal_classification = dict(classification or {})
+        _goal_classification['intent_type'] = (intent or {}).get('intent_type', '')
+        extract_and_route_signals(topic, text, _goal_classification)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Goal signal extraction non-fatal: {e}")
+
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP
     # ═══════════════════════════════════════════════════════════

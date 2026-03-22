@@ -252,6 +252,9 @@ class GoalEcologyService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Parent detection skipped: {e}")
 
+        # Post-creation: store embedding for KNN search (non-blocking, non-fatal)
+        self._store_goal_embedding(goal_id, description)
+
         return {
             'id': goal_id,
             'type': type,
@@ -262,6 +265,31 @@ class GoalEcologyService:
             'urgency': urgency,
             'timescale': timescale,
         }
+
+    def _store_goal_embedding(self, goal_id: str, description: str) -> None:
+        """Store or replace embedding for a goal in goals_vec. Non-fatal."""
+        try:
+            from services.embedding_service import EmbeddingService
+            embedding_svc = EmbeddingService()
+            embedding = embedding_svc.generate_embedding(description)
+            if not embedding:
+                return
+
+            packed = struct.pack(f'{len(embedding)}f', *embedding)
+
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT rowid FROM goals WHERE id = ?", (goal_id,))
+                row = cursor.fetchone()
+                if row:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO goals_vec(rowid, embedding) VALUES (?, ?)",
+                        (row[0], packed),
+                    )
+                cursor.close()
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Goal embedding storage non-fatal: {e}")
 
     def add_evidence(
         self,
@@ -303,48 +331,45 @@ class GoalEcologyService:
             f"type={signal_type}, strength={strength:.2f}"
         )
 
-    def find_matching_goals(self, text: str, threshold: float = 0.6) -> List[Dict[str, Any]]:
-        """Find active goals whose descriptions are semantically similar to text."""
+    def find_matching_goals(self, text: str, threshold: float = 0.6, k: int = 10) -> List[Dict[str, Any]]:
+        """Find active goals matching text using KNN embedding search over goals_vec."""
         try:
-            from services.embedding_service import get_embedding_service
-            import numpy as np
+            from services.embedding_service import EmbeddingService
+            embedding_svc = EmbeddingService()
+            embedding = embedding_svc.generate_embedding(text)
+            if not embedding:
+                return []
 
-            embedding_service = get_embedding_service()
-            query_emb = embedding_service.generate_embedding_np(text)
+            packed = struct.pack(f'{len(embedding)}f', *embedding)
 
-            # Get all non-terminal goals
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, description, type, status, salience, confidence
-                    FROM goals
-                    WHERE status NOT IN ('completed', 'decayed')
-                """)
+                    SELECT g.id, g.description, g.type, g.status,
+                           g.salience, g.confidence, v.distance
+                    FROM goals_vec v
+                    JOIN goals g ON g.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = ?
+                      AND g.status NOT IN ('completed', 'decayed')
+                    ORDER BY v.distance
+                """, (packed, k))
                 rows = cursor.fetchall()
                 cursor.close()
 
-            if not rows:
-                return []
-
             matches = []
             for row in rows:
-                goal_id, desc, gtype, status, salience, confidence = row
-                desc_emb = embedding_service.generate_embedding_np(desc)
-                similarity = float(np.dot(query_emb, desc_emb))
-
+                similarity = max(0.0, 1.0 - (row[6] or 1.0))
                 if similarity >= threshold:
                     matches.append({
-                        'id': goal_id,
-                        'description': desc,
-                        'type': gtype,
-                        'status': status,
-                        'salience': salience,
-                        'confidence': confidence,
+                        'id': row[0],
+                        'description': row[1],
+                        'type': row[2],
+                        'status': row[3],
+                        'salience': row[4],
+                        'confidence': row[5],
                         'similarity': similarity,
                     })
 
-            # Sort by similarity descending
-            matches.sort(key=lambda m: m['similarity'], reverse=True)
             return matches
 
         except Exception as e:
@@ -572,8 +597,9 @@ class GoalEcologyService:
     def get_actionable_goals(self) -> List[Dict[str, Any]]:
         """Get goals where salience >= threshold for their type AND strategy exists.
 
-        Muted goals are excluded — they stay alive for context injection but
-        should not trigger proactive actions.
+        Muted goals are excluded via SQL (is_muted column) with _is_muted() as
+        fallback for pre-migration goals. Goals stay alive for context injection
+        but should not trigger proactive actions when muted.
         """
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -583,6 +609,7 @@ class GoalEcologyService:
                 FROM goals
                 WHERE status NOT IN ('completed', 'decayed', 'evolved')
                   AND strategy IS NOT NULL
+                  AND (is_muted IS NULL OR is_muted = 0)
                 ORDER BY salience DESC
             """)
             rows = cursor.fetchall()
@@ -595,7 +622,7 @@ class GoalEcologyService:
             outcome_feedback_json = r[10]
             threshold = ACTIONABLE_THRESHOLDS.get(goal_type, 0.6)
 
-            # Skip muted goals
+            # Legacy fallback: check JSON for pre-migration goals
             if self._is_muted(outcome_feedback_json):
                 continue
 
@@ -760,6 +787,9 @@ class GoalEcologyService:
                 now, '[]', now, now,
             ))
             cursor.close()
+
+        # Store embedding for KNN search
+        self._store_goal_embedding(new_goal_id, new_description)
 
         logger.info(
             f"{LOG_PREFIX} Goal evolved: {goal_id[:8]} → {new_goal_id[:8]} "
@@ -981,7 +1011,7 @@ class GoalEcologyService:
         self, description: str, timescale: str, exclude_id: str = None
     ) -> Optional[str]:
         """
-        Find a potential parent goal for a new goal based on embedding similarity.
+        Find a potential parent goal using KNN search over goals_vec.
 
         Only links shorter-timescale goals to longer-timescale ones.
         Returns the parent goal_id if found above 0.6 threshold, else None.
@@ -989,47 +1019,41 @@ class GoalEcologyService:
         try:
             current_order = self.TIMESCALE_ORDER.get(timescale, -1)
 
-            # Fetch all active goals with a strictly longer timescale
+            # Use KNN search to find similar goals efficiently
+            from services.embedding_service import EmbeddingService
+            embedding_svc = EmbeddingService()
+            embedding = embedding_svc.generate_embedding(description)
+            if not embedding:
+                return None
+
+            packed = struct.pack(f'{len(embedding)}f', *embedding)
+
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, description, timescale
-                    FROM goals
-                    WHERE status NOT IN ('completed', 'decayed', 'evolved')
-                """)
+                    SELECT g.id, g.timescale, v.distance
+                    FROM goals_vec v
+                    JOIN goals g ON g.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = 10
+                      AND g.status NOT IN ('completed', 'decayed', 'evolved')
+                    ORDER BY v.distance
+                """, (packed,))
                 rows = cursor.fetchall()
                 cursor.close()
-
-            candidates = [
-                (r[0], r[1])
-                for r in rows
-                if self.TIMESCALE_ORDER.get(r[2], -1) > current_order
-                and r[0] != exclude_id
-            ]
-
-            if not candidates:
-                return None
-
-            from services.embedding_service import get_embedding_service
-            import numpy as np
-
-            emb_service = get_embedding_service()
-            desc_emb = emb_service.generate_embedding_np(description)
 
             best_id = None
             best_sim = 0.6  # minimum threshold
 
-            for cand_id, cand_desc in candidates:
-                cand_emb = emb_service.generate_embedding_np(cand_desc)
-                # L2-normalized embeddings from generate_embedding_np — dot product == cosine sim
-                norm_a = float(np.linalg.norm(desc_emb))
-                norm_b = float(np.linalg.norm(cand_emb))
-                if norm_a < 1e-9 or norm_b < 1e-9:
+            for goal_id, goal_timescale, distance in rows:
+                if goal_id == exclude_id:
                     continue
-                sim = float(np.dot(desc_emb, cand_emb) / (norm_a * norm_b + 1e-9))
-                if sim > best_sim:
-                    best_sim = sim
-                    best_id = cand_id
+                # Only link to goals with strictly longer timescale
+                if self.TIMESCALE_ORDER.get(goal_timescale, -1) <= current_order:
+                    continue
+                similarity = max(0.0, 1.0 - (distance or 1.0))
+                if similarity > best_sim:
+                    best_sim = similarity
+                    best_id = goal_id
 
             return best_id
 
@@ -1112,7 +1136,7 @@ class GoalEcologyService:
             feedback.append({'muted': True, 'timestamp': now.isoformat()})
 
             cursor.execute("""
-                UPDATE goals SET outcome_feedback = ?, updated_at = ?
+                UPDATE goals SET outcome_feedback = ?, is_muted = 1, updated_at = ?
                 WHERE id = ?
             """, (json.dumps(feedback), now.isoformat(), goal_id))
             cursor.close()
@@ -1148,7 +1172,7 @@ class GoalEcologyService:
             feedback.append({'muted': False, 'timestamp': now.isoformat()})
 
             cursor.execute("""
-                UPDATE goals SET outcome_feedback = ?, updated_at = ?
+                UPDATE goals SET outcome_feedback = ?, is_muted = 0, updated_at = ?
                 WHERE id = ?
             """, (json.dumps(feedback), now.isoformat(), goal_id))
             cursor.close()
@@ -1162,45 +1186,56 @@ class GoalEcologyService:
         """
         Detect clusters of thematically related goals.
 
-        Computes pairwise embedding similarity between active goals.
-        If 3+ goals have mutual similarity > 0.55, returns them as a cluster
-        with a suggested consolidated description.
+        Fetches embeddings from goals_vec (no on-the-fly generation), computes
+        pairwise similarity. If 3+ goals have mutual similarity > 0.55, returns
+        them as a cluster with a suggested consolidated description.
 
         Returns:
             List of cluster dicts: [{'goals': [...], 'suggested_description': '...'}]
         """
         try:
-            # Get all active goals
+            import numpy as np
+
+            # Get all active goals with their embeddings from goals_vec
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, description, type, salience, confidence, timescale
-                    FROM goals
-                    WHERE status NOT IN ('completed', 'decayed', 'evolved')
-                    ORDER BY salience DESC
+                    SELECT g.id, g.description, g.type, g.salience, g.confidence,
+                           g.timescale, g.rowid
+                    FROM goals g
+                    WHERE g.status NOT IN ('completed', 'decayed', 'evolved')
+                    ORDER BY g.salience DESC
                     LIMIT 20
                 """)
                 rows = cursor.fetchall()
+
+                if len(rows) < 3:
+                    cursor.close()
+                    return []
+
+                goals = []
+                embeddings = []
+                for r in rows:
+                    rowid = r[6]
+                    cursor.execute(
+                        "SELECT embedding FROM goals_vec WHERE rowid = ?",
+                        (rowid,),
+                    )
+                    vec_row = cursor.fetchone()
+                    if vec_row and vec_row[0]:
+                        blob = vec_row[0]
+                        n_floats = len(blob) // 4
+                        emb = np.array(struct.unpack(f'{n_floats}f', blob), dtype=np.float32)
+                        embeddings.append(emb)
+                        goals.append({
+                            'id': r[0], 'description': r[1], 'type': r[2],
+                            'salience': r[3], 'confidence': r[4], 'timescale': r[5]
+                        })
+
                 cursor.close()
 
-            if len(rows) < 3:
+            if len(goals) < 3:
                 return []
-
-            goals = [
-                {'id': r[0], 'description': r[1], 'type': r[2],
-                 'salience': r[3], 'confidence': r[4], 'timescale': r[5]}
-                for r in rows
-            ]
-
-            # Compute embeddings
-            from services.embedding_service import get_embedding_service
-            import numpy as np
-            embedding_service = get_embedding_service()
-
-            embeddings = []
-            for g in goals:
-                emb = embedding_service.generate_embedding_np(g['description'])
-                embeddings.append(emb)
 
             # Build similarity matrix
             n = len(goals)
