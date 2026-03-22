@@ -599,10 +599,8 @@ class TestAppendMode:
             {
                 'action_type': 'find_tools',
                 'status': 'success',
-                'result': {
-                    'text': 'Found 1 tool matching "weather": weather_api',
-                    '_discovered_tools': ['weather_api'],
-                },
+                'result': 'Found 1 tool matching "weather": weather_api',
+                '_discovered_tools': ['weather_api'],
                 'execution_time': 0.05,
             },
         ]

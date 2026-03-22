@@ -238,6 +238,19 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
 
+    # Warm search router embedding cache (background thread)
+    try:
+        def _warm_search_cache():
+            try:
+                from tools.search.router import _ensure_cache
+                _ensure_cache()
+                logger.info("[Startup] Search router cache ready")
+            except Exception as e:
+                logger.warning(f"[Startup] Search router cache warmup failed: {e}")
+        threading.Thread(target=_warm_search_cache, daemon=True, name="search-cache-warmup").start()
+    except Exception as e:
+        logger.warning(f"[Startup] Search cache warmup start failed: {e}")
+
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker(shared_state=None):
         from api import create_app

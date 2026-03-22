@@ -1400,6 +1400,11 @@ class ChalieApp {
     const textarea = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
+    // Scroll to bottom when user focuses the input (clicking or tab-switching)
+    textarea.addEventListener('focus', () => {
+      this.renderer.forceScrollToBottom();
+    });
+
     // Auto-resize textarea
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';

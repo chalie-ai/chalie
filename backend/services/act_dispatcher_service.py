@@ -232,8 +232,10 @@ class ActDispatcherService:
 
             # Handle structured skill results (dict with text + reply_actions)
             reply_actions = None
+            _discovered_tools = None
             if isinstance(raw_result, dict) and 'text' in raw_result:
                 reply_actions = raw_result.get('reply_actions')
+                _discovered_tools = raw_result.get('_discovered_tools')
                 raw_result = raw_result['text']
 
             confidence = _estimate_confidence(action_type, raw_result)
@@ -252,6 +254,8 @@ class ActDispatcherService:
             }
             if reply_actions:
                 dispatch_result['reply_actions'] = reply_actions
+            if _discovered_tools:
+                dispatch_result['_discovered_tools'] = _discovered_tools
             # Annotate with reliability warning if source memory is unreliable
             if _reliability_warning:
                 dispatch_result['reliability_warning'] = _reliability_warning

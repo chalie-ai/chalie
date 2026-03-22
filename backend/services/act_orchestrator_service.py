@@ -447,10 +447,8 @@ class ACTOrchestrator:
             for _exec_r in actions_executed:
                 if _exec_r.get('action_type') != 'find_tools':
                     continue
-                _ft_result = _exec_r.get('result')
-                if not isinstance(_ft_result, dict):
-                    continue
-                _discovered = _ft_result.get('_discovered_tools', [])
+                # _discovered_tools is preserved at top level by the dispatcher
+                _discovered = _exec_r.get('_discovered_tools', [])
                 if not _discovered:
                     continue
                 try:
