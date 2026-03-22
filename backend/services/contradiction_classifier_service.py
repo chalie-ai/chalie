@@ -50,7 +50,7 @@ LOG_PREFIX = "[CONTRADICTION]"
 _SIMILARITY_THRESHOLD = 0.75
 
 # Maximum time to spend on ingestion detection (ms). Skip if exceeded.
-_INGESTION_TIMEOUT_MS = 600
+_INGESTION_TIMEOUT_MS = 3000
 
 # Maximum candidate pairs to classify per ingestion call
 _MAX_PAIRS_PER_INGESTION = 3
@@ -376,7 +376,7 @@ class ContradictionClassifierService:
 
     # Minimum ONNX confidence to trust the classification.
     # Below this, fall back to LLM for higher-quality classification.
-    _ONNX_CONFIDENCE_THRESHOLD = 0.80
+    _ONNX_CONFIDENCE_THRESHOLD = 0.65
 
     def _classify_pair_onnx(
         self,
@@ -553,7 +553,7 @@ class ContradictionClassifierService:
 
         Flow:
           1. Try ONNX model (< 5ms, no context_hint needed)
-          2. If ONNX unavailable or confidence < 0.80 → fall through to LLM
+          2. If ONNX unavailable or confidence < 0.65 → fall through to LLM
           3. LLM provides richer output (reasoning, surface_context, resolution)
 
         Returns parsed JSON dict or None on failure.
@@ -624,7 +624,7 @@ class ContradictionClassifierService:
                 try:
                     cursor.execute("""
                         SELECT t.id, t.trait_key, t.trait_value, t.confidence,
-                               t.source, t.reinforcement_count, t.reliability,
+                               t.reinforcement_count, t.reliability,
                                t.created_at
                         FROM user_traits_vec v
                         JOIN user_traits t ON t.rowid = v.rowid
@@ -636,10 +636,9 @@ class ContradictionClassifierService:
                         mem_text = f"{row[1]}: {row[2]}"
                         meta = {
                             'confidence': row[3],
-                            'source': row[4],
-                            'reinforcement_count': row[5],
-                            'reliability': row[6] or 'reliable',
-                            'created_at': row[7],
+                            'reinforcement_count': row[4],
+                            'reliability': row[5] or 'reliable',
+                            'created_at': row[6],
                         }
                         meta['established'] = _is_established('trait', meta)
                         pairs.append((
@@ -716,7 +715,7 @@ class ContradictionClassifierService:
                 # Sample top traits by confidence
                 cursor.execute("""
                     SELECT t.id, t.trait_key, t.trait_value, t.confidence,
-                           t.source, t.reinforcement_count, t.reliability,
+                           t.reinforcement_count, t.reliability,
                            v.embedding, t.created_at
                     FROM user_traits t
                     LEFT JOIN user_traits_vec v ON v.rowid = t.rowid
@@ -727,17 +726,16 @@ class ContradictionClassifierService:
                 for row in cursor.fetchall():
                     meta = {
                         'confidence': row[3],
-                        'source': row[4],
-                        'reinforcement_count': row[5],
-                        'reliability': row[6] or 'reliable',
-                        'created_at': row[8],
+                        'reinforcement_count': row[4],
+                        'reliability': row[5] or 'reliable',
+                        'created_at': row[7],
                     }
                     meta['established'] = _is_established('trait', meta)
                     memories.append({
                         'id': row[0],
                         'type': 'trait',
                         'text': f"{row[1]}: {row[2]}",
-                        'embedding': _unpack_embedding(row[7]),
+                        'embedding': _unpack_embedding(row[6]),
                         'meta': meta,
                     })
 
