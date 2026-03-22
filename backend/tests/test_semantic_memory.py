@@ -1,230 +1,211 @@
-#!/usr/bin/env python3
-"""
-Integration tests for semantic memory system.
-Tests storage, consolidation, retrieval, and spreading activation.
-"""
+"""Tests for semantic memory system — storage, retrieval, relationships."""
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+import json
+import pytest
+from unittest.mock import MagicMock, patch
 
-from services.semantic_storage_service import SemanticStorageService
-from services.semantic_retrieval_service import SemanticRetrievalService
-from services.semantic_consolidation_service import SemanticConsolidationService
-from services.database_service import DatabaseService
-from datetime import datetime
+from services.semantic_service import SemanticService
 
 
-def test_storage():
-    """Test storing and retrieving a concept"""
-    print("\n[TEST 1] Testing storage and retrieval...")
+pytestmark = pytest.mark.unit
 
-    try:
-        db_service = DatabaseService()
-        storage = SemanticStorageService(db_service)
 
-        # Store a test concept
+# ── Fixtures ─────────────────────────────────────────────────────────
+
+@pytest.fixture
+def storage_env():
+    """SemanticService with mocked DatabaseService.
+
+    Returns (service, mock_cursor) so tests can set cursor behavior.
+    """
+    mock_db = MagicMock()
+    mock_cursor = MagicMock()
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+    with patch('services.config_service.ConfigService.get_agent_config', return_value={}):
+        svc = SemanticService(mock_db, config={})
+    return svc, mock_cursor
+
+
+# ── Store concept ────────────────────────────────────────────────────
+
+class TestStoreConcept:
+
+    def test_requires_concept_name(self, storage_env):
+        """Missing concept_name raises ValueError."""
+        svc, _ = storage_env
+        with pytest.raises(ValueError, match="Missing required field: concept_name"):
+            svc.store_concept({'concept_type': 'knowledge', 'definition': 'test'})
+
+    def test_requires_concept_type(self, storage_env):
+        """Missing concept_type raises ValueError."""
+        svc, _ = storage_env
+        with pytest.raises(ValueError, match="Missing required field: concept_type"):
+            svc.store_concept({'concept_name': 'test', 'definition': 'test'})
+
+    def test_requires_definition(self, storage_env):
+        """Missing definition raises ValueError."""
+        svc, _ = storage_env
+        with pytest.raises(ValueError, match="Missing required field: definition"):
+            svc.store_concept({'concept_name': 'test', 'concept_type': 'knowledge'})
+
+    def test_returns_uuid_on_success(self, storage_env):
+        """Successful store returns a UUID string."""
+        svc, mock_cursor = storage_env
+
         concept_data = {
             'concept_name': 'Python Programming',
             'concept_type': 'knowledge',
-            'definition': 'Python is a high-level programming language',
+            'definition': 'A high-level programming language',
             'domain': 'programming',
-            'confidence': 0.9
+            'confidence': 0.9,
         }
 
-        concept_id = storage.store_concept(concept_data)
-        assert concept_id is not None, "Failed to store concept"
-
-        # Retrieve the concept
-        concept = storage.get_concept(concept_id)
-        assert concept is not None, "Failed to retrieve concept"
-        assert "python" in concept['concept_name'].lower(), "Concept name doesn't match"
-
-        print("✓ Storage and retrieval test passed")
-        return True
-
-    except Exception as e:
-        print(f"✗ Storage test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        result = svc.store_concept(concept_data)
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) == 36  # UUID format
 
 
-def test_consolidation():
-    """Test extracting concepts from mock episode"""
-    print("\n[TEST 2] Testing consolidation...")
+# ── Get concept ──────────────────────────────────────────────────────
 
-    try:
-        db_service = DatabaseService()
-        consolidation = SemanticConsolidationService(db_service)
+class TestGetConcept:
 
-        # Mock episode data
-        episode_text = """
-        User asked: What is machine learning?
-        Assistant: Machine learning is a subset of artificial intelligence where systems
-        learn from data. Neural networks are a key technique used in deep learning.
-        """
+    def test_returns_none_for_missing_concept(self, storage_env):
+        """get_concept returns None when concept not found."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchone.return_value = None
 
-        # Extract concepts
-        concepts = consolidation.extract_concepts_from_episode(
-            episode_text=episode_text,
-            episode_id="test_episode_001"
+        result = svc.get_concept('nonexistent-id')
+        assert result is None
+
+    def test_returns_concept_dict_on_success(self, storage_env):
+        """get_concept returns a dict with expected keys."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchone.return_value = (
+            'id-1', 'Python', 'knowledge', 'A language',
+            3, 'programming', 0.5, 1.0,
+            0, 0, 0.9, '[]',
+            'unverified', '{}', '[]',
+            None, None, None,
+            0.0, 0.5, '2026-01-01', '2026-01-01'
         )
 
-        assert len(concepts) > 0, "No concepts extracted"
-
-        # Check if relevant concepts were extracted
-        concept_names = [c['concept_name'].lower() for c in concepts]
-        has_ml_concept = any('machine learning' in name or 'neural' in name for name in concept_names)
-
-        print(f"✓ Consolidation test passed - extracted {len(concepts)} concepts")
-        if has_ml_concept:
-            print("  Found expected ML-related concepts")
-
-        return True
-
-    except Exception as e:
-        print(f"✗ Consolidation test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        result = svc.get_concept('id-1')
+        assert result is not None
+        assert result['concept_name'] == 'Python'
+        assert result['concept_type'] == 'knowledge'
+        assert result['confidence'] == 0.9
 
 
-def test_retrieval():
-    """Test hybrid search with confidence filtering"""
-    print("\n[TEST 3] Testing retrieval with hybrid search...")
+# ── Strengthen concept ───────────────────────────────────────────────
 
-    try:
-        db_service = DatabaseService()
-        storage = SemanticStorageService(db_service)
-        retrieval = SemanticRetrievalService(db_service)
+class TestStrengthenConcept:
 
-        # Store test concepts
-        concept1 = {
-            'concept_name': 'Python Programming Language',
-            'concept_type': 'knowledge',
-            'definition': 'Python is a versatile programming language',
-            'domain': 'programming',
-            'confidence': 0.9
-        }
+    def test_returns_false_when_not_found(self, storage_env):
+        """strengthen_concept returns False when concept doesn't exist."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchone.return_value = None
 
-        concept2 = {
-            'concept_name': 'JavaScript Web Development',
-            'concept_type': 'knowledge',
-            'definition': 'JavaScript is used for web development',
-            'domain': 'programming',
-            'confidence': 0.85
-        }
+        result = svc.strengthen_concept('missing-id', 'ep-1')
+        assert result is False
 
-        storage.store_concept(concept1)
-        storage.store_concept(concept2)
-
-        # Search for related concepts
-        results = retrieval.hybrid_search(
-            query="programming languages",
-            limit=10
+    def test_increases_strength(self, storage_env):
+        """strengthen_concept multiplies strength by 1.1."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchone.return_value = (
+            5.0,   # current strength
+            '[]',  # source_episodes
+            3,     # consolidation_count
+            0.5,   # decay_resistance
         )
 
-        assert len(results) > 0, "No results found"
+        result = svc.strengthen_concept('concept-1', 'ep-new')
+        assert result is True
 
-        print(f"✓ Retrieval test passed - found {len(results)} relevant concepts")
-        return True
-
-    except Exception as e:
-        print(f"✗ Retrieval test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        # Verify UPDATE was called with new_strength ~5.5
+        update_call = mock_cursor.execute.call_args_list[-1]
+        params = update_call[0][1]
+        assert abs(params[0] - 5.5) < 0.01  # 5.0 * 1.1
 
 
-def test_spreading_activation():
-    """Test BFS with weak relationship activation"""
-    print("\n[TEST 4] Testing spreading activation...")
+# ── Store relationship ───────────────────────────────────────────────
 
-    try:
-        db_service = DatabaseService()
-        storage = SemanticStorageService(db_service)
-        retrieval = SemanticRetrievalService(db_service)
+class TestStoreRelationship:
 
-        # Store connected concepts
-        concept1_data = {
-            'concept_name': 'Machine Learning Algorithms',
-            'concept_type': 'knowledge',
-            'definition': 'Algorithms that learn from data',
-            'domain': 'AI',
-            'confidence': 0.9
-        }
+    def test_requires_fields(self, storage_env):
+        """Missing required fields raise ValueError."""
+        svc, _ = storage_env
+        with pytest.raises(ValueError, match="Missing required field"):
+            svc.store_relationship({'source_concept_id': 'a'})
 
-        concept2_data = {
-            'concept_name': 'Neural Networks',
-            'concept_type': 'knowledge',
-            'definition': 'Networks inspired by biological neurons',
-            'domain': 'AI',
-            'confidence': 0.9
-        }
+    def test_creates_new_relationship(self, storage_env):
+        """New relationship returns a UUID."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchone.return_value = None  # No existing relationship
 
-        concept1_id = storage.store_concept(concept1_data)
-        concept2_id = storage.store_concept(concept2_data)
-
-        # Create relationship
-        relationship_data = {
-            'source_concept_id': concept1_id,
-            'target_concept_id': concept2_id,
+        rel_data = {
+            'source_concept_id': 'concept-1',
+            'target_concept_id': 'concept-2',
             'relationship_type': 'related_to',
             'strength': 0.8,
-            'confidence': 0.9
         }
 
-        storage.store_relationship(relationship_data)
+        result = svc.store_relationship(rel_data)
+        assert result is not None
+        assert isinstance(result, str)
 
-        # Get relationships to verify connection
-        relationships = storage.get_relationships(concept1_id, direction='outgoing')
+    def test_strengthens_existing_relationship(self, storage_env):
+        """Existing relationship gets strengthened instead of duplicated."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchone.return_value = ('rel-1', 0.5, '[]')
 
-        assert len(relationships) > 0, "No relationships found"
-        assert any(r['target_concept_id'] == concept2_id for r in relationships), "Expected relationship not created"
+        rel_data = {
+            'source_concept_id': 'concept-1',
+            'target_concept_id': 'concept-2',
+            'relationship_type': 'related_to',
+        }
 
-        print(f"✓ Spreading activation test passed - created {len(relationships)} relationships")
-        return True
-
-    except Exception as e:
-        print(f"✗ Spreading activation test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def main():
-    """Run all integration tests"""
-    print("=" * 60)
-    print("SEMANTIC MEMORY INTEGRATION TESTS")
-    print("=" * 60)
-
-    results = []
-
-    # Run all tests
-    results.append(("Storage", test_storage()))
-    results.append(("Consolidation", test_consolidation()))
-    results.append(("Retrieval", test_retrieval()))
-    results.append(("Spreading Activation", test_spreading_activation()))
-
-    # Summary
-    print("\n" + "=" * 60)
-    print("TEST SUMMARY")
-    print("=" * 60)
-
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
-
-    for name, result in results:
-        status = "✓ PASS" if result else "✗ FAIL"
-        print(f"{name:25} {status}")
-
-    print(f"\nTotal: {passed}/{total} tests passed")
-    print("=" * 60)
-
-    return all(result for _, result in results)
+        result = svc.store_relationship(rel_data)
+        assert result == 'rel-1'
 
 
-if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+# ── Get relationships ────────────────────────────────────────────────
+
+class TestGetRelationships:
+
+    def test_returns_empty_when_none(self, storage_env):
+        """No relationships returns empty list."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchall.return_value = []
+
+        result = svc.get_relationships('concept-1')
+        assert result == []
+
+    def test_returns_relationships_with_target_id_alias(self, storage_env):
+        """Relationships include target_id alias for spreading activation compat."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchall.return_value = [
+            ('rel-1', 'src-1', 'tgt-1', 'related_to', 0.8, False, '[]', 0.9)
+        ]
+
+        result = svc.get_relationships('src-1')
+        assert len(result) == 1
+        assert result[0]['target_id'] == 'tgt-1'
+        assert result[0]['target_concept_id'] == 'tgt-1'
+
+
+# ── Retrieval with confidence filtering ──────────────────────────────
+
+class TestRetrieveConcepts:
+
+    def test_returns_empty_when_no_concepts(self, storage_env):
+        """Empty concept store returns []."""
+        svc, mock_cursor = storage_env
+        mock_cursor.fetchall.return_value = []
+
+        result = svc.retrieve_concepts('test query', query_embedding=[0.0] * 256)
+        assert result == []

@@ -249,6 +249,9 @@ class PlanDecompositionService:
 
         return ready
 
+    # Maximum number of retries for retryable steps (2 retries = 3 total attempts)
+    MAX_STEP_RETRIES = 2
+
     @staticmethod
     def update_step_status(
         plan: Dict,
@@ -263,6 +266,11 @@ class PlanDecompositionService:
         """
         Mutate step status and recalculate plan metadata.
 
+        If a step fails and is marked ``retryable=True``, it will be reset to
+        ``pending`` (up to ``MAX_STEP_RETRIES`` times) instead of being
+        permanently failed. The ``retry_count`` field tracks how many retries
+        have been consumed.
+
         Skipped steps count toward progress. Updates blocked_on/blocked_reason
         if applicable.
         """
@@ -273,6 +281,35 @@ class PlanDecompositionService:
             return plan
 
         now = datetime.now(timezone.utc).isoformat()
+
+        if new_status == 'failed' and retryable:
+            step.setdefault('retry_count', 0)
+            if step['retry_count'] < PlanDecompositionService.MAX_STEP_RETRIES:
+                # Retry: reset to pending so get_ready_steps picks it up again
+                step['retry_count'] += 1
+                step['status'] = 'pending'
+                step['retryable'] = True
+                step['last_failure_reason'] = failure_reason
+                step['last_failure_at'] = now
+                # Clear completed_at / started_at so it runs fresh
+                step['completed_at'] = None
+                step['started_at'] = None
+                logger.info(
+                    f"{LOG_PREFIX} Retrying step {step_id} "
+                    f"(attempt {step['retry_count'] + 1}/"
+                    f"{PlanDecompositionService.MAX_STEP_RETRIES + 1}): "
+                    f"{failure_reason[:80]}"
+                )
+                plan = PlanDecompositionService._update_blocked_state(plan)
+                return plan
+            else:
+                # Exhausted retries — fall through to permanent failure
+                logger.warning(
+                    f"{LOG_PREFIX} Step {step_id} exhausted "
+                    f"{PlanDecompositionService.MAX_STEP_RETRIES} retries, "
+                    f"marking permanently failed"
+                )
+
         step['status'] = new_status
 
         if new_status == 'in_progress' and not step.get('started_at'):
@@ -289,8 +326,6 @@ class PlanDecompositionService:
         if failure_reason:
             step['failure_reason'] = failure_reason
         if new_status == 'failed':
-            # TODO: retryable step retry not yet implemented — flag is stored
-            # but no consumer reads it to schedule re-execution
             step['retryable'] = retryable
 
         # Recalculate blocked state

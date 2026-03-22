@@ -608,8 +608,8 @@ class ContradictionClassifierService:
             return []
 
         try:
-            from services.user_trait_service import _pack_embedding
-            packed = _pack_embedding(embedding)
+            from services.embedding_utils import pack_embedding
+            packed = pack_embedding(embedding)
             if packed is None:
                 return []
         except Exception:

@@ -70,7 +70,7 @@ class TestStoreEpisodeSuccess:
         svc, mock_cursor = storage_env
         test_uuid = 'c862db4f-bd83-4724-92a8-33fcf3bd38e8'
 
-        with patch('services.episodic_storage_service.uuid') as mock_uuid_mod:
+        with patch('services.episodic_service.uuid') as mock_uuid_mod:
             mock_uuid_mod.uuid4.return_value = uuid.UUID(test_uuid)
             result = svc.store_episode(_make_episode_data())
 
@@ -82,8 +82,8 @@ class TestStoreEpisodeSuccess:
         test_uuid = 'd862db4f-bd83-4724-92a8-33fcf3bd38e8'
 
         # Even if curiosity service fails (ImportError, etc.), store still succeeds
-        with patch('services.episodic_storage_service.uuid') as mock_uuid_mod, \
-             patch('services.episodic_storage_service.CuriosityPursuitService',
+        with patch('services.episodic_service.uuid') as mock_uuid_mod, \
+             patch('services.episodic_service.CuriosityPursuitService',
                    side_effect=ImportError("not available"), create=True):
             mock_uuid_mod.uuid4.return_value = uuid.UUID(test_uuid)
             result = svc.store_episode(_make_episode_data())
