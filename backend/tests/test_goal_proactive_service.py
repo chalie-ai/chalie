@@ -184,6 +184,47 @@ class TestSocialCostBlocking:
 
         assert cost <= 1.0
 
+    def test_social_cost_active_conversation_penalty(self):
+        """Active conversation (< 2 min ago) should increase social cost."""
+        from services.time_utils import utc_now
+        from services.memory_store import MemoryStore
+
+        store = MemoryStore()
+        store.set('last_user_message_ts', utc_now().isoformat())
+
+        mock_inference = MagicMock()
+        mock_inference.is_user_deep_focus.return_value = False
+
+        with patch('services.ambient_inference_service.AmbientInferenceService',
+                   return_value=mock_inference), \
+             patch('services.memory_client.MemoryClientService.create_connection',
+                   return_value=store):
+            cost = _calculate_social_cost()
+
+        assert cost >= 0.3  # Active conversation penalty
+
+    def test_social_cost_reentry_bonus(self):
+        """Re-entry after 4 hour gap should reduce social cost."""
+        from services.time_utils import utc_now
+        from services.memory_store import MemoryStore
+        from datetime import timedelta
+
+        store = MemoryStore()
+        four_hours_ago = (utc_now() - timedelta(hours=4)).isoformat()
+        store.set('last_user_message_ts', four_hours_ago)
+
+        mock_inference = MagicMock()
+        mock_inference.is_user_deep_focus.return_value = False
+
+        with patch('services.ambient_inference_service.AmbientInferenceService',
+                   return_value=mock_inference), \
+             patch('services.memory_client.MemoryClientService.create_connection',
+                   return_value=store):
+            cost = _calculate_social_cost()
+
+        # Should be negative (bonus) or at least lower than baseline
+        assert cost <= 0.0  # Re-entry bonus should make cost negative or zero
+
 
 class TestProactiveExecution:
 

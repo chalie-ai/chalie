@@ -92,6 +92,9 @@ def extract_and_route_signals(
     except Exception as e:
         logger.debug(f"{LOG_PREFIX} Goal matching failed: {e}")
 
+    # 2b. Enrich signals with ambient context
+    _enrich_with_ambient_context(signals)
+
     # 3. Handle unmatched explicit signals — create stated goal or store for clustering
     if signals and signals[0]['signal_type'] == 'explicit_statement':
         # Check if any goal matched
@@ -239,6 +242,47 @@ def _map_signal_type(cognitive_signal_type: str) -> str:
         'user_message': 'topic_recurrence',
     }
     return mapping.get(cognitive_signal_type, 'behavioral')
+
+
+def _enrich_with_ambient_context(signals: List[Dict]) -> None:
+    """
+    Enrich extracted signals with current ambient context.
+
+    Deep focus boosts signal strength (user is concentrating = higher value signal).
+    Casual attention keeps default strength.
+    Away/distracted has no effect (those messages are rare).
+    """
+    if not signals:
+        return
+
+    try:
+        from services.ambient_inference_service import AmbientInferenceService
+        inference = AmbientInferenceService()
+
+        from services.client_context_service import ClientContextService
+        ctx_service = ClientContextService()
+        ctx = ctx_service.get()
+        if not ctx:
+            return
+
+        state = inference.infer(ctx)
+        attention = state.get('attention')
+        tempo = state.get('tempo')
+
+        for signal in signals:
+            # Deep focus = higher signal strength (user is concentrating on this)
+            if attention == 'deep_focus':
+                signal['strength'] = min(1.0, signal.get('strength', 0.5) * 1.3)
+                signal['ambient_context'] = 'deep_focus'
+            elif attention == 'casual':
+                signal['ambient_context'] = 'casual'
+
+            # Routine tempo suggests ongoing interest (not a one-off)
+            if tempo == 'routine':
+                signal['ambient_context'] = signal.get('ambient_context', '') + ':routine'
+
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Ambient enrichment skipped: {e}")
 
 
 def _store_unmatched_signal(
