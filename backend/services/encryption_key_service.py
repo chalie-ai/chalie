@@ -11,11 +11,19 @@ _key_cache = None
 
 
 def get_key_file_path() -> Path:
-    """Return the path to the persistent ``.key`` file inside the data volume.
+    """Return the path to the persistent ``.key`` file inside the data directory.
+
+    Uses the same data directory as the database: ``CHALIE_DB_PATH`` env var
+    determines the directory when set, otherwise falls back to
+    ``<backend_root>/data/.key``.
 
     Returns:
-        :class:`~pathlib.Path` pointing to ``<backend_root>/data/.key``.
+        :class:`~pathlib.Path` pointing to the ``.key`` file.
     """
+    import os
+    db_path = os.environ.get("CHALIE_DB_PATH")
+    if db_path:
+        return Path(db_path).resolve().parent / ".key"
     return Path(__file__).resolve().parent.parent / "data" / ".key"
 
 
