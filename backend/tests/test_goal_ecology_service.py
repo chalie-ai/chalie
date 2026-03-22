@@ -410,7 +410,7 @@ class TestOutcomeFeedback:
         assert after['salience'] > before['salience']
 
     def test_rejected_weakens_goal(self):
-        """Rejected feedback should decrease confidence and clear strategy."""
+        """Rejected feedback should decrease confidence. Strategy requires 2 rejections to clear."""
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)
 
@@ -428,7 +428,12 @@ class TestOutcomeFeedback:
 
         after = ecology.get_goal(goal['id'])
         assert after['confidence'] < before['confidence']
-        assert after['strategy'] is None  # Strategy cleared on rejection
+        assert after['strategy'] is not None  # Strategy preserved after single rejection
+
+        # Second rejection clears strategy
+        ecology.record_outcome(goal['id'], 'rejected')
+        after2 = ecology.get_goal(goal['id'])
+        assert after2['strategy'] is None  # Strategy cleared after 2 rejections
 
     def test_ignored_reduces_salience(self):
         """Ignored feedback should reduce salience."""
@@ -1448,8 +1453,8 @@ class TestOutcomeFeedbackAdvanced:
         # Should not raise
         ecology.record_outcome('nonexistent-id', 'engaged')
 
-    def test_rejected_clears_strategy(self):
-        """Rejected outcome should clear the goal's strategy."""
+    def test_rejected_clears_strategy_after_two(self):
+        """Two rejected outcomes should clear the goal's strategy."""
         db, conn = _make_db()
         ecology = GoalEcologyService(db_service=db)
 
@@ -1461,6 +1466,12 @@ class TestOutcomeFeedbackAdvanced:
         )
         conn.commit()
 
+        # First rejection preserves strategy
+        ecology.record_outcome(goal['id'], 'rejected')
+        saved = ecology.get_goal(goal['id'])
+        assert saved['strategy'] is not None
+
+        # Second rejection clears strategy
         ecology.record_outcome(goal['id'], 'rejected')
         saved = ecology.get_goal(goal['id'])
         assert saved['strategy'] is None
@@ -1608,3 +1619,104 @@ class TestTimescaleWindows:
         ]
         for i in range(len(windows) - 1):
             assert windows[i] < windows[i + 1]
+
+
+class TestStrategyEvolution:
+    """Test outcome-driven strategy evolution in record_outcome."""
+
+    def _create_goal_with_strategy(self, ecology, conn, goal_id='test-strat-goal', strategy='Original approach'):
+        """Helper to create a goal with a preset strategy."""
+        now = utc_now().isoformat()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO goals (id, type, status, description, confidence, salience,
+                commitment, urgency, timescale, strategy, evidence_count,
+                last_reinforced_at, outcome_feedback, created_at, updated_at)
+            VALUES (?, 'stated', 'actionable', 'Test goal', 0.8, 0.7,
+                0.0, 0.5, 'short_term', ?, 1, ?, '[]', ?, ?)
+        """, (goal_id, strategy, now, now, now))
+        conn.commit()
+        cursor.close()
+        return goal_id
+
+    def test_single_rejection_does_not_clear_strategy(self):
+        """One rejection should not clear strategy (needs 2+)."""
+        db, conn = _make_db()
+        ecology = GoalEcologyService(db_service=db)
+        gid = self._create_goal_with_strategy(ecology, conn)
+
+        ecology.record_outcome(gid, 'rejected')
+
+        goal = ecology.get_goal(gid)
+        assert goal['strategy'] is not None  # Strategy preserved after single rejection
+
+    def test_two_rejections_clears_strategy(self):
+        """Two rejections against same strategy should null it out."""
+        db, conn = _make_db()
+        ecology = GoalEcologyService(db_service=db)
+        gid = self._create_goal_with_strategy(ecology, conn)
+
+        ecology.record_outcome(gid, 'rejected')
+        ecology.record_outcome(gid, 'rejected')
+
+        goal = ecology.get_goal(gid)
+        assert goal['strategy'] is None  # Strategy cleared after 2 rejections
+
+    def test_rejected_strategy_archived_in_feedback(self):
+        """Failed strategy should be archived in outcome_feedback."""
+        db, conn = _make_db()
+        ecology = GoalEcologyService(db_service=db)
+        gid = self._create_goal_with_strategy(ecology, conn, strategy='Research directly')
+
+        ecology.record_outcome(gid, 'rejected')
+        ecology.record_outcome(gid, 'rejected')
+
+        goal = ecology.get_goal(gid)
+        feedback = goal['outcome_feedback']
+        failed_entries = [f for f in feedback if f.get('event') == 'strategy_failed']
+        assert len(failed_entries) == 1
+        assert 'Research directly' in failed_entries[0]['strategy']
+        assert failed_entries[0]['rejection_count'] >= 2
+
+    def test_three_engagements_marks_strategy_confirmed(self):
+        """Three engaged responses should mark strategy as confirmed in feedback."""
+        db, conn = _make_db()
+        ecology = GoalEcologyService(db_service=db)
+        gid = self._create_goal_with_strategy(ecology, conn)
+
+        ecology.record_outcome(gid, 'engaged')
+        ecology.record_outcome(gid, 'engaged')
+        ecology.record_outcome(gid, 'engaged')
+
+        goal = ecology.get_goal(gid)
+        feedback = goal['outcome_feedback']
+        confirmed = [f for f in feedback if f.get('event') == 'strategy_confirmed']
+        assert len(confirmed) == 1
+        assert confirmed[0]['engagement_count'] >= 3
+
+    def test_mixed_responses_two_rejections_clears(self):
+        """Mixed responses with 2 rejections total for same strategy still triggers clear."""
+        db, conn = _make_db()
+        ecology = GoalEcologyService(db_service=db)
+        gid = self._create_goal_with_strategy(ecology, conn)
+
+        ecology.record_outcome(gid, 'rejected')
+        ecology.record_outcome(gid, 'engaged')
+        ecology.record_outcome(gid, 'rejected')
+
+        goal = ecology.get_goal(gid)
+        # 2 rejections total for same strategy hash -> strategy cleared
+        assert goal['strategy'] is None
+
+    def test_feedback_tracks_strategy_hash(self):
+        """Feedback entries should include strategy_hash when strategy exists."""
+        db, conn = _make_db()
+        ecology = GoalEcologyService(db_service=db)
+        gid = self._create_goal_with_strategy(ecology, conn)
+
+        ecology.record_outcome(gid, 'engaged')
+
+        goal = ecology.get_goal(gid)
+        feedback = goal['outcome_feedback']
+        assert len(feedback) >= 1
+        assert 'strategy_hash' in feedback[0]

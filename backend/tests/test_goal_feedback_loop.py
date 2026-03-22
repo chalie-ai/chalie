@@ -50,7 +50,27 @@ class TestClassifyEngagement:
     def test_short_unknown_is_acknowledged(self):
         from workers.digest_worker import _classify_engagement
         assert _classify_engagement("hmm") == 'acknowledged'
-        assert _classify_engagement("interesting") == 'acknowledged'
+
+    def test_interesting_is_engaged(self):
+        """'interesting' shows active engagement, not mere acknowledgment."""
+        from workers.digest_worker import _classify_engagement
+        assert _classify_engagement("interesting") == 'engaged'
+
+    def test_ambiguous_rejection_with_engagement_is_engaged(self):
+        """'I don't think that's right but tell me more' is engaged, not rejected."""
+        from workers.digest_worker import _classify_engagement
+        assert _classify_engagement("I don't think that's right but tell me more") == 'engaged'
+
+    def test_short_rejection_still_rejected(self):
+        """Short unambiguous rejections still work."""
+        from workers.digest_worker import _classify_engagement
+        assert _classify_engagement("stop") == 'rejected'
+        assert _classify_engagement("don't do that") == 'rejected'
+
+    def test_long_with_but_clause_is_engaged(self):
+        """Long message with rejection + 'but' + engagement = engaged."""
+        from workers.digest_worker import _classify_engagement
+        assert _classify_engagement("I'm not interested in that approach however tell me about alternatives") == 'engaged'
 
 
 @pytest.mark.unit
