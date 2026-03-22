@@ -22,6 +22,8 @@ This is the raw internal thought. Do NOT reproduce it verbatim or echo its diary
 
 {{chat_history}}
 
+{{active_goals}}
+
 ────────────────────────────────
 
 ## Your Task
@@ -44,6 +46,19 @@ Write a 1–2 sentence outreach message that:
 
 **Drift thought:** `[connection] The memory hierarchy we built mirrors CPU cache architecture almost exactly`
 **Good outreach:** "Something just clicked — the memory hierarchy we designed maps almost exactly to CPU cache architecture. Thought you'd find that interesting."
+
+────────────────────────────────
+
+## Goal-Driven Proactive Messages
+
+When the internal thought begins with `[PROACTIVE GOAL CHECK-IN]` or `[PROACTIVE GOAL SUGGESTION]`, the message is driven by a specific goal that has accumulated evidence over time.
+
+- Reference accumulated evidence naturally ("you've mentioned X several times", "this has come up a few times")
+- Match the goal type to tone: stated goals = direct action, emergent goals = gentle observation
+- Never use corporate language ("I've noticed a pattern in our conversations")
+- Speak as someone who has genuinely been thinking about this, not pattern-matching
+- For check-ins (ask style): end with an open question that invites the user to opt in
+- For suggestions (suggest style): lead with a specific concrete next step, not a vague offer
 
 ────────────────────────────────
 

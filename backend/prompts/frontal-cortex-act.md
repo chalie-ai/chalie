@@ -103,6 +103,8 @@ Previous Internal Actions:
 
 {{world_state}}
 
+{{active_goals}}
+
 ────────────────────────────────
 
 ## Output Contract (STRICT)

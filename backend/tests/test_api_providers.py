@@ -115,7 +115,7 @@ class TestProvidersAPI:
     def test_create_first_provider_auto_assigns_all_jobs(
         self, client, mock_service, mock_cache
     ):
-        """POST /providers for the first provider auto-assigns all 20 jobs."""
+        """POST /providers for the first provider auto-assigns all jobs."""
         mock_service.list_providers_summary.return_value = []  # no existing
         mock_service.create_provider.return_value = {
             "id": 1,
@@ -132,7 +132,7 @@ class TestProvidersAPI:
         })
 
         assert response.status_code == 201
-        assert mock_service.set_job_assignment.call_count == 19
+        assert mock_service.set_job_assignment.call_count == 20
 
         assigned_jobs = sorted([c.args[0] for c in mock_service.set_job_assignment.call_args_list])
         expected_jobs = sorted([
@@ -144,7 +144,7 @@ class TestProvidersAPI:
             'semantic-memory', 'cognitive-triage', 'experience-assimilation',
             'fact-store', 'memory-chunker',
             'moment-enrichment', 'document-synthesis',
-            'document-classification',
+            'document-classification', 'goal-strategy',
         ])
         assert assigned_jobs == expected_jobs
 

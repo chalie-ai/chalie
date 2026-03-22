@@ -13,7 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'moment', 'persistent_task', 'emit_card', 'document',
-    'read', 'reflect',
+    'read', 'reflect', 'goals',
 })
 
 # ── LLM-visible for planning: excludes emit_card (internal trigger) and
@@ -64,6 +64,7 @@ SKILL_DESCRIPTIONS: dict = {
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
+    'goals': 'View, confirm, complete, or dismiss tracked goals and see accumulated evidence',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
@@ -82,6 +83,7 @@ SKILL_EFFORT: dict = {
     'document': 'light',
     'read': 'light',
     'reflect': 'light',
+    'goals': 'trivial',
 }
 
 # ── Skill categories ───────────────────────────────────────────────────────────
@@ -100,4 +102,5 @@ SKILL_CATEGORIES: dict = {
     'document': 'knowledge',
     'read': 'research',
     'reflect': 'cognition',
+    'goals': 'cognition',
 }

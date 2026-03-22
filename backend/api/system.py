@@ -397,6 +397,21 @@ def observability_tasks():
         except Exception as e:
             logger.warning(f"[OBS] triage calibration error: {e}")
 
+        # Goal ecology stats
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            result['goal_ecology_stats'] = {
+                'last_run': store.get('goal_ecology:last_run'),
+                'cycles_total': int(store.get('goal_ecology:cycles_total') or 0),
+                'goals_decayed_total': int(store.get('goal_ecology:goals_decayed_total') or 0),
+                'goals_created_total': int(store.get('goal_ecology:goals_created_total') or 0),
+                'proactive_attempts_total': int(store.get('goal_ecology:proactive_attempts_total') or 0),
+                'unmatched_signals': len(store.keys('goal:unmatched:*')),
+            }
+        except Exception as e:
+            logger.warning(f"[OBS] goal ecology stats error: {e}")
+
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"[REST API] observability/tasks error: {e}")

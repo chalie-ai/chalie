@@ -536,8 +536,10 @@ class FrontalCortexService:
         result = result.replace('{{facts}}', facts_context if _include('facts') else '')
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 
-        # active_goals removed — world state covers persistent tasks with salience scoring
-        result = result.replace('{{active_goals}}', '')
+        goal_context = ''
+        if _include('active_goals'):
+            goal_context = self._get_goal_context()
+        result = result.replace('{{active_goals}}', goal_context)
 
         # Phase 3 — Response weaving: inject contradiction context when flagged
         contradiction_ctx = _ctx.get('contradiction_context')
@@ -1171,7 +1173,7 @@ class FrontalCortexService:
             from services.innate_skills.registry import PLANNING_SKILLS
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read"]
+            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read", "goals"]
             available = [s for s in innate if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)
@@ -1223,6 +1225,28 @@ class FrontalCortexService:
             lines = [h[1] for h in hints[:8]]
             return "## Strategy Hints (from experience)\n" + "\n".join(f"- {l}" for l in lines)
         except Exception:
+            return ''
+
+    def _get_goal_context(self, limit: int = 3) -> str:
+        """Compact goal stack for prompt injection (~150 tokens)."""
+        try:
+            from services.goal_ecology_service import GoalEcologyService
+            ecology = GoalEcologyService()
+            goals = ecology.get_active_stack(limit=limit)
+            if not goals:
+                return ''
+            lines = ['\n## Active Goals']
+            for g in goals:
+                sal = f"{g['salience']:.0%}"
+                conf = f"{g['confidence']:.0%}"
+                status_hint = f" (strategy: {g['strategy'][:60]})" if g.get('strategy') else ''
+                lines.append(
+                    f"- [{g['type']}] {g['description'][:100]} "
+                    f"(salience={sal}, confidence={conf}){status_hint}"
+                )
+            return '\n'.join(lines)
+        except Exception as e:
+            logging.debug(f"[FRONTAL CORTEX] Goal context unavailable: {e}")
             return ''
 
     def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
