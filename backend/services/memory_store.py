@@ -199,6 +199,17 @@ class MemoryStore:
             self._strings[key] = (str(new_val), expiry)
             return new_val
 
+    def incrby(self, key: str, amount: int = 1) -> int:
+        with self._str_lock:
+            entry = self._strings.get(key)
+            if entry is None or self._is_expired(entry[1]):
+                self._strings[key] = (str(amount), None)
+                return amount
+            val, expiry = entry
+            new_val = int(val) + amount
+            self._strings[key] = (str(new_val), expiry)
+            return new_val
+
     def decr(self, key: str) -> int:
         """Atomically decrement the integer value at ``key`` by 1.
 

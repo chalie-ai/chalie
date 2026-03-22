@@ -57,6 +57,8 @@ Registered external tools: {{registered_tool_names}}
 
 {{situation}}
 
+{{active_goals}}
+
 ────────────────────────────────
 
 ## Execution
