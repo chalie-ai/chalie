@@ -65,6 +65,10 @@ _TTL_RESULT = 600   # 10 minutes
 _TTL_HASH = 300     # 5 minutes
 _TTL_PROGRESS = 600 # 10 minutes — must outlive _TTL_BYTES so it can serve as fallback
 
+# Hard wall-clock timeout for the entire analysis pipeline (seconds).
+# Acts as a safety net above the per-call SDK-level timeouts (30s/60s).
+_ANALYSIS_HARD_TIMEOUT = 90
+
 # Extension → sanitised filename suffix when original filename is unavailable
 _MIME_EXT = {
     'image/jpeg': '.jpg',
@@ -405,7 +409,30 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
     progress_key = _KEY_PROGRESS.format(image_id=image_id)
     try:
         from services.image_context_service import analyze
-        result = analyze(image_bytes, mime_type)
+
+        # Hard wall-clock timeout — wraps the SDK-level per-call timeouts
+        # as a safety net against DNS hangs, network stalls, etc.
+        analysis_result = [None]
+        analysis_error = [None]
+
+        def _do_analyze():
+            try:
+                analysis_result[0] = analyze(image_bytes, mime_type)
+            except Exception as e:
+                analysis_error[0] = e
+
+        worker = threading.Thread(target=_do_analyze, daemon=True)
+        worker.start()
+        worker.join(timeout=_ANALYSIS_HARD_TIMEOUT)
+
+        if worker.is_alive():
+            raise TimeoutError(
+                f"Image analysis timed out after {_ANALYSIS_HARD_TIMEOUT}s"
+            )
+        if analysis_error[0] is not None:
+            raise analysis_error[0]
+        result = analysis_result[0]
+
         store = _get_store()
         store.set(result_key, json.dumps(result), ex=_TTL_RESULT)
         # B3 fix: stamp progress key as 'ready' so status checks see completion.
