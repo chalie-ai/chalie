@@ -235,7 +235,8 @@ def authed_client():
 
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+         patch('api._init_dashboard_gateway'):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as client:
