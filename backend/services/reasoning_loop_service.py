@@ -303,6 +303,9 @@ class ReasoningLoopService:
                 # Check for deferred thoughts from quiet hours
                 self._process_deferred()
 
+                # Goal ecology runs every cycle regardless of worker/episode state
+                self._run_goal_ecology_cycle()
+
                 # Block until a signal arrives or idle_timeout elapses
                 result = self.store.blpop([PRIORITY_QUEUE_KEY, SIGNAL_QUEUE_KEY], timeout=self.idle_timeout)
 
@@ -775,6 +778,69 @@ class ReasoningLoopService:
                 self.store.set('goal_inference:last_run', str(time.time()))
             except Exception:
                 pass
+
+    # -- Goal ecology idle cycle ------------------------------------------------
+
+    def _run_goal_ecology_cycle(self):
+        """
+        Run goal ecology maintenance: decay, pattern detection, proactive triggering.
+
+        Runs every drift interval regardless of worker/episode state. Goals need
+        continuous maintenance even when no conversations are happening.
+        """
+        try:
+            from services.goal_ecology_service import GoalEcologyService
+            ecology = GoalEcologyService()
+
+            # 1. Decay unreinforced goals
+            decayed = ecology.decay_unreinforced()
+
+            # 2. Detect patterns from unmatched signals -> create new goals
+            new_goals = ecology.detect_patterns_from_unmatched()
+
+            # 3. Check for actionable goals -> trigger proactive actions
+            actionable = ecology.get_actionable_goals()
+            if actionable:
+                from services.goal_proactive_service import check_and_execute
+                for goal in actionable:
+                    try:
+                        check_and_execute(goal)
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Proactive execution failed for {goal.get('id', '?')[:8]}: {e}")
+
+            # Observability — write ecology stats to MemoryStore
+            from services.time_utils import utc_now
+            self.store.set("goal_ecology:last_run", utc_now().isoformat())
+            self.store.incrby("goal_ecology:cycles_total", 1)
+            if decayed:
+                self.store.incrby("goal_ecology:goals_decayed_total", decayed)
+            if new_goals:
+                self.store.incrby("goal_ecology:goals_created_total", len(new_goals))
+            if actionable:
+                self.store.incrby("goal_ecology:proactive_attempts_total", 1)
+
+            # Periodic autobiography alignment refresh (~10% of cycles ≈ every 50min)
+            if random.random() < 0.1:
+                try:
+                    from services.goal_autobiography_bridge import refresh_all_goals
+                    refresh_all_goals()
+                except Exception:
+                    pass
+
+            # Cross-goal inference (~1% of cycles ≈ every 8 hours)
+            if random.random() < 0.01:
+                try:
+                    clusters = ecology.detect_goal_clusters()
+                    if clusters:
+                        logger.info(
+                            f"{LOG_PREFIX} Cross-goal inference found "
+                            f"{len(clusters)} cluster(s)"
+                        )
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Goal ecology cycle failed (non-fatal): {e}")
 
     def _reason_from_seed(self, seed: Dict, signal: ReasoningSignal) -> None:
         """Core reasoning pipeline: spreading activation → synthesis → action."""

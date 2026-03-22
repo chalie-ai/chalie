@@ -1443,16 +1443,13 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 thread_id, response_data['response'], response_data['generation_time']
             )
 
-        # Store proactive_id in MemoryStore for engagement correlation
-        if proactive_id:
+        # Store goal_id in MemoryStore for engagement correlation
+        goal_id = metadata.get('goal_id') or proactive_id
+        if goal_id:
             try:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()
-                store.setex(
-                    f"proactive_response_tag:{topic}",
-                    14400,  # 4h TTL
-                    proactive_id,
-                )
+                store.setex(f"proactive_response_tag:{topic}", 14400, goal_id)
             except Exception:
                 pass
 
@@ -1689,23 +1686,101 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
         logging.warning(f"[BELIEF CORRECTION] Hook failed (non-fatal): {e}")
 
 
+def _classify_engagement(text: str) -> str:
+    """
+    Classify user engagement with a proactive message.
+    Deterministic, no LLM. Pattern-based classification.
+    Returns: engaged|acknowledged|rejected|ignored
+    """
+    import re
+    text_lower = text.strip().lower()
+
+    if not text_lower:
+        return 'ignored'
+
+    # Acknowledgment patterns (short, non-substantive) — check first
+    ack = re.compile(
+        r'^(ok|okay|sure|thanks|cool|got it|noted|yep|yeah|alright|'
+        r'fine|roger|k|ty|thx|ack)\s*[.!]*$', re.IGNORECASE
+    )
+    if ack.match(text_lower):
+        return 'acknowledged'
+
+    if len(text_lower) < 3:
+        return 'ignored'
+
+    # For substantive messages (>20 chars), check engagement BEFORE rejection
+    # This handles "I don't think that's right but tell me more" correctly
+    engagement_pattern = re.compile(
+        r'\b(yes|please|tell me|show|how|what|why|when|do it|go ahead|'
+        r'more|explain|help|interesting|continue|elaborate)\b', re.IGNORECASE
+    )
+
+    rejection_pattern = re.compile(
+        r'\b(stop|don.t|no thanks|not interested|shut up|leave me|go away|'
+        r'not now|quit|enough|annoying)\b', re.IGNORECASE
+    )
+
+    has_engagement = engagement_pattern.search(text_lower)
+    has_rejection = rejection_pattern.search(text_lower)
+
+    # For longer messages with both signals, engagement wins
+    # (user is still engaging even if they disagree)
+    if len(text_lower) > 20 and has_engagement and has_rejection:
+        # Check if rejection is followed by a "but" clause with engagement
+        if re.search(r'\b(but|however|though|although)\b', text_lower):
+            return 'engaged'
+        # For longer messages, engagement signal wins by default
+        return 'engaged'
+
+    # Pure rejection (short or unambiguous)
+    if has_rejection:
+        return 'rejected'
+
+    # Engaged: longer response, question, or action words
+    if len(text_lower) > 20 or '?' in text or has_engagement:
+        return 'engaged'
+
+    return 'acknowledged'
+
+
 def _try_proactive_engagement_correlation(text: str, topic: str):
     """
-    Check if the user is responding to a proactive message and score engagement.
-
-    Called during Phase A of the normal digest pipeline.
+    Check if user is responding to a proactive message and classify engagement.
+    Uses proactive_response_tag stored in MemoryStore (4h TTL).
     """
     try:
-        from services.autonomous_actions.engagement_tracker import EngagementTracker
-        tracker = EngagementTracker()
-        result = tracker.check_and_score(user_message=text, topic=topic)
-        if result:
-            logging.info(
-                f"[PROACTIVE ENGAGEMENT] Scored response to proactive message: "
-                f"{result['outcome']} (similarity={result['similarity']:.3f})"
-            )
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+
+        tag_key = f"proactive_response_tag:{topic}"
+        goal_id = store.get(tag_key)
+        if not goal_id:
+            return
+
+        # Consume the tag (one-shot correlation)
+        store.delete(tag_key)
+
+        response_type = _classify_engagement(text)
+
+        from services.goal_ecology_service import GoalEcologyService
+        ecology = GoalEcologyService()
+        ecology.record_outcome(goal_id, response_type)
+
+        # Track ignored count for social cost calculation
+        if response_type == 'ignored':
+            ignored_key = 'goal:recent_ignored_count'
+            current = int(store.get(ignored_key) or 0)
+            store.setex(ignored_key, 86400, str(current + 1))
+        elif response_type in ('engaged', 'acknowledged'):
+            store.delete('goal:recent_ignored_count')
+
+        logging.info(
+            f"[DIGEST] Proactive engagement: {response_type} "
+            f"for goal {goal_id[:8]}"
+        )
     except Exception as e:
-        logging.debug(f"[PROACTIVE ENGAGEMENT] Correlation failed: {e}")
+        logging.debug(f"[DIGEST] Proactive engagement correlation failed: {e}")
 
 
 _FORK_RESPONSE_PATTERNS = {
@@ -1931,6 +2006,15 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             metadata=metadata,
             thread_id=thread_id,
         )
+
+    # Step 3b.0: Track message pace for proactive timing
+    try:
+        from services.time_utils import utc_now as _pace_utc_now
+        _busy_store.set('last_user_message_ts', _pace_utc_now().isoformat())
+        _current_count = int(_busy_store.get('recent_message_count_5min') or 0)
+        _busy_store.setex('recent_message_count_5min', 300, str(_current_count + 1))
+    except Exception:
+        pass
 
     # Step 3b.1: Check for save trigger (completion/deferral signal)
     try:
@@ -2373,6 +2457,15 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             )
     except Exception as _save_e:
         logging.debug(f"[DIGEST] Saveable content detection skipped: {_save_e}")
+
+    # ── Phase D Step 11f: Goal signal extraction ──
+    try:
+        from services.goal_signal_service import extract_and_route_signals
+        _goal_classification = dict(classification or {})
+        _goal_classification['intent_type'] = (intent or {}).get('intent_type', '')
+        extract_and_route_signals(topic, text, _goal_classification)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Goal signal extraction non-fatal: {e}")
 
     # ═══════════════════════════════════════════════════════════
     # PHASE E: ASYNC FOLLOW-UP
