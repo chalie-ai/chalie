@@ -5,6 +5,7 @@
  * No configuration needed — voice is available when the service is running,
  * hidden when it's not.
  */
+import { lsSet, showToast } from './utils.js';
 
 const _TTS_PATH = '/voice/synthesize';
 const _STT_PATH = '/voice/transcribe';
@@ -463,5 +464,246 @@ export class VoiceIO {
 
     const data = await response.json();
     return data.text || null;
+  }
+}
+
+
+/**
+ * Voice Mode — full-screen orb overlay, state machine, and media controls.
+ *
+ * Owns the UI layer that sits on top of VoiceIO. app.js creates this and
+ * wires the callbacks for presence, rendering, and WebSocket send.
+ */
+export class VoiceMode {
+  /**
+   * @param {{ voice: VoiceIO }} deps
+   */
+  constructor({ voice }) {
+    this._voice = voice;
+    this._active = false;
+    this._hasPlayback = false;
+    this._lastVoiceText = null;
+
+    // Callbacks set by app.js
+    this._onSendMessage = null;    // (text) => void — send voice message
+    this._onModeEnter = null;      // () => void
+    this._onModeExit = null;       // () => void
+  }
+
+  /** Register callback fired when a voice message should be sent. */
+  onSendMessage(cb) { this._onSendMessage = cb; }
+
+  /** Register callback when voice mode is entered. */
+  onModeEnter(cb) { this._onModeEnter = cb; }
+
+  /** Register callback when voice mode is exited. */
+  onModeExit(cb) { this._onModeExit = cb; }
+
+  /** Whether voice mode is currently active. */
+  get active() { return this._active; }
+
+  /**
+   * Bind all voice mode DOM events.  Must be called after DOM ready.
+   */
+  init() {
+    document.getElementById('voiceModeBtn')?.addEventListener('click', () => {
+      if (this._active) this.exitMode();
+      else this.enterMode();
+    });
+
+    document.getElementById('voiceModeExit')?.addEventListener('click', () => {
+      this.exitMode();
+    });
+
+    // Orb click — state machine
+    document.getElementById('voiceOrb')?.addEventListener('click', async () => {
+      // Unlock autoplay on every user gesture so TTS can play later
+      this._voice.unlockAudio();
+
+      const orb = document.getElementById('voiceOrb');
+      const state = orb?.dataset.state;
+
+      if (state === 'idle') {
+        this._lastVoiceText = null;
+        const sub = document.getElementById('voiceSubtitle');
+        if (sub) { sub.textContent = ''; sub.classList.add('hidden'); }
+        await this._voice.startRecording();
+        if (this._voice._isRecording) this._setOrbState('listening');
+      } else if (state === 'listening') {
+        this._setOrbState('thinking');
+        const text = await this._voice.stopRecording();
+        if (text) {
+          this._onSendMessage?.(text);
+        } else {
+          this._setOrbState('idle');
+        }
+      }
+    });
+
+    // Auto-stop at 10-minute limit
+    document.addEventListener('chalie:recording:maxed', async () => {
+      if (!this._active) return;
+      showToast('10-min max per voice message');
+      this._setOrbState('thinking');
+      const text = await this._voice.stopRecording();
+      if (text) {
+        this._onSendMessage?.(text);
+      } else {
+        this._setOrbState('idle');
+      }
+    });
+
+    // Subtitle: show current sentence during playback
+    document.addEventListener('chalie:speak:chunk', (e) => {
+      if (!this._active) return;
+      const el = document.getElementById('voiceSubtitle');
+      if (el) {
+        el.textContent = e.detail.text;
+        el.classList.remove('hidden');
+      }
+    });
+
+    // TTS finished — back to idle (controls stay visible for re-listen)
+    document.addEventListener('chalie:speak:done', () => {
+      if (this._active) {
+        this._setOrbState('idle');
+        this._setPlayPauseIcon(false);
+      }
+    });
+    document.addEventListener('chalie:speak:error', () => {
+      if (this._active) {
+        this._hasPlayback = false;
+        this._setOrbState('idle');
+        const sub = document.getElementById('voiceSubtitle');
+        if (sub) { sub.textContent = ''; sub.classList.add('hidden'); }
+      }
+    });
+
+    // Media controls
+    document.getElementById('voiceCtrlForward')?.addEventListener('click', () => this._voice.skipForward());
+    document.getElementById('voiceCtrlBack')?.addEventListener('click', () => this._voice.skipBack());
+    document.getElementById('voiceCtrlPause')?.addEventListener('click', () => {
+      this._voice.unlockAudio();
+
+      // If playback finished and user presses play — replay from start
+      if (!this._voice._speaking && this._hasPlayback && this._lastVoiceText) {
+        this._setOrbState('speaking');
+        this._setPlayPauseIcon(true);
+        this._voice.speak(this._lastVoiceText);
+        return;
+      }
+
+      const playing = this._voice.togglePause();
+      this._setPlayPauseIcon(playing);
+    });
+
+    // Speak button on chat messages — enter voice mode and play
+    document.addEventListener('chalie:speak-message', (e) => {
+      const text = e.detail?.text;
+      if (!text || !this._voice._available) return;
+      this._voice.unlockAudio();
+      this.enterMode();
+      this._lastVoiceText = text;
+      this._setOrbState('speaking');
+      this._setPlayPauseIcon(true);
+      this._voice.speak(text);
+    });
+  }
+
+  enterMode() {
+    if (!this._voice._available) return;
+    this._active = true;
+    lsSet('chalie_voice_mode', '1');
+
+    document.getElementById('voiceModeOverlay')?.classList.remove('hidden');
+    document.getElementById('conversationSpine')?.classList.add('hidden');
+    document.querySelector('.input-dock')?.classList.add('hidden');
+    document.getElementById('taskStrip')?.classList.add('hidden');
+    document.getElementById('voiceModeBtn')?.classList.add('active');
+
+    this._setOrbState('idle');
+    this._onModeEnter?.();
+  }
+
+  exitMode() {
+    this._active = false;
+    lsSet('chalie_voice_mode', '');
+
+    // Stop any active recording or playback
+    if (this._voice._isRecording) this._voice.stopRecording();
+    this._voice.stopAudio();
+
+    document.getElementById('voiceModeOverlay')?.classList.add('hidden');
+    document.getElementById('conversationSpine')?.classList.remove('hidden');
+    document.querySelector('.input-dock')?.classList.remove('hidden');
+    document.getElementById('voiceModeBtn')?.classList.remove('active');
+
+    this._onModeExit?.();
+  }
+
+  /**
+   * Called by app.js when a voice message response arrives with TTS text.
+   * Sets the orb to speaking state and starts playback.
+   */
+  startSpeaking(text) {
+    this._lastVoiceText = text;
+    this._setOrbState('speaking');
+    this._setPlayPauseIcon(true);
+    this._voice.speak(text);
+  }
+
+  /** Set orb to error/idle after send failure. */
+  setOrbIdle() {
+    this._setOrbState('idle');
+  }
+
+  /** Set orb to "thinking" state. */
+  setOrbThinking() {
+    this._setOrbState('thinking');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private
+  // ---------------------------------------------------------------------------
+
+  _setOrbState(state) {
+    const orb = document.getElementById('voiceOrb');
+    const controls = document.getElementById('voiceModeControls');
+    const label = document.getElementById('voiceModeLabel');
+
+    if (orb) orb.dataset.state = state;
+    if (label) {
+      const labels = { idle: '', listening: 'Listening...', thinking: 'Thinking...', speaking: '' };
+      label.textContent = labels[state] || '';
+    }
+
+    if (controls) {
+      if (state === 'speaking') {
+        this._hasPlayback = true;
+        controls.classList.remove('hidden');
+      } else if (state === 'listening' || state === 'thinking') {
+        this._hasPlayback = false;
+        controls.classList.add('hidden');
+      }
+    }
+
+    // Audio-reactive visualizer
+    if (state === 'speaking' && orb) {
+      this._voice.startVisualizer(orb);
+    } else {
+      this._voice.stopVisualizer();
+      if (orb) {
+        orb.style.removeProperty('--orb-energy');
+        orb.style.removeProperty('--orb-bass');
+      }
+    }
+  }
+
+  _setPlayPauseIcon(playing) {
+    const btn = document.getElementById('voiceCtrlPause');
+    if (!btn) return;
+    btn.innerHTML = playing
+      ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
   }
 }
