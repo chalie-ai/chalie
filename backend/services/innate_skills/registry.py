@@ -5,7 +5,7 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 13 skills).
+register_innate_skills() in __init__.py (currently 15 skills).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
@@ -13,7 +13,7 @@ ALL_SKILL_NAMES: frozenset = frozenset({
     'recall', 'memorize', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'persistent_task', 'document',
-    'read', 'reflect', 'find_tools',
+    'read', 'reflect', 'find_tools', 'goals',
 })
 
 # ── LLM-visible for planning ──────────────────────────────────────────────
@@ -55,6 +55,7 @@ SKILL_DESCRIPTIONS: dict = {
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
+    'goals': 'View, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
@@ -72,6 +73,7 @@ SKILL_EFFORT: dict = {
     'read': 'light',
     'reflect': 'light',
     'find_tools': 'trivial',
+    'goals': 'trivial',
 }
 
 # ── Skill categories ───────────────────────────────────────────────────────────
@@ -89,4 +91,5 @@ SKILL_CATEGORIES: dict = {
     'read': 'research',
     'reflect': 'cognition',
     'find_tools': 'cognition',
+    'goals': 'cognition',
 }

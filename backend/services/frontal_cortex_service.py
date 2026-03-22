@@ -807,6 +807,10 @@ class FrontalCortexService:
         result = result.replace('{{act_history}}', act_history)
         result = result.replace('{{working_memory}}', working_memory_context if _include('working_memory') else '')
 
+        goal_context = ''
+        if _include('active_goals'):
+            goal_context = self._get_goal_context()
+        result = result.replace('{{active_goals}}', goal_context)
 
         # Phase 3 — Response weaving: inject contradiction context when flagged
         contradiction_ctx = _ctx.get('contradiction_context')
@@ -1382,7 +1386,7 @@ class FrontalCortexService:
         try:
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read"]
+            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read", "goals"]
             available = [s for s in innate if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)
@@ -1454,5 +1458,94 @@ class FrontalCortexService:
         except Exception:
             return ''
 
+    def _get_goal_context(self, limit: int = 3) -> str:
+        """Compact goal stack for prompt injection (~150 tokens)."""
+        try:
+            from services.goal_ecology_service import GoalEcologyService
+            ecology = GoalEcologyService()
+            goals = ecology.get_active_stack(limit=limit)
+            if not goals:
+                return ''
+            lines = ['\n## Active Goals']
+            for g in goals:
+                sal = f"{g['salience']:.0%}"
+                conf = f"{g['confidence']:.0%}"
+                status_hint = f" (strategy: {g['strategy'][:60]})" if g.get('strategy') else ''
+                lines.append(
+                    f"- [{g['type']}] {g['description'][:100]} "
+                    f"(salience={sal}, confidence={conf}){status_hint}"
+                )
+                # Show parent relationship if exists
+                if g.get('lineage_parent_id'):
+                    try:
+                        parent = ecology.get_goal(g['lineage_parent_id'])
+                        if parent:
+                            lines.append(
+                                f"  ^ serves: [{parent['type']}] {parent['description'][:80]}"
+                            )
+                    except Exception:
+                        pass
+            return '\n'.join(lines)
+        except Exception as e:
+            logging.debug(f"[FRONTAL CORTEX] Goal context unavailable: {e}")
+            return ''
+
+    def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
+        """
+        Get tool profiles for ACT prompt injection.
+
+        When selected_tools is provided (from CognitiveTriageService), injects
+        full profiles for those specific tools from tool_capability_profiles table.
+        Falls back to manifest-based summaries if profiles unavailable.
+        """
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+
+            # Prefer triage-selected tools (Wave 2)
+            tool_names = None
+            if selected_tools:
+                tool_names = [t for t in selected_tools if t in registry.tools]
+            elif relevant_tools:
+                tool_names = [
+                    item['name'] for item in relevant_tools
+                    if item.get('type') == 'tool' and item['name'] in registry.tools
+                ][:5]
+
+            if tool_names:
+                # Try to get rich profiles first (inject full_profile for triage-selected tools)
+                try:
+                    from services.tool_profile_service import ToolProfileService
+                    profiles = ToolProfileService().get_profiles_for_tools(tool_names)
+                    if profiles:
+                        lines = []
+                        for p in profiles:
+                            name = p.get('tool_name', '')
+                            full_profile = p.get('full_profile', '') or p.get('short_summary', '')
+                            perf_hint = self._get_performance_hint(name)
+                            suffix = f"\n{perf_hint}" if perf_hint else ''
+                            lines.append(f"### {name}\n{full_profile}{suffix}")
+                        return "\n\n".join(lines)
+                except Exception:
+                    pass
+
+                # Fallback to manifest-based summaries
+                lines = []
+                for name in tool_names:
+                    manifest = registry.tools[name]['manifest']
+                    desc = manifest.get('description', name)
+                    params = manifest.get('parameters', {})
+                    param_str = f" ({', '.join(list(params.keys()))})" if params else ""
+                    perf_hint = self._get_performance_hint(name)
+                    suffix = f" {perf_hint}" if perf_hint else ''
+                    lines.append(f"- {name}{param_str}: {desc}{suffix}")
+                return "\n".join(lines)
+
+            # No selected tools — return all registered tools
+            summaries = registry.get_tool_prompt_summaries()
+            return summaries if summaries else "(no tools loaded)"
+        except Exception as e:
+            logging.debug(f"Tool registry not available for prompt: {e}")
+            return "(no tools loaded)"
 
 

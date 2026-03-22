@@ -554,6 +554,8 @@ class DatabaseService:
                 ("user_traits",       "reliability", "TEXT DEFAULT 'reliable'", None),
                 ("episodes",          "reliability", "TEXT DEFAULT 'reliable'", None),
                 ("semantic_concepts", "reliability", "TEXT DEFAULT 'reliable'", None),
+                # Migration 006 — fast mute column on goals (avoids JSON deserialisation)
+                ("goals", "is_muted", "INTEGER DEFAULT 0", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

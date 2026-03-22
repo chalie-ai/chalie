@@ -271,6 +271,25 @@ class AutobiographyService:
                     })
                 inputs["constraint_episodes"] = constraint_episodes
 
+                # Gather active goals from goal ecology (non-fatal)
+                try:
+                    from services.goal_ecology_service import GoalEcologyService
+                    ecology = GoalEcologyService()
+                    active_goals = ecology.get_active_stack(limit=5)
+                    inputs["active_goals"] = [
+                        {
+                            "description": g.get("description", ""),
+                            "type": g.get("type", "emergent"),
+                            "salience": g.get("salience", 0.0),
+                            "confidence": g.get("confidence", 0.0),
+                            "evidence_count": g.get("evidence_count", 0),
+                            "timescale": g.get("timescale", "medium_term"),
+                        }
+                        for g in active_goals
+                    ]
+                except Exception:
+                    inputs["active_goals"] = []
+
                 return inputs
         except Exception as e:
             logger.error(f"[AUTOBIOGRAPHY] Error gathering synthesis inputs: {e}")
@@ -280,6 +299,7 @@ class AutobiographyService:
                 "concepts": [],
                 "relationships": [],
                 "constraint_episodes": [],
+                "active_goals": [],
             }
 
     def synthesize(self) -> bool:
@@ -388,6 +408,14 @@ class AutobiographyService:
                 except Exception as de:
                     logger.warning(f"[AUTOBIOGRAPHY] Delta computation non-fatal error: {de}")
 
+                try:
+                    from services.goal_autobiography_bridge import refresh_all_goals
+                    refreshed = refresh_all_goals()
+                    if refreshed:
+                        logger.info(f"[AUTOBIOGRAPHY] Refreshed alignment for {refreshed} goals")
+                except Exception as ge:
+                    logger.debug(f"[AUTOBIOGRAPHY] Goal alignment refresh non-fatal: {ge}")
+
                 return True
 
         except Exception as e:
@@ -495,6 +523,15 @@ class AutobiographyService:
             )
             for ep in constraint_episodes:
                 lines.append(f"- {ep['gist']}")
+
+        if inputs.get("active_goals"):
+            lines.append("\n## Tracked Goals (from goal ecology)\n")
+            for g in inputs["active_goals"]:
+                lines.append(
+                    f"- [{g['type']}] {g['description']} "
+                    f"(salience={g['salience']:.0%}, confidence={g['confidence']:.0%}, "
+                    f"evidence={g['evidence_count']}, timescale={g['timescale']})"
+                )
 
         return "\n".join(lines)
 
