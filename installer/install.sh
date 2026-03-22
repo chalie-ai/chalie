@@ -3,7 +3,6 @@
 # Usage: curl -fsSL https://chalie.ai/install | bash
 # Usage (update): curl -fsSL https://chalie.ai/install | CHALIE_UPDATE=1 bash
 # Usage (no voice): curl -fsSL https://chalie.ai/install | bash -s -- --disable-voice
-# Embodiments (built-in tools) are always installed and cannot be disabled.
 set -euo pipefail
 
 CHALIE_HOME="${CHALIE_HOME:-$HOME/.chalie}"
@@ -178,52 +177,6 @@ _check_python() {
   else
     _error "Python installation failed. Please install Python 3.9+ and try again."
     exit 1
-  fi
-}
-
-# ─── Docker Check (non-fatal, sandboxed tools only) ────────────────────────
-_check_docker() {
-  _section "Docker (optional — sandboxed tools only)"
-  if docker info >/dev/null 2>&1; then
-    _ok "Docker is available — sandboxed tool execution enabled"
-    return
-  fi
-
-  local os
-  os="$(_detect_os)"
-  if [[ "$os" == "darwin" ]]; then
-    if command -v docker >/dev/null 2>&1; then
-      _warn "Docker is installed but the daemon is not running."
-      _warn "Start Docker Desktop to enable sandboxed tool execution."
-    else
-      _warn "Docker not found."
-      _warn "Only needed for sandboxed tool execution (not voice, not core features)."
-      _warn "Install Docker Desktop if you want sandboxed tools:"
-      _warn "  https://www.docker.com/products/docker-desktop/"
-    fi
-  else
-    # Linux: ask (skip in non-interactive environments)
-    printf "\n"
-    if [[ -t 0 ]]; then
-      read -r -p "  Install Docker for sandboxed tool execution? [y/N] " _docker_reply
-    else
-      _docker_reply="${CHALIE_INSTALL_DOCKER:-n}"
-      _info "Non-interactive: skipping Docker prompt (use CHALIE_INSTALL_DOCKER=y to install)"
-    fi
-    printf "\n"
-    if [[ "${_docker_reply,,}" == "y" ]]; then
-      _info "Installing Docker via get.docker.com…"
-      curl -fsSL https://get.docker.com | _run_privileged sh
-      if id -nG "$USER" | grep -qw docker; then
-        _ok "Already in docker group"
-      else
-        _run_privileged usermod -aG docker "$USER"
-        _warn "Added $USER to docker group. Log out and back in for group membership to take effect."
-      fi
-      _ok "Docker installed"
-    else
-      _warn "Skipping Docker. Sandboxed tools will be disabled; trusted tools and core features work fine."
-    fi
   fi
 }
 
@@ -509,7 +462,6 @@ main() {
     printf "  Platform: %s / %s\n\n" "$os" "$arch"
 
     _check_python
-    _check_docker
     _install_voice_deps
     _download_release
     _setup_venv
