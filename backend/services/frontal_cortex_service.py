@@ -1244,6 +1244,16 @@ class FrontalCortexService:
                     f"- [{g['type']}] {g['description'][:100]} "
                     f"(salience={sal}, confidence={conf}){status_hint}"
                 )
+                # Show parent relationship if exists
+                if g.get('lineage_parent_id'):
+                    try:
+                        parent = ecology.get_goal(g['lineage_parent_id'])
+                        if parent:
+                            lines.append(
+                                f"  ^ serves: [{parent['type']}] {parent['description'][:80]}"
+                            )
+                    except Exception:
+                        pass
             return '\n'.join(lines)
         except Exception as e:
             logging.debug(f"[FRONTAL CORTEX] Goal context unavailable: {e}")

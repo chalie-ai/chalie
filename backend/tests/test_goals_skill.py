@@ -236,3 +236,115 @@ class TestGoalsSkillMute:
         from services.innate_skills.goals_skill import handle_goals
         result = handle_goals('test-topic', {'action': 'unmute'})
         assert 'goal_id required' in result
+
+
+@pytest.mark.unit
+class TestGoalsSkillViewLineage:
+    """Test goals skill view action shows lineage information."""
+
+    def _make_view_mocks(self, goal_data, parent_data=None, children=None):
+        """Helper: set up ecology mock for view tests."""
+        from unittest.mock import MagicMock, patch
+        from contextlib import contextmanager
+
+        svc = MagicMock()
+        svc.get_goal.side_effect = lambda gid: (
+            goal_data if gid == goal_data.get('id')
+            else parent_data if (parent_data and gid == parent_data.get('id'))
+            else None
+        )
+        svc.get_children.return_value = children or []
+
+        # Stub DB for evidence query
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_conn.cursor.return_value = mock_cursor
+
+        @contextmanager
+        def _ctx():
+            yield mock_conn
+
+        mock_db = MagicMock()
+        mock_db.connection = _ctx
+
+        return svc, mock_db
+
+    def test_view_shows_parent_goal_when_lineage_exists(self, mock_store):
+        """View should display parent goal info when lineage_parent_id is set."""
+        parent_goal = {
+            'id': 'parent-1', 'type': 'developmental',
+            'description': 'Build reputation as exceptional host',
+            'salience': 0.8, 'confidence': 0.7,
+        }
+        child_goal = {
+            'id': 'g1', 'description': 'Plan dinner for 20', 'type': 'stated',
+            'status': 'actionable', 'salience': 0.85, 'confidence': 0.9,
+            'urgency': 0.7, 'timescale': 'short_term', 'evidence_count': 3,
+            'strategy': None, 'created_at': '2026-03-22T10:00:00',
+            'outcome_feedback': '[]',
+            'lineage_parent_id': 'parent-1',
+        }
+
+        svc, mock_db = self._make_view_mocks(child_goal, parent_data=parent_goal)
+
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service', return_value=mock_db):
+            MockEcology.return_value = svc
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'view', 'goal_id': 'g1'})
+
+        assert 'Parent Goal' in result
+        assert 'Build reputation as exceptional host' in result
+        assert 'developmental' in result
+
+    def test_view_shows_child_goals_when_children_exist(self, mock_store):
+        """View should display child goals when get_children returns results."""
+        goal_data = {
+            'id': 'g1', 'description': 'Long-term vision', 'type': 'developmental',
+            'status': 'actionable', 'salience': 0.8, 'confidence': 0.7,
+            'urgency': 0.5, 'timescale': 'long_term', 'evidence_count': 5,
+            'strategy': None, 'created_at': '2026-03-22T10:00:00',
+            'outcome_feedback': '[]',
+            'lineage_parent_id': None,
+        }
+        children = [
+            {'id': 'c1', 'type': 'stated', 'description': 'Plan dinner for 20',
+             'status': 'actionable', 'salience': 0.85, 'confidence': 0.9},
+            {'id': 'c2', 'type': 'emergent', 'description': 'Host a workshop',
+             'status': 'strengthening', 'salience': 0.5, 'confidence': 0.4},
+        ]
+
+        svc, mock_db = self._make_view_mocks(goal_data, children=children)
+
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service', return_value=mock_db):
+            MockEcology.return_value = svc
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'view', 'goal_id': 'g1'})
+
+        assert 'Child Goals' in result
+        assert 'Plan dinner for 20' in result
+        assert 'Host a workshop' in result
+
+    def test_view_no_lineage_shows_no_parent_section(self, mock_store):
+        """View without lineage should not include Parent Goal section."""
+        goal_data = {
+            'id': 'g1', 'description': 'Standalone goal', 'type': 'stated',
+            'status': 'actionable', 'salience': 0.85, 'confidence': 0.9,
+            'urgency': 0.5, 'timescale': 'short_term', 'evidence_count': 2,
+            'strategy': None, 'created_at': '2026-03-22T10:00:00',
+            'outcome_feedback': '[]',
+            'lineage_parent_id': None,
+        }
+
+        svc, mock_db = self._make_view_mocks(goal_data)
+
+        with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
+             patch('services.database_service.get_lightweight_db_service', return_value=mock_db):
+            MockEcology.return_value = svc
+            from services.innate_skills.goals_skill import handle_goals
+            result = handle_goals('test-topic', {'action': 'view', 'goal_id': 'g1'})
+
+        assert 'Parent Goal' not in result
+        assert 'Child Goals' not in result

@@ -206,6 +206,21 @@ class GoalEcologyService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Alignment computation skipped: {e}")
 
+        # Post-creation: find parent goal (non-blocking, non-fatal)
+        try:
+            parent_id = self._find_parent_goal(description, timescale, exclude_id=goal_id)
+            if parent_id:
+                with self.db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE goals SET lineage_parent_id = ?, updated_at = ? WHERE id = ?",
+                        (parent_id, utc_now().isoformat(), goal_id)
+                    )
+                    cursor.close()
+                logger.info(f"{LOG_PREFIX} Linked goal {goal_id[:8]} to parent {parent_id[:8]}")
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Parent detection skipped: {e}")
+
         return {
             'id': goal_id,
             'type': type,
@@ -320,7 +335,8 @@ class GoalEcologyService:
             # Get goal data
             cursor.execute("""
                 SELECT id, type, status, evidence_count, urgency,
-                       parent_motives, identity_links, created_at, last_reinforced_at
+                       parent_motives, identity_links, created_at, last_reinforced_at,
+                       lineage_parent_id
                 FROM goals WHERE id = ?
             """, (goal_id,))
             row = cursor.fetchone()
@@ -329,7 +345,8 @@ class GoalEcologyService:
                 return 0.0
 
             _, gtype, status, evidence_count, urgency, \
-                motives_json, links_json, created_at, last_reinforced_at = row
+                motives_json, links_json, created_at, last_reinforced_at, \
+                lineage_parent_id = row
 
             # Evidence recency: how recently was evidence added? (0-1)
             now = utc_now()
@@ -377,6 +394,19 @@ class GoalEcologyService:
                 urgency_score * 0.15
             )
             salience = round(min(1.0, max(0.0, salience)), 4)
+
+            # Lineage boost: child goals get up to 10% boost from high-salience parents
+            try:
+                if lineage_parent_id:
+                    cursor2 = conn.cursor()
+                    cursor2.execute("SELECT salience FROM goals WHERE id = ?", (lineage_parent_id,))
+                    parent_row = cursor2.fetchone()
+                    cursor2.close()
+                    if parent_row and parent_row[0] > 0.5:
+                        lineage_boost = parent_row[0] * 0.1  # Up to 10% of parent's salience
+                        salience = min(1.0, salience + lineage_boost)
+            except Exception:
+                pass
 
             # Update confidence based on evidence count and type
             confidence = self._calculate_confidence(gtype, evidence_count)
@@ -488,7 +518,7 @@ class GoalEcologyService:
             cursor.execute("""
                 SELECT id, type, status, description, confidence, salience,
                        urgency, timescale, strategy, evidence_count,
-                       last_reinforced_at, created_at
+                       last_reinforced_at, created_at, lineage_parent_id
                 FROM goals
                 WHERE status NOT IN ('completed', 'decayed', 'evolved')
                 ORDER BY salience DESC
@@ -503,6 +533,7 @@ class GoalEcologyService:
                 'confidence': r[4], 'salience': r[5], 'urgency': r[6],
                 'timescale': r[7], 'strategy': r[8], 'evidence_count': r[9],
                 'last_reinforced_at': r[10], 'created_at': r[11],
+                'lineage_parent_id': r[12],
             }
             for r in rows
         ]
@@ -865,6 +896,91 @@ class GoalEcologyService:
             'outcome_feedback': json.loads(row[15]) if row[15] else [],
             'created_at': row[16], 'updated_at': row[17],
         }
+
+    # ── Goal Hierarchy ───────────────────────────────────────────────────────
+
+    TIMESCALE_ORDER = {'immediate': 0, 'short_term': 1, 'medium_term': 2, 'long_term': 3}
+
+    def _find_parent_goal(
+        self, description: str, timescale: str, exclude_id: str = None
+    ) -> Optional[str]:
+        """
+        Find a potential parent goal for a new goal based on embedding similarity.
+
+        Only links shorter-timescale goals to longer-timescale ones.
+        Returns the parent goal_id if found above 0.6 threshold, else None.
+        """
+        try:
+            current_order = self.TIMESCALE_ORDER.get(timescale, -1)
+
+            # Fetch all active goals with a strictly longer timescale
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, description, timescale
+                    FROM goals
+                    WHERE status NOT IN ('completed', 'decayed', 'evolved')
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+
+            candidates = [
+                (r[0], r[1])
+                for r in rows
+                if self.TIMESCALE_ORDER.get(r[2], -1) > current_order
+                and r[0] != exclude_id
+            ]
+
+            if not candidates:
+                return None
+
+            from services.embedding_service import get_embedding_service
+            import numpy as np
+
+            emb_service = get_embedding_service()
+            desc_emb = emb_service.generate_embedding_np(description)
+
+            best_id = None
+            best_sim = 0.6  # minimum threshold
+
+            for cand_id, cand_desc in candidates:
+                cand_emb = emb_service.generate_embedding_np(cand_desc)
+                # L2-normalized embeddings from generate_embedding_np — dot product == cosine sim
+                norm_a = float(np.linalg.norm(desc_emb))
+                norm_b = float(np.linalg.norm(cand_emb))
+                if norm_a < 1e-9 or norm_b < 1e-9:
+                    continue
+                sim = float(np.dot(desc_emb, cand_emb) / (norm_a * norm_b + 1e-9))
+                if sim > best_sim:
+                    best_sim = sim
+                    best_id = cand_id
+
+            return best_id
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _find_parent_goal skipped: {e}")
+            return None
+
+    def get_children(self, goal_id: str) -> List[Dict[str, Any]]:
+        """Get child goals linked via lineage_parent_id."""
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, type, status, description, salience, confidence
+                    FROM goals
+                    WHERE lineage_parent_id = ? AND status NOT IN ('completed', 'decayed')
+                    ORDER BY salience DESC
+                """, (goal_id,))
+                rows = cursor.fetchall()
+                cursor.close()
+            return [
+                {'id': r[0], 'type': r[1], 'status': r[2], 'description': r[3],
+                 'salience': r[4], 'confidence': r[5]}
+                for r in rows
+            ]
+        except Exception:
+            return []
 
     # ── Mute / Unmute ────────────────────────────────────────────────────────
 
