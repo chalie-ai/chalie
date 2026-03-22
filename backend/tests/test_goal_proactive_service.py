@@ -10,6 +10,7 @@ from services.goal_proactive_service import (
     _execute_proactive,
     _execute_via_persistent_task,
     _execute_via_proactive_push,
+    _learn_quiet_hours,
     MIN_CONFIDENCE_FOR_ACTION,
     MAX_SOCIAL_COST,
     ASK_THRESHOLD,
@@ -622,3 +623,90 @@ class TestMaxSocialCost:
             result = check_and_execute(goal)
 
         assert result is None
+
+
+class TestQuietHoursAndConversationPace:
+
+    def test_social_cost_quiet_hours_penalty(self, mock_store):
+        """Quiet hours should add 0.4 to social cost."""
+        import json
+        from services.time_utils import utc_now
+        # Set current hour as quiet
+        current_hour = utc_now().hour
+        mock_store.set('goal:quiet_hours', json.dumps([current_hour]))
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient:
+            MockAmbient.return_value.is_user_deep_focus.return_value = False
+
+            cost = _calculate_social_cost()
+
+        assert cost >= 0.4  # Quiet hours penalty
+
+    def test_social_cost_non_quiet_hours_no_penalty(self, mock_store):
+        """Non-quiet hours should not add penalty."""
+        import json
+        from services.time_utils import utc_now
+        current_hour = utc_now().hour
+        # Set a different hour as quiet
+        quiet_hour = (current_hour + 12) % 24
+        mock_store.set('goal:quiet_hours', json.dumps([quiet_hour]))
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient:
+            MockAmbient.return_value.is_user_deep_focus.return_value = False
+
+            cost = _calculate_social_cost()
+
+        assert cost < 0.4  # No quiet hours penalty
+
+    def test_social_cost_rapid_conversation_penalty(self, mock_store):
+        """3+ messages in 5 minutes should add social cost."""
+        mock_store.setex('recent_message_count_5min', 300, '4')
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient:
+            MockAmbient.return_value.is_user_deep_focus.return_value = False
+
+            cost = _calculate_social_cost()
+
+        assert cost >= 0.25  # Rapid conversation penalty
+
+    def test_learn_quiet_hours_insufficient_data(self, mock_store):
+        """Less than 50 interactions should return None."""
+        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchall.return_value = [(10, 5), (14, 3)]  # Only 8 total
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            result = _learn_quiet_hours()
+
+        assert result is None
+
+    def test_learn_quiet_hours_with_sufficient_data(self, mock_store):
+        """Hours with < 5% of interactions should be marked quiet."""
+        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            # Simulate: hours 9-17 have lots of interactions, others are sparse
+            rows = []
+            for h in range(9, 18):
+                rows.append((h, 100))  # 900 total for active hours
+            rows.append((3, 2))   # < 5% of ~902
+            rows.append((22, 1))  # < 5% of ~903
+
+            mock_cursor.fetchall.return_value = rows
+            mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+            mock_conn.__exit__ = MagicMock(return_value=False)
+            mock_conn.cursor.return_value = mock_cursor
+            MockDb.return_value.connection.return_value = mock_conn
+
+            result = _learn_quiet_hours()
+
+        assert result is not None
+        assert 3 in result  # Hour 3 has very few interactions
+        assert 22 in result  # Hour 22 has very few interactions
+        assert 10 not in result  # Hour 10 has lots of interactions
+        # Hours with zero interactions should also be quiet
+        assert 0 in result  # No interactions at midnight

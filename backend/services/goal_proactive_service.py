@@ -17,8 +17,9 @@ actionable output — then delivers results proactively.
 Social cost checks prevent interrupting deep focus, quiet hours, or recently ignored attempts.
 """
 
+import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from services.time_utils import utc_now
 
@@ -135,7 +136,104 @@ def _calculate_social_cost() -> float:
     except Exception:
         pass
 
+    # Quiet hours: learned from interaction log
+    try:
+        cost += _get_quiet_hours_cost()
+    except Exception:
+        pass
+
+    # Rapid conversation pace: multiple messages in quick succession
+    try:
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        recent_count = store.get('recent_message_count_5min')
+        if recent_count and int(recent_count) >= 3:
+            cost += 0.25  # User is in active conversation, don't interrupt
+    except Exception:
+        pass
+
     return min(1.0, cost)
+
+
+def _get_quiet_hours_cost() -> float:
+    """
+    Check if current hour is a quiet hour based on learned interaction patterns.
+
+    Queries interaction_log to find hours with < 5% of total interactions.
+    Caches result in MemoryStore for 24 hours.
+
+    Returns:
+        0.4 if current hour is a quiet hour, 0.0 otherwise.
+    """
+    from services.memory_client import MemoryClientService
+
+    store = MemoryClientService.create_connection()
+
+    # Check cache first
+    cached = store.get('goal:quiet_hours')
+    if cached:
+        quiet_hours = json.loads(cached)
+    else:
+        quiet_hours = _learn_quiet_hours()
+        if quiet_hours is not None:
+            store.setex('goal:quiet_hours', 86400, json.dumps(quiet_hours))
+        else:
+            return 0.0
+
+    current_hour = utc_now().hour
+    if current_hour in quiet_hours:
+        return 0.4
+
+    return 0.0
+
+
+def _learn_quiet_hours() -> Optional[List[int]]:
+    """
+    Learn quiet hours from interaction_log timestamps.
+
+    Bucket interaction timestamps by hour. Hours with < 5% of total
+    interactions are considered quiet hours.
+
+    Returns:
+        List of quiet hour integers (0-23) or None if insufficient data.
+    """
+    try:
+        from services.database_service import get_lightweight_db_service
+        db = get_lightweight_db_service()
+
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT CAST(strftime('%H', created_at) AS INTEGER) as hour,
+                       COUNT(*) as count
+                FROM interaction_log
+                WHERE created_at > datetime('now', '-30 days')
+                GROUP BY hour
+            """)
+            rows = cursor.fetchall()
+            cursor.close()
+
+        if not rows:
+            return None
+
+        total = sum(r[1] for r in rows)
+        if total < 50:  # Not enough data to learn from
+            return None
+
+        threshold = total * 0.05  # 5% of total
+        quiet = [r[0] for r in rows if r[1] < threshold]
+
+        # Also mark hours with zero interactions as quiet
+        active_hours = {r[0] for r in rows}
+        for h in range(24):
+            if h not in active_hours:
+                quiet.append(h)
+
+        return sorted(set(quiet))
+
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Quiet hours learning failed: {e}")
+        return None
 
 
 def _choose_output_style(confidence: float) -> str:
