@@ -70,6 +70,37 @@ UNMATCHED_SIGNAL_PREFIX = "goal:unmatched:"
 UNMATCHED_SIGNAL_TTL = 14 * 24 * 3600  # 14 days
 
 
+def _infer_timescale_from_signals(signals: list) -> str:
+    """
+    Infer appropriate timescale for an emergent goal based on signal ambient context.
+
+    Signals from deep_focus + routine contexts suggest longer-term developmental goals.
+    Default is medium_term if no strong ambient signal.
+    """
+    deep_focus_count = sum(
+        1 for s in signals
+        if 'deep_focus' in str(s.get('ambient_context', ''))
+    )
+    routine_count = sum(
+        1 for s in signals
+        if 'routine' in str(s.get('ambient_context', ''))
+    )
+
+    total = len(signals)
+    if total == 0:
+        return 'medium_term'
+
+    # If majority of signals came during deep focus + routine, likely long-term
+    if deep_focus_count / total > 0.5 and routine_count / total > 0.3:
+        return 'long_term'
+
+    # If majority are from deep focus, suggest medium-to-long
+    if deep_focus_count / total > 0.5:
+        return 'medium_term'
+
+    return 'medium_term'
+
+
 def _trigger_strategy_generation(goal_id: str, goal_type: str) -> None:
     """
     Spawn a daemon thread to generate a strategy for a newly actionable goal.
@@ -813,10 +844,13 @@ class GoalEcologyService:
                 contents = [s.get('content', '') for s in cluster_signals]
                 description = max(contents, key=len) if contents else 'Unnamed goal'
 
+                # Infer timescale from ambient context in signals
+                timescale = _infer_timescale_from_signals(cluster_signals)
+
                 goal = self.create_goal(
                     description=description,
                     type='emergent',
-                    timescale='medium_term',
+                    timescale=timescale,
                 )
 
                 # Add all cluster signals as evidence

@@ -1720,3 +1720,36 @@ class TestStrategyEvolution:
         feedback = goal['outcome_feedback']
         assert len(feedback) >= 1
         assert 'strategy_hash' in feedback[0]
+
+
+@pytest.mark.unit
+class TestTimescaleInference:
+    """Test _infer_timescale_from_signals helper."""
+
+    def test_default_is_medium_term(self, mock_store):
+        from services.goal_ecology_service import _infer_timescale_from_signals
+        signals = [{'content': 'test'}, {'content': 'test2'}, {'content': 'test3'}]
+        assert _infer_timescale_from_signals(signals) == 'medium_term'
+
+    def test_deep_focus_routine_signals_long_term(self, mock_store):
+        from services.goal_ecology_service import _infer_timescale_from_signals
+        signals = [
+            {'content': 'a', 'ambient_context': 'deep_focus:routine'},
+            {'content': 'b', 'ambient_context': 'deep_focus:routine'},
+            {'content': 'c', 'ambient_context': 'deep_focus'},
+        ]
+        assert _infer_timescale_from_signals(signals) == 'long_term'
+
+    def test_empty_signals_medium_term(self, mock_store):
+        from services.goal_ecology_service import _infer_timescale_from_signals
+        assert _infer_timescale_from_signals([]) == 'medium_term'
+
+    def test_minority_deep_focus_stays_medium(self, mock_store):
+        from services.goal_ecology_service import _infer_timescale_from_signals
+        signals = [
+            {'content': 'a', 'ambient_context': 'deep_focus'},
+            {'content': 'b'},
+            {'content': 'c'},
+            {'content': 'd'},
+        ]
+        assert _infer_timescale_from_signals(signals) == 'medium_term'

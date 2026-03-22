@@ -115,6 +115,26 @@ def _calculate_social_cost() -> float:
     except Exception:
         pass
 
+    # Message momentum: active conversation = higher cost
+    try:
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        last_msg_ts = store.get('last_user_message_ts')
+        if last_msg_ts:
+            from services.time_utils import parse_utc, utc_now
+            last = parse_utc(last_msg_ts)
+            gap_seconds = (utc_now() - last).total_seconds()
+
+            # Active conversation (message within last 2 minutes) — don't interrupt
+            if gap_seconds < 120:
+                cost += 0.3
+
+            # Re-entry after gap (2-8 hours) — good time to suggest
+            elif 7200 < gap_seconds < 28800:
+                cost -= 0.15
+    except Exception:
+        pass
+
     return min(1.0, cost)
 
 

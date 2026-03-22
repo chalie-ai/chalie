@@ -435,3 +435,95 @@ class TestSignalTypeMapping:
 
     def test_novel_observation_maps_to_behavioral(self):
         assert _map_signal_type('novel_observation') == 'behavioral'
+
+
+@pytest.mark.unit
+class TestAmbientEnrichment:
+    """Test ambient context enrichment of goal signals."""
+
+    def test_deep_focus_boosts_strength(self, mock_store):
+        """Deep focus attention should boost signal strength by 1.3x."""
+        from services.goal_signal_service import _enrich_with_ambient_context
+
+        signals = [{'signal_type': 'topic_recurrence', 'strength': 0.5}]
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient, \
+             patch('services.client_context_service.ClientContextService') as MockCtx:
+            MockCtx.return_value.get.return_value = {'behavioral': {}}
+            MockAmbient.return_value.infer.return_value = {
+                'attention': 'deep_focus', 'tempo': None,
+            }
+
+            _enrich_with_ambient_context(signals)
+
+        assert signals[0]['strength'] == 0.65  # 0.5 * 1.3
+        assert 'deep_focus' in signals[0].get('ambient_context', '')
+
+    def test_casual_attention_no_boost(self, mock_store):
+        """Casual attention should not modify strength."""
+        from services.goal_signal_service import _enrich_with_ambient_context
+
+        signals = [{'signal_type': 'topic_recurrence', 'strength': 0.5}]
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient, \
+             patch('services.client_context_service.ClientContextService') as MockCtx:
+            MockCtx.return_value.get.return_value = {'behavioral': {}}
+            MockAmbient.return_value.infer.return_value = {
+                'attention': 'casual', 'tempo': None,
+            }
+
+            _enrich_with_ambient_context(signals)
+
+        assert signals[0]['strength'] == 0.5  # unchanged
+        assert signals[0].get('ambient_context') == 'casual'
+
+    def test_routine_tempo_annotated(self, mock_store):
+        """Routine tempo should be annotated on signals."""
+        from services.goal_signal_service import _enrich_with_ambient_context
+
+        signals = [{'signal_type': 'topic_recurrence', 'strength': 0.5}]
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient, \
+             patch('services.client_context_service.ClientContextService') as MockCtx:
+            MockCtx.return_value.get.return_value = {'behavioral': {}}
+            MockAmbient.return_value.infer.return_value = {
+                'attention': None, 'tempo': 'routine',
+            }
+
+            _enrich_with_ambient_context(signals)
+
+        assert 'routine' in signals[0].get('ambient_context', '')
+
+    def test_empty_signals_noop(self, mock_store):
+        """Empty signal list should not error."""
+        from services.goal_signal_service import _enrich_with_ambient_context
+        signals = []
+        _enrich_with_ambient_context(signals)  # Should not raise
+
+    def test_ambient_service_failure_graceful(self, mock_store):
+        """Ambient service failure should not prevent signal extraction."""
+        from services.goal_signal_service import _enrich_with_ambient_context
+
+        signals = [{'signal_type': 'test', 'strength': 0.5}]
+
+        with patch('services.ambient_inference_service.AmbientInferenceService', side_effect=Exception("boom")):
+            _enrich_with_ambient_context(signals)  # Should not raise
+
+        assert signals[0]['strength'] == 0.5  # unchanged
+
+    def test_strength_capped_at_one(self, mock_store):
+        """Strength should not exceed 1.0 after boost."""
+        from services.goal_signal_service import _enrich_with_ambient_context
+
+        signals = [{'signal_type': 'topic_recurrence', 'strength': 0.9}]
+
+        with patch('services.ambient_inference_service.AmbientInferenceService') as MockAmbient, \
+             patch('services.client_context_service.ClientContextService') as MockCtx:
+            MockCtx.return_value.get.return_value = {'behavioral': {}}
+            MockAmbient.return_value.infer.return_value = {
+                'attention': 'deep_focus', 'tempo': None,
+            }
+
+            _enrich_with_ambient_context(signals)
+
+        assert signals[0]['strength'] == 1.0  # capped
