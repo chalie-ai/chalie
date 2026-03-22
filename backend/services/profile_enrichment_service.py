@@ -24,18 +24,7 @@ CYCLE_INTERVAL_SECONDS = 6 * 3600  # 6 hours
 RELIABILITY_DECAY_DAYS = 30  # Decay reliability if no new data in 30 days
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
-    if embedding is None:
-        return None
-    if isinstance(embedding, bytes):
-        return embedding
-    if isinstance(embedding, (list, tuple)):
-        return struct.pack(f'{len(embedding)}f', *embedding)
-    if hasattr(embedding, 'tolist'):
-        flat = embedding.tolist()
-        return struct.pack(f'{len(flat)}f', *flat)
-    return embedding
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class ProfileEnrichmentService:

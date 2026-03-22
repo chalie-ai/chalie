@@ -19,15 +19,7 @@ from services.semantic_storage_service import SemanticStorageService
 from services.config_service import ConfigService
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
-    if embedding is None:
-        return None
-    if isinstance(embedding, bytes):
-        return embedding
-    if isinstance(embedding, (list, tuple)):
-        return struct.pack(f'{len(embedding)}f', *embedding)
-    return embedding
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class SemanticConsolidationService:

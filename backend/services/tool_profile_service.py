@@ -44,11 +44,7 @@ def _compute_manifest_hash(manifest: dict) -> str:
     return hashlib.md5(content.encode()).hexdigest()
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list/tuple of floats into a binary blob for sqlite-vec."""
-    if embedding is None:
-        return None
-    return struct.pack(f'{len(embedding)}f', *embedding)
+from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:
