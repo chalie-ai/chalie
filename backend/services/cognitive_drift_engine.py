@@ -982,6 +982,20 @@ class CognitiveDriftEngine:
                 except Exception:
                     pass
 
+            # Cross-goal inference (~1% of cycles ≈ every 8 hours)
+            if random.random() < 0.01:
+                try:
+                    clusters = ecology.detect_goal_clusters()
+                    if clusters:
+                        for cluster in clusters:
+                            _notify_cluster_detection(cluster)
+                        logger.info(
+                            f"{LOG_PREFIX} Cross-goal inference found "
+                            f"{len(clusters)} cluster(s)"
+                        )
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Goal ecology cycle failed (non-fatal): {e}")
 
@@ -1183,6 +1197,30 @@ class CognitiveDriftEngine:
                 db_service.close_pool()
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to log action result: {e}")
+
+
+def _notify_cluster_detection(cluster: dict) -> None:
+    """Store cluster detection in MemoryStore for proactive pickup."""
+    try:
+        from services.memory_client import MemoryClientService
+        import json as _json
+        store = MemoryClientService.create_connection()
+
+        goal_descriptions = [g['description'][:80] for g in cluster['goals']]
+        goal_ids = [g['id'] for g in cluster['goals']]
+        suggested = cluster.get('suggested_description', '')
+
+        store.setex(
+            f"goal_cluster_pending:{goal_ids[0][:8]}",
+            86400,  # 24h TTL
+            _json.dumps({
+                'goal_ids': goal_ids,
+                'descriptions': goal_descriptions,
+                'suggested_description': suggested,
+            })
+        )
+    except Exception:
+        pass
 
 
 def cognitive_drift_worker(shared_state=None):
