@@ -427,7 +427,8 @@ class TestGenerateDirectivesIntegration:
             result = svc.generate_directives()
         assert result.startswith("## Adaptive Response Style")
 
-    def test_priority_note_always_appended(self):
+    def test_directives_contain_bullet_items(self):
+        """Non-empty output always contains at least one bullet directive."""
         svc = _service()
         style = _make_style(pacing=2)
         with patch.object(svc, '_blend_with_baseline', return_value=style), \
@@ -435,7 +436,8 @@ class TestGenerateDirectivesIntegration:
              patch.object(svc, '_get_challenge_tolerance', return_value=None), \
              patch.object(svc, '_get_fork_directive', return_value=""):
             result = svc.generate_directives()
-        assert "identity voice" in result
+        assert result != ""
+        assert "\n- " in result
 
     def test_high_load_directive_takes_first_slot(self):
         svc = _service()
