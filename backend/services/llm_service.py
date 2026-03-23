@@ -335,7 +335,7 @@ class RefreshableLLMService:
         Args:
             agent_name: Agent configuration name used to resolve provider
                 settings via ``ConfigService.resolve_agent_config``
-                (e.g., ``'cognitive-drift'``, ``'mode-reflection'``).
+                (e.g., ``'cognitive-drift'``, ``'episodic-memory'``).
         """
         self._agent_name = agent_name
         self._version = None  # Last seen provider cache version
@@ -423,7 +423,7 @@ def create_refreshable_llm_service(agent_name: str) -> RefreshableLLMService:
     is added, updated, or reassigned via the Brain UI).
 
     Args:
-        agent_name: Agent config name (e.g., 'cognitive-drift', 'mode-reflection')
+        agent_name: Agent config name (e.g., 'cognitive-drift', 'episodic-memory')
 
     Returns:
         RefreshableLLMService that transparently re-creates its client on changes.

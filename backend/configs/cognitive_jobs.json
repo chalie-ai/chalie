@@ -61,12 +61,6 @@
       "caps": { "reasoning": "low", "structured": "medium", "creativity": "medium", "classification": "none" }
     },
     {
-      "id": "frontal-cortex-reflexive",
-      "name": "Reflexive Mode",
-      "desc": "Fast reflexive responses for simple, self-contained queries via cognitive reflex path.",
-      "caps": { "reasoning": "low", "structured": "medium", "creativity": "low", "classification": "none" }
-    },
-    {
       "id": "frontal-cortex-scheduled-tool",
       "name": "Scheduled Tool Mode",
       "desc": "Generates responses after scheduled tool/reminder execution.",
