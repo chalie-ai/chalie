@@ -55,8 +55,12 @@ CREATE TABLE IF NOT EXISTS goal_evidence (
 
 
 def _make_db():
-    """Create an in-memory SQLite db with goal schema, return db_service mock."""
-    conn = sqlite3.connect(":memory:")
+    """Create an in-memory SQLite db with goal schema, return db_service mock.
+
+    ``check_same_thread=False`` is required so the write-queue background
+    thread can share this in-memory connection with the test thread.
+    """
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(GOAL_SCHEMA)
     conn.commit()

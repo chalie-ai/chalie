@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from services.database_service import get_lightweight_db_service
 from services.time_utils import utc_now, parse_utc
+from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOAL ECOLOGY]"
@@ -150,7 +151,15 @@ class GoalEcologyService:
     """Manages persistent goal lifecycle, evidence accumulation, and salience scoring."""
 
     def __init__(self, db_service=None):
+        """Initialise the service, wiring in the shared DB service and write queue.
+
+        Args:
+            db_service: Optional pre-constructed
+                :class:`~services.database_service.DatabaseService` instance;
+                when ``None`` the lightweight singleton is used.
+        """
         self.db = db_service or get_lightweight_db_service()
+        self._write_queue = get_write_queue()
 
     # ── CRUD ────────────────────────────────────────────────────────────────
 
@@ -227,13 +236,21 @@ class GoalEcologyService:
         if existing:
             new_salience = min(1.0, existing['salience'] + 0.1)
             now_iso = utc_now().isoformat()
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE goals SET salience = ?, last_reinforced_at = ?, updated_at = ?
-                    WHERE id = ?
-                """, (new_salience, now_iso, now_iso, existing['id']))
-                cursor.close()
+
+            def _reinforce(
+                sal=new_salience, ts=now_iso, gid=existing['id'], db=self.db
+            ):
+                """Asynchronously update salience when dedup finds an existing goal."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """UPDATE goals SET salience = ?, last_reinforced_at = ?,
+                           updated_at = ? WHERE id = ?""",
+                        (sal, ts, ts, gid),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_reinforce)
             existing['salience'] = new_salience
             logger.info(
                 f"{LOG_PREFIX} Reinforced existing goal "
@@ -259,22 +276,29 @@ class GoalEcologyService:
         motives_json = json.dumps(parent_motives or [])
         links_json = json.dumps(identity_links or [])
 
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO goals (
-                    id, type, status, description, parent_motives, identity_links,
-                    confidence, salience, commitment, urgency, timescale,
-                    strategy, lineage_parent_id, evidence_count,
-                    last_reinforced_at, outcome_feedback, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                goal_id, type, status, description, motives_json, links_json,
-                confidence, salience, 0.0, urgency, timescale,
-                None, None, 0,
-                now, '[]', now, now,
-            ))
-            cursor.close()
+        _insert_params = (
+            goal_id, type, status, description, motives_json, links_json,
+            confidence, salience, 0.0, urgency, timescale,
+            None, None, 0,
+            now, '[]', now, now,
+        )
+
+        def _insert_goal(params=_insert_params, db=self.db):
+            """Insert the new goal row inside the write-queue worker thread."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT INTO goals (
+                           id, type, status, description, parent_motives, identity_links,
+                           confidence, salience, commitment, urgency, timescale,
+                           strategy, lineage_parent_id, evidence_count,
+                           last_reinforced_at, outcome_feedback, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    params,
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_insert_goal)
 
         logger.info(
             f"{LOG_PREFIX} Created goal '{description[:60]}' "
@@ -286,18 +310,25 @@ class GoalEcologyService:
             from services.goal_autobiography_bridge import compute_goal_alignment
             alignment = compute_goal_alignment(description)
             if alignment['parent_motives'] or alignment['identity_links']:
-                with self.db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        UPDATE goals SET parent_motives = ?, identity_links = ?, updated_at = ?
-                        WHERE id = ?
-                    """, (
-                        json.dumps(alignment['parent_motives']),
-                        json.dumps(alignment['identity_links']),
-                        utc_now().isoformat(),
-                        goal_id,
-                    ))
-                    cursor.close()
+                _align_params = (
+                    json.dumps(alignment['parent_motives']),
+                    json.dumps(alignment['identity_links']),
+                    utc_now().isoformat(),
+                    goal_id,
+                )
+
+                def _update_alignment(params=_align_params, db=self.db):
+                    """Persist autobiography alignment data on the write-queue thread."""
+                    with db.connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """UPDATE goals SET parent_motives = ?, identity_links = ?,
+                               updated_at = ? WHERE id = ?""",
+                            params,
+                        )
+                        cursor.close()
+
+                self._write_queue.submit_sync(_update_alignment)
                 self.recalculate_salience(goal_id)
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Alignment computation skipped: {e}")
@@ -306,13 +337,19 @@ class GoalEcologyService:
         try:
             parent_id = self._find_parent_goal(description, timescale, exclude_id=goal_id)
             if parent_id:
-                with self.db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "UPDATE goals SET lineage_parent_id = ?, updated_at = ? WHERE id = ?",
-                        (parent_id, utc_now().isoformat(), goal_id)
-                    )
-                    cursor.close()
+                _link_params = (parent_id, utc_now().isoformat(), goal_id)
+
+                def _update_parent(params=_link_params, db=self.db):
+                    """Set lineage_parent_id for the newly created goal."""
+                    with db.connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE goals SET lineage_parent_id = ?, updated_at = ? WHERE id = ?",
+                            params,
+                        )
+                        cursor.close()
+
+                self._write_queue.submit_sync(_update_parent)
                 logger.info(f"{LOG_PREFIX} Linked goal {goal_id[:8]} to parent {parent_id[:8]}")
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Parent detection skipped: {e}")
@@ -332,7 +369,16 @@ class GoalEcologyService:
         }
 
     def _store_goal_embedding(self, goal_id: str, description: str) -> None:
-        """Store or replace embedding for a goal in goals_vec. Non-fatal."""
+        """Store or replace embedding for a goal in goals_vec. Non-fatal.
+
+        The rowid lookup (SELECT) is performed on the calling thread.  The
+        ``INSERT OR REPLACE`` into ``goals_vec`` is dispatched to the shared
+        write-queue to avoid lock contention.
+
+        Args:
+            goal_id: UUID of the goal whose embedding should be stored.
+            description: Text used to generate the embedding vector.
+        """
         try:
             from services.embedding_service import EmbeddingService
             embedding_svc = EmbeddingService()
@@ -342,16 +388,29 @@ class GoalEcologyService:
 
             packed = pack_embedding(embedding)
 
+            # SELECT rowid on calling thread (read-only, fine to run directly)
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT rowid FROM goals WHERE id = ?", (goal_id,))
                 row = cursor.fetchone()
-                if row:
+                cursor.close()
+
+            if not row:
+                return
+
+            rowid = row[0]
+
+            def _upsert_vec(rid=rowid, emb=packed, db=self.db):
+                """Insert or replace the embedding blob in goals_vec."""
+                with db.connection() as conn:
+                    cursor = conn.cursor()
                     cursor.execute(
                         "INSERT OR REPLACE INTO goals_vec(rowid, embedding) VALUES (?, ?)",
-                        (row[0], packed),
+                        (rid, emb),
                     )
-                cursor.close()
+                    cursor.close()
+
+            self._write_queue.submit_sync(_upsert_vec)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Goal embedding storage non-fatal: {e}")
@@ -364,29 +423,48 @@ class GoalEcologyService:
         source: Optional[str] = None,
         strength: float = 1.0,
     ) -> None:
-        """Add evidence to a goal, increment evidence_count, recalculate confidence/salience."""
+        """Add evidence to a goal, increment evidence_count, recalculate confidence/salience.
+
+        The INSERT into ``goal_evidence`` and the UPDATE of ``goals.evidence_count``
+        are dispatched together as a single :meth:`submit_sync` call so they commit
+        atomically before :meth:`recalculate_salience` reads the updated count.
+
+        Args:
+            goal_id: UUID of the goal receiving new evidence.
+            signal_type: Category label for the evidence (e.g. ``'topic_recurrence'``).
+            content: Raw text content of the evidence signal.
+            source: Optional origin identifier (conversation ID, URL, etc.).
+            strength: Numeric weight in the range 0–1 (default ``1.0``).
+        """
         evidence_id = str(uuid.uuid4())
         now = utc_now().isoformat()
 
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
+        def _write_evidence(
+            eid=evidence_id, gid=goal_id, stype=signal_type,
+            cont=content, src=source, stren=strength, ts=now, db=self.db,
+        ):
+            """Atomically insert evidence and bump evidence_count on the write-queue thread."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT INTO goal_evidence
+                           (id, goal_id, signal_type, content, source, strength, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (eid, gid, stype, cont, src, stren, ts),
+                )
+                cursor.execute(
+                    """UPDATE goals
+                       SET evidence_count = evidence_count + 1,
+                           last_reinforced_at = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (ts, ts, gid),
+                )
+                cursor.close()
 
-            # Insert evidence row
-            cursor.execute("""
-                INSERT INTO goal_evidence (id, goal_id, signal_type, content, source, strength, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (evidence_id, goal_id, signal_type, content, source, strength, now))
-
-            # Increment evidence count and update reinforcement time
-            cursor.execute("""
-                UPDATE goals
-                SET evidence_count = evidence_count + 1,
-                    last_reinforced_at = ?,
-                    updated_at = ?
-                WHERE id = ?
-            """, (now, now, goal_id))
-
-            cursor.close()
+        # submit_sync ensures the writes are committed before recalculate_salience
+        # reads the updated evidence_count from the same table.
+        self._write_queue.submit_sync(_write_evidence)
 
         # Recalculate after evidence is committed
         self.recalculate_salience(goal_id)
@@ -442,24 +520,36 @@ class GoalEcologyService:
             return []
 
     def recalculate_salience(self, goal_id: str) -> float:
-        """
-        Recalculate goal salience based on evidence and context.
+        """Recalculate goal salience based on evidence and context.
 
-        Formula:
-          salience = (evidence_recency * 0.25 + evidence_density * 0.20 +
-                      motive_alignment * 0.15 + urgency * 0.15 +
-                      cross_context * 0.15 + identity_fit * 0.10)
+        All SELECT queries run directly on the calling thread.  Only the final
+        UPDATE (persisting the computed salience, confidence, and status) is
+        dispatched to the write queue to avoid ``SQLITE_BUSY`` under concurrency.
+
+        Formula::
+
+            salience = (evidence_recency * 0.25 + evidence_density * 0.20 +
+                        cross_context * 0.15 + motive_alignment * 0.15 +
+                        identity_fit * 0.10 + urgency * 0.15)
+
+        Args:
+            goal_id: UUID of the goal to recompute.
+
+        Returns:
+            The newly computed salience value (0.0–1.0), or ``0.0`` if the goal
+            does not exist.
         """
+        # ── Read phase (direct, no lock contention) ──────────────────────────
         with self.db.connection() as conn:
             cursor = conn.cursor()
 
-            # Get goal data
-            cursor.execute("""
-                SELECT id, type, status, evidence_count, urgency,
-                       parent_motives, identity_links, created_at, last_reinforced_at,
-                       lineage_parent_id
-                FROM goals WHERE id = ?
-            """, (goal_id,))
+            cursor.execute(
+                """SELECT id, type, status, evidence_count, urgency,
+                          parent_motives, identity_links, created_at, last_reinforced_at,
+                          lineage_parent_id
+                   FROM goals WHERE id = ?""",
+                (goal_id,),
+            )
             row = cursor.fetchone()
             if not row:
                 cursor.close()
@@ -469,77 +559,91 @@ class GoalEcologyService:
                 motives_json, links_json, created_at, last_reinforced_at, \
                 lineage_parent_id = row
 
-            # Evidence recency: how recently was evidence added? (0-1)
-            now = utc_now()
-            if last_reinforced_at:
-                reinforced = parse_utc(last_reinforced_at)
-                hours_since = max(0, (now - reinforced).total_seconds() / 3600)
-                evidence_recency = max(0.0, 1.0 - (hours_since / 168.0))  # 7 day decay
-            else:
-                evidence_recency = 0.0
-
-            # Evidence density: how much evidence per time? (0-1)
-            created = parse_utc(created_at)
-            age_hours = max(1.0, (now - created).total_seconds() / 3600)
-            evidence_density = min(1.0, evidence_count / max(1, age_hours / 24))  # 1 evidence/day = 1.0
-
-            # Motive alignment: how many core motives are linked? (0-1)
-            motives = json.loads(motives_json) if motives_json else []
-            motive_alignment = 0.0
-            for m in motives:
-                if m in CORE_MOTIVES:
-                    motive_alignment = max(motive_alignment, CORE_MOTIVES[m])
-
-            # Identity fit: how many identity links? (0-1)
-            links = json.loads(links_json) if links_json else []
-            identity_fit = min(1.0, len(links) * 0.3)
-
             # Cross-context: diversity of evidence sources (0-1)
-            cursor.execute("""
-                SELECT COUNT(DISTINCT signal_type) FROM goal_evidence
-                WHERE goal_id = ?
-            """, (goal_id,))
-            distinct_types = cursor.fetchone()[0]
-            cross_context = min(1.0, distinct_types / 3.0)
-
-            # Urgency (already 0-1)
-            urgency_score = min(1.0, max(0.0, urgency))
-
-            # Weighted sum
-            salience = (
-                evidence_recency * 0.25 +
-                evidence_density * 0.20 +
-                cross_context * 0.15 +
-                motive_alignment * 0.15 +
-                identity_fit * 0.10 +
-                urgency_score * 0.15
+            cursor.execute(
+                "SELECT COUNT(DISTINCT signal_type) FROM goal_evidence WHERE goal_id = ?",
+                (goal_id,),
             )
-            salience = round(min(1.0, max(0.0, salience)), 4)
+            distinct_types = cursor.fetchone()[0]
 
-            # Lineage boost: child goals get up to 10% boost from high-salience parents
+            # Lineage boost: read parent salience if linked
+            parent_salience = 0.0
             try:
                 if lineage_parent_id:
-                    cursor2 = conn.cursor()
-                    cursor2.execute("SELECT salience FROM goals WHERE id = ?", (lineage_parent_id,))
-                    parent_row = cursor2.fetchone()
-                    cursor2.close()
-                    if parent_row and parent_row[0] > 0.5:
-                        lineage_boost = parent_row[0] * 0.1  # Up to 10% of parent's salience
-                        salience = min(1.0, salience + lineage_boost)
+                    cursor.execute(
+                        "SELECT salience FROM goals WHERE id = ?", (lineage_parent_id,)
+                    )
+                    parent_row = cursor.fetchone()
+                    if parent_row:
+                        parent_salience = parent_row[0] or 0.0
             except Exception:
                 pass
 
-            # Update confidence based on evidence count and type
-            confidence = self._calculate_confidence(gtype, evidence_count)
-
-            # Determine status transition
-            new_status = self._determine_status(gtype, status, salience, confidence)
-
-            cursor.execute("""
-                UPDATE goals SET salience = ?, confidence = ?, status = ?, updated_at = ?
-                WHERE id = ?
-            """, (salience, confidence, new_status, now.isoformat(), goal_id))
             cursor.close()
+
+        # ── Computation phase ────────────────────────────────────────────────
+        now = utc_now()
+
+        # Evidence recency: how recently was evidence added? (0-1)
+        if last_reinforced_at:
+            reinforced = parse_utc(last_reinforced_at)
+            hours_since = max(0, (now - reinforced).total_seconds() / 3600)
+            evidence_recency = max(0.0, 1.0 - (hours_since / 168.0))  # 7 day decay
+        else:
+            evidence_recency = 0.0
+
+        # Evidence density: how much evidence per time? (0-1)
+        created = parse_utc(created_at)
+        age_hours = max(1.0, (now - created).total_seconds() / 3600)
+        evidence_density = min(1.0, evidence_count / max(1, age_hours / 24))
+
+        # Motive alignment: how many core motives are linked? (0-1)
+        motives = json.loads(motives_json) if motives_json else []
+        motive_alignment = 0.0
+        for m in motives:
+            if m in CORE_MOTIVES:
+                motive_alignment = max(motive_alignment, CORE_MOTIVES[m])
+
+        # Identity fit: how many identity links? (0-1)
+        links = json.loads(links_json) if links_json else []
+        identity_fit = min(1.0, len(links) * 0.3)
+
+        cross_context = min(1.0, distinct_types / 3.0)
+        urgency_score = min(1.0, max(0.0, urgency))
+
+        salience = (
+            evidence_recency * 0.25 +
+            evidence_density * 0.20 +
+            cross_context * 0.15 +
+            motive_alignment * 0.15 +
+            identity_fit * 0.10 +
+            urgency_score * 0.15
+        )
+        salience = round(min(1.0, max(0.0, salience)), 4)
+
+        # Lineage boost: child goals get up to 10% boost from high-salience parents
+        if parent_salience > 0.5:
+            salience = min(1.0, salience + parent_salience * 0.1)
+
+        confidence = self._calculate_confidence(gtype, evidence_count)
+        new_status = self._determine_status(gtype, status, salience, confidence)
+
+        # ── Write phase (dispatched to write queue) ──────────────────────────
+        def _update_salience(
+            sal=salience, conf=confidence, ns=new_status,
+            ts=now.isoformat(), gid=goal_id, db=self.db,
+        ):
+            """Persist recomputed salience, confidence, and status for this goal."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE goals SET salience = ?, confidence = ?, status = ?,
+                       updated_at = ? WHERE id = ?""",
+                    (sal, conf, ns, ts, gid),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_update_salience)
 
         # Trigger strategy generation when a goal first becomes actionable
         old_status = status  # captured from the SELECT above
@@ -582,50 +686,70 @@ class GoalEcologyService:
             return 'candidate'
 
     def decay_unreinforced(self) -> int:
-        """
-        Decay goals not reinforced within their timescale window.
+        """Decay goals not reinforced within their timescale window.
 
-        Goals below DECAY_THRESHOLD salience are marked 'decayed'.
-        Returns count of goals decayed.
+        All candidates are identified via a single SELECT on the calling thread.
+        Each individual UPDATE is then dispatched to the write queue using
+        loop-safe default-argument binding to avoid closure capture bugs.
+
+        Returns:
+            Number of goals whose status was set to ``'decayed'`` in this cycle.
         """
         now = utc_now()
         decayed_count = 0
+        now_iso = now.isoformat()
 
+        # ── Read phase: identify candidates directly ──────────────────────────
         with self.db.connection() as conn:
             cursor = conn.cursor()
-
-            cursor.execute("""
-                SELECT id, timescale, salience, last_reinforced_at, created_at
-                FROM goals
-                WHERE status NOT IN ('completed', 'decayed', 'evolved')
-            """)
+            cursor.execute(
+                """SELECT id, timescale, salience, last_reinforced_at, created_at
+                   FROM goals
+                   WHERE status NOT IN ('completed', 'decayed', 'evolved')"""
+            )
             rows = cursor.fetchall()
-
-            for row in rows:
-                goal_id, timescale, salience, last_reinforced, created_at = row
-
-                # Determine the reference time (last reinforced or created)
-                ref_time = parse_utc(last_reinforced) if last_reinforced else parse_utc(created_at)
-                window = TIMESCALE_WINDOWS.get(timescale, TIMESCALE_WINDOWS['medium_term'])
-
-                # Check if goal is past its reinforcement window
-                if (now - ref_time) > window:
-                    new_salience = max(0.0, salience - SALIENCE_DECAY_RATE)
-
-                    if new_salience < DECAY_THRESHOLD:
-                        cursor.execute("""
-                            UPDATE goals SET salience = 0.0, status = 'decayed', updated_at = ?
-                            WHERE id = ?
-                        """, (now.isoformat(), goal_id))
-                        decayed_count += 1
-                        logger.info(f"{LOG_PREFIX} Goal {goal_id[:8]} decayed (salience was {salience:.3f})")
-                    else:
-                        cursor.execute("""
-                            UPDATE goals SET salience = ?, updated_at = ?
-                            WHERE id = ?
-                        """, (new_salience, now.isoformat(), goal_id))
-
             cursor.close()
+
+        # ── Write phase: queue each UPDATE individually ───────────────────────
+        for row in rows:
+            goal_id, timescale, salience, last_reinforced, created_at = row
+
+            ref_time = parse_utc(last_reinforced) if last_reinforced else parse_utc(created_at)
+            window = TIMESCALE_WINDOWS.get(timescale, TIMESCALE_WINDOWS['medium_term'])
+
+            if (now - ref_time) > window:
+                new_salience = max(0.0, salience - SALIENCE_DECAY_RATE)
+
+                if new_salience < DECAY_THRESHOLD:
+                    def _decay_goal(gid=goal_id, ts=now_iso, db=self.db):
+                        """Mark goal as decayed (salience → 0, status → decayed)."""
+                        with db.connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                """UPDATE goals SET salience = 0.0, status = 'decayed',
+                                   updated_at = ? WHERE id = ?""",
+                                (ts, gid),
+                            )
+                            cursor.close()
+
+                    self._write_queue.submit_sync(_decay_goal)
+                    decayed_count += 1
+                    logger.info(
+                        f"{LOG_PREFIX} Goal {goal_id[:8]} decayed "
+                        f"(salience was {salience:.3f})"
+                    )
+                else:
+                    def _reduce_salience(gid=goal_id, sal=new_salience, ts=now_iso, db=self.db):
+                        """Reduce goal salience one step toward the decay threshold."""
+                        with db.connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "UPDATE goals SET salience = ?, updated_at = ? WHERE id = ?",
+                                (sal, ts, gid),
+                            )
+                            cursor.close()
+
+                    self._write_queue.submit_sync(_reduce_salience)
 
         if decayed_count:
             logger.info(f"{LOG_PREFIX} Decay cycle: {decayed_count} goals decayed")
@@ -701,19 +825,24 @@ class GoalEcologyService:
         return actionable
 
     def record_outcome(self, goal_id: str, response_type: str) -> None:
-        """
-        Record user feedback on a proactive goal action.
+        """Record user feedback on a proactive goal action.
 
-        response_type: engaged|acknowledged|ignored|rejected
+        Reads the current goal state on the calling thread, computes the new
+        values, then dispatches the UPDATE to the write queue.
 
-        Strategy evolution:
-        - 3+ engaged outcomes: strategy marked as confirmed (add strategy_confirmed flag)
-        - 2+ rejected outcomes for current strategy: archive old strategy, null it out
-          (next drift cycle will regenerate with rejection history in prompt)
+        Args:
+            goal_id: UUID of the goal being responded to.
+            response_type: One of ``'engaged'``, ``'acknowledged'``,
+                ``'ignored'``, or ``'rejected'``.
+
+        Strategy evolution side effects:
+
+        - 3+ engaged outcomes: ``strategy_confirmed`` event appended to feedback.
+        - 2+ rejected outcomes for the current strategy: strategy nulled out;
+          the next drift cycle regenerates it with rejection history in the prompt.
         """
         now = utc_now()
 
-        # Feedback effects
         effects = {
             'engaged': {'confidence_delta': 0.15, 'salience_delta': 0.2},
             'acknowledged': {'confidence_delta': 0.05, 'salience_delta': 0.0},
@@ -722,81 +851,78 @@ class GoalEcologyService:
         }
         effect = effects.get(response_type, {'confidence_delta': 0.0, 'salience_delta': 0.0})
 
+        # ── Read phase ───────────────────────────────────────────────────────
         with self.db.connection() as conn:
             cursor = conn.cursor()
-
-            # Get current values
-            cursor.execute("""
-                SELECT confidence, salience, outcome_feedback, strategy FROM goals WHERE id = ?
-            """, (goal_id,))
+            cursor.execute(
+                "SELECT confidence, salience, outcome_feedback, strategy FROM goals WHERE id = ?",
+                (goal_id,),
+            )
             row = cursor.fetchone()
-            if not row:
-                cursor.close()
-                return
-
-            confidence, salience, feedback_json, current_strategy = row
-            feedback = json.loads(feedback_json) if feedback_json else []
-
-            # Apply deltas
-            new_confidence = min(1.0, max(0.0, confidence + effect['confidence_delta']))
-            new_salience = min(1.0, max(0.0, salience + effect['salience_delta']))
-
-            # Append feedback entry with strategy version tracking
-            feedback_entry = {
-                'response': response_type,
-                'timestamp': now.isoformat(),
-            }
-            if current_strategy:
-                feedback_entry['strategy_hash'] = hash(current_strategy) % 10000
-            feedback.append(feedback_entry)
-
-            # Strategy evolution logic
-            strategy_update = ""
-            if current_strategy:
-                current_hash = hash(current_strategy) % 10000
-                # Count rejections against current strategy
-                rejections_for_current = sum(
-                    1 for f in feedback
-                    if f.get('response') == 'rejected'
-                    and f.get('strategy_hash') == current_hash
-                )
-
-                if rejections_for_current >= 2:
-                    # Archive failed strategy in feedback history
-                    feedback.append({
-                        'event': 'strategy_failed',
-                        'strategy': current_strategy[:200],
-                        'rejection_count': rejections_for_current,
-                        'timestamp': now.isoformat(),
-                    })
-                    strategy_update = ", strategy = NULL"
-                    logger.info(
-                        f"{LOG_PREFIX} Strategy invalidated for goal {goal_id[:8]} "
-                        f"after {rejections_for_current} rejections"
-                    )
-
-                # Track engagement confirmations
-                engagements_for_current = sum(
-                    1 for f in feedback
-                    if f.get('response') == 'engaged'
-                    and f.get('strategy_hash') == current_hash
-                )
-                if engagements_for_current >= 3:
-                    feedback.append({
-                        'event': 'strategy_confirmed',
-                        'strategy': current_strategy[:200],
-                        'engagement_count': engagements_for_current,
-                        'timestamp': now.isoformat(),
-                    })
-
-            params = [new_confidence, new_salience, json.dumps(feedback), now.isoformat(), goal_id]
-            cursor.execute(f"""
-                UPDATE goals
-                SET confidence = ?, salience = ?, outcome_feedback = ?,
-                    updated_at = ?{strategy_update}
-                WHERE id = ?
-            """, params)
             cursor.close()
+
+        if not row:
+            return
+
+        confidence, salience, feedback_json, current_strategy = row
+        feedback = json.loads(feedback_json) if feedback_json else []
+
+        # ── Computation phase ────────────────────────────────────────────────
+        new_confidence = min(1.0, max(0.0, confidence + effect['confidence_delta']))
+        new_salience = min(1.0, max(0.0, salience + effect['salience_delta']))
+
+        feedback_entry: dict = {'response': response_type, 'timestamp': now.isoformat()}
+        if current_strategy:
+            feedback_entry['strategy_hash'] = hash(current_strategy) % 10000
+        feedback.append(feedback_entry)
+
+        strategy_update = ""
+        if current_strategy:
+            current_hash = hash(current_strategy) % 10000
+            rejections_for_current = sum(
+                1 for f in feedback
+                if f.get('response') == 'rejected' and f.get('strategy_hash') == current_hash
+            )
+            if rejections_for_current >= 2:
+                feedback.append({
+                    'event': 'strategy_failed',
+                    'strategy': current_strategy[:200],
+                    'rejection_count': rejections_for_current,
+                    'timestamp': now.isoformat(),
+                })
+                strategy_update = ", strategy = NULL"
+                logger.info(
+                    f"{LOG_PREFIX} Strategy invalidated for goal {goal_id[:8]} "
+                    f"after {rejections_for_current} rejections"
+                )
+
+            engagements_for_current = sum(
+                1 for f in feedback
+                if f.get('response') == 'engaged' and f.get('strategy_hash') == current_hash
+            )
+            if engagements_for_current >= 3:
+                feedback.append({
+                    'event': 'strategy_confirmed',
+                    'strategy': current_strategy[:200],
+                    'engagement_count': engagements_for_current,
+                    'timestamp': now.isoformat(),
+                })
+
+        sql = (
+            f"UPDATE goals SET confidence = ?, salience = ?, outcome_feedback = ?,"
+            f" updated_at = ?{strategy_update} WHERE id = ?"
+        )
+        write_params = [new_confidence, new_salience, json.dumps(feedback), now.isoformat(), goal_id]
+
+        # ── Write phase ──────────────────────────────────────────────────────
+        def _record(stmt=sql, params=write_params, db=self.db):
+            """Persist outcome deltas and feedback history for this goal."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(stmt, params)
+                cursor.close()
+
+        self._write_queue.submit_sync(_record)
 
         logger.info(
             f"{LOG_PREFIX} Outcome recorded for goal {goal_id[:8]}: "
@@ -804,54 +930,84 @@ class GoalEcologyService:
         )
 
     def evolve_goal(self, goal_id: str, new_description: str) -> Dict[str, Any]:
+        """Evolve a goal: create a new goal with lineage, mark old as ``'evolved'``.
+
+        The SELECT is performed directly on the calling thread.  The UPDATE that
+        marks the parent as evolved and the INSERT of the new goal are both
+        dispatched via :meth:`submit_sync` (in order) so the returned dict
+        reflects committed state.
+
+        Args:
+            goal_id: UUID of the goal to evolve.
+            new_description: Description text for the successor goal.
+
+        Returns:
+            Dict with ``id``, ``type``, ``status``, ``description``, and
+            ``lineage_parent_id`` of the newly created successor goal.
+
+        Raises:
+            ValueError: When *goal_id* does not exist in the database.
         """
-        Evolve a goal: create a new goal with lineage, mark old as 'evolved'.
-        """
+        # ── Read phase ───────────────────────────────────────────────────────
         with self.db.connection() as conn:
             cursor = conn.cursor()
-
-            # Get parent goal data
-            cursor.execute("""
-                SELECT type, parent_motives, identity_links, urgency, timescale,
-                       confidence, evidence_count
-                FROM goals WHERE id = ?
-            """, (goal_id,))
+            cursor.execute(
+                """SELECT type, parent_motives, identity_links, urgency, timescale,
+                          confidence, evidence_count
+                   FROM goals WHERE id = ?""",
+                (goal_id,),
+            )
             row = cursor.fetchone()
-            if not row:
-                cursor.close()
-                raise ValueError(f"Goal {goal_id} not found")
-
-            gtype, motives_json, links_json, urgency, timescale, confidence, evidence_count = row
-
-            # Mark parent as evolved
-            now = utc_now().isoformat()
-            cursor.execute("""
-                UPDATE goals SET status = 'evolved', updated_at = ? WHERE id = ?
-            """, (now, goal_id))
             cursor.close()
 
-        # Create evolved goal with inherited properties
+        if not row:
+            raise ValueError(f"Goal {goal_id} not found")
+
+        gtype, motives_json, links_json, urgency, timescale, confidence, evidence_count = row
+        now = utc_now().isoformat()
+
+        # ── Write 1: mark parent as evolved (must commit before INSERT) ──────
+        def _mark_evolved(gid=goal_id, ts=now, db=self.db):
+            """Set status = 'evolved' on the parent goal."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE goals SET status = 'evolved', updated_at = ? WHERE id = ?",
+                    (ts, gid),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_mark_evolved)
+
+        # ── Write 2: insert successor goal ───────────────────────────────────
         new_goal_id = str(uuid.uuid4())
         motives = json.loads(motives_json) if motives_json else []
         links = json.loads(links_json) if links_json else []
 
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO goals (
-                    id, type, status, description, parent_motives, identity_links,
-                    confidence, salience, commitment, urgency, timescale,
-                    lineage_parent_id, evidence_count,
-                    last_reinforced_at, outcome_feedback, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                new_goal_id, gtype, 'strengthening', new_description,
-                json.dumps(motives), json.dumps(links),
-                min(1.0, confidence * 0.8), 0.5, 0.0, urgency, timescale,
-                goal_id, 0,
-                now, '[]', now, now,
-            ))
-            cursor.close()
+        _insert_params = (
+            new_goal_id, gtype, 'strengthening', new_description,
+            json.dumps(motives), json.dumps(links),
+            min(1.0, confidence * 0.8), 0.5, 0.0, urgency, timescale,
+            goal_id, 0,
+            now, '[]', now, now,
+        )
+
+        def _insert_evolved(params=_insert_params, db=self.db):
+            """Insert the evolved successor goal row."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT INTO goals (
+                           id, type, status, description, parent_motives, identity_links,
+                           confidence, salience, commitment, urgency, timescale,
+                           lineage_parent_id, evidence_count,
+                           last_reinforced_at, outcome_feedback, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    params,
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_insert_evolved)
 
         # Store embedding for KNN search
         self._store_goal_embedding(new_goal_id, new_description)
@@ -977,48 +1133,104 @@ class GoalEcologyService:
             return []
 
     def complete_goal(self, goal_id: str) -> bool:
-        """Mark goal as completed."""
+        """Mark goal as completed.
+
+        The UPDATE is dispatched via :meth:`submit_sync` so the return value
+        reflects the write result.
+
+        Args:
+            goal_id: UUID of the goal to complete.
+
+        Returns:
+            ``True`` if a row was updated, ``False`` if the goal did not exist
+            or was already in a terminal state.
+        """
         now = utc_now().isoformat()
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE goals SET status = 'completed', updated_at = ?
-                WHERE id = ? AND status NOT IN ('completed', 'decayed')
-            """, (now, goal_id))
-            affected = cursor.rowcount
-            cursor.close()
-        return affected > 0
+
+        def _complete(gid=goal_id, ts=now, db=self.db):
+            """Set goal status to 'completed' and return the affected-row count."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE goals SET status = 'completed', updated_at = ?
+                       WHERE id = ? AND status NOT IN ('completed', 'decayed')""",
+                    (ts, gid),
+                )
+                affected = cursor.rowcount
+                cursor.close()
+            return affected
+
+        return self._write_queue.submit_sync(_complete) > 0
 
     def dismiss_goal(self, goal_id: str) -> bool:
-        """User-initiated dismissal -- mark as decayed."""
+        """User-initiated dismissal — mark goal as decayed.
+
+        Args:
+            goal_id: UUID of the goal to dismiss.
+
+        Returns:
+            ``True`` if a row was updated, ``False`` otherwise.
+        """
         now = utc_now().isoformat()
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE goals SET status = 'decayed', salience = 0.0, updated_at = ?
-                WHERE id = ? AND status NOT IN ('completed', 'decayed')
-            """, (now, goal_id))
-            affected = cursor.rowcount
-            cursor.close()
-        return affected > 0
+
+        def _dismiss(gid=goal_id, ts=now, db=self.db):
+            """Set goal status to 'decayed' and salience to 0."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE goals SET status = 'decayed', salience = 0.0, updated_at = ?
+                       WHERE id = ? AND status NOT IN ('completed', 'decayed')""",
+                    (ts, gid),
+                )
+                affected = cursor.rowcount
+                cursor.close()
+            return affected
+
+        return self._write_queue.submit_sync(_dismiss) > 0
 
     def confirm_goal(self, goal_id: str) -> Optional[Dict[str, Any]]:
-        """User confirms a goal -- elevate to stated type."""
+        """User confirms a goal — elevate to ``'stated'`` type.
+
+        The UPDATE is dispatched via :meth:`submit_sync` so the subsequent
+        :meth:`get_goal` SELECT sees the committed state.
+
+        Args:
+            goal_id: UUID of the goal to confirm.
+
+        Returns:
+            The updated goal dict, or ``None`` if the goal does not exist.
+        """
         now = utc_now().isoformat()
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE goals
-                SET type = 'stated', confidence = MAX(confidence, 0.8),
-                    salience = MAX(salience, 0.9), status = 'actionable',
-                    updated_at = ?
-                WHERE id = ?
-            """, (now, goal_id))
-            cursor.close()
+
+        def _confirm(gid=goal_id, ts=now, db=self.db):
+            """Elevate goal type and status to stated/actionable."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE goals
+                       SET type = 'stated', confidence = MAX(confidence, 0.8),
+                           salience = MAX(salience, 0.9), status = 'actionable',
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (ts, gid),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_confirm)
         return self.get_goal(goal_id)
 
     def update_goal(self, goal_id: str, updates: dict) -> bool:
-        """Update specific fields on a goal."""
+        """Update specific allowed fields on a goal.
+
+        Args:
+            goal_id: UUID of the goal to modify.
+            updates: Dict of field→value pairs.  Only ``'urgency'``,
+                ``'timescale'``, ``'description'``, and ``'strategy'`` are
+                accepted; others are silently ignored.
+
+        Returns:
+            ``True`` if at least one row was updated, ``False`` otherwise.
+        """
         if not updates:
             return True
         allowed = {'urgency', 'timescale', 'description', 'strategy'}
@@ -1028,15 +1240,17 @@ class GoalEcologyService:
         filtered['updated_at'] = utc_now().isoformat()
         set_clause = ', '.join(f"{k} = ?" for k in filtered)
         values = list(filtered.values()) + [goal_id]
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE goals SET {set_clause} WHERE id = ?",
-                values,
-            )
-            affected = cursor.rowcount
-            cursor.close()
-        return affected > 0
+
+        def _update(stmt=f"UPDATE goals SET {set_clause} WHERE id = ?", params=values, db=self.db):
+            """Apply field updates to the goal row."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(stmt, params)
+                affected = cursor.rowcount
+                cursor.close()
+            return affected
+
+        return self._write_queue.submit_sync(_update) > 0
 
     def get_goal(self, goal_id: str) -> Optional[Dict[str, Any]]:
         """Get a single goal by ID."""
@@ -1173,75 +1387,104 @@ class GoalEcologyService:
             return False
 
     def mute_goal(self, goal_id: str) -> bool:
-        """
-        Mute a goal to prevent proactive triggering while keeping it alive.
+        """Mute a goal to prevent proactive triggering while keeping it alive.
 
-        The mute marker is stored as a special entry in outcome_feedback:
-        {"muted": true, "timestamp": "..."}.  The goal stays in the active stack
-        and context injection — only get_actionable_goals() skips it.
+        The mute marker is stored as a special entry in ``outcome_feedback``:
+        ``{"muted": true, "timestamp": "..."}``.  The goal stays in the active
+        stack and context injection — only :meth:`get_actionable_goals` skips it.
 
-        Returns True if the goal was found and muted, False otherwise.
+        The SELECT for current feedback runs on the calling thread; the UPDATE
+        is dispatched via :meth:`submit_sync` so ``True`` is returned only after
+        the write is confirmed committed.
+
+        Args:
+            goal_id: UUID of the goal to mute.
+
+        Returns:
+            ``True`` if the goal was found and muted, ``False`` otherwise.
         """
         now = utc_now()
+
+        # ── Read phase ───────────────────────────────────────────────────────
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT outcome_feedback FROM goals WHERE id = ?", (goal_id,)
             )
             row = cursor.fetchone()
-            if not row:
-                cursor.close()
-                return False
-
-            feedback_json = row[0]
-            feedback = json.loads(feedback_json) if feedback_json else []
-            if not isinstance(feedback, list):
-                feedback = []
-
-            feedback.append({'muted': True, 'timestamp': now.isoformat()})
-
-            cursor.execute("""
-                UPDATE goals SET outcome_feedback = ?, is_muted = 1, updated_at = ?
-                WHERE id = ?
-            """, (json.dumps(feedback), now.isoformat(), goal_id))
             cursor.close()
 
+        if not row:
+            return False
+
+        feedback = json.loads(row[0]) if row[0] else []
+        if not isinstance(feedback, list):
+            feedback = []
+        feedback.append({'muted': True, 'timestamp': now.isoformat()})
+
+        # ── Write phase ──────────────────────────────────────────────────────
+        def _mute(fb_json=json.dumps(feedback), ts=now.isoformat(), gid=goal_id, db=self.db):
+            """Persist mute marker and set is_muted = 1."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE goals SET outcome_feedback = ?, is_muted = 1, updated_at = ?
+                       WHERE id = ?""",
+                    (fb_json, ts, gid),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_mute)
         logger.info(f"{LOG_PREFIX} Goal {goal_id[:8]} muted")
         return True
 
     def unmute_goal(self, goal_id: str) -> bool:
-        """
-        Unmute a previously muted goal, re-enabling proactive triggering.
+        """Unmute a previously muted goal, re-enabling proactive triggering.
 
-        Appends {"muted": false, "timestamp": "..."} to outcome_feedback so the
-        mute state is fully auditable.
+        Appends ``{"muted": false, "timestamp": "..."}`` to ``outcome_feedback``
+        so the mute state is fully auditable.
 
-        Returns True if the goal was found and unmuted, False otherwise.
+        The SELECT for current feedback runs on the calling thread; the UPDATE
+        is dispatched via :meth:`submit_sync`.
+
+        Args:
+            goal_id: UUID of the goal to unmute.
+
+        Returns:
+            ``True`` if the goal was found and unmuted, ``False`` otherwise.
         """
         now = utc_now()
+
+        # ── Read phase ───────────────────────────────────────────────────────
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT outcome_feedback FROM goals WHERE id = ?", (goal_id,)
             )
             row = cursor.fetchone()
-            if not row:
-                cursor.close()
-                return False
-
-            feedback_json = row[0]
-            feedback = json.loads(feedback_json) if feedback_json else []
-            if not isinstance(feedback, list):
-                feedback = []
-
-            feedback.append({'muted': False, 'timestamp': now.isoformat()})
-
-            cursor.execute("""
-                UPDATE goals SET outcome_feedback = ?, is_muted = 0, updated_at = ?
-                WHERE id = ?
-            """, (json.dumps(feedback), now.isoformat(), goal_id))
             cursor.close()
 
+        if not row:
+            return False
+
+        feedback = json.loads(row[0]) if row[0] else []
+        if not isinstance(feedback, list):
+            feedback = []
+        feedback.append({'muted': False, 'timestamp': now.isoformat()})
+
+        # ── Write phase ──────────────────────────────────────────────────────
+        def _unmute(fb_json=json.dumps(feedback), ts=now.isoformat(), gid=goal_id, db=self.db):
+            """Persist unmute marker and set is_muted = 0."""
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE goals SET outcome_feedback = ?, is_muted = 0, updated_at = ?
+                       WHERE id = ?""",
+                    (fb_json, ts, gid),
+                )
+                cursor.close()
+
+        self._write_queue.submit_sync(_unmute)
         logger.info(f"{LOG_PREFIX} Goal {goal_id[:8]} unmuted")
         return True
 
