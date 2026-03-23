@@ -154,6 +154,58 @@ class GoalEcologyService:
 
     # ── CRUD ────────────────────────────────────────────────────────────────
 
+    def _find_similar_goal(
+        self, description: str, goal_type: str, threshold: float = 0.80
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Find an existing goal with a similar description and same type.
+
+        Uses KNN embedding search over goals_vec. Returns the first match
+        above threshold, or None.
+        """
+        try:
+            from services.embedding_service import EmbeddingService
+            embedding_svc = EmbeddingService()
+            embedding = embedding_svc.generate_embedding(description)
+            if not embedding:
+                return None
+
+            packed = pack_embedding(embedding)
+
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT g.id, g.description, g.type, g.status,
+                           g.salience, g.confidence, v.distance
+                    FROM goals_vec v
+                    JOIN goals g ON g.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = 5
+                      AND g.type = ?
+                      AND g.status NOT IN ('completed', 'decayed', 'evolved')
+                    ORDER BY v.distance
+                """, (packed, goal_type))
+                rows = cursor.fetchall()
+                cursor.close()
+
+            for row in rows:
+                similarity = max(0.0, 1.0 - (row[6] or 1.0))
+                if similarity >= threshold:
+                    return {
+                        'id': row[0],
+                        'description': row[1],
+                        'type': row[2],
+                        'status': row[3],
+                        'salience': row[4],
+                        'confidence': row[5],
+                        'similarity': similarity,
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _find_similar_goal failed (non-fatal): {e}")
+            return None
+
     def create_goal(
         self,
         description: str,
@@ -167,7 +219,29 @@ class GoalEcologyService:
         Create a new goal.
 
         Stated goals get instant high salience. Other types start as candidates.
+        Deduplicates: if a similar goal of the same type already exists,
+        reinforces it (bumps salience) and returns it instead of creating a duplicate.
         """
+        # -- Dedup: reinforce existing similar goal instead of duplicating --
+        existing = self._find_similar_goal(description, type)
+        if existing:
+            new_salience = min(1.0, existing['salience'] + 0.1)
+            now_iso = utc_now().isoformat()
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE goals SET salience = ?, last_reinforced_at = ?, updated_at = ?
+                    WHERE id = ?
+                """, (new_salience, now_iso, now_iso, existing['id']))
+                cursor.close()
+            existing['salience'] = new_salience
+            logger.info(
+                f"{LOG_PREFIX} Reinforced existing goal "
+                f"(id={existing['id'][:8]}, new salience={new_salience:.2f}) "
+                f"instead of duplicating"
+            )
+            return existing
+
         goal_id = str(uuid.uuid4())
         now = utc_now().isoformat()
 

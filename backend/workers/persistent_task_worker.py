@@ -128,7 +128,7 @@ def _process_task(task_service, task):
                 f"{LOG_PREFIX} Task {task_id} exhausted iteration budget "
                 f"({task['iterations_used']}/{task['max_iterations']})"
             )
-            task_service.complete_task(task_id, progress.get('last_summary', 'Iteration limit reached.'))
+            task_service.stall_task(task_id, 'Iteration budget exhausted')
             return
 
         progress = task.get('progress', {}) or {}
@@ -154,6 +154,12 @@ def _process_task(task_service, task):
             progress=new_progress,
             result_fragment=result_data.get('result_fragment'),
         )
+
+        # Safety check: checkpoint may have auto-stalled the task
+        refreshed_after_cp = task_service.get_task(task_id)
+        if refreshed_after_cp and refreshed_after_cp['status'] == 'stalled':
+            logger.info(f"{LOG_PREFIX} Task {task_id} auto-stalled by checkpoint")
+            return
 
         # Check if task is complete
         if result_data.get('task_complete', False):
