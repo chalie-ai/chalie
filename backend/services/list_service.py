@@ -11,6 +11,8 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
+from services.write_queue_service import get_write_queue
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +52,7 @@ class ListService:
             db_service: DatabaseService instance
         """
         self.db = db_service
+        self._write_queue = get_write_queue()
 
     # ─────────────────────────────────────────────
     # List operations
@@ -76,13 +79,24 @@ class ListService:
         list_id = secrets.token_hex(4)
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO lists (id, name, list_type, created_at, updated_at)
-                    VALUES (?, ?, ?, datetime('now'), datetime('now'))
-                """, (list_id, name, list_type))
-                cursor.close()
+            def _insert_list(_id=list_id, _name=name, _type=list_type, _db=self.db):
+                """Insert the new list row on the write-queue thread.
+
+                Args:
+                    _id: Pre-generated 8-char hex list ID.
+                    _name: List name.
+                    _type: List type (e.g. ``'checklist'``).
+                    _db: DatabaseService instance.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO lists (id, name, list_type, created_at, updated_at)
+                        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+                    """, (_id, _name, _type))
+                    cursor.close()
+
+            self._write_queue.submit_sync(_insert_list)
 
             self._log_event(list_id, 'list_created', details={'name': name})
             embed_list(list_id, name, db=self.db)
@@ -111,14 +125,27 @@ class ListService:
 
         list_id = list_row['id']
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE lists SET deleted_at = datetime('now'), updated_at = datetime('now')
-                    WHERE id = ? AND deleted_at IS NULL
-                """, (list_id,))
-                updated = cursor.rowcount > 0
-                cursor.close()
+            def _soft_delete(_id=list_id, _db=self.db):
+                """Soft-delete the list by setting deleted_at; returns rowcount.
+
+                Args:
+                    _id: List ID to soft-delete.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    Number of rows updated (1 if deleted, 0 if already gone).
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE lists SET deleted_at = datetime('now'), updated_at = datetime('now')
+                        WHERE id = ? AND deleted_at IS NULL
+                    """, (_id,))
+                    rc = cursor.rowcount
+                    cursor.close()
+                    return rc
+
+            updated = self._write_queue.submit_sync(_soft_delete) > 0
 
             if updated:
                 self._log_event(list_id, 'list_deleted', details={'name': list_row['name']})
@@ -148,14 +175,27 @@ class ListService:
 
         list_id = list_row['id']
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE list_items SET removed_at = datetime('now'), updated_at = datetime('now')
-                    WHERE list_id = ? AND removed_at IS NULL
-                """, (list_id,))
-                count = cursor.rowcount
-                cursor.close()
+            def _clear_items(_id=list_id, _db=self.db):
+                """Soft-delete all active items in the list; returns removed count.
+
+                Args:
+                    _id: List ID whose items should be cleared.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    Number of items soft-deleted.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE list_items SET removed_at = datetime('now'), updated_at = datetime('now')
+                        WHERE list_id = ? AND removed_at IS NULL
+                    """, (_id,))
+                    rc = cursor.rowcount
+                    cursor.close()
+                    return rc
+
+            count = self._write_queue.submit_sync(_clear_items)
 
             if count > 0:
                 self._touch_list(list_id)
@@ -191,14 +231,28 @@ class ListService:
         list_id = list_row['id']
         old_name = list_row['name']
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE lists SET name = ?, updated_at = datetime('now')
-                    WHERE id = ? AND deleted_at IS NULL
-                """, (new_name, list_id))
-                updated = cursor.rowcount > 0
-                cursor.close()
+            def _rename(_id=list_id, _new_name=new_name, _db=self.db):
+                """Rename the list; returns rowcount.
+
+                Args:
+                    _id: List ID to rename.
+                    _new_name: New display name.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    Number of rows updated (1 on success, 0 if not found/deleted).
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE lists SET name = ?, updated_at = datetime('now')
+                        WHERE id = ? AND deleted_at IS NULL
+                    """, (_new_name, _id))
+                    rc = cursor.rowcount
+                    cursor.close()
+                    return rc
+
+            updated = self._write_queue.submit_sync(_rename) > 0
 
             if updated:
                 self._log_event(list_id, 'list_renamed', details={'old_name': old_name, 'new_name': new_name})
@@ -334,71 +388,89 @@ class ListService:
             return 0
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            def _add_items_block(_id=list_id, _items=items, _dedupe=dedupe, _db=self.db):
+                """Read position/dedup state then insert or restore items atomically.
 
-                # Get current max position
-                cursor.execute("""
-                    SELECT COALESCE(MAX(position), -1)
-                    FROM list_items
-                    WHERE list_id = ? AND removed_at IS NULL
-                """, (list_id,))
-                max_pos = cursor.fetchone()[0]
+                Runs on the write-queue thread so all reads and writes share one
+                serialised SQLite connection, preventing position conflicts.
 
-                # Get existing active items for dedup
-                existing_normalized = set()
-                if dedupe:
+                Args:
+                    _id: List ID to add items to.
+                    _items: Ordered list of item content strings.
+                    _dedupe: When ``True``, skip items already present (case-insensitive).
+                    _db: DatabaseService instance.
+
+                Returns:
+                    Count of items actually added.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+
+                    # Get current max position
                     cursor.execute("""
-                        SELECT LOWER(TRIM(content))
+                        SELECT COALESCE(MAX(position), -1)
                         FROM list_items
                         WHERE list_id = ? AND removed_at IS NULL
-                    """, (list_id,))
-                    existing_normalized = {row[0] for row in cursor.fetchall()}
+                    """, (_id,))
+                    max_pos = cursor.fetchone()[0]
 
-                added = 0
-                for item_content in items:
-                    if not item_content or not item_content.strip():
-                        continue
-
-                    normalized = item_content.strip().lower()
-
-                    # Dedupe check
-                    if dedupe and normalized in existing_normalized:
-                        continue
-
-                    # Check if this item was previously removed (restore instead of insert)
-                    cursor.execute("""
-                        SELECT id FROM list_items
-                        WHERE list_id = ?
-                          AND LOWER(TRIM(content)) = ?
-                          AND removed_at IS NOT NULL
-                        ORDER BY removed_at DESC
-                        LIMIT 1
-                    """, (list_id, normalized))
-                    removed_row = cursor.fetchone()
-
-                    if removed_row:
-                        # Restore the soft-deleted row
-                        max_pos += 1
+                    # Get existing active items for dedup
+                    existing_normalized = set()
+                    if _dedupe:
                         cursor.execute("""
-                            UPDATE list_items
-                            SET removed_at = NULL, checked = 0,
-                                position = ?, updated_at = datetime('now')
-                            WHERE id = ?
-                        """, (max_pos, removed_row[0]))
-                    else:
-                        # Insert new row
-                        max_pos += 1
-                        item_id = secrets.token_hex(4)
+                            SELECT LOWER(TRIM(content))
+                            FROM list_items
+                            WHERE list_id = ? AND removed_at IS NULL
+                        """, (_id,))
+                        existing_normalized = {row[0] for row in cursor.fetchall()}
+
+                    added = 0
+                    for item_content in _items:
+                        if not item_content or not item_content.strip():
+                            continue
+
+                        normalized = item_content.strip().lower()
+
+                        # Dedupe check
+                        if _dedupe and normalized in existing_normalized:
+                            continue
+
+                        # Check if this item was previously removed (restore instead of insert)
                         cursor.execute("""
-                            INSERT INTO list_items (id, list_id, content, position, added_at, updated_at)
-                            VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
-                        """, (item_id, list_id, item_content.strip(), max_pos))
+                            SELECT id FROM list_items
+                            WHERE list_id = ?
+                              AND LOWER(TRIM(content)) = ?
+                              AND removed_at IS NOT NULL
+                            ORDER BY removed_at DESC
+                            LIMIT 1
+                        """, (_id, normalized))
+                        removed_row = cursor.fetchone()
 
-                    existing_normalized.add(normalized)
-                    added += 1
+                        if removed_row:
+                            # Restore the soft-deleted row
+                            max_pos += 1
+                            cursor.execute("""
+                                UPDATE list_items
+                                SET removed_at = NULL, checked = 0,
+                                    position = ?, updated_at = datetime('now')
+                                WHERE id = ?
+                            """, (max_pos, removed_row[0]))
+                        else:
+                            # Insert new row
+                            max_pos += 1
+                            item_id = secrets.token_hex(4)
+                            cursor.execute("""
+                                INSERT INTO list_items (id, list_id, content, position, added_at, updated_at)
+                                VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+                            """, (item_id, _id, item_content.strip(), max_pos))
 
-                cursor.close()
+                        existing_normalized.add(normalized)
+                        added += 1
+
+                    cursor.close()
+                    return added
+
+            added = self._write_queue.submit_sync(_add_items_block)
 
             if added > 0:
                 self._touch_list(list_id)
@@ -435,25 +507,45 @@ class ListService:
         removed = 0
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                for item_content in items:
-                    normalized = item_content.strip().lower()
-                    cursor.execute("""
-                        UPDATE list_items
-                        SET removed_at = datetime('now'), updated_at = datetime('now')
-                        WHERE list_id = ?
-                          AND LOWER(TRIM(content)) = ?
-                          AND removed_at IS NULL
-                    """, (list_id, normalized))
-                    if cursor.rowcount > 0:
-                        removed += cursor.rowcount
-                        self._log_event(
-                            list_id, 'item_removed',
-                            item_content=item_content.strip(),
-                            details={'normalized_content': normalized},
-                        )
-                cursor.close()
+            def _remove_items_block(
+                _id=list_id, _items=items, _row=list_row,
+                _log=self._log_event, _db=self.db,
+            ):
+                """Soft-remove matching items inside a single serialised connection.
+
+                Args:
+                    _id: List ID.
+                    _items: Item content strings to remove (case-insensitive).
+                    _row: Resolved list dict (used for logging).
+                    _log: Bound reference to ``self._log_event`` for per-item events.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    Total number of rows soft-deleted.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    removed = 0
+                    for item_content in _items:
+                        normalized = item_content.strip().lower()
+                        cursor.execute("""
+                            UPDATE list_items
+                            SET removed_at = datetime('now'), updated_at = datetime('now')
+                            WHERE list_id = ?
+                              AND LOWER(TRIM(content)) = ?
+                              AND removed_at IS NULL
+                        """, (_id, normalized))
+                        if cursor.rowcount > 0:
+                            removed += cursor.rowcount
+                            _log(
+                                _id, 'item_removed',
+                                item_content=item_content.strip(),
+                                details={'normalized_content': normalized},
+                            )
+                    cursor.close()
+                    return removed
+
+            removed = self._write_queue.submit_sync(_remove_items_block)
 
             if removed > 0:
                 self._touch_list(list_id)
@@ -491,34 +583,64 @@ class ListService:
         return self._set_checked(name_or_id, items, checked=False)
 
     def _set_checked(self, name_or_id: str, items: List[str], checked: bool) -> int:
+        """Set the checked state of matching items in a serialised write-queue operation.
+
+        Args:
+            name_or_id: List name or 8-char hex ID.
+            items: Item content strings to update (case-insensitive).
+            checked: ``True`` to check, ``False`` to uncheck.
+
+        Returns:
+            Count of rows updated, or 0 on error or empty input.
+        """
         list_row = self._resolve_list(name_or_id)
         if not list_row or not items:
             return 0
 
         list_id = list_row['id']
         event_type = 'item_checked' if checked else 'item_unchecked'
-        count = 0
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                for item_content in items:
-                    normalized = item_content.strip().lower()
-                    cursor.execute("""
-                        UPDATE list_items
-                        SET checked = ?, updated_at = datetime('now')
-                        WHERE list_id = ?
-                          AND LOWER(TRIM(content)) = ?
-                          AND removed_at IS NULL
-                    """, (1 if checked else 0, list_id, normalized))
-                    if cursor.rowcount > 0:
-                        count += cursor.rowcount
-                        self._log_event(
-                            list_id, event_type,
-                            item_content=item_content.strip(),
-                            details={'normalized_content': normalized},
-                        )
-                cursor.close()
+            def _set_checked_block(
+                _id=list_id, _items=items, _checked=checked,
+                _evt=event_type, _log=self._log_event, _db=self.db,
+            ):
+                """Toggle checked state inside a single serialised connection.
+
+                Args:
+                    _id: List ID.
+                    _items: Item content strings to toggle.
+                    _checked: Target checked state.
+                    _evt: Event type string for the audit log.
+                    _log: Bound reference to ``self._log_event``.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    Total number of rows updated.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    count = 0
+                    for item_content in _items:
+                        normalized = item_content.strip().lower()
+                        cursor.execute("""
+                            UPDATE list_items
+                            SET checked = ?, updated_at = datetime('now')
+                            WHERE list_id = ?
+                              AND LOWER(TRIM(content)) = ?
+                              AND removed_at IS NULL
+                        """, (1 if _checked else 0, _id, normalized))
+                        if cursor.rowcount > 0:
+                            count += cursor.rowcount
+                            _log(
+                                _id, _evt,
+                                item_content=item_content.strip(),
+                                details={'normalized_content': normalized},
+                            )
+                    cursor.close()
+                    return count
+
+            count = self._write_queue.submit_sync(_set_checked_block)
 
             if count > 0:
                 self._touch_list(list_id)
@@ -756,14 +878,30 @@ class ListService:
         event_id = secrets.token_hex(4)
         details_json = json.dumps(details or {})
 
-        try:
-            with self.db.connection() as conn:
+        def _insert_event(
+            _eid=event_id, _lid=list_id, _et=event_type,
+            _ic=item_content, _dj=details_json, _db=self.db,
+        ):
+            """Insert a list event record (fire-and-forget).
+
+            Args:
+                _eid: Pre-generated 8-char hex event ID.
+                _lid: List ID this event belongs to.
+                _et: Event type string (e.g. ``'item_added'``).
+                _ic: Optional item content string.
+                _dj: JSON-serialised details dict.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO list_events (id, list_id, event_type, item_content, details, created_at)
                     VALUES (?, ?, ?, ?, ?, datetime('now'))
-                """, (event_id, list_id, event_type, item_content, details_json))
+                """, (_eid, _lid, _et, _ic, _dj))
                 cursor.close()
+
+        try:
+            self._write_queue.submit(_insert_event)
         except Exception as e:
             logger.warning(f"[LISTS] _log_event failed (non-fatal): {e}")
 
@@ -774,12 +912,21 @@ class ListService:
         Args:
             list_id: List identifier
         """
-        try:
-            with self.db.connection() as conn:
+        def _touch(_id=list_id, _db=self.db):
+            """Update lists.updated_at to now (fire-and-forget).
+
+            Args:
+                _id: List ID to touch.
+                _db: DatabaseService instance.
+            """
+            with _db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE lists SET updated_at = datetime('now') WHERE id = ?
-                """, (list_id,))
+                """, (_id,))
                 cursor.close()
+
+        try:
+            self._write_queue.submit(_touch)
         except Exception as e:
             logger.warning(f"[LISTS] _touch_list failed (non-fatal): {e}")
