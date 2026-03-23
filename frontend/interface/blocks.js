@@ -99,6 +99,7 @@ export class BlockRenderer {
       case 'badge':     return this._renderBadge(block);
       case 'alert':     return this._renderAlert(block);
       case 'loading':   return this._renderLoading(block);
+      case 'thought':   return this._renderThought(block);
       default:          return this._renderUnknown(block);
     }
   }
@@ -736,6 +737,99 @@ export class BlockRenderer {
     }
 
     return div;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Proactive thought card
+  // ---------------------------------------------------------------------------
+
+  /**
+   * thought block — proactive card surfacing a Chalie-initiated idea or
+   * cross-topic connection.
+   *
+   * Expected block shape:
+   * {
+   *   type:    "thought",
+   *   id:      string,        // required — used in CustomEvent detail
+   *   content: string,        // required — body text of the thought
+   *   context: string|null    // optional — additional context line
+   * }
+   *
+   * Emitted events (on document):
+   *   chalie:thought-action  { action: "expand",  blockId: block.id }
+   *   chalie:thought-action  { action: "dismiss", blockId: block.id }
+   *
+   * @param {Object} block
+   * @returns {Element|null}
+   */
+  _renderThought(block) {
+    const content = block.content;
+    if (typeof content !== 'string' || content === '') return null;
+
+    // ---- outer card --------------------------------------------------------
+    const card = document.createElement('div');
+    card.className = 'block-thought';
+    if (block.id) card.dataset.blockId = block.id;
+
+    // ---- header ------------------------------------------------------------
+    const header = document.createElement('div');
+    header.className = 'block-thought__header';
+    header.textContent = 'Chalie had a thought';
+    card.appendChild(header);
+
+    // ---- body --------------------------------------------------------------
+    const body = document.createElement('p');
+    body.className = 'block-thought__body';
+    body.textContent = content;
+    card.appendChild(body);
+
+    // ---- optional context line ---------------------------------------------
+    if (block.context && typeof block.context === 'string') {
+      const ctx = document.createElement('p');
+      ctx.className = 'block-thought__context';
+      ctx.textContent = block.context;
+      card.appendChild(ctx);
+    }
+
+    // ---- action row --------------------------------------------------------
+    const actions = document.createElement('div');
+    actions.className = 'block-thought__actions';
+
+    // Helper — dispatch chalie:thought-action
+    const dispatch = (action) => {
+      document.dispatchEvent(new CustomEvent('chalie:thought-action', {
+        detail: { action, blockId: block.id ?? null },
+      }));
+    };
+
+    // "Tell me more" — expand
+    const expandBtn = document.createElement('button');
+    expandBtn.className = 'block-thought__btn block-thought__btn--expand';
+    expandBtn.textContent = 'Tell me more';
+    expandBtn.addEventListener('click', () => dispatch('expand'));
+
+    // "Not now" — dismiss (fade out the card)
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'block-thought__btn block-thought__btn--dismiss';
+    dismissBtn.textContent = 'Not now';
+    dismissBtn.addEventListener('click', () => {
+      card.classList.add('block-thought--fading');
+      dispatch('dismiss');
+    });
+
+    // "×" close — remove from DOM immediately
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'block-thought__btn block-thought__btn--close';
+    closeBtn.setAttribute('aria-label', 'Close thought card');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => card.remove());
+
+    actions.appendChild(expandBtn);
+    actions.appendChild(dismissBtn);
+    actions.appendChild(closeBtn);
+    card.appendChild(actions);
+
+    return card;
   }
 
   // ---------------------------------------------------------------------------
