@@ -20,6 +20,8 @@ import signal
 import threading
 from typing import Dict, List, Tuple
 
+from utils.logger import Logger
+
 def _read_version():
     """Read version from the VERSION file — single source of truth."""
     try:
@@ -190,7 +192,7 @@ class WorkerManager:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
 
     # Deferred imports
     from services import PromptQueue, DatabaseService, SchemaService

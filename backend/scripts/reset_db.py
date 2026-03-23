@@ -11,12 +11,10 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from utils.logger import Logger
 from services.database_service import get_shared_db_service
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+Logger.start()
 logger = logging.getLogger(__name__)
 
 # Tables that hold user/cognitive data (not schema or config)
