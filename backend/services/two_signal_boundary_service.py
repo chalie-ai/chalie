@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 # ── Cold start ───────────────────────────────────────────────────────────────
 COLD_START_MSGS = 6
 
+# ── Short message gate ───────────────────────────────────────────────────────
+# Messages with <= this many words skip the two-signal check.  Short terse
+# answers ("yes", "38", "iam 38") produce semantically generic embeddings that
+# are statistically far from any topic centroid.  The two-signal detector
+# correctly flags them as outliers, but they're contextual continuations, not
+# topic changes.  Discourse markers still fire for short messages.
+SHORT_MSG_MAX_WORDS = 4
+
 # ── Stale baseline reset (dishabituation after long silence) ─────────────────
 STALE_GAP_SECONDS = 2700  # 45 minutes
 
@@ -89,7 +97,7 @@ class TwoSignalBoundaryService:
 
     # Defaults
     DEFAULT_WINDOW_SIZE = 5
-    DEFAULT_THRESHOLD_K = 1.6
+    DEFAULT_THRESHOLD_K = 1.0
 
     _STORE_TTL = 86400  # 24h
 
@@ -154,6 +162,13 @@ class TwoSignalBoundaryService:
 
         # ── Discourse marker check ──────────────────────────────
         marker_match = self._detect_marker(message_text) if message_text else None
+
+        # ── Short message gate ────────────────────────────────────
+        # Terse answers (≤ SHORT_MSG_MAX_WORDS) skip two-signal.
+        # Their embeddings are too generic to produce meaningful
+        # similarity scores.  Still add to history for centroid.
+        word_count = len(message_text.split()) if message_text else 0
+        is_short = word_count <= SHORT_MSG_MAX_WORDS
 
         # ── First message: seed state, no detection ─────────────
         embeddings = s['embeddings']
@@ -224,6 +239,14 @@ class TwoSignalBoundaryService:
         window_drop = window_sim < window_thresh
 
         two_signal_fire = consec_drop and window_drop
+
+        # Short messages: suppress two-signal, markers only
+        if is_short and two_signal_fire:
+            logger.debug(
+                f"[TWO-SIGNAL] Short message gate suppressed boundary "
+                f"({word_count} words): '{message_text[:40]}'"
+            )
+            two_signal_fire = False
 
         # ── Combine signals ─────────────────────────────────────
         is_boundary = two_signal_fire or bool(marker_match)

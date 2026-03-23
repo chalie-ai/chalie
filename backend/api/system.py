@@ -651,6 +651,21 @@ def observability_self_model():
         return jsonify({"error": "Failed to retrieve self-model"}), 500
 
 
+@system_bp.route('/system/observability/pipeline-health', methods=['GET'])
+@require_session
+def observability_pipeline_health():
+    """Pipeline health checks — subset of self-model noteworthy items."""
+    try:
+        from services.self_model_service import SelfModelService
+        snapshot = SelfModelService().get_snapshot()
+        noteworthy = snapshot.get('noteworthy', [])
+        pipeline_items = [n for n in noteworthy if n.get('severity', 0) >= 0.3]
+        return jsonify({'ok': True, 'checks': pipeline_items}), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/pipeline-health error: {e}")
+        return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
+
+
 @system_bp.route('/system/observability/capability-gaps', methods=['GET'])
 @require_session
 def observability_capability_gaps():

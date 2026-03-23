@@ -694,11 +694,11 @@ async function loadJobStats(jobId, hours) {
                 <div class="stat-label">Calls</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${(s.tokens_in || 0).toLocaleString()}</div>
+                <div class="stat-value">${(s.total_tokens_input || 0).toLocaleString()}</div>
                 <div class="stat-label">Tokens In</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${(s.tokens_out || 0).toLocaleString()}</div>
+                <div class="stat-value">${(s.total_tokens_output || 0).toLocaleString()}</div>
                 <div class="stat-label">Tokens Out</div>
             </div>
             <div class="stat-card">
@@ -719,8 +719,8 @@ async function loadJobStats(jobId, hours) {
             return `<tr>
                 <td>${time}</td>
                 <td>${escapeHtml(c.model || '—')}</td>
-                <td class="num">${(c.tokens_in || 0).toLocaleString()}</td>
-                <td class="num">${(c.tokens_out || 0).toLocaleString()}</td>
+                <td class="num">${(c.tokens_input || 0).toLocaleString()}</td>
+                <td class="num">${(c.tokens_output || 0).toLocaleString()}</td>
                 <td class="num">${(c.latency_ms || 0).toLocaleString()}</td>
             </tr>`;
         }).join('');
