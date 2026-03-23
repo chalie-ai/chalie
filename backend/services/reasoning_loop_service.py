@@ -45,6 +45,7 @@ from services.episodic_retrieval_service import EpisodicRetrievalService
 from services.embedding_service import EmbeddingService
 from services.background_llm_queue import create_background_llm_proxy
 from services.database_service import get_lightweight_db_service
+from utils.logger import Logger
 
 logger = logging.getLogger(__name__)
 
@@ -1559,7 +1560,7 @@ class ReasoningLoopService:
 
 def reasoning_loop_worker(shared_state=None):
     """Module-level wrapper for threading."""
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
     try:
         config = ConfigService.get_agent_config("cognitive-drift")
         check_interval = config.get('check_interval', 300)

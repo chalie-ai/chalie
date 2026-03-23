@@ -18,6 +18,7 @@ from typing import Optional, Dict
 
 from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
+from utils.logger import Logger
 
 logger = logging.getLogger(__name__)
 
@@ -605,7 +606,7 @@ def curiosity_pursuit_worker(shared_state=None):
     Args:
         shared_state: Optional shared dict passed from the process manager.
     """
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
     try:
         config = ConfigService.resolve_agent_config("cognitive-drift")
         cycle_interval = config.get('curiosity_pursuit_interval', 21600)

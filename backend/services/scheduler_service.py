@@ -12,6 +12,7 @@ import logging
 import time
 
 from services.embedding_utils import pack_embedding
+from utils.logger import Logger
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
 
 def scheduler_worker(shared_state=None):
     """Module-level entry point for run.py."""
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
     next_tick = time.monotonic() + _POLL_INTERVAL
