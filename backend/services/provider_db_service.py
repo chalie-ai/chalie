@@ -6,6 +6,20 @@ from typing import Dict, Any, Optional, List
 logger = logging.getLogger(__name__)
 
 
+def _infer_vision_support(platform: str, model: str) -> bool:
+    """Infer vision support from platform and model name."""
+    model_lower = model.lower()
+    if platform == 'anthropic':
+        return any(x in model_lower for x in ('sonnet', 'opus', 'haiku'))
+    elif platform == 'openai':
+        return any(x in model_lower for x in ('gpt-4', 'gpt-5'))
+    elif platform == 'gemini':
+        return True  # All Gemini models support vision
+    elif platform == 'ollama':
+        return any(x in model_lower for x in ('llava', 'vision', 'bakllava'))
+    return False
+
+
 class ProviderDbService:
     """Manages provider configuration in database."""
 
@@ -77,6 +91,7 @@ class ProviderDbService:
                 "dimensions": row['dimensions'],
                 "timeout": row['timeout'],
                 "is_active": bool(row['is_active']),
+                "supports_vision": bool(row.get('supports_vision', 0)),
             }
         return {
             "id": row[0],
@@ -88,6 +103,7 @@ class ProviderDbService:
             "dimensions": row[6],
             "timeout": row[7],
             "is_active": bool(row[8]),
+            "supports_vision": bool(row[9]) if len(row) > 9 else False,
         }
 
     def get_all_providers(self) -> List[Dict[str, Any]]:
@@ -96,7 +112,7 @@ class ProviderDbService:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, platform, model, host, api_key, "
-                "dimensions, timeout, is_active "
+                "dimensions, timeout, is_active, supports_vision "
                 "FROM providers WHERE is_active = 1 ORDER BY name"
             )
             rows = cursor.fetchall()
@@ -110,7 +126,7 @@ class ProviderDbService:
             cursor.execute(
                 "SELECT id, name, platform, model, host, "
                 "(api_key IS NOT NULL) AS has_api_key, "
-                "dimensions, timeout, is_active "
+                "dimensions, timeout, is_active, supports_vision "
                 "FROM providers WHERE is_active = 1 ORDER BY name"
             )
             rows = cursor.fetchall()
@@ -126,6 +142,7 @@ class ProviderDbService:
                     "dimensions": row[6],
                     "timeout": row[7],
                     "is_active": bool(row[8]),
+                    "supports_vision": bool(row[9]),
                 }
                 for row in rows
             ]
@@ -136,7 +153,7 @@ class ProviderDbService:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, platform, model, host, api_key, "
-                "dimensions, timeout, is_active "
+                "dimensions, timeout, is_active, supports_vision "
                 "FROM providers WHERE name = ? AND is_active = 1",
                 (name,)
             )
@@ -152,7 +169,7 @@ class ProviderDbService:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, platform, model, host, api_key, "
-                "dimensions, timeout, is_active "
+                "dimensions, timeout, is_active, supports_vision "
                 "FROM providers WHERE id = ? AND is_active = 1",
                 (provider_id,)
             )
@@ -167,11 +184,17 @@ class ProviderDbService:
         api_key_val = data.get("api_key")
         encrypted_key = self._encrypt(api_key_val) if api_key_val else None
 
+        # Auto-infer vision support if not explicitly provided
+        if 'supports_vision' in data:
+            vision = 1 if data['supports_vision'] else 0
+        else:
+            vision = 1 if _infer_vision_support(data.get('platform', ''), data.get('model', '')) else 0
+
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO providers (name, platform, model, host, api_key, dimensions, timeout, is_active) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO providers (name, platform, model, host, api_key, dimensions, timeout, is_active, supports_vision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     data["name"],
                     data["platform"],
@@ -181,6 +204,7 @@ class ProviderDbService:
                     data.get("dimensions"),
                     data.get("timeout", 120),
                     1 if data.get("is_active", True) else 0,
+                    vision,
                 )
             )
             new_id = cursor.lastrowid
@@ -199,9 +223,22 @@ class ProviderDbService:
                 updates.append(f"{key} = ?")
                 params.append(data[key])
 
+        if "supports_vision" in data:
+            updates.append("supports_vision = ?")
+            params.append(1 if data["supports_vision"] else 0)
+
         if "is_active" in data:
             updates.append("is_active = ?")
             params.append(1 if data["is_active"] else 0)
+
+        # Auto-infer vision support if platform or model changed and supports_vision not explicit
+        if 'supports_vision' not in data and ('platform' in data or 'model' in data):
+            current = self.get_provider_by_id(provider_id)
+            if current:
+                platform = data.get('platform', current.get('platform', ''))
+                model = data.get('model', current.get('model', ''))
+                updates.append("supports_vision = ?")
+                params.append(1 if _infer_vision_support(platform, model) else 0)
 
         # Handle api_key separately for encryption
         if "api_key" in data:

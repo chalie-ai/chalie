@@ -237,7 +237,12 @@ class DomainConfidenceService:
         sql = """
             SELECT
                 SUM(CASE WHEN event_type = 'tool_result' THEN 1 ELSE 0 END) AS successes,
-                SUM(CASE WHEN event_type = 'action_gate_rejected' THEN 1 ELSE 0 END) AS rejections,
+                SUM(CASE WHEN event_type = 'action_gate_rejected'
+                    AND lower(payload) NOT LIKE '%"gate": "timing"%'
+                    AND lower(payload) NOT LIKE '%"gate": "cognitive_load"%'
+                    AND lower(payload) NOT LIKE '%"reason": "quiet_hours"%'
+                    AND lower(payload) NOT LIKE '%"reason": "social_cost"%'
+                    THEN 1 ELSE 0 END) AS rejections,
                 COUNT(*) AS total
             FROM interaction_log
             WHERE event_type IN ('tool_result', 'action_gate_rejected')
@@ -331,6 +336,10 @@ class DomainConfidenceService:
                   lower(topic) LIKE lower(?)
                   OR lower(payload) LIKE lower(?)
               )
+              AND lower(payload) NOT LIKE '%"gate": "timing"%'
+              AND lower(payload) NOT LIKE '%"gate": "cognitive_load"%'
+              AND lower(payload) NOT LIKE '%"reason": "quiet_hours"%'
+              AND lower(payload) NOT LIKE '%"reason": "social_cost"%'
         """
         pattern = f"%{domain}%"
         try:

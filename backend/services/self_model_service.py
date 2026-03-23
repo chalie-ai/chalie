@@ -201,6 +201,7 @@ class SelfModelService:
             "refreshed_at": _utc_now().isoformat(),
         }
         snapshot["noteworthy"] = self._assess_noteworthy(snapshot)
+        snapshot["noteworthy"].extend(self._check_pipeline_health())
 
         try:
             self._store.setex(CACHE_KEY, CACHE_TTL, json.dumps(snapshot))
@@ -518,6 +519,111 @@ class SelfModelService:
         return features
 
     # ── Noteworthy assessment ───────────────────────────────────
+
+    def _check_pipeline_health(self) -> list:
+        """Check cognitive pipeline health -- returns noteworthy items for degraded pipelines."""
+        checks = []
+        try:
+            db = self._get_db()
+            with db.connection() as conn:
+                # 1. Compaction stale: topic with 50+ entries and no compaction
+                row = conn.execute("""
+                    SELECT tt.topic, COUNT(tt.id) as entries
+                    FROM topic_transcript tt
+                    LEFT JOIN topic_compactions tc ON tc.topic = tt.topic
+                    WHERE tc.topic IS NULL
+                    GROUP BY tt.topic
+                    HAVING entries >= 50
+                    ORDER BY entries DESC LIMIT 1
+                """).fetchone()
+                if row:
+                    checks.append({
+                        'signal': f"Compaction stale: topic has {row[1]} entries, no compaction",
+                        'severity': 0.7,
+                    })
+
+                # 2. Goal evidence empty: 10+ goals, 0 evidence
+                try:
+                    goal_count = conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
+                    evidence_count = conn.execute("SELECT COUNT(*) FROM goal_evidence").fetchone()[0]
+                    if goal_count >= 10 and evidence_count == 0:
+                        checks.append({
+                            'signal': f"Goal evidence inactive: {goal_count} goals, 0 evidence",
+                            'severity': 0.6,
+                        })
+                except Exception:
+                    pass
+
+                # 3. Goal duplication: any goal title appearing 3+ times
+                try:
+                    dup = conn.execute("""
+                        SELECT description, COUNT(*) as c FROM goals
+                        GROUP BY description HAVING c >= 3
+                        ORDER BY c DESC LIMIT 1
+                    """).fetchone()
+                    if dup:
+                        checks.append({
+                            'signal': f"Duplicate goals: '{dup[0][:50]}' x{dup[1]}",
+                            'severity': 0.5,
+                        })
+                except Exception:
+                    pass
+
+                # 4. Stuck tasks: in_progress with iterations >= max
+                try:
+                    stuck = conn.execute("""
+                        SELECT COUNT(*) FROM persistent_tasks
+                        WHERE status = 'in_progress'
+                          AND iterations_used >= max_iterations
+                    """).fetchone()[0]
+                    if stuck > 0:
+                        checks.append({
+                            'signal': f"{stuck} task(s) stuck: iterations exhausted but still in_progress",
+                            'severity': 0.7,
+                        })
+                except Exception:
+                    pass
+
+                # 5. Proactive rejection rate: >95% in last 24h
+                try:
+                    candidates = conn.execute("""
+                        SELECT COUNT(*) FROM interaction_log
+                        WHERE event_type = 'proactive_candidate'
+                          AND created_at > datetime('now', '-24 hours')
+                    """).fetchone()[0]
+                    rejected = conn.execute("""
+                        SELECT COUNT(*) FROM interaction_log
+                        WHERE event_type = 'action_gate_rejected'
+                          AND created_at > datetime('now', '-24 hours')
+                    """).fetchone()[0]
+                    if candidates >= 10:
+                        rate = (rejected / candidates) * 100 if candidates > 0 else 0
+                        if rate > 95:
+                            checks.append({
+                                'signal': f"Proactive {rate:.0f}% rejection rate ({rejected}/{candidates} in 24h)",
+                                'severity': 0.4,
+                            })
+                except Exception:
+                    pass
+
+                # 6. Orphaned episodes: topic_id not in topics
+                try:
+                    orphans = conn.execute("""
+                        SELECT COUNT(*) FROM episodes
+                        WHERE topic_id IS NOT NULL
+                          AND topic_id NOT IN (SELECT id FROM topics)
+                    """).fetchone()[0]
+                    if orphans > 10:
+                        checks.append({
+                            'signal': f"{orphans} orphaned episodes (topic_id not in topics)",
+                            'severity': 0.3,
+                        })
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Pipeline health check failed: {e}")
+        return checks
 
     def _assess_noteworthy(self, snapshot: dict) -> List[dict]:
         """
