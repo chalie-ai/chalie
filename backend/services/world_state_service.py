@@ -907,22 +907,22 @@ class WorldStateService:
                             summary['scheduled'].append(
                                 f"[{time_str}] {entry.get('message', '')}"
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Skipping malformed scheduled entry: {e}", exc_info=False)
 
                 for entry in payload.get('persistent_tasks', []):
                     try:
                         status = entry.get('status', '')
                         goal = entry.get('goal', '')
                         summary['tasks'].append(f"[{status.upper()}] {goal[:80]}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Skipping malformed task entry: {e}", exc_info=False)
 
                 for entry in payload.get('lists', []):
                     try:
                         summary['lists'].append(entry.get('name', ''))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Skipping malformed list entry: {e}", exc_info=False)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} get_world_model_summary: cache read failed: {e}")

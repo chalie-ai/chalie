@@ -452,16 +452,16 @@ class ToolProfileService:
             cached = ms.get(TRIAGE_SUMMARIES_CACHE_KEY)
             if cached:
                 return cached
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Triage summaries cache read failed (non-fatal): {e}", exc_info=False)
 
         summaries = self._build_triage_summaries()
 
         try:
             ms = self._get_store()
             ms.setex(TRIAGE_SUMMARIES_CACHE_KEY, TRIAGE_SUMMARIES_TTL, summaries)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Triage summaries cache write failed (non-fatal): {e}", exc_info=False)
 
         return summaries
 
@@ -659,8 +659,8 @@ class ToolProfileService:
             try:
                 iface_rows = db.fetch_all("SELECT DISTINCT tool_name FROM interface_tools")
                 valid_names |= {r['tool_name'] for r in (iface_rows or [])}
-            except Exception:
-                pass  # table may not exist on fresh install
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} interface_tools table not available (expected on fresh install): {e}", exc_info=False)
 
             existing = db.fetch_all("SELECT tool_name FROM tool_capability_profiles")
             stale = [r['tool_name'] for r in (existing or []) if r['tool_name'] not in valid_names]
@@ -880,5 +880,5 @@ class ToolProfileService:
         try:
             ms = self._get_store()
             ms.delete(TRIAGE_SUMMARIES_CACHE_KEY)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Cache invalidation failed (non-fatal): {e}", exc_info=False)
