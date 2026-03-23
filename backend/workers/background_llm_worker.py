@@ -18,6 +18,8 @@ proxy can detect a stalled worker.
 Observability: aggregated metrics are logged every 60s.
 """
 
+# WS4 batch-5: silent catches fixed 2026-03-23
+
 import json
 import time
 import random
@@ -77,7 +79,8 @@ def _get_sleep_interval(store) -> float:
                     base = NORMAL_SLEEP
                 else:
                     base = IDLE_SLEEP
-    except Exception:
+    except Exception as e:
+        logger.debug("%s MemoryStore read failed, using NORMAL_SLEEP: %s", LOG_PREFIX, e)
         base = NORMAL_SLEEP  # safe default on any MemoryStore error
 
     # ±10% jitter to prevent rhythmic bursts across services
@@ -122,8 +125,8 @@ def background_llm_worker(shared_state=None):
             depth = store.llen(QUEUE_KEY)
             if depth > metrics["max_queue_depth_seen"]:
                 metrics["max_queue_depth_seen"] = depth
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("%s Failed to read queue depth: %s", LOG_PREFIX, e)
 
         # Emit metrics every METRICS_INTERVAL seconds then reset counters
         now = time.time()
@@ -185,8 +188,11 @@ def background_llm_worker(shared_state=None):
             try:
                 store.rpush(result_key, json.dumps({"error": "stale"}))
                 store.expire(result_key, 60)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "%s Failed to push stale-discard result (job=%s): %s",
+                    LOG_PREFIX, job_id, e,
+                )
             continue
 
         # Get or create LLM service for this agent (cached for provider refresh)
@@ -204,8 +210,11 @@ def background_llm_worker(shared_state=None):
                 try:
                     store.rpush(result_key, json.dumps({"error": "llm_init_failed"}))
                     store.expire(result_key, 60)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "%s Failed to push llm_init_failed result (job=%s): %s",
+                        LOG_PREFIX, job_id, e,
+                    )
                 continue
 
         llm = llm_cache[agent_name]
@@ -243,8 +252,11 @@ def background_llm_worker(shared_state=None):
                 try:
                     store.rpush(result_key, json.dumps({"error": "rate_limit_reenqueue_failed"}))
                     store.expire(result_key, 60)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "%s Failed to push rate_limit_reenqueue_failed result (job=%s): %s",
+                        LOG_PREFIX, job_id, e,
+                    )
             time.sleep(wait)
             continue
         except Exception as e:
@@ -298,8 +310,11 @@ def background_llm_worker(shared_state=None):
                             result_key, json.dumps({"error": "reenqueue_failed"})
                         )
                         store.expire(result_key, 60)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "%s Failed to push reenqueue_failed result (job=%s): %s",
+                            LOG_PREFIX, job_id, e,
+                        )
             else:
                 # Max retries exhausted — unblock caller so it can move on
                 metrics["failures"] += 1
@@ -312,8 +327,11 @@ def background_llm_worker(shared_state=None):
                         result_key, json.dumps({"error": "max_retries_exceeded"})
                     )
                     store.expire(result_key, 60)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "%s Failed to push max_retries_exceeded result (job=%s): %s",
+                        LOG_PREFIX, job_id, e,
+                    )
 
         # Adaptive sleep with ±10% jitter before processing next job
         sleep_duration = _get_sleep_interval(store)
