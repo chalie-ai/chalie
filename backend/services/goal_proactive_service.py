@@ -81,6 +81,18 @@ def check_and_execute(goal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             f"style={style}, description='{description[:60]}'"
         )
 
+        # 6. Emit telemetry for the proactive trigger decision
+        try:
+            from services.telemetry_service import get_telemetry_collector, PROACTIVE_TRIGGER
+            get_telemetry_collector().record(PROACTIVE_TRIGGER, {
+                "confidence": confidence,
+                "social_cost": social_cost,
+                "action_taken": style,
+                "goal_id": goal_id,
+            })
+        except Exception:
+            pass
+
         return result
 
     except Exception as e:

@@ -38,6 +38,16 @@ from services.innate_skills.registry import COGNITIVE_PRIMITIVES
 from services.tool_schema_service import get_skill_schemas, get_external_tool_schemas
 from services.llm_service import estimate_tokens
 
+try:
+    from services.telemetry_service import (
+        get_telemetry_collector,
+        ACT_LOOP_ITERATION,
+        ACT_LOOP_COMPLETE,
+    )
+    _TELEMETRY_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _TELEMETRY_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
 
@@ -236,6 +246,18 @@ class ACTOrchestrator:
         # ── Main loop ───────────────────────────────────────────────────
         while True:
             iteration_start = time.time()
+
+            # ── Telemetry: iteration start ─────────────────────────────
+            if _TELEMETRY_AVAILABLE:
+                try:
+                    get_telemetry_collector().record(ACT_LOOP_ITERATION, {
+                        "iteration": act_loop.iteration_number,
+                        "elapsed_seconds": round(
+                            iteration_start - act_loop.start_time, 2
+                        ),
+                    })
+                except Exception:
+                    pass
 
             # ── Collect tool names for health hints ───────────────────
             _tool_names = set()
@@ -614,6 +636,18 @@ class ACTOrchestrator:
         loop_telemetry = act_loop.get_loop_telemetry()
         loop_telemetry['termination_reason'] = termination_reason
         logger.info(f"{LOG_PREFIX} Loop telemetry: {loop_telemetry}")
+
+        # ── Telemetry: loop complete ──────────────────────────────────
+        if _TELEMETRY_AVAILABLE:
+            try:
+                get_telemetry_collector().record(ACT_LOOP_COMPLETE, {
+                    "iterations_used": loop_telemetry.get("iterations_used"),
+                    "termination_reason": termination_reason,
+                    "elapsed_seconds": loop_telemetry.get("elapsed_seconds"),
+                    "actions_total": loop_telemetry.get("actions_total"),
+                })
+            except Exception:
+                pass
 
         try:
             from services.database_service import get_shared_db_service

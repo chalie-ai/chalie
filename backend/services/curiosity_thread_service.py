@@ -277,6 +277,30 @@ class CuriosityThreadService:
 
             if updated:
                 logger.info(f"{LOG_PREFIX} Added learning note to thread {thread_id}")
+                # Emit SURPRISING_CONNECTION telemetry — fetch seed_topic for context
+                try:
+                    from services.telemetry_service import (
+                        get_telemetry_collector,
+                        SURPRISING_CONNECTION,
+                    )
+                    with self.db.connection() as _conn:
+                        _cur = _conn.cursor()
+                        _cur.execute(
+                            "SELECT seed_topic FROM curiosity_threads WHERE id = ?",
+                            (thread_id,),
+                        )
+                        _row = _cur.fetchone()
+                        _cur.close()
+                    seed_topic = _row[0] if _row else thread_id
+                    get_telemetry_collector().record(SURPRISING_CONNECTION, {
+                        "topic": seed_topic,
+                        "connection": note[:200],
+                        "thread_id": thread_id,
+                        "source": source,
+                    })
+                except Exception:
+                    pass
+
             return updated
 
         except Exception as e:
