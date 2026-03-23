@@ -21,6 +21,8 @@ import logging
 import threading
 from collections import deque
 
+from utils.logger import set_correlation_id
+
 from services.blocks_render_service import BlocksRenderService
 _blocks_svc = BlocksRenderService()
 
@@ -99,6 +101,12 @@ def register_websocket(sock):
             except Exception:
                 pass
             return
+
+        # Bind a connection-scoped correlation ID so all log lines emitted
+        # during this WebSocket session carry the same traceable identifier.
+        request_id = str(uuid.uuid4())
+        set_correlation_id(request_id)
+        logger.debug(f"[WS] Connection established", extra={"connection_id": request_id})
 
         # Subscribe to output:events for drift/card/task push
         from services.memory_client import MemoryClientService
