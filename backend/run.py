@@ -158,6 +158,14 @@ def main():
     _get_write_queue()
     logger.info("[Startup] WriteQueueService started")
 
+    # Initialise the telemetry collector singleton before any service worker
+    # starts emitting events.  Services call get_telemetry_collector().record()
+    # directly (thread-safe), so the singleton must exist first to ensure the
+    # ring buffer and per-type counters are ready from boot.
+    from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
+    _get_telemetry_collector()
+    logger.info("[Startup] TelemetryCollector initialized")
+
     # Import consumer's WorkerManager and all services
     from consumer import WorkerManager
 
