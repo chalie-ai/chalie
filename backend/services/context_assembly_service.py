@@ -9,6 +9,16 @@ context payload.
 import logging
 from typing import Dict, Any, Optional, List
 
+try:
+    from services.telemetry_service import (
+        get_telemetry_collector,
+        MEMORY_RECALL,
+        CONTEXT_ASSEMBLY,
+    )
+    _TELEMETRY_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _TELEMETRY_AVAILABLE = False
+
 RELIABILITY_WEIGHT = {
     'reliable':    1.0,
     'uncertain':   0.6,
@@ -111,6 +121,38 @@ class ContextAssemblyService:
         # Apply budget constraints if needed
         if total_tokens > self.max_context_tokens:
             sections = self._apply_budget(sections)
+
+        # Emit CONTEXT_ASSEMBLY telemetry event for observability.
+        # Item counts are estimated from the formatted section text so that
+        # no changes to sub-method return types are required.
+        if _TELEMETRY_AVAILABLE:
+            try:
+                episodes_text = sections.get("episodes", "")
+                concepts_text = sections.get("concepts", "")
+                # Count numbered episode items ("1. ", "2. ", etc.)
+                episode_count = sum(
+                    1
+                    for line in episodes_text.splitlines()
+                    if line.strip() and line.strip()[0].isdigit() and ". " in line
+                )
+                # Count concept bullet entries ("- **name**")
+                concept_count = concepts_text.count("- **")
+                get_telemetry_collector().record(
+                    CONTEXT_ASSEMBLY,
+                    {
+                        "episode_count": episode_count,
+                        "concept_count": concept_count,
+                        "trait_count": 0,
+                        "total_tokens_est": sections.get("total_tokens_est", 0),
+                        "has_working_memory": bool(sections.get("working_memory")),
+                        "has_moments": bool(sections.get("moments")),
+                    },
+                )
+            except Exception as _tel_err:
+                logging.debug(
+                    "[CONTEXT] CONTEXT_ASSEMBLY telemetry emit failed (non-fatal): %s",
+                    _tel_err,
+                )
 
         return sections
 
@@ -283,6 +325,22 @@ class ContextAssemblyService:
 
             if not episodes:
                 return ""
+
+            # Emit MEMORY_RECALL telemetry event for observability
+            if _TELEMETRY_AVAILABLE:
+                try:
+                    get_telemetry_collector().record(
+                        MEMORY_RECALL,
+                        {
+                            "episode_count": len(episodes),
+                            "query_topic": topic,
+                        },
+                    )
+                except Exception as _tel_err:
+                    logging.debug(
+                        "[CONTEXT] MEMORY_RECALL telemetry emit failed (non-fatal): %s",
+                        _tel_err,
+                    )
 
             # Downweight unreliable episodes so they rank lower in caller scoring
             for ep in episodes:

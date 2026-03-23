@@ -29,6 +29,15 @@ from services.database_service import get_lightweight_db_service
 from services.time_utils import utc_now, parse_utc
 from services.write_queue_service import get_write_queue
 
+try:
+    from services.telemetry_service import (
+        get_telemetry_collector,
+        GOAL_LIFECYCLE,
+    )
+    _TELEMETRY_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _TELEMETRY_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOAL ECOLOGY]"
 
@@ -357,6 +366,27 @@ class GoalEcologyService:
         # Post-creation: store embedding for KNN search (non-blocking, non-fatal)
         self._store_goal_embedding(goal_id, description)
 
+        # Emit GOAL_LIFECYCLE telemetry for goal creation
+        if _TELEMETRY_AVAILABLE:
+            try:
+                get_telemetry_collector().record(
+                    GOAL_LIFECYCLE,
+                    {
+                        "action": "create",
+                        "goal_id": goal_id,
+                        "type": type,
+                        "status": status,
+                        "salience": salience,
+                        "timescale": timescale,
+                    },
+                )
+            except Exception as _tel_err:
+                logger.debug(
+                    "%s GOAL_LIFECYCLE 'create' telemetry emit failed (non-fatal): %s",
+                    LOG_PREFIX,
+                    _tel_err,
+                )
+
         return {
             'id': goal_id,
             'type': type,
@@ -473,6 +503,25 @@ class GoalEcologyService:
             f"{LOG_PREFIX} Evidence added to goal {goal_id[:8]}: "
             f"type={signal_type}, strength={strength:.2f}"
         )
+
+        # Emit GOAL_LIFECYCLE telemetry for evidence addition
+        if _TELEMETRY_AVAILABLE:
+            try:
+                get_telemetry_collector().record(
+                    GOAL_LIFECYCLE,
+                    {
+                        "action": "evidence_added",
+                        "goal_id": goal_id,
+                        "signal_type": signal_type,
+                        "strength": strength,
+                    },
+                )
+            except Exception as _tel_err:
+                logger.debug(
+                    "%s GOAL_LIFECYCLE 'evidence_added' telemetry emit failed (non-fatal): %s",
+                    LOG_PREFIX,
+                    _tel_err,
+                )
 
     def find_matching_goals(self, text: str, threshold: float = 0.6, k: int = 10) -> List[Dict[str, Any]]:
         """Find active goals matching text using KNN embedding search over goals_vec."""
