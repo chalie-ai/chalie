@@ -17,6 +17,8 @@ import struct
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from services.write_queue_service import get_write_queue
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[CURIOSITY THREAD]"
@@ -52,6 +54,7 @@ class CuriosityThreadService:
             from services.database_service import get_shared_db_service
             db_service = get_shared_db_service()
         self.db = db_service
+        self._write_queue = get_write_queue()
 
     def create_thread(
         self,
@@ -80,33 +83,51 @@ class CuriosityThreadService:
             return None
 
         try:
+            # Dedup check — read-only, stays on caller thread
             with self.db.connection() as conn:
                 cursor = conn.cursor()
-
-                # Dedup check
                 cursor.execute(
                     "SELECT id FROM curiosity_threads WHERE seed_topic = ? AND status = 'active'",
                     (seed_topic,)
                 )
-                if cursor.fetchone():
-                    logger.info(f"{LOG_PREFIX} Dedup: active thread already exists for '{seed_topic}'")
-                    cursor.close()
-                    return None
-
-                thread_id = os.urandom(4).hex()
-
-                cursor.execute("""
-                    INSERT INTO curiosity_threads (id, title, rationale, thread_type, seed_topic)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (thread_id, title, rationale, thread_type, seed_topic))
-
+                existing = cursor.fetchone()
                 cursor.close()
 
-                logger.info(
-                    f"{LOG_PREFIX} Created thread {thread_id}: "
-                    f"type={thread_type}, topic='{seed_topic}'"
-                )
-                return thread_id
+            if existing:
+                logger.info(f"{LOG_PREFIX} Dedup: active thread already exists for '{seed_topic}'")
+                return None
+
+            thread_id = os.urandom(4).hex()
+
+            def _insert_thread(
+                _id=thread_id, _title=title, _rationale=rationale,
+                _type=thread_type, _topic=seed_topic, _db=self.db,
+            ):
+                """Insert the new curiosity thread on the write-queue thread.
+
+                Args:
+                    _id: Pre-generated 8-char hex thread ID.
+                    _title: Short human-readable title.
+                    _rationale: Explanation of why this thread was seeded.
+                    _type: ``'learning'`` or ``'behavioral'``.
+                    _topic: Seed topic string.
+                    _db: DatabaseService instance.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO curiosity_threads (id, title, rationale, thread_type, seed_topic)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (_id, _title, _rationale, _type, _topic))
+                    cursor.close()
+
+            self._write_queue.submit_sync(_insert_thread)
+
+            logger.info(
+                f"{LOG_PREFIX} Created thread {thread_id}: "
+                f"type={thread_type}, topic='{seed_topic}'"
+            )
+            return thread_id
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} create_thread failed: {e}")
@@ -215,36 +236,48 @@ class CuriosityThreadService:
                 "source": source,
             }
 
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            def _append_note(_id=thread_id, _entry=entry, _db=self.db):
+                """Read current notes, append new entry, and write back atomically.
 
-                # Read current notes, append, write back
-                cursor.execute(
-                    "SELECT learning_notes FROM curiosity_threads WHERE id = ?",
-                    (thread_id,)
-                )
-                row = cursor.fetchone()
-                if not row:
+                Args:
+                    _id: Thread ID to update.
+                    _entry: Pre-built note dict with ``note``, ``timestamp``, ``source``.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    ``True`` if the update row was found and modified, ``False`` otherwise.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT learning_notes FROM curiosity_threads WHERE id = ?",
+                        (_id,)
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        cursor.close()
+                        return False
+
+                    current_notes = row[0] if isinstance(row[0], list) else json.loads(row[0] or '[]')
+                    current_notes.append(_entry)
+
+                    cursor.execute("""
+                        UPDATE curiosity_threads
+                        SET learning_notes = ?,
+                            exploration_count = exploration_count + 1,
+                            last_explored_at = datetime('now'),
+                            updated_at = datetime('now')
+                        WHERE id = ?
+                    """, (json.dumps(current_notes), _id))
+                    updated = cursor.rowcount > 0
                     cursor.close()
-                    return False
+                    return updated
 
-                current_notes = row[0] if isinstance(row[0], list) else json.loads(row[0] or '[]')
-                current_notes.append(entry)
+            updated = self._write_queue.submit_sync(_append_note)
 
-                cursor.execute("""
-                    UPDATE curiosity_threads
-                    SET learning_notes = ?,
-                        exploration_count = exploration_count + 1,
-                        last_explored_at = datetime('now'),
-                        updated_at = datetime('now')
-                    WHERE id = ?
-                """, (json.dumps(current_notes), thread_id))
-                updated = cursor.rowcount > 0
-                cursor.close()
-
-                if updated:
-                    logger.info(f"{LOG_PREFIX} Added learning note to thread {thread_id}")
-                return updated
+            if updated:
+                logger.info(f"{LOG_PREFIX} Added learning note to thread {thread_id}")
+            return updated
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} add_learning_note failed: {e}")
@@ -304,41 +337,55 @@ class CuriosityThreadService:
             True if the update succeeded, False if the thread was not found or on error.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            def _update_engagement(_id=thread_id, _score=score, _db=self.db):
+                """Read current engagement, compute rolling average, persist new state.
 
-                cursor.execute(
-                    "SELECT engagement_score FROM curiosity_threads WHERE id = ?",
-                    (thread_id,)
-                )
-                row = cursor.fetchone()
-                if not row:
-                    cursor.close()
-                    return False
+                Args:
+                    _id: Thread ID to update.
+                    _score: New engagement sample in ``[0.0, 1.0]``.
+                    _db: DatabaseService instance.
 
-                current = row[0]
-                new_score = (current * 0.7) + (score * 0.3)
-                new_score = max(0.0, min(1.0, new_score))
-
-                new_status = 'dormant' if new_score < 0.2 else 'active'
-
-                cursor.execute("""
-                    UPDATE curiosity_threads
-                    SET engagement_score = ?,
-                        status = ?,
-                        updated_at = datetime('now')
-                    WHERE id = ?
-                """, (new_score, new_status, thread_id))
-
-                cursor.close()
-
-                if new_status == 'dormant':
-                    logger.info(
-                        f"{LOG_PREFIX} Thread {thread_id} → dormant "
-                        f"(engagement={new_score:.2f})"
+                Returns:
+                    ``(new_score, new_status)`` tuple, or ``None`` if thread not found.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT engagement_score FROM curiosity_threads WHERE id = ?",
+                        (_id,)
                     )
+                    row = cursor.fetchone()
+                    if not row:
+                        cursor.close()
+                        return None
 
-                return True
+                    current = row[0]
+                    new_score = (current * 0.7) + (_score * 0.3)
+                    new_score = max(0.0, min(1.0, new_score))
+                    new_status = 'dormant' if new_score < 0.2 else 'active'
+
+                    cursor.execute("""
+                        UPDATE curiosity_threads
+                        SET engagement_score = ?,
+                            status = ?,
+                            updated_at = datetime('now')
+                        WHERE id = ?
+                    """, (new_score, new_status, _id))
+                    cursor.close()
+                    return new_score, new_status
+
+            result = self._write_queue.submit_sync(_update_engagement)
+            if result is None:
+                return False
+
+            new_score, new_status = result
+            if new_status == 'dormant':
+                logger.info(
+                    f"{LOG_PREFIX} Thread {thread_id} → dormant "
+                    f"(engagement={new_score:.2f})"
+                )
+
+            return True
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} update_engagement failed: {e}")
@@ -362,6 +409,7 @@ class CuriosityThreadService:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
 
+            # Read-only DB query — stays on caller thread
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -370,44 +418,56 @@ class CuriosityThreadService:
                     (seed_topic,)
                 )
                 row = cursor.fetchone()
-                if not row:
-                    cursor.close()
-                    return False
-
-                thread_id = row[0]
-                current_score = row[1]
-
-                # Daily reinforcement cap via MemoryStore counter
-                daily_key = f"curiosity:reinforce:{thread_id}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
-                current_daily = float(store.get(daily_key) or 0)
-
-                if current_daily >= self.MAX_DAILY_REINFORCEMENT:
-                    logger.debug(
-                        f"{LOG_PREFIX} Daily reinforcement cap reached for thread {thread_id}"
-                    )
-                    cursor.close()
-                    return False
-
-                boost = min(0.1, self.MAX_DAILY_REINFORCEMENT - current_daily)
-                new_score = min(1.0, current_score + boost)
-
-                cursor.execute(
-                    "UPDATE curiosity_threads SET engagement_score = ?, updated_at = datetime('now') WHERE id = ?",
-                    (new_score, thread_id)
-                )
                 cursor.close()
 
-                # Update daily counter
-                pipe = store.pipeline()
-                pipe.incrbyfloat(daily_key, boost)
-                pipe.expire(daily_key, 86400)
-                pipe.execute()
+            if not row:
+                return False
 
-                logger.info(
-                    f"{LOG_PREFIX} Reinforced thread {thread_id} "
-                    f"(+{boost:.1f} → {new_score:.2f})"
+            thread_id = row[0]
+            current_score = row[1]
+
+            # Redis read — stays on caller thread
+            daily_key = f"curiosity:reinforce:{thread_id}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+            current_daily = float(store.get(daily_key) or 0)
+
+            if current_daily >= self.MAX_DAILY_REINFORCEMENT:
+                logger.debug(
+                    f"{LOG_PREFIX} Daily reinforcement cap reached for thread {thread_id}"
                 )
-                return True
+                return False
+
+            boost = min(0.1, self.MAX_DAILY_REINFORCEMENT - current_daily)
+            new_score = min(1.0, current_score + boost)
+
+            def _update_score(_id=thread_id, _ns=new_score, _db=self.db):
+                """Persist the reinforced engagement score on the write-queue thread.
+
+                Args:
+                    _id: Thread ID to update.
+                    _ns: New engagement score after boost.
+                    _db: DatabaseService instance.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE curiosity_threads SET engagement_score = ?, updated_at = datetime('now') WHERE id = ?",
+                        (_ns, _id)
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update_score)
+
+            # Redis write — stays on caller thread
+            pipe = store.pipeline()
+            pipe.incrbyfloat(daily_key, boost)
+            pipe.expire(daily_key, 86400)
+            pipe.execute()
+
+            logger.info(
+                f"{LOG_PREFIX} Reinforced thread {thread_id} "
+                f"(+{boost:.1f} → {new_score:.2f})"
+            )
+            return True
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} reinforce_from_conversation failed: {e}")
@@ -425,35 +485,55 @@ class CuriosityThreadService:
             Total number of threads transitioned (dormant + abandoned combined).
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                count = 0
+            def _apply_dormancy_rules(
+                _ddays=self.DORMANCY_DAYS,
+                _adays=self.ABANDON_DAYS,
+                _aeng=self.ABANDON_ENGAGEMENT,
+                _db=self.db,
+            ):
+                """Apply lifecycle dormancy rules; returns total threads transitioned.
 
-                # Active → dormant (not explored in 45 days)
-                cursor.execute("""
-                    UPDATE curiosity_threads
-                    SET status = 'dormant', updated_at = datetime('now')
-                    WHERE status = 'active'
-                      AND last_explored_at IS NOT NULL
-                      AND last_explored_at < datetime('now', ? || ' days')
-                """, (str(-self.DORMANCY_DAYS),))
-                count += cursor.rowcount
+                Args:
+                    _ddays: Days of inactivity before active → dormant.
+                    _adays: Days dormant before eligible for abandonment.
+                    _aeng: Engagement threshold below which dormant → abandoned.
+                    _db: DatabaseService instance.
 
-                # Dormant → abandoned (engagement < 0.2 AND dormant > 60 days)
-                cursor.execute("""
-                    UPDATE curiosity_threads
-                    SET status = 'abandoned', updated_at = datetime('now')
-                    WHERE status = 'dormant'
-                      AND engagement_score < ?
-                      AND updated_at < datetime('now', ? || ' days')
-                """, (self.ABANDON_ENGAGEMENT, str(-self.ABANDON_DAYS)))
-                count += cursor.rowcount
+                Returns:
+                    Sum of rows transitioned to dormant and abandoned.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    count = 0
 
-                cursor.close()
+                    # Active → dormant (not explored in N days)
+                    cursor.execute("""
+                        UPDATE curiosity_threads
+                        SET status = 'dormant', updated_at = datetime('now')
+                        WHERE status = 'active'
+                          AND last_explored_at IS NOT NULL
+                          AND last_explored_at < datetime('now', ? || ' days')
+                    """, (str(-_ddays),))
+                    count += cursor.rowcount
 
-                if count > 0:
-                    logger.info(f"{LOG_PREFIX} Dormancy applied to {count} threads")
-                return count
+                    # Dormant → abandoned (engagement low AND dormant long enough)
+                    cursor.execute("""
+                        UPDATE curiosity_threads
+                        SET status = 'abandoned', updated_at = datetime('now')
+                        WHERE status = 'dormant'
+                          AND engagement_score < ?
+                          AND updated_at < datetime('now', ? || ' days')
+                    """, (_aeng, str(-_adays)))
+                    count += cursor.rowcount
+
+                    cursor.close()
+                    return count
+
+            count = self._write_queue.submit_sync(_apply_dormancy_rules)
+
+            if count > 0:
+                logger.info(f"{LOG_PREFIX} Dormancy applied to {count} threads")
+            return count
 
         except Exception as e:
             logger.error(f"{LOG_PREFIX} apply_dormancy failed: {e}")
@@ -566,15 +646,27 @@ class CuriosityThreadService:
             True if the update succeeded, False if the thread was not found or on error.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE curiosity_threads SET last_explored_at = datetime('now') WHERE id = ?",
-                    (thread_id,)
-                )
-                updated = cursor.rowcount > 0
-                cursor.close()
-                return updated
+            def _mark_explored(_id=thread_id, _db=self.db):
+                """Set last_explored_at to now; returns True if row was found.
+
+                Args:
+                    _id: Thread ID to update.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    ``True`` if the row existed and was updated.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE curiosity_threads SET last_explored_at = datetime('now') WHERE id = ?",
+                        (_id,)
+                    )
+                    updated = cursor.rowcount > 0
+                    cursor.close()
+                    return updated
+
+            return self._write_queue.submit_sync(_mark_explored)
         except Exception as e:
             logger.error(f"{LOG_PREFIX} mark_explored failed: {e}")
             return False
@@ -589,15 +681,27 @@ class CuriosityThreadService:
             True if the update succeeded, False if the thread was not found or on error.
         """
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE curiosity_threads SET last_surfaced_at = datetime('now') WHERE id = ?",
-                    (thread_id,)
-                )
-                updated = cursor.rowcount > 0
-                cursor.close()
-                return updated
+            def _mark_surfaced(_id=thread_id, _db=self.db):
+                """Set last_surfaced_at to now; returns True if row was found.
+
+                Args:
+                    _id: Thread ID to update.
+                    _db: DatabaseService instance.
+
+                Returns:
+                    ``True`` if the row existed and was updated.
+                """
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE curiosity_threads SET last_surfaced_at = datetime('now') WHERE id = ?",
+                        (_id,)
+                    )
+                    updated = cursor.rowcount > 0
+                    cursor.close()
+                    return updated
+
+            return self._write_queue.submit_sync(_mark_surfaced)
         except Exception as e:
             logger.error(f"{LOG_PREFIX} mark_surfaced failed: {e}")
             return False

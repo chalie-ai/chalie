@@ -11,7 +11,7 @@ from services.time_utils import utc_now
 
 def _create_in_memory_db():
     """Return a minimal DatabaseService-like object backed by an in-memory SQLite."""
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
 
     # wrapper_tokens (migration 011)
