@@ -3385,3 +3385,119 @@ details.block-section[open] > summary.block-section__title::before {
   color: var(--text-secondary);
   border-color: rgba(255, 255, 255, 0.12);
 }
+
+/* ==========================================================================
+   WS6 — Proactive Thought Card  (.block-thought)
+   Uses the existing --dusk-blue (#00F0FF) cyan accent for the top edge and
+   header text; all other values follow the established interface tokens.
+   ========================================================================== */
+
+/* ---- Card container (glass morphism) ------------------------------------ */
+.block-thought {
+  position: relative;
+  border-top: 3px solid var(--dusk-blue);         /* cyan top accent edge   */
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);          /* semi-transparent glass */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-left: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  margin-block: var(--space-md);
+  /* Smooth fade-out when dismissed */
+  transition: opacity var(--duration-slow) ease, transform var(--duration-slow) ease;
+}
+
+/* Fading state — triggered by "Not now" */
+.block-thought--fading {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+/* ---- Header (cyan label) ------------------------------------------------ */
+.block-thought__header {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dusk-blue);                        /* #00F0FF cyan           */
+  margin-bottom: var(--space-sm);
+}
+
+/* ---- Body text ---------------------------------------------------------- */
+.block-thought__body {
+  font-size: var(--font-size-base, 0.9375rem);
+  color: var(--text-primary);
+  line-height: 1.55;
+  margin: 0 0 var(--space-xs);
+}
+
+/* ---- Optional context line ---------------------------------------------- */
+.block-thought__context {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: var(--space-xs) 0 0;
+}
+
+/* ---- Action row --------------------------------------------------------- */
+.block-thought__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  flex-wrap: wrap;
+}
+
+/* ---- Shared button base ------------------------------------------------- */
+.block-thought__btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 5px var(--space-sm);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast), border-color var(--duration-fast),
+              background var(--duration-fast);
+  line-height: 1.4;
+}
+
+/* ---- "Tell me more" — cyan primary action ------------------------------- */
+.block-thought__btn--expand {
+  color: var(--dusk-blue);
+  border-color: rgba(0, 240, 255, 0.30);
+}
+
+.block-thought__btn--expand:hover {
+  background: rgba(0, 240, 255, 0.08);
+  border-color: rgba(0, 240, 255, 0.55);
+  color: var(--dusk-blue);
+}
+
+/* ---- "Not now" — muted secondary action --------------------------------- */
+.block-thought__btn--dismiss {
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+.block-thought__btn--dismiss:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ---- "×" close — ghost, pushed to the far right ------------------------ */
+.block-thought__btn--close {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  border-color: transparent;
+  font-size: 1rem;
+  padding: 4px 6px;
+}
+
+.block-thought__btn--close:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
