@@ -1231,8 +1231,8 @@ class TestGoalContextInjection:
                 {'type': 'emergent', 'description': 'Research AI regulation', 'salience': 0.7, 'confidence': 0.55, 'strategy': 'Monitor EU AI Act'},
             ]
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         assert '## Active Goals' in result
@@ -1248,8 +1248,8 @@ class TestGoalContextInjection:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = []
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         assert result == ''
@@ -1259,8 +1259,8 @@ class TestGoalContextInjection:
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
             MockEcology.side_effect = Exception("DB down")
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         assert result == ''
@@ -1273,8 +1273,8 @@ class TestGoalContextInjection:
                 {'type': 'stated', 'description': 'A' * 200, 'salience': 0.5, 'confidence': 0.5, 'strategy': None},
             ]
 
-            from services.frontal_cortex_service import FrontalCortexService
-            fc = FrontalCortexService.__new__(FrontalCortexService)
+            from services.prompt_assembly_service import PromptAssemblyService
+            fc = PromptAssemblyService.__new__(PromptAssemblyService)
             result = fc._get_goal_context()
 
         # Description should be truncated to 100 chars

@@ -13,9 +13,9 @@ pytestmark = pytest.mark.unit
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_service_instance():
-    """Return a bare FrontalCortexService instance with no __init__ side-effects."""
-    from services.frontal_cortex_service import FrontalCortexService
-    return object.__new__(FrontalCortexService)
+    """Return a bare PromptAssemblyService instance with no __init__ side-effects."""
+    from services.prompt_assembly_service import PromptAssemblyService
+    return object.__new__(PromptAssemblyService)
 
 
 def _mock_identity_and_store(
