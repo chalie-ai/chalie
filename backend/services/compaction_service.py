@@ -33,6 +33,12 @@ _TRIGGER_FRACTION = 0.85
 # Don't compact a single short exchange.
 _MIN_ENTRIES_TO_COMPACT = 4
 
+# Absolute ceiling on uncompacted tokens, independent of model context size.
+# Modern models have huge context windows (128K+) making the fraction-based
+# threshold unreachable.  This ensures compaction fires at a sensible size
+# regardless of how large the context budget is.
+_MAX_UNCOMPACTED_TOKENS = 24_000
+
 _COMPACTION_PROMPT = """Summarize the following conversation context into a compact, actionable summary.
 
 Preserve:
@@ -81,7 +87,8 @@ def check_and_compact(topic: str, context_budget: int) -> bool:
     entries_tokens = estimate_tokens(entries_text)
 
     total = compacted_tokens + entries_tokens
-    threshold = int(context_budget * _TRIGGER_FRACTION)
+    budget_threshold = int(context_budget * _TRIGGER_FRACTION)
+    threshold = min(budget_threshold, _MAX_UNCOMPACTED_TOKENS)
 
     if total <= threshold:
         logger.debug(

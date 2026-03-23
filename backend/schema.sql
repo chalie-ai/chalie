@@ -620,6 +620,7 @@ CREATE INDEX IF NOT EXISTS idx_place_fp_hash ON place_fingerprints(fingerprint_h
 
 -- ────────────────────────────────────────────────────────────────
 -- PERSISTENT TASKS — multi-session ACT work
+-- Valid states: accepted, in_progress, paused, completed, cancelled, expired, stalled
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS persistent_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -30,6 +30,11 @@ MIN_TEXT_LENGTH = 10
 
 # Embedding similarity threshold for matching existing goals
 GOAL_MATCH_THRESHOLD = 0.65
+# Lower threshold for candidate goals — they need MORE evidence to mature,
+# so they should be EASIER to match (not harder)
+CANDIDATE_MATCH_THRESHOLD = 0.55
+# Evidence count required for a candidate goal to graduate to active
+CANDIDATE_GRADUATION_EVIDENCE = 3
 
 
 def extract_and_route_signals(
@@ -68,13 +73,18 @@ def extract_and_route_signals(
             'strength': 1.0,
         })
 
-    # 2. Topic matching (embedding similarity against active goals)
+    # 2. Topic matching (embedding similarity against existing goals)
+    # Use the lower candidate threshold to also match emergent candidate goals
     try:
         from services.goal_ecology_service import GoalEcologyService
         ecology = GoalEcologyService()
-        matches = ecology.find_matching_goals(user_text, threshold=GOAL_MATCH_THRESHOLD)
+        matches = ecology.find_matching_goals(user_text, threshold=CANDIDATE_MATCH_THRESHOLD)
 
         for match in matches:
+            # Apply stricter threshold for non-candidate goals
+            if match.get('status') != 'candidate' and match.get('similarity', 0) < GOAL_MATCH_THRESHOLD:
+                continue
+
             ecology.add_evidence(
                 goal_id=match['id'],
                 signal_type='topic_recurrence',
@@ -88,6 +98,10 @@ def extract_and_route_signals(
                 'goal_id': match['id'],
                 'similarity': match.get('similarity', 0.0),
             })
+
+            # Graduate candidate goals with enough evidence
+            if match.get('status') == 'candidate':
+                _try_graduate_candidate(ecology, match['id'])
 
     except Exception as e:
         logger.debug(f"{LOG_PREFIX} Goal matching failed: {e}")
@@ -177,13 +191,19 @@ def route_cognitive_signal(signal) -> None:
         if not content:
             return
 
-        # Try to match against existing goals
+        # Try to match against existing goals (use lower threshold to include candidates)
         from services.goal_ecology_service import GoalEcologyService
         ecology = GoalEcologyService()
-        matches = ecology.find_matching_goals(content, threshold=GOAL_MATCH_THRESHOLD)
+        matches = ecology.find_matching_goals(content, threshold=CANDIDATE_MATCH_THRESHOLD)
 
-        if matches:
-            for match in matches[:2]:  # Route to top 2 matches
+        # Filter: non-candidate goals must meet the stricter threshold
+        filtered = [
+            m for m in matches
+            if m.get('status') == 'candidate' or m.get('similarity', 0) >= GOAL_MATCH_THRESHOLD
+        ]
+
+        if filtered:
+            for match in filtered[:2]:  # Route to top 2 matches
                 ecology.add_evidence(
                     goal_id=match['id'],
                     signal_type=_map_signal_type(signal_type),
@@ -191,9 +211,12 @@ def route_cognitive_signal(signal) -> None:
                     source=source_id,
                     strength=match.get('similarity', 0.7),
                 )
+                # Graduate candidate goals with enough evidence
+                if match.get('status') == 'candidate':
+                    _try_graduate_candidate(ecology, match['id'])
             logger.debug(
                 f"{LOG_PREFIX} Cognitive signal '{signal_type}' routed to "
-                f"{len(matches)} goals"
+                f"{len(filtered)} goals"
             )
         else:
             # Store as unmatched
@@ -201,6 +224,42 @@ def route_cognitive_signal(signal) -> None:
 
     except Exception as e:
         logger.debug(f"{LOG_PREFIX} Cognitive signal routing failed: {e}")
+
+
+def _try_graduate_candidate(ecology, goal_id: str) -> None:
+    """
+    Check if a candidate goal has enough evidence to graduate to active.
+
+    Graduation requires CANDIDATE_GRADUATION_EVIDENCE (3) evidence entries.
+    On graduation, confidence is bumped and status transitions to 'active'.
+    """
+    try:
+        goal = ecology.get_goal(goal_id)
+        if not goal or goal.get('status') != 'candidate':
+            return
+
+        evidence_count = goal.get('evidence_count', 0)
+        if evidence_count >= CANDIDATE_GRADUATION_EVIDENCE:
+            from services.database_service import get_lightweight_db_service
+            from services.time_utils import utc_now as _utc_now
+            db = ecology.db
+            now = _utc_now().isoformat()
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE goals
+                    SET status = 'active',
+                        confidence = MAX(confidence, 0.5),
+                        updated_at = ?
+                    WHERE id = ? AND status = 'candidate'
+                """, (now, goal_id))
+                cursor.close()
+            logger.info(
+                f"{LOG_PREFIX} Candidate goal {goal_id[:8]} graduated to active "
+                f"({evidence_count} evidence entries)"
+            )
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Candidate graduation check failed: {e}")
 
 
 def _extract_signal_content(signal_type: str, payload: Dict) -> Optional[str]:

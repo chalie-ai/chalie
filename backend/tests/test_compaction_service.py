@@ -142,6 +142,40 @@ class TestCheckAndCompact:
         assert result is True
         mock_run.assert_called_once()
 
+    def test_absolute_threshold_fires_on_large_context_budget(self, compaction_db):
+        """Large model context budget should still trigger compaction at absolute ceiling."""
+        from services.compaction_service import check_and_compact
+
+        # ~30K tokens of content — above _MAX_UNCOMPACTED_TOKENS (24K) but
+        # well below 85% of 200K budget (170K)
+        long_content = 'word ' * 6000  # ~7500 tokens each
+        entries = [{'id': i, 'content': long_content} for i in range(5)]
+
+        with patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.compaction_service.get_entries_since', return_value=entries), \
+             patch('services.compaction_service._run_compaction', return_value=True) as mock_run:
+            result = check_and_compact('test', 200_000)
+
+        assert result is True
+        mock_run.assert_called_once()
+
+    def test_small_budget_uses_fraction_threshold(self, compaction_db):
+        """Small context budget should use fraction-based threshold (below absolute ceiling)."""
+        from services.compaction_service import check_and_compact
+
+        # Budget=10000, fraction threshold=8500, absolute=24000 → min=8500
+        # ~10K tokens of content — above 8500 fraction threshold
+        long_content = 'word ' * 2000  # ~2500 tokens each
+        entries = [{'id': i, 'content': long_content} for i in range(5)]
+
+        with patch('services.compaction_service.get_compaction', return_value=None), \
+             patch('services.compaction_service.get_entries_since', return_value=entries), \
+             patch('services.compaction_service._run_compaction', return_value=True) as mock_run:
+            result = check_and_compact('test', 10_000)
+
+        assert result is True
+        mock_run.assert_called_once()
+
     def test_includes_existing_compaction_tokens(self, compaction_db):
         from services.compaction_service import check_and_compact
 

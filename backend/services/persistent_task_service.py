@@ -7,6 +7,7 @@ State machine:
    CANCELLED    PAUSED → IN_PROGRESS
                   ↓
                CANCELLED
+  IN_PROGRESS -> STALLED (iteration budget exhausted)
   Auto-expiry: ACCEPTED/IN_PROGRESS/PAUSED → EXPIRED (14 days default)
 
 Duplicate detection: Jaccard similarity > 0.6 against active tasks.
@@ -27,7 +28,7 @@ LOG_PREFIX = "[PERSISTENT TASK]"
 # Valid state transitions
 VALID_TRANSITIONS = {
     'accepted': {'in_progress', 'cancelled', 'expired'},
-    'in_progress': {'completed', 'paused', 'cancelled', 'expired'},
+    'in_progress': {'completed', 'paused', 'cancelled', 'expired', 'stalled'},
     'paused': {'in_progress', 'cancelled', 'expired'},
 }
 
@@ -330,6 +331,16 @@ class PersistentTaskService:
             )
 
         logger.debug(f"{LOG_PREFIX} Checkpoint for task {task_id}")
+
+        # Auto-stall if iteration budget exhausted
+        try:
+            task = self.get_task(task_id)
+            if task and task.get('iterations_used', 0) >= task.get('max_iterations', 20):
+                self.stall_task(task_id, 'Iteration budget exhausted')
+                return True
+        except Exception:
+            pass  # Non-fatal — worker will catch it on next cycle
+
         return True
 
     def complete_task(self, task_id: int, result: str, artifact: Optional[Dict] = None) -> bool:
@@ -369,6 +380,32 @@ class PersistentTaskService:
                 content=f"Task {task_id} completed",
                 activation_energy=0.6,
             ))
+        except Exception:
+            pass
+        return True
+
+    def stall_task(self, task_id: int, reason: str) -> bool:
+        """Mark a task as stalled (iteration budget exhausted)."""
+        try:
+            task = self.get_task(task_id)
+        except Exception:
+            task = None
+        progress = {}
+        if task:
+            progress = task.get('progress', {}) or {}
+        progress['stall_reason'] = reason
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE persistent_tasks SET status = 'stalled', progress = ?, updated_at = datetime('now') WHERE id = ?",
+                (json.dumps(progress), task_id))
+        logger.info(f"{LOG_PREFIX} Task {task_id} stalled: {reason}")
+        try:
+            from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
+            emit_reasoning_signal(ReasoningSignal(
+                signal_type='task_state_changed', source='persistent_task_service',
+                topic='general', content=f"Task {task_id} stalled: {reason}",
+                activation_energy=0.6))
         except Exception:
             pass
         return True
@@ -463,6 +500,9 @@ class PersistentTaskService:
                 f"\nCycles completed: {cycles}"
                 f"\nIterations used: {task['iterations_used']}/{task['max_iterations']}"
             )
+        elif status == 'stalled':
+            stall_reason = progress.get('stall_reason', 'Unknown')
+            summary += f"\nStalled: {stall_reason}"
         elif status == 'paused':
             summary += "\nThis task is paused. Say 'resume' to continue."
 

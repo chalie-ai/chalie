@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOAL PROACTIVE]"
 
 # Social cost thresholds
-MAX_SOCIAL_COST = 0.4
+MAX_SOCIAL_COST = 0.6
 MIN_CONFIDENCE_FOR_ACTION = 0.6
 
 # Output style thresholds
@@ -102,7 +102,7 @@ def _calculate_social_cost() -> float:
         from services.ambient_inference_service import AmbientInferenceService
         inference = AmbientInferenceService()
         if inference.is_user_deep_focus():
-            cost += 0.5
+            cost += 0.3
     except Exception:
         pass
 
@@ -128,7 +128,7 @@ def _calculate_social_cost() -> float:
 
             # Active conversation (message within last 2 minutes) — don't interrupt
             if gap_seconds < 120:
-                cost += 0.3
+                cost += 0.2
 
             # Re-entry after gap (2-8 hours) — good time to suggest
             elif 7200 < gap_seconds < 28800:

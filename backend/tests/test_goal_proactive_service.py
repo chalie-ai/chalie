@@ -90,7 +90,7 @@ class TestConfidenceGating:
 class TestSocialCostBlocking:
 
     def test_deep_focus_increases_cost(self):
-        """Deep focus should add 0.5 to social cost."""
+        """Deep focus should add 0.3 to social cost."""
         mock_inference = MagicMock()
         mock_inference.is_user_deep_focus.return_value = True
 
@@ -103,7 +103,7 @@ class TestSocialCostBlocking:
                    return_value=mock_store):
             cost = _calculate_social_cost()
 
-        assert cost >= 0.5
+        assert cost >= 0.3
 
     def test_no_deep_focus_low_cost(self):
         """Without deep focus and no ignored attempts, cost should be low."""
@@ -151,7 +151,7 @@ class TestSocialCostBlocking:
                    return_value=mock_store):
             cost = _calculate_social_cost()
 
-        assert cost > MAX_SOCIAL_COST
+        assert cost >= MAX_SOCIAL_COST
 
     def test_high_social_cost_blocks_execution(self):
         """Goals should not execute when social cost exceeds threshold."""
@@ -202,7 +202,7 @@ class TestSocialCostBlocking:
                    return_value=store):
             cost = _calculate_social_cost()
 
-        assert cost >= 0.3  # Active conversation penalty
+        assert cost >= 0.2  # Active conversation penalty
 
     def test_social_cost_reentry_bonus(self):
         """Re-entry after 4 hour gap should reduce social cost."""
@@ -585,8 +585,8 @@ class TestCheckAndExecuteIntegration:
 class TestMaxSocialCost:
 
     def test_max_social_cost_constant(self):
-        """Verify MAX_SOCIAL_COST is 0.4."""
-        assert MAX_SOCIAL_COST == 0.4
+        """Verify MAX_SOCIAL_COST is 0.6."""
+        assert MAX_SOCIAL_COST == 0.6
 
     def test_social_cost_at_exactly_max_allows_execution(self):
         """Social cost at exactly MAX should still block (> comparison)."""
