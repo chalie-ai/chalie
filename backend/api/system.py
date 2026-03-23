@@ -772,6 +772,41 @@ def observability_write_queue():
         return jsonify({"error": "Failed to retrieve write queue stats"}), 500
 
 
+@system_bp.route('/system/observability/telemetry', methods=['GET'])
+@require_session
+def observability_telemetry():
+    """Telemetry event summary across all tracked event types.
+
+    Returns a per-event-type breakdown produced by the process-level
+    :class:`~services.telemetry_service.TelemetryCollector` singleton.
+    Each key in the response body corresponds to one of the seven canonical
+    telemetry event types (e.g. ``memory_recall``, ``act_loop_complete``).
+    All types are present even when no events have been recorded yet.
+
+    The response is wrapped with a ``generated_at`` ISO 8601 timestamp so
+    callers can detect a stale/cached response.
+
+    Responses:
+        200: JSON object structured as::
+
+                {
+                    "generated_at": "<ISO-8601>",
+                    "memory_recall": {"count": 42, "recent": [...]},
+                    "context_assembly": {"count": 7, "recent": [...]},
+                    ...
+                }
+
+        500: JSON error object if the telemetry collector is unavailable.
+    """
+    try:
+        from services.telemetry_service import get_telemetry_collector
+        summary = get_telemetry_collector().get_summary()
+        return jsonify({"generated_at": _now_iso(), **summary}), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/telemetry error: {e}")
+        return jsonify({"error": "Failed to retrieve telemetry summary"}), 500
+
+
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────
