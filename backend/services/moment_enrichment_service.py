@@ -16,6 +16,8 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta
 
+from utils.logger import Logger
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[MOMENT ENRICHMENT]"
@@ -24,7 +26,7 @@ _POLL_INTERVAL = 300  # 5 minutes
 
 def moment_enrichment_worker(shared_state=None):
     """Module-level entry point for run.py."""
-    logging.basicConfig(level=logging.INFO)
+    Logger.start()
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
     next_tick = time.monotonic() + _POLL_INTERVAL
