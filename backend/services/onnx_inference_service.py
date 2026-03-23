@@ -279,8 +279,8 @@ class OnnxInferenceService:
             try:
                 with open(meta_path) as f:
                     local_version = json.load(f).get("version")
-            except (json.JSONDecodeError, OSError):
-                pass
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"{LOG_PREFIX} Could not read local version for {model_name}: {e}")
 
         api_url = f"https://api.github.com/repos/{repo}/releases/latest"
         req = Request(api_url, headers={
