@@ -26,6 +26,8 @@ import os
 import re
 import time
 import logging
+
+logger = logging.getLogger(__name__)
 from services import ConfigService, FrontalCortexService, OrchestratorService, PromptQueue, SessionService
 from services.llm_service import create_llm_service
 from services.recent_topic_service import RecentTopicService
@@ -94,8 +96,8 @@ def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
             if raw:
                 try:
                     contexts.append(json.loads(raw))
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.debug(f"[DIGEST] Failed to parse image context JSON for {img_id!r}: {e}", exc_info=True)
                 break
             time.sleep(1)
         else:
@@ -316,7 +318,8 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 with open(prompt_path, 'r') as f:
                     template = f.read()
                 return template.replace('{{message}}', message)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[TRAIT_EXTRACT] Failed to load trait prompt template: {e}", exc_info=True)
                 return None
 
         t = threading.Thread(target=_extract_traits, daemon=True)
@@ -799,8 +802,8 @@ def unified_generate(topic, text, classification, thread_conv_service,
                     },
                 )
                 IntentService().emit(intent)
-            except Exception:
-                pass  # Non-critical — sse delivery is primary
+            except Exception as e:
+                logger.debug(f"[UNIFIED] Intent emit for narration failed (non-critical): {e}", exc_info=True)
 
         except Exception as _e:
             logging.error(f"[UNIFIED] Narration publish failed: {_e}", exc_info=True)
@@ -1257,8 +1260,8 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
                 source='cron_tool',
                 metadata=metadata,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[CRON TOOL] Failed to log cron tool execution event: {e}", exc_info=True)
 
         logging.info(
             f"[CRON TOOL] {tool_name} delivered: priority={priority} "
@@ -1330,8 +1333,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             working_memory_len=len(wm_turns),
             world_state_nonempty=bool(world_state)
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[PROACTIVE] Context warmth calculation failed: {e}", exc_info=True)
 
     # Collect signals for mode routing
     try:
@@ -1377,8 +1380,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
             from services.autonomous_actions.engagement_tracker import EngagementTracker
             tracker = EngagementTracker()
             tracker._update_engagement_state(proactive_id, 'router_ignored', -0.3)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[PROACTIVE] Failed to record router_ignored engagement state: {e}", exc_info=True)
         return f"Topic '{topic}' | Mode: PROACTIVE_IGNORED | Router filtered thought"
 
     # ACT mode doesn't make sense for proactive thoughts — fall back to UNIFIED
@@ -1450,8 +1453,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 from services.memory_client import MemoryClientService
                 store = MemoryClientService.create_connection()
                 store.setex(f"proactive_response_tag:{topic}", 14400, goal_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[PROACTIVE] Failed to store response tag in MemoryStore: {e}", exc_info=True)
 
         # Route through orchestrator for delivery
         try:
@@ -1489,8 +1492,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
                 source='proactive_drift',
                 metadata=metadata,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[PROACTIVE] Failed to log proactive_sent event: {e}", exc_info=True)
 
         logging.info(
             f"[PROACTIVE] Delivered: [{drift_type}] → {selected_mode} "
@@ -1519,8 +1522,8 @@ def _log_cycle_event(event_type: str, payload: dict, topic: str):
             topic=topic,
             source='cycle_service',
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Failed to log cycle event '{event_type}': {e}", exc_info=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2013,8 +2016,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         _busy_store.set('last_user_message_ts', _pace_utc_now().isoformat())
         _current_count = int(_busy_store.get('recent_message_count_5min') or 0)
         _busy_store.setex('recent_message_count_5min', 300, str(_current_count + 1))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Message pace tracking failed: {e}", exc_info=True)
 
     # Step 3b.1: Check for save trigger (completion/deferral signal)
     try:
@@ -2042,8 +2045,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         from services.autonomous_actions.communicate_action import CommunicateAction
         communicate = CommunicateAction()
         communicate.record_user_interaction()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] User interaction timestamp recording failed: {e}", exc_info=True)
 
     # Step 3f: Detect fork responses and store adaptive signals
     _detect_fork_response(text, thread_id)
@@ -2404,8 +2407,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             _fc = FrontalCortexService(cortex_config, cortex_prompt_map)
             _ctx_limit = _fc.get_context_limit()
             _ctx_budget = min(int(_ctx_limit * 0.6), 150_000)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[DIGEST] Context limit resolution failed, using default: {e}", exc_info=True)
         compaction_service.check_and_compact(topic, _ctx_budget)
     except Exception:
         logging.debug("[DIGEST] Compaction check failed", exc_info=True)
@@ -2416,8 +2419,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         from services.conversation_phase_service import get_conversation_phase_service
         _phase_svc_resp = get_conversation_phase_service()
         _phase_svc_resp.update(thread_id, response_data['response'], is_user=False, topic=topic)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Conversation phase update (assistant response) failed: {e}", exc_info=True)
 
     # Step 11b: Log system response event
     if interaction_log:
@@ -2490,7 +2493,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Clear thread-busy flag — observer can now safely scan this thread
     try:
         _busy_store.delete(f"thread_busy:{thread_id}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[DIGEST] Failed to clear thread-busy flag: {e}", exc_info=True)
 
     return f"Topic '{topic}' | Mode: {response_data['mode']} | Response generated in {response_data['generation_time']:.2f}s"

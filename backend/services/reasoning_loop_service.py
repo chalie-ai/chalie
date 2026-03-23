@@ -355,8 +355,8 @@ class ReasoningLoopService:
                 from services.database_service import get_shared_db_service
                 svc = DomainConfidenceService(get_shared_db_service(), self.store)
                 svc.invalidate_all()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Domain confidence cache invalidation failed: {e}", exc_info=True)
 
         # Track signal topic for goal inference pattern detection
         if signal.topic and signal.signal_type != 'user_message':
@@ -366,8 +366,8 @@ class ReasoningLoopService:
                 self.store.zremrangebyscore(
                     'goal_inference:signal_topics', '-inf', time.time() - 86400 * 14
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Goal inference topic tracking failed: {e}", exc_info=True)
 
     def _handle_reasoning_signal(self, signal: ReasoningSignal) -> None:
         """Full reasoning path: gates → seed → spreading activation → synthesis → action."""
@@ -390,8 +390,8 @@ class ReasoningLoopService:
                     f"skipping signal"
                 )
                 return
-        except Exception:
-            pass  # Fall through to existing checks
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Situation model proactivity check failed: {e}", exc_info=True)  # Fall through to existing checks
         # Gate 3: Deep focus
         if self._is_user_deep_focus():
             logger.info(f"{LOG_PREFIX} User in deep focus, skipping signal")
@@ -458,8 +458,8 @@ class ReasoningLoopService:
                     svc.invalidate_domain(domain)
                 else:
                     svc.invalidate_all()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Domain confidence invalidation on trait change failed: {e}", exc_info=True)
 
             # High-energy trait changes (corrections, overwrites) deserve reasoning
             if signal.activation_energy >= 0.6:
@@ -490,8 +490,8 @@ class ReasoningLoopService:
                         updated_at=signal.timestamp,
                         deadline=signal.metadata.get('deadline') if signal.metadata else None,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} World state task notification failed: {e}", exc_info=True)
 
             # Task completions (energy >= 0.6) may warrant reasoning about next steps
             if signal.activation_energy >= 0.6:
@@ -512,8 +512,8 @@ class ReasoningLoopService:
                         status='fired',
                         due_at=signal.metadata.get('due_at') if signal.metadata else None,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} World state schedule notification failed: {e}", exc_info=True)
 
             # Schedule fires always go through reasoning — they may need user surfacing
             self._handle_reasoning_signal(signal)
@@ -558,8 +558,8 @@ class ReasoningLoopService:
         if signal.topic:
             try:
                 self.store.zadd('reasoning_loop:active_topics', {signal.topic: time.time()})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Active topic tracking failed: {e}", exc_info=True)
 
         # Dispatch to digest worker — same thread-spawn pattern the WebSocket used to do
         text = signal.content or ''
@@ -576,8 +576,8 @@ class ReasoningLoopService:
                 logger.error(f"{LOG_PREFIX} digest_worker error for {request_id}: {e}", exc_info=True)
                 try:
                     self.store.publish(sse_channel, json.dumps({"error": str(e)}))
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"{LOG_PREFIX} Failed to publish error to SSE channel: {e2}", exc_info=True)
 
         thread = threading.Thread(target=run_digest, daemon=True)
         thread.start()
@@ -597,8 +597,8 @@ class ReasoningLoopService:
                 'reasoning_loop:active_topics', time.time() - 3600, '+inf'
             )
             context['active_topics'] = list(topics[:10]) if topics else []
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get active topics for context: {e}", exc_info=True)
 
         # Recent identity shifts
         try:
@@ -606,15 +606,15 @@ class ReasoningLoopService:
             context['recent_identity_shifts'] = [
                 json.loads(s) for s in shifts
             ] if shifts else []
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get identity shifts for context: {e}", exc_info=True)
 
         # Last task event
         try:
             task_event = self.store.get('reasoning_loop:last_task_event')
             context['last_task_event'] = json.loads(task_event) if task_event else None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get last task event for context: {e}", exc_info=True)
 
         # Recent expired threads
         try:
@@ -622,8 +622,8 @@ class ReasoningLoopService:
             context['recent_thread_expiries'] = [
                 json.loads(e) for e in expiries
             ] if expiries else []
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get expired threads for context: {e}", exc_info=True)
 
         # Last reasoning state (what was Chalie just thinking about?)
         try:
@@ -633,16 +633,16 @@ class ReasoningLoopService:
                     'seed_concept': state.get('last_seed_concept', ''),
                     'seed_type': state.get('last_seed_type', ''),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get last reasoning state for context: {e}", exc_info=True)
 
         # World model summary — scheduled items, tasks, lists, ambient, topics
         try:
             ws = self._get_world_state_service()
             if ws:
                 context['world_model'] = ws.get_world_model_summary()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get world model summary for context: {e}", exc_info=True)
 
         return context
 
@@ -708,8 +708,8 @@ class ReasoningLoopService:
         if ws:
             try:
                 ws.refresh_model()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} World model refresh failed: {e}", exc_info=True)
 
         # Goal inference: check for latent goals (cooldown-gated)
         if self._should_run_goal_inference():
@@ -752,7 +752,8 @@ class ReasoningLoopService:
                 if elapsed < cooldown:
                     return False
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Goal inference cooldown check failed: {e}", exc_info=True)
             return False
 
     def _run_goal_inference(self) -> None:
@@ -777,8 +778,8 @@ class ReasoningLoopService:
             # Set cooldown even on failure to prevent retry storms
             try:
                 self.store.set('goal_inference:last_run', str(time.time()))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Failed to set goal inference cooldown after failure: {e}", exc_info=True)
 
     # -- Goal ecology idle cycle ------------------------------------------------
 
@@ -825,8 +826,8 @@ class ReasoningLoopService:
                 try:
                     from services.goal_autobiography_bridge import refresh_all_goals
                     refresh_all_goals()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Autobiography alignment refresh failed: {e}", exc_info=True)
 
             # Cross-goal inference (~1% of cycles ≈ every 8 hours)
             if random.random() < 0.01:
@@ -837,8 +838,8 @@ class ReasoningLoopService:
                             f"{LOG_PREFIX} Cross-goal inference found "
                             f"{len(clusters)} cluster(s)"
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Cross-goal cluster detection failed: {e}", exc_info=True)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Goal ecology cycle failed (non-fatal): {e}")
@@ -995,8 +996,8 @@ class ReasoningLoopService:
             if pending > 0:
                 logger.info(f"{LOG_PREFIX} Priority signal waiting — preempting background reasoning")
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Priority preempt check failed: {e}", exc_info=True)
         return False
 
     # -- Fatigue ---------------------------------------------------------------
@@ -1033,7 +1034,8 @@ class ReasoningLoopService:
             from services.ambient_inference_service import AmbientInferenceService
             inference = AmbientInferenceService()
             return inference.is_user_deep_focus()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Deep focus check failed: {e}", exc_info=True)
             return False
 
     # -- Cooldown --------------------------------------------------------------
@@ -1264,16 +1266,16 @@ class ReasoningLoopService:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             rhythm_text = TemporalPatternService(db).get_rhythm_summary()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Temporal rhythm context fetch failed: {e}", exc_info=True)
 
         # Inject constraint context so drift thoughts can factor in blocked paths
         constraint_context = ''
         try:
             from services.constraint_memory_service import ConstraintMemoryService
             constraint_context = ConstraintMemoryService().format_for_prompt(mode='drift')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Constraint context fetch failed: {e}", exc_info=True)
 
         # Inject user traits so drift thoughts orbit the user's actual life
         # instead of generic philosophizing
@@ -1294,8 +1296,8 @@ class ReasoningLoopService:
                     for t in top_traits
                 ]
                 user_context = '\n'.join(lines)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} User traits context fetch failed: {e}", exc_info=True)
 
         user_message = self.prompt_template \
             .replace("{{seed_concept}}", seed_text) \
@@ -1550,8 +1552,8 @@ class ReasoningLoopService:
                                     action_name=r.get('action', 'unknown'),
                                     reason=r.get('reason', ''),
                                 )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"{LOG_PREFIX} Failed to record gate rejection in procedural memory: {e}", exc_info=True)
             finally:
                 db_service.close_pool()
         except Exception as e:
@@ -1564,7 +1566,8 @@ def reasoning_loop_worker(shared_state=None):
     try:
         config = ConfigService.get_agent_config("cognitive-drift")
         check_interval = config.get('check_interval', 300)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"{LOG_PREFIX} Failed to load cognitive-drift config, using default check_interval=300: {e}", exc_info=True)
         check_interval = 300
 
     engine = ReasoningLoopService(check_interval=check_interval)
