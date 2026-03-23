@@ -80,8 +80,8 @@ class SelfModelService:
         if raw:
             try:
                 return json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug(f"{LOG_PREFIX} Cache parse failed, refreshing: {e}", exc_info=True)
         return self._refresh()
 
     def has_noteworthy_state(self) -> bool:
@@ -241,13 +241,15 @@ class SelfModelService:
         try:
             topic = self._store.get("recent_topic")
             return topic if topic else "general"
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get active topic: {e}", exc_info=True)
             return "general"
 
     def _get_working_memory_depth(self, topic: str) -> int:
         try:
             return self._store.llen(f"working_memory:{topic}")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get working memory depth: {e}", exc_info=True)
             return 0
 
     def _get_fok_signal(self, topic: str) -> int:
@@ -255,7 +257,8 @@ class SelfModelService:
         try:
             value = self._store.get(f"fok:{topic}")
             return int(value) if value else 0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get FOK signal: {e}", exc_info=True)
             return 0
 
     def _get_recall_failure_rate(self, topic: str) -> float:
@@ -273,7 +276,8 @@ class SelfModelService:
                 if total > 0:
                     return round(failures / total, 3)
             return 0.0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
             return 0.0
 
     def _get_topic_age(self) -> str:
@@ -289,14 +293,16 @@ class SelfModelService:
                 else:
                     return f"{age_seconds // 3600}h {(age_seconds % 3600) // 60}min"
             return "unknown"
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get topic age: {e}", exc_info=True)
             return "unknown"
 
     def _get_focus_active(self, topic: str) -> bool:
         try:
             from services.focus_session_service import FocusSessionService
             return FocusSessionService().get_focus(topic) is not None
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get focus active: {e}", exc_info=True)
             return False
 
     def _get_skill_reliability(self) -> dict:
@@ -322,7 +328,8 @@ class SelfModelService:
                     "attempts": attempts,
                 }
             return result
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get skill reliability: {e}", exc_info=True)
             return {}
 
     # ── Operational layer ───────────────────────────────────────
@@ -348,8 +355,8 @@ class SelfModelService:
                     "total": data.get("total", 0),
                     "dead_threads": data.get("dead", []),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to get thread health: {e}", exc_info=True)
         return {"alive": 0, "total": 0, "dead_threads": []}
 
     def _get_provider_status(self) -> dict:
@@ -372,7 +379,8 @@ class SelfModelService:
                 "active_count": active_count,
                 "unassigned_jobs": sorted(unassigned),
             }
-        except Exception:
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to get provider status: {e}", exc_info=True)
             return {"active_count": 0, "unassigned_jobs": []}
 
     def _get_queue_depth(self) -> dict:
@@ -380,12 +388,14 @@ class SelfModelService:
         try:
             from services.background_llm_queue import QUEUE_KEY
             bg_llm = self._store.llen(QUEUE_KEY)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get bg_llm queue depth: {e}", exc_info=True)
             bg_llm = 0
 
         try:
             prompt_queue = self._store.llen("prompt-queue")
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get prompt queue depth: {e}", exc_info=True)
             prompt_queue = 0
 
         return {"bg_llm": bg_llm, "prompt_queue": prompt_queue}
@@ -421,7 +431,8 @@ class SelfModelService:
                 "trait_count": trait_count,
                 "avg_activation": avg_activation,
             }
-        except Exception:
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to get memory pressure: {e}", exc_info=True)
             return {"episode_count": 0, "concept_count": 0, "trait_count": 0, "avg_activation": 1.0}
 
     def _is_bg_llm_stale(self) -> bool:
@@ -437,7 +448,8 @@ class SelfModelService:
                 return elapsed > HEARTBEAT_STALE_THRESHOLD
             # No heartbeat yet — might be early startup
             return False
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to check bg LLM heartbeat staleness: {e}", exc_info=True)
             return False
 
     # ── Capability layer ────────────────────────────────────────
@@ -467,16 +479,16 @@ class SelfModelService:
                             capability_categories[category] = []
                         if name not in capability_categories[category]:
                             capability_categories[category].append(name)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to load tool inventory: {e}", exc_info=True)
 
         # Innate skills from authoritative registry
         innate_skills = []
         try:
             from services.innate_skills.registry import ALL_SKILL_NAMES
             innate_skills = sorted(ALL_SKILL_NAMES)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Failed to load innate skills: {e}", exc_info=True)
 
         # Provider features
         provider_features = self._get_provider_features()
@@ -514,8 +526,8 @@ class SelfModelService:
                     features["vision"] = True  # all cloud providers support vision
                 elif platform == "ollama":
                     features["local_inference"] = True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get provider features: {e}", exc_info=True)
         return features
 
     # ── Noteworthy assessment ───────────────────────────────────
@@ -551,8 +563,8 @@ class SelfModelService:
                             'signal': f"Goal evidence inactive: {goal_count} goals, 0 evidence",
                             'severity': 0.6,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Goal evidence check failed: {e}", exc_info=True)
 
                 # 3. Goal duplication: any goal title appearing 3+ times
                 try:
@@ -566,8 +578,8 @@ class SelfModelService:
                             'signal': f"Duplicate goals: '{dup[0][:50]}' x{dup[1]}",
                             'severity': 0.5,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Goal duplication check failed: {e}", exc_info=True)
 
                 # 4. Stuck tasks: in_progress with iterations >= max
                 try:
@@ -581,8 +593,8 @@ class SelfModelService:
                             'signal': f"{stuck} task(s) stuck: iterations exhausted but still in_progress",
                             'severity': 0.7,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Stuck tasks check failed: {e}", exc_info=True)
 
                 # 5. Proactive rejection rate: >95% in last 24h
                 try:
@@ -603,8 +615,8 @@ class SelfModelService:
                                 'signal': f"Proactive {rate:.0f}% rejection rate ({rejected}/{candidates} in 24h)",
                                 'severity': 0.4,
                             })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Proactive rejection rate check failed: {e}", exc_info=True)
 
                 # 6. Orphaned episodes: topic_id not in topics
                 try:
@@ -618,8 +630,8 @@ class SelfModelService:
                             'signal': f"{orphans} orphaned episodes (topic_id not in topics)",
                             'severity': 0.3,
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} Orphaned episodes check failed: {e}", exc_info=True)
 
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Pipeline health check failed: {e}")
@@ -777,7 +789,8 @@ class SelfModelService:
                     }
                     for r in rows
                 ]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Failed to get frequent gaps: {e}", exc_info=True)
             return []
 
     def link_gap_to_curiosity(self, gap_id: int, thread_id: str) -> None:
