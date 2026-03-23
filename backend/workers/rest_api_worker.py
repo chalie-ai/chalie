@@ -8,8 +8,9 @@ import sys
 import logging
 import runtime_config
 
+from utils.logger import Logger
 
-logging.basicConfig(level=logging.INFO)
+Logger.start()
 logger = logging.getLogger(__name__)
 
 

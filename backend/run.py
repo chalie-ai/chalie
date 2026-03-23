@@ -18,6 +18,8 @@ import os
 import sys
 import logging
 
+from utils.logger import Logger
+
 # Force numpy to fully initialize before any background thread imports it.
 # Python's import system isn't fully thread-safe for nested imports — concurrent
 # first-imports of numpy from multiple threads cause a circular import in
@@ -41,7 +43,7 @@ _backend_dir = os.path.dirname(os.path.abspath(__file__))
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 
-logging.basicConfig(level=logging.INFO)
+Logger.start()
 logger = logging.getLogger(__name__)
 
 
