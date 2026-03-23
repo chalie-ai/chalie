@@ -150,6 +150,14 @@ def main():
     except Exception as e:
         logger.warning(f"Settings initialization failed: {e}")
 
+    # Start the write-queue singleton so its daemon drain thread is running before
+    # any service worker tries to submit writes.  The singleton is created here
+    # (rather than lazily on first use) so the background thread is alive for the
+    # full lifetime of the process.
+    from services.write_queue_service import get_write_queue as _get_write_queue
+    _get_write_queue()
+    logger.info("[Startup] WriteQueueService started")
+
     # Import consumer's WorkerManager and all services
     from consumer import WorkerManager
 

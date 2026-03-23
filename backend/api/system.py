@@ -746,6 +746,29 @@ def observability_situation():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
+@system_bp.route('/system/observability/write-queue', methods=['GET'])
+@require_session
+def observability_write_queue():
+    """Write queue runtime statistics.
+
+    Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
+    singleton covering current backlog depth, completed writes, and error
+    count since process start.
+
+    Responses:
+        200: JSON object with keys ``queue_size`` (int), ``processed`` (int),
+             and ``errors`` (int).
+        500: JSON error object if the write-queue service is unavailable.
+    """
+    try:
+        from services.write_queue_service import get_write_queue
+        stats = get_write_queue().get_stats()
+        return jsonify(stats), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/write-queue error: {e}")
+        return jsonify({"error": "Failed to retrieve write queue stats"}), 500
+
+
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────
