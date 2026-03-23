@@ -13,6 +13,18 @@
       "caps": { "reasoning": "high", "structured": "medium", "creativity": "medium", "classification": "none" }
     },
     {
+      "id": "frontal-cortex-unified",
+      "name": "Frontal Cortex (Unified)",
+      "desc": "Unified generation path for user messages. Logs under this name; assign provider here.",
+      "caps": { "reasoning": "high", "structured": "medium", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "cognitive-triage",
+      "name": "Cognitive Triage",
+      "desc": "Lightweight classifier for routing, critic, and classification tasks.",
+      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high" }
+    },
+    {
       "id": "frontal-cortex-act",
       "name": "Act Mode",
       "desc": "Plans and executes multi-step tool actions. Up to 7 iterations per invocation.",
@@ -107,6 +119,18 @@
       "name": "Goal Strategy",
       "desc": "Generates 1-3 sentence strategy for actionable goals. Lightweight, fires once per goal transition.",
       "caps": { "reasoning": "medium", "structured": "medium", "creativity": "medium", "classification": "none" }
+    },
+    {
+      "id": "reflect-skill",
+      "name": "Reflect",
+      "desc": "On-demand experiential synthesis; what worked, what didn't, patterns noticed.",
+      "caps": { "reasoning": "medium", "structured": "medium", "creativity": "high", "classification": "none" }
+    },
+    {
+      "id": "failure-analysis",
+      "name": "Failure Analysis",
+      "desc": "Root-cause assessment and blame distribution for failed LLM/tool operations.",
+      "caps": { "reasoning": "medium", "structured": "high", "creativity": "none", "classification": "high" }
     }
   ]
 }
