@@ -8,6 +8,8 @@ When enough learning accumulates and surfacing conditions are met, enqueues a
 proactive candidate for delivery to the user.
 """
 
+# WS4 batch-5: silent catches fixed 2026-03-23
+
 import json
 import os
 import time
@@ -76,7 +78,8 @@ class CuriosityPursuitService:
                 if store.llen(queue_name) > 0:
                     return False
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug("%s MemoryStore queue check failed, failing open: %s", LOG_PREFIX, e)
             return True  # fail-open
 
     def run_once(self) -> Optional[Dict]:
@@ -148,8 +151,10 @@ class CuriosityPursuitService:
                     content=learning_summary[:200] if learning_summary else '',
                     activation_energy=0.5,
                 ))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "%s emit_reasoning_signal failed (non-fatal): %s", LOG_PREFIX, e
+                )
 
             # Check surfacing conditions
             self._check_surfacing(thread, thread_service)
@@ -331,8 +336,11 @@ class CuriosityPursuitService:
                 try:
                     data = json.loads(summary)
                     summary = data.get('response', data.get('summary', summary))
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    logger.debug(
+                        "%s LLM summary not JSON, using raw text (non-fatal): %s",
+                        LOG_PREFIX, e,
+                    )
 
             return summary if len(summary) > 10 else None
 
@@ -414,8 +422,11 @@ class CuriosityPursuitService:
                 db = get_shared_db_service()
                 trait_service = UserTraitService(db)
                 user_traits = trait_service.get_traits_for_prompt("")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    "%s User traits unavailable for surprise prompt (non-fatal): %s",
+                    LOG_PREFIX, e,
+                )
 
             system_prompt = (
                 system_prompt
@@ -492,8 +503,10 @@ class CuriosityPursuitService:
                 embedding = EmbeddingService().generate_embedding(message)
                 tracker = EngagementTracker(config={})
                 tracker.store_pending_content(proactive_id, message, embedding=embedding)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    "%s Engagement tracking store failed (non-fatal): %s", LOG_PREFIX, e
+                )
 
             # Store thread_id in MemoryStore for feedback routing
             store.setex(
@@ -550,7 +563,11 @@ class CuriosityPursuitService:
                 # Generate embedding for the seed topic
                 try:
                     topic_embedding = embedding_service.generate_embedding(seed_topic)
-                except Exception:
+                except Exception as e:
+                    logger.debug(
+                        "%s Embedding generation failed for topic '%s': %s",
+                        LOG_PREFIX, seed_topic, e,
+                    )
                     continue
 
                 # Cosine similarity
@@ -610,7 +627,8 @@ def curiosity_pursuit_worker(shared_state=None):
     try:
         config = ConfigService.resolve_agent_config("cognitive-drift")
         cycle_interval = config.get('curiosity_pursuit_interval', 21600)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to load cognitive-drift config, using default interval: %s", e)
         cycle_interval = 21600
 
     service = CuriosityPursuitService(cycle_interval=cycle_interval)

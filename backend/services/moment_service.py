@@ -11,6 +11,8 @@ Side effects preserved:
   - Background enrichment via moment_enrichment_service
 """
 
+# WS4 batch-5: silent catches audited 2026-03-23 — zero silent catches found
+
 import json
 import logging
 import struct

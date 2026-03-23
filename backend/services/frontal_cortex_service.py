@@ -14,6 +14,8 @@ Re-exports ``ChatHistoryProcessor`` and ``_ONBOARDING_SCHEDULE`` so any
 existing callers that import those names from this module continue to work.
 """
 
+# WS4 batch-5: silent catches audited 2026-03-23 — zero try/except blocks in facade
+
 from services.prompt_assembly_service import (
     PromptAssemblyService,
     _ONBOARDING_SCHEDULE,
