@@ -124,9 +124,10 @@ class TestPersistentTaskService:
 
         assert result is True
         # Verify the SQL update was executed
-        executed_sql = cursor.execute.call_args[0][0]
-        assert 'iterations_used = iterations_used + 1' in executed_sql
-        assert 'progress' in executed_sql
+        all_sqls = [x[0][0] for x in cursor.execute.call_args_list]
+        update_sqls = [s for s in all_sqls if 'iterations_used = iterations_used + 1' in s]
+        assert len(update_sqls) > 0
+        assert 'progress' in update_sqls[0]
 
     # ── Jaccard Similarity / Duplicate Detection ─────────────────────
 
