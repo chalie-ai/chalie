@@ -40,7 +40,8 @@ class DecayEngineService:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
             self.episodic_decay_rate = episodic_config.get('episodic_decay_rate', 0.05)
             self.semantic_decay_rate = episodic_config.get('semantic_decay_rate', 0.03)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[DECAY ENGINE] Failed to load decay rates from config, using defaults: {e}")
             self.episodic_decay_rate = 0.05
             self.semantic_decay_rate = 0.03
 
@@ -71,7 +72,8 @@ class DecayEngineService:
                     if richness < 0.1:
                         logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.1, skipping cycle")
                         continue
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"[DECAY ENGINE] Memory richness check failed, running decay anyway: {e}")
                     richness = 1.0  # fail-open: run decay if telemetry unavailable
 
                 logger.info("[DECAY ENGINE] Running decay cycle...")
@@ -353,7 +355,8 @@ class DecayEngineService:
                                 if new_ttl < ttl:
                                     store.expire(key, new_ttl)
                                     count += 1
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[DECAY ENGINE] Failed to process external knowledge key '{key}': {e}")
                         continue
 
                 if cursor == 0:
@@ -441,7 +444,8 @@ def decay_engine_worker(shared_state=None):
     try:
         episodic_config = ConfigService.get_agent_config("episodic-memory")
         decay_interval = episodic_config.get('decay_interval_seconds', 1800)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[DECAY ENGINE] Failed to load decay_interval from config, using default 1800s: {e}")
         decay_interval = 1800
 
     service = DecayEngineService(decay_interval=decay_interval)
