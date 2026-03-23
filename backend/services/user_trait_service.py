@@ -158,8 +158,8 @@ def _nudge_uncertainty_tolerance(db_service, direction: float) -> None:
             reward_signal=direction * 0.5,
             topic='self_calibration',
         )
-    except Exception:
-        pass  # Identity vector may not exist yet — safe to skip
+    except Exception as e:
+        logger.debug(f"[USER_TRAITS] Uncertainty tolerance nudge skipped (vector may not exist yet): {e}", exc_info=False)
 
 
 from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
@@ -279,8 +279,8 @@ class UserTraitService:
                                 content=f"Reinforced '{trait_key}' = '{trait_value}' (confidence={new_confidence:.2f})",
                                 activation_energy=0.3,
                             ))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"[USER_TRAITS] Reinforcement reasoning signal skipped: {e}", exc_info=False)
 
                         # Phase 4 — evidence-based resolution: reinforcement resolves uncertainties
                         # on this trait if the other side is significantly weaker
@@ -336,8 +336,8 @@ class UserTraitService:
                                 content=f"Changed '{trait_key}': '{old_value}' → '{trait_value}' (confidence={confidence:.2f})",
                                 activation_energy=0.6,
                             ))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"[USER_TRAITS] Overwrite reasoning signal skipped: {e}", exc_info=False)
 
                         # Create uncertainty for the conflict (confidence dominance path)
                         if old_trait_id:
@@ -436,8 +436,8 @@ class UserTraitService:
                             content=f"New trait '{trait_key}' = '{trait_value}' (confidence={confidence:.2f})",
                             activation_energy=0.5,
                         ))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[USER_TRAITS] New-trait reasoning signal skipped: {e}", exc_info=False)
 
                 cursor.close()
                 return True
@@ -758,8 +758,8 @@ class UserTraitService:
                             content=f"User corrected '{trait_key}' → '{new_value}'",
                             activation_energy=0.7,
                         ))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[USER_TRAITS] Correction reasoning signal skipped: {e}", exc_info=False)
 
                     # Phase 3 — Resolution feedback loop: resolve linked uncertainties
                     # and Phase 4 — lower uncertainty tolerance (user correcting us)
@@ -808,8 +808,8 @@ class UserTraitService:
                             content=f"User set new trait '{trait_key}' = '{new_value}'",
                             activation_energy=0.7,
                         ))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[USER_TRAITS] New-trait-from-correction reasoning signal skipped: {e}", exc_info=False)
             return True
         except Exception as e:
             logger.error(f"[TRAITS] Correction failed for {trait_key}: {e}")
@@ -848,8 +848,8 @@ class UserTraitService:
                     content=f"User deleted trait '{trait_key}'",
                     activation_energy=0.7,
                 ))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[USER_TRAITS] Deletion reasoning signal skipped: {e}", exc_info=False)
 
             # Phase 4 — lower uncertainty tolerance (user deleting = wants accuracy)
             try:
