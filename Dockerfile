@@ -51,10 +51,9 @@ COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY run.sh VERSION ./
 
-# Data directory for SQLite DB and runtime files
+# Data directory for SQLite DB, encryption key, and runtime files.
 RUN mkdir -p /data
 VOLUME ["/data"]
-
 ENV CHALIE_DB_PATH=/data/chalie.db
 
 EXPOSE 8081

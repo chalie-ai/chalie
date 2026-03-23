@@ -46,12 +46,12 @@ def get_stats(job_name: str, hours: int = 24) -> dict:
 
     calls = [
         {
-            'provider': r[0],
-            'model': r[1],
-            'tokens_input': r[2],
-            'tokens_output': r[3],
-            'latency_ms': r[4],
-            'created_at': r[5],
+            'provider': r['provider'],
+            'model': r['model'],
+            'tokens_input': r['tokens_input'],
+            'tokens_output': r['tokens_output'],
+            'latency_ms': r['latency_ms'],
+            'created_at': r['created_at'],
         }
         for r in rows
     ]

@@ -47,6 +47,20 @@ SALIENCE_MAP = {
     'transient': 4,
 }
 
+# Topics that represent internal system telemetry — not user-facing knowledge.
+# Storing these as episodes pollutes the memory pipeline with self-referential
+# operational data instead of learning about the user.
+_INTERNAL_TOPICS = frozenset({
+    'self_reflection', 'gate_rejection', 'system_telemetry',
+})
+
+# Keywords in tool output that indicate internal system events.
+_INTERNAL_KEYWORDS = (
+    'blocked by', 'gate rejected', 'type mismatch',
+    'SEED_THREAD', 'PLAN blocked', 'COMMUNICATE blocked', 'REFLECT blocked',
+    'action_gate_rejected', 'fatigue budget',
+)
+
 
 class ExperienceAssimilationService:
     """
@@ -237,6 +251,18 @@ class ExperienceAssimilationService:
         tool_outputs = item.get('tool_outputs', [])
 
         if not tool_outputs:
+            return
+
+        # Filter internal telemetry — don't learn about our own plumbing
+        if topic in _INTERNAL_TOPICS:
+            logger.debug(f"{LOG_PREFIX} Skipping internal topic '{topic}'")
+            return
+
+        combined_output = ' '.join(
+            str(o.get('result', '')) for o in tool_outputs
+        )
+        if any(kw in combined_output for kw in _INTERNAL_KEYWORDS):
+            logger.debug(f"{LOG_PREFIX} Skipping internal telemetry in topic '{topic}'")
             return
 
         if self._is_topic_on_cooldown(topic):
