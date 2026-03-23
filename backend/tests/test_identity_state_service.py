@@ -293,9 +293,9 @@ class TestIdentityStateServiceOnboardingState:
                 'device': {'class': 'iPhone'},
             }
 
-            from services.frontal_cortex_service import FrontalCortexService
+            from services.prompt_assembly_service import PromptAssemblyService
 
-            svc = object.__new__(FrontalCortexService)
+            svc = object.__new__(PromptAssemblyService)
             result = svc._get_user_state()
 
         assert 'Malta' in result
