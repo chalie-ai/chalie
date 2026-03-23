@@ -208,7 +208,8 @@ class ACTOrchestrator:
         # Auto-calculate context budget from provider limits
         try:
             _context_limit = cortex_service.get_context_limit()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} get_context_limit failed, using fallback 32000: {e}")
             _context_limit = 32000  # Safe fallback
         _context_budget = min(int(_context_limit * 0.6), 150_000)
         logger.info(
@@ -519,8 +520,8 @@ class ACTOrchestrator:
                             topic, 'tool', _result[:80000],
                             tool_name=_atype,
                         )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"{LOG_PREFIX} Transcript append failed (non-fatal): {e}")
 
             # ── Smart repetition detection (embedding-based) ────────────
             if self.smart_repetition and not termination_reason:
@@ -625,8 +626,8 @@ class ACTOrchestrator:
                 topic=topic,
                 source='act_loop',
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"{LOG_PREFIX} Loop telemetry write failed (non-fatal): {e}")
 
         # ── Post-loop: automatic reflection (fire-and-forget) ────────
         _maybe_auto_reflect(
@@ -856,7 +857,8 @@ class ACTOrchestrator:
                 for l in all_lessons[:3]
             ]
             return '\n'.join(lines)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _get_cautionary_lessons failed (non-fatal): {e}")
             return ''
 
     def _record_failure_lesson(
@@ -968,8 +970,8 @@ class ACTOrchestrator:
                     f"(threshold={self.repetition_sim_threshold})"
                 )
                 return 'smart_repetition'
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} _check_smart_repetition failed (non-fatal): {e}")
         return None
 
 
@@ -1029,8 +1031,8 @@ def _maybe_auto_reflect(
             logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown active for {topic}")
             return
         store.setex(cooldown_key, _AUTO_REFLECT_COOLDOWN_S, '1')
-    except Exception:
-        pass  # If cooldown check fails, proceed anyway
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown check failed, proceeding: {e}")
 
     reason = (
         f"high_value({total_net_value:.1f})" if total_net_value >= _AUTO_REFLECT_HIGH_VALUE

@@ -25,7 +25,8 @@ def _check_webhook_rate_limit(tool_name: str) -> bool:
         if count == 1:
             store.expire(key, 60)  # 1-minute sliding window
         return count <= 30
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[TOOLS API] Rate-limit check failed for '{tool_name}', failing open: {e}")
         return True  # Fail open on MemoryStore errors
 
 
@@ -88,7 +89,8 @@ def tool_webhook(tool_name):
         # Parse body
         try:
             webhook_body = request.get_json(force=True) or {}
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[TOOLS API] Failed to parse webhook JSON body for '{tool_name}': {e}")
             webhook_body = {}
 
         # Dialog callback — routes "tool" output through full cognitive pipeline
@@ -557,8 +559,8 @@ def oauth_callback(tool_name: str):
                     brain_url = f"{scheme}://{host}/brain/"
                     from flask import redirect as flask_redirect
                     return flask_redirect(f"{brain_url}?oauth_success=true&tool={tool_name}")
-            except Exception:
-                pass  # Fall through to normal error handling
+            except Exception as e:
+                logger.debug(f"[TOOLS API] OAuth status check during duplicate callback failed for '{tool_name}': {e}")
 
         scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
         host = request.headers.get("X-Forwarded-Host", request.host)

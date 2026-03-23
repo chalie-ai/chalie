@@ -150,7 +150,8 @@ def system_status():
                         cursor.execute(f"SELECT COUNT(*) FROM {table}")
                         row = cursor.fetchone()
                         result["storage"][table] = row[0] if row else 0
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"[SYSTEM] Count query failed for table '{table}': {e}")
                         result["storage"][table] = -1
         except Exception as e:
             result["status"] = "degraded"
@@ -160,15 +161,16 @@ def system_status():
         for queue_name in ["prompt-queue", "output-queue"]:
             try:
                 result["queues"][queue_name] = store.llen(queue_name)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[SYSTEM] Queue depth check failed for '{queue_name}': {e}")
                 result["queues"][queue_name] = -1
 
         # Last proactive drift run
         try:
             last_run = store.get("cognitive_drift:last_run")
             result["last_proactive_run"] = last_run if last_run else None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[SYSTEM] Failed to read cognitive_drift:last_run: {e}")
 
         return jsonify(result), 200
 
@@ -283,8 +285,8 @@ def observability_tools():
         try:
             from services.tool_registry_service import ToolRegistryService
             valid_names = set(ToolRegistryService().tools.keys()) | ALL_SKILL_NAMES
-        except Exception:
-            pass  # If registry is unavailable, show all profiles rather than nothing
+        except Exception as e:
+            logger.warning(f"[OBS] Tool registry unavailable, showing all profiles: {e}")
 
         if valid_names is not None:
             placeholders = ','.join('?' * len(valid_names))
@@ -310,8 +312,8 @@ def observability_tools():
             perf_stats = ToolPerformanceService().get_all_tool_stats(30)
             for s in (perf_stats or []):
                 perf_by_name[s.get('tool_name', '')] = s
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[OBS] Tool performance stats unavailable: {e}")
 
         import json as _json
         tools = []
@@ -320,7 +322,8 @@ def observability_tools():
             if isinstance(triggers, str):
                 try:
                     triggers = _json.loads(triggers)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[OBS] Failed to parse triage_triggers JSON for tool '{r.get('tool_name', '?')}': {e}")
                     triggers = []
             entry = {
                 'tool_name': r['tool_name'],
