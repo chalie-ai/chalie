@@ -392,6 +392,32 @@ class ClientContextService:
         """Check if the user just returned from an extended absence."""
         return bool(self._store.get(REENTRY_KEY))
 
+    def get_timezone_offset(self) -> 'Optional[int]':
+        """Return the user's UTC offset in minutes, derived from the stored IANA timezone.
+
+        Positive values mean east of UTC (e.g. UTC+2 → 120).
+        Negative values mean west of UTC (e.g. UTC-5 → -300).
+        Returns None if no timezone is stored or the ZoneInfo lookup fails.
+        """
+        ctx = self.get()
+        timezone = ctx.get("timezone")
+        if not timezone:
+            return None
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import datetime, timezone as dt_timezone
+            # Use the current wall-clock moment so DST is accounted for correctly.
+            now_utc = datetime.now(dt_timezone.utc)
+            tz = ZoneInfo(timezone)
+            local_dt = now_utc.astimezone(tz)
+            # utcoffset() returns a timedelta; convert to whole minutes.
+            offset = local_dt.utcoffset()
+            if offset is not None:
+                return int(offset.total_seconds() // 60)
+        except Exception as e:
+            logging.debug(f"[CLIENT CONTEXT] get_timezone_offset failed: {e}")
+        return None
+
     # ── Demographic Trait Seeding ──────────────────────────────────────
 
     def _seed_demographic_traits(self, ctx: dict):
