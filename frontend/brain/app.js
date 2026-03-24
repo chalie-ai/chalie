@@ -2209,6 +2209,36 @@ async function loadDocuments() {
     }
 }
 
+/**
+ * Renders a single document row as an HTML string.
+ *
+ * For deleted documents, renders two icon-only action buttons:
+ *   - Restore (undo-2 icon)
+ *   - Purge / permanently delete (trash-2 icon)
+ *
+ * For active documents, renders two icon-only action buttons:
+ *   - Preview (eye icon) — opens the preview modal
+ *   - Delete (x icon) — triggers soft delete with toast undo
+ *
+ * No inline `onclick` handlers are emitted; all interactions are handled
+ * via event delegation on the `#docList` container.
+ *
+ * @param {Object} doc - Document object from the API.
+ * @param {string} doc.id - Unique document ID.
+ * @param {string} doc.original_name - Human-readable filename.
+ * @param {string} [doc.mime_type] - MIME type used for icon selection.
+ * @param {number} [doc.file_size_bytes] - File size for display.
+ * @param {number} [doc.page_count] - Page count for display.
+ * @param {number} [doc.chunk_count] - Chunk count for display.
+ * @param {string} [doc.doc_date] - Document date for display.
+ * @param {string} [doc.doc_category] - Category label for badge.
+ * @param {string} [doc.doc_project] - Project label for pill.
+ * @param {string} [doc.status] - Processing status ('ready', 'failed', 'processing', …).
+ * @param {string|null} [doc.deleted_at] - ISO timestamp if soft-deleted, else null/undefined.
+ * @param {string} [doc.watched_folder_id] - Present if sourced from a watched folder.
+ * @param {Object} [doc.extracted_metadata] - Extracted metadata map.
+ * @returns {string} HTML string for the document row.
+ */
 function renderDocumentRow(doc) {
     const meta = doc.extracted_metadata || {};
     const docType = meta.document_type?.value || '';
@@ -2239,19 +2269,18 @@ function renderDocumentRow(doc) {
 
     let actions = '';
     if (isDeleted) {
-        actions = `<button class="tool-card__btn" onclick="restoreDocument('${doc.id}')">Restore</button>
-                   <button class="tool-card__btn btn-danger-sm" onclick="purgeDocument('${doc.id}')">Purge</button>`;
+        actions = `<button class="tool-card__btn doc-row__restore" title="Restore"><i data-lucide="undo-2"></i></button>
+                   <button class="tool-card__btn doc-row__purge" title="Permanently delete"><i data-lucide="trash-2"></i></button>`;
     } else {
-        actions = `<button class="tool-card__btn btn-danger-sm" onclick="deleteDocument('${doc.id}')">Delete</button>
-                   <button class="tool-card__btn" onclick="previewDocument('${doc.id}')">View</button>
-                   <button class="tool-card__btn" onclick="window.open('${API_BASE}/documents/${doc.id}/preview', '_blank')">Preview</button>`;
+        actions = `<button class="tool-card__btn doc-row__preview" title="Preview"><i data-lucide="eye"></i></button>
+                   <button class="tool-card__btn doc-row__delete" title="Delete"><i data-lucide="x"></i></button>`;
     }
 
     const imageThumbnail = doc.mime_type?.startsWith('image/')
         ? `<div class="doc-row__image-preview"><img src="${API_BASE}/documents/${doc.id}/preview" alt="${escapeHtml(doc.original_name)}" class="doc-row__image-thumb" loading="lazy"></div>`
         : '';
 
-    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}" data-doc-id="${doc.id}">
         ${imageThumbnail}
         <div class="doc-row__info">
             <div class="doc-row__name">
@@ -2332,11 +2361,12 @@ function renderDocuments() {
                 </div>
             </div>
         `).join('');
-        return;
+    } else {
+        // Flat view (default)
+        el.innerHTML = docs.map(renderDocumentRow).join('');
     }
 
-    // Flat view (default)
-    el.innerHTML = docs.map(renderDocumentRow).join('');
+    // Always initialise Lucide icons after DOM injection, for both grouped and flat views.
     if (typeof lucide !== 'undefined') lucide.createIcons({ node: el });
 }
 
@@ -2495,7 +2525,7 @@ document.getElementById('docSearchInput')?.addEventListener('input', () => rende
 document.getElementById('docUploadBtn')?.addEventListener('click', () => {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
+    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml,.jpg,.jpeg,.png,.webp,.gif';
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files[0];
         if (!file) return;
