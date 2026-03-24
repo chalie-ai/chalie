@@ -181,6 +181,7 @@ def main():
     from services.curiosity_pursuit_service import curiosity_pursuit_worker
     from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
+    from services.world_awareness_service import world_awareness_worker
 
     # Initialize worker manager
     manager = WorkerManager()
@@ -197,6 +198,7 @@ def main():
     manager.register_service("curiosity-pursuit-service", curiosity_pursuit_worker)
     manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
+    manager.register_service("world-awareness-service", world_awareness_worker)
 
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
