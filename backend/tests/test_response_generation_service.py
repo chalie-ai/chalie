@@ -18,10 +18,11 @@ All imports are taken from the canonical module
 """
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from services.response_generation_service import (
     ChatHistoryProcessor,
+    ResponseGenerationService,
     _extract_response_from_broken_json,
 )
 
@@ -392,3 +393,466 @@ class TestExtractResponseFromBrokenJson:
         result = _extract_response_from_broken_json(text)
         assert result is not None
         assert "first value" in result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TestParseResponseTextLayers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestParseResponseTextLayers:
+    """Unit tests for :meth:`ResponseGenerationService._parse_response_text`.
+
+    Covers all JSON recovery layers (0 through 5), markdown fence stripping,
+    field validation (mode normalisation, confidence clamping, action
+    filtering, alternative_paths validation), and edge cases such as non-dict
+    responses and empty input.
+
+    A fresh :class:`ResponseGenerationService` instance is created for each
+    test via :meth:`_make_service`, which patches
+    ``services.llm_service.create_llm_service`` so no real LLM provider is
+    instantiated.
+    """
+
+    @staticmethod
+    def _make_service() -> ResponseGenerationService:
+        """Create a ResponseGenerationService backed by a mocked LLM.
+
+        Patches ``services.llm_service.create_llm_service`` to return a plain
+        :class:`~unittest.mock.MagicMock` so the constructor completes without
+        any network access or import-time side effects.
+
+        Returns:
+            A ready-to-use :class:`ResponseGenerationService` instance whose
+            ``llm`` attribute is a :class:`~unittest.mock.MagicMock`.
+        """
+        with patch("services.llm_service.create_llm_service", return_value=MagicMock()):
+            svc = ResponseGenerationService({})
+        return svc
+
+    # ── Layer 0 ──────────────────────────────────────────────────────────────
+
+    def test_layer0_valid_json_parses_directly(self):
+        """Layer 0: a well-formed JSON string must parse without recovery.
+
+        Verifies the fast path (direct ``json.loads``) for clean LLM output
+        and asserts that all standard result keys are populated with the
+        expected values.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "Hello!", "confidence": 0.8}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "Hello!"
+        assert result["confidence"] == pytest.approx(0.8)
+        assert result["generation_time"] == pytest.approx(0.1)
+
+    def test_layer0_act_mode_with_valid_actions(self):
+        """Layer 0: ACT mode with a valid actions list must preserve those actions.
+
+        Confirms that the ``actions`` list is returned intact when the parsed
+        JSON specifies ACT mode and contains at least one dict with a
+        ``'type'`` key.
+        """
+        svc = self._make_service()
+        text = (
+            '{"mode": "ACT", "response": "", '
+            '"actions": [{"type": "search", "query": "python"}], '
+            '"confidence": 0.9}'
+        )
+        result = svc._parse_response_text(text, 0.2)
+        assert result["mode"] == "ACT"
+        assert result["actions"] is not None
+        assert len(result["actions"]) == 1
+        assert result["actions"][0]["type"] == "search"
+
+    def test_layer0_ignore_mode_preserved(self):
+        """Layer 0: IGNORE mode must pass through the mode validator unchanged.
+
+        Ensures the third valid mode value is not incorrectly coerced to
+        UNIFIED by the normalisation step.
+        """
+        svc = self._make_service()
+        text = '{"mode": "IGNORE", "response": "", "confidence": 0.5}'
+        result = svc._parse_response_text(text, 0.05)
+        assert result["mode"] == "IGNORE"
+
+    # ── Layer 0b ─────────────────────────────────────────────────────────────
+
+    def test_layer0b_multi_object_json_uses_first_object(self):
+        """Layer 0b: two concatenated JSON objects must yield only the first.
+
+        Simulates a provider response where two objects are emitted back-to-
+        back.  ``json.loads`` raises "Extra data"; the ``raw_decode`` fallback
+        must recover the first valid object.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "first"}\n{"extra": "second"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "first"
+
+    # ── Layer 1 ──────────────────────────────────────────────────────────────
+
+    def test_layer1_invalid_escape_sequence_fixed_and_parsed(self):
+        r"""Layer 1: an invalid ``\$`` escape must be repaired before parsing.
+
+        The regex ``re.sub(r'\\([^"\\/bfnrtu])', r'\1', ...)`` converts
+        ``\$`` to ``$``; the resulting text must be valid JSON.
+        """
+        svc = self._make_service()
+        # Raw string: the JSON value contains \$ which is invalid in JSON
+        text = r'{"mode": "UNIFIED", "response": "cost is \$10"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert "$10" in result["response"]
+
+    # ── Layer 1b ─────────────────────────────────────────────────────────────
+
+    def test_layer1b_escape_fixed_multi_object_json_uses_first(self):
+        r"""Layer 1b: escape-fixed multi-object text must yield the first object.
+
+        After the invalid-escape fix converts the text to syntactically valid
+        JSON fragments, the resulting string may still contain two objects
+        (triggering an "Extra data" error); ``raw_decode`` must recover the
+        first.
+        """
+        svc = self._make_service()
+        # After fixing \$ -> $, the two-object structure triggers "Extra data"
+        text = '{"mode": "UNIFIED", "response": "value \\$end"}\n{"stray": 1}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert "end" in result["response"]
+
+    # ── Layer 2 ──────────────────────────────────────────────────────────────
+
+    def test_layer2_json_embedded_in_prose_is_extracted(self):
+        """Layer 2: a JSON object embedded in prose must be found by brace scanning.
+
+        The LLM sometimes wraps its JSON output in explanation text.  The
+        brace extractor (``find('{')`` / ``rfind('}')``) must locate and parse
+        the embedded object, ignoring surrounding prose.
+        """
+        svc = self._make_service()
+        text = (
+            'Sure, here is my answer: '
+            '{"mode": "UNIFIED", "response": "embedded"} — done.'
+        )
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "embedded"
+
+    def test_layer2_json_after_newline_prose_extracted(self):
+        """Layer 2: JSON appearing after a prose preamble line must be extracted.
+
+        Verifies that multi-line preambles (prose on line 1, JSON on line 2)
+        are handled correctly by the brace scanner.
+        """
+        svc = self._make_service()
+        text = 'Let me respond:\n{"mode": "UNIFIED", "response": "multiline"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "multiline"
+
+    # ── Layer 3 ──────────────────────────────────────────────────────────────
+
+    def test_layer3_literal_newline_in_string_value_fixed(self):
+        """Layer 3: a literal newline (chr 10) inside a JSON string must be escaped.
+
+        JSON forbids bare control characters in string values.  The character-
+        by-character loop replaces each such character with its JSON escape
+        sequence so the parse can succeed.
+        """
+        svc = self._make_service()
+        # Embed a real newline character (chr 10) inside the JSON string value
+        text = '{"mode": "UNIFIED", "response": "line1' + chr(10) + 'line2"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert "line1" in result["response"]
+        assert "line2" in result["response"]
+
+    def test_layer3_literal_tab_in_string_value_fixed(self):
+        """Layer 3: a literal tab character (chr 9) inside a JSON string must be escaped.
+
+        Mirrors the newline case; the character loop must also replace bare
+        tab characters with ``\\t`` before attempting to parse.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "col1' + chr(9) + 'col2"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert "col1" in result["response"]
+        assert "col2" in result["response"]
+
+    # ── Layer 4 ──────────────────────────────────────────────────────────────
+
+    def test_layer4_broken_json_unescaped_inner_quotes_extracted(self):
+        """Layer 4: broken JSON with unescaped inner quotes must be recovered.
+
+        :func:`_extract_response_from_broken_json` locates the ``"response"``
+        value by scanning for a sibling key boundary, bypassing the standard
+        JSON parser entirely.
+        """
+        svc = self._make_service()
+        # Unescaped inner quotes make this syntactically invalid JSON
+        text = '{"response": "He said "hello" to her", "mode": "UNIFIED"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["response"] is not None
+        assert len(result["response"]) > 0
+        assert "hello" in result["response"]
+
+    # ── Layer 5 ──────────────────────────────────────────────────────────────
+
+    def test_layer5_pure_prose_wrapped_as_unified(self):
+        """Layer 5: a plain prose string with no JSON must be wrapped as UNIFIED.
+
+        When no JSON is recoverable from any layer, the raw text becomes the
+        ``response`` value and ``mode`` is forced to UNIFIED.
+        """
+        svc = self._make_service()
+        text = "I'm sorry, I don't know the answer to that question."
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == text
+
+    def test_layer5_empty_string_raises_exception(self):
+        """Layer 5: an entirely empty LLM response must raise an Exception.
+
+        An empty response is unrecoverable; the parser must propagate an
+        exception rather than silently returning an empty result dict.
+        """
+        svc = self._make_service()
+        with pytest.raises(Exception, match="[Ee]mpty"):
+            svc._parse_response_text("", 0.1)
+
+    # ── Markdown fence stripping ─────────────────────────────────────────────
+
+    def test_markdown_fence_json_stripped_before_parse(self):
+        r"""Markdown \`\`\`json fences must be removed before JSON parsing.
+
+        Some LLM providers wrap JSON output in fenced code blocks; the
+        stripper must handle the ``\`\`\`json`` variant before any parse
+        attempt.
+        """
+        svc = self._make_service()
+        text = '```json\n{"mode": "UNIFIED", "response": "fenced"}\n```'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "fenced"
+
+    def test_markdown_fence_plain_stripped_before_parse(self):
+        r"""Plain \`\`\` fences (no language tag) must also be stripped.
+
+        Covers the ``\`\`\`` variant (without a language specifier) to ensure
+        the stripper is not limited to the ``json``-tagged form.
+        """
+        svc = self._make_service()
+        text = '```\n{"mode": "UNIFIED", "response": "plain-fenced"}\n```'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "plain-fenced"
+
+    # ── Field validation — mode ───────────────────────────────────────────────
+
+    def test_mode_invalid_string_defaults_to_unified(self):
+        """An unrecognised mode string must be normalised to UNIFIED.
+
+        Protects downstream consumers from unexpected mode values that do not
+        appear in the ``valid_modes`` list (``['ACT', 'UNIFIED', 'IGNORE']``).
+        """
+        svc = self._make_service()
+        text = '{"mode": "CUSTOM_MODE", "response": "hello"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+
+    # ── Field validation — confidence ────────────────────────────────────────
+
+    def test_confidence_above_one_clamped_to_one(self):
+        """A confidence value above 1.0 must be clamped to exactly 1.0.
+
+        LLMs occasionally return out-of-range confidence scores; the upper
+        clamp must enforce the [0, 1] contract.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "hi", "confidence": 1.9}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["confidence"] == pytest.approx(1.0)
+
+    def test_confidence_below_zero_clamped_to_zero(self):
+        """A negative confidence value must be clamped to exactly 0.0.
+
+        Enforces the lower bound of the [0, 1] confidence range.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "hi", "confidence": -0.5}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["confidence"] == pytest.approx(0.0)
+
+    def test_confidence_non_numeric_defaults_to_half(self):
+        """A non-numeric confidence value must fall back to the default of 0.5.
+
+        When ``float(confidence)`` raises a ``ValueError``, the parser must
+        substitute the safe midpoint default.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "hi", "confidence": "high"}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["confidence"] == pytest.approx(0.5)
+
+    # ── Field validation — actions ───────────────────────────────────────────
+
+    def test_actions_infer_act_mode_when_mode_absent(self):
+        """A non-empty actions list must cause ACT mode to be inferred.
+
+        ACT prompt output may omit the ``mode`` field; the parser must set
+        ``mode`` to ACT whenever a valid actions list is present.
+        """
+        svc = self._make_service()
+        text = '{"response": "", "actions": [{"type": "lookup", "key": "x"}]}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "ACT"
+        assert result["actions"] is not None
+
+    def test_actions_without_type_key_filtered_out(self):
+        """Action dicts missing the ``'type'`` key must be silently discarded.
+
+        Only dicts with a ``'type'`` key constitute valid action descriptors;
+        malformed entries must not reach downstream consumers.
+        """
+        svc = self._make_service()
+        text = (
+            '{"mode": "ACT", "response": "", '
+            '"actions": [{"type": "valid"}, {"no_type": true}]}'
+        )
+        result = svc._parse_response_text(text, 0.1)
+        assert result["actions"] is not None
+        assert len(result["actions"]) == 1
+        assert result["actions"][0]["type"] == "valid"
+
+    def test_actions_all_invalid_results_in_none(self):
+        """When every action is invalid, the ``actions`` field must be None.
+
+        After filtering, an empty list is normalised to ``None`` so callers
+        can use a simple truthiness check.
+        """
+        svc = self._make_service()
+        text = '{"mode": "ACT", "response": "", "actions": [{"no_type": true}]}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["actions"] is None
+
+    # ── Field validation — alternative_paths ────────────────────────────────
+
+    def test_alternative_paths_missing_mode_excluded(self):
+        """Alternative paths without a ``'mode'`` key must be excluded.
+
+        The validator requires each alternative path to carry a ``'mode'``
+        key; paths without it must be silently dropped.
+        """
+        svc = self._make_service()
+        text = (
+            '{"mode": "UNIFIED", "response": "hi", '
+            '"alternative_paths": ['
+            '  {"expected_confidence": 0.7},'
+            '  {"mode": "ACT", "expected_confidence": 0.5}'
+            ']}'
+        )
+        result = svc._parse_response_text(text, 0.1)
+        assert len(result["alternative_paths"]) == 1
+        assert result["alternative_paths"][0]["mode"] == "ACT"
+
+    def test_alternative_paths_confidence_clamped(self):
+        """Alternative path ``expected_confidence`` must be clamped to [0, 1].
+
+        The same range enforcement that applies to top-level ``confidence``
+        must also apply to each alternative path's ``expected_confidence``.
+        """
+        svc = self._make_service()
+        text = (
+            '{"mode": "UNIFIED", "response": "hi", '
+            '"alternative_paths": [{"mode": "ACT", "expected_confidence": 2.5}]}'
+        )
+        result = svc._parse_response_text(text, 0.1)
+        assert len(result["alternative_paths"]) == 1
+        assert result["alternative_paths"][0]["expected_confidence"] == pytest.approx(1.0)
+
+    def test_alternative_paths_missing_confidence_defaults_to_half(self):
+        """Alternative path lacking ``expected_confidence`` must default to 0.5.
+
+        When the key is absent the validator must inject the default rather
+        than allowing a ``KeyError`` downstream.
+        """
+        svc = self._make_service()
+        text = (
+            '{"mode": "UNIFIED", "response": "hi", '
+            '"alternative_paths": [{"mode": "ACT"}]}'
+        )
+        result = svc._parse_response_text(text, 0.1)
+        assert len(result["alternative_paths"]) == 1
+        assert result["alternative_paths"][0]["expected_confidence"] == pytest.approx(0.5)
+
+    # ── Edge cases ───────────────────────────────────────────────────────────
+
+    def test_non_dict_json_array_uses_first_dict_element(self):
+        """A bare JSON array must be unwrapped to its first dict element.
+
+        When ``json.loads`` succeeds but returns a list, the first dict
+        element is promoted to ``response_data`` so field extraction can
+        proceed normally.
+        """
+        svc = self._make_service()
+        text = '[{"mode": "UNIFIED", "response": "array-item"}]'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["mode"] == "UNIFIED"
+        assert result["response"] == "array-item"
+
+    def test_generation_time_propagated_unchanged(self):
+        """The ``generation_time`` argument must be forwarded verbatim to the result.
+
+        Verifies that the timing measurement is threaded through the parse
+        pipeline without being altered or dropped.
+        """
+        svc = self._make_service()
+        text = '{"mode": "UNIFIED", "response": "timing test"}'
+        result = svc._parse_response_text(text, 3.14159)
+        assert result["generation_time"] == pytest.approx(3.14159)
+
+    def test_narrated_and_narration_fields_passed_through(self):
+        """Optional ``narrated`` and ``narration`` keys must appear in the result.
+
+        When the parsed JSON includes these optional fields (used by the ACT
+        loop for live progress display), they must be forwarded unchanged to
+        the caller without being dropped during field extraction.
+        """
+        svc = self._make_service()
+        text = (
+            '{"mode": "UNIFIED", "response": "done", '
+            '"narrated": true, "narration": "Working on it\u2026"}'
+        )
+        result = svc._parse_response_text(text, 0.1)
+        assert result.get("narrated") is True
+        assert result.get("narration") == "Working on it\u2026"
+
+    def test_response_value_non_string_coerced_to_string(self):
+        """A non-string ``response`` value must be coerced to a string.
+
+        When the LLM returns a nested object or number as the ``response``
+        value, it must be converted via ``str()`` rather than propagated as-is
+        (which would break callers expecting a string).
+        """
+        svc = self._make_service()
+        # response is a JSON number, not a string
+        text = '{"mode": "UNIFIED", "response": 42}'
+        result = svc._parse_response_text(text, 0.1)
+        assert isinstance(result["response"], str)
+        assert "42" in result["response"]
+
+    def test_downstream_mode_default_is_unified(self):
+        """When ``downstream_mode`` is absent, it must default to UNIFIED.
+
+        The key is optional in ACT prompt output; its absence must not cause
+        a ``KeyError`` or a ``None`` value in the result dict.
+        """
+        svc = self._make_service()
+        text = '{"mode": "ACT", "response": "", "actions": [{"type": "run"}]}'
+        result = svc._parse_response_text(text, 0.1)
+        assert result["downstream_mode"] == "UNIFIED"
