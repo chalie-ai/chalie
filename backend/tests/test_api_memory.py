@@ -45,8 +45,8 @@ class TestMemoryAPI:
     def test_search_returns_results(self, client):
         """GET /memory/search with q returns results array."""
         with patch('services.database_service.get_shared_db_service') as mock_db_fn, \
-             patch('services.episodic_retrieval_service.EpisodicRetrievalService') as mock_er_cls, \
-             patch('services.semantic_retrieval_service.SemanticRetrievalService') as mock_sr_cls, \
+             patch('services.episodic_service.EpisodicService') as mock_er_cls, \
+             patch('services.semantic_service.SemanticService') as mock_sr_cls, \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
             mock_db_fn.return_value = MagicMock()
 

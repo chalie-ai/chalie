@@ -237,6 +237,15 @@ def _build_service(config: dict):
                 "Gemini provider requires 'api_key' field"
             )
         return GeminiService(config)
+    # Dev-only providers (gitignored, never shipped)
+    try:
+        from services.dev_providers import build_dev_service
+        dev_service = build_dev_service(config)
+        if dev_service:
+            return dev_service
+    except ImportError:
+        pass
+
     raise ValueError(f"Unknown platform: {platform}")
 
 

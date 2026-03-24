@@ -22,8 +22,8 @@ def memory_search():
 
     try:
         from services.database_service import get_shared_db_service
-        from services.episodic_retrieval_service import EpisodicRetrievalService
-        from services.semantic_retrieval_service import SemanticRetrievalService
+        from services.episodic_service import EpisodicService
+        from services.semantic_service import SemanticService
         from services.config_service import ConfigService
 
         db = get_shared_db_service()
@@ -32,7 +32,7 @@ def memory_search():
         # Episodic search
         try:
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            retrieval = EpisodicRetrievalService(db, episodic_config)
+            retrieval = EpisodicService(db, episodic_config)
             episodes = retrieval.retrieve_episodes(query_text=query, limit=5)
             for ep in episodes:
                 results.append({
@@ -46,7 +46,7 @@ def memory_search():
 
         # Semantic concept search
         try:
-            semantic = SemanticRetrievalService(db)
+            semantic = SemanticService(db)
             concepts = semantic.retrieve_concepts(query=query, limit=5)
             for c in concepts:
                 results.append({

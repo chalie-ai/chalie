@@ -44,10 +44,12 @@ export class ActivityPanel {
     const toggleBtn = document.getElementById('activityBtn');
     const closeBtn  = document.getElementById('closeActivityPanel');
 
+    // Hide button until real events arrive
+    if (toggleBtn) toggleBtn.style.display = 'none';
+
     toggleBtn?.addEventListener('click', () => this._toggle());
     closeBtn?.addEventListener('click',  () => this._toggle(false));
 
-    this._seedMockEntries();
   }
 
   /**
@@ -71,6 +73,12 @@ export class ActivityPanel {
     }
 
     this._prependEntryElement(entry);
+
+    // Show toggle button once we have real entries
+    const toggleBtn = document.getElementById('activityBtn');
+    if (toggleBtn && toggleBtn.style.display === 'none') {
+      toggleBtn.style.display = '';
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -192,37 +200,4 @@ export class ActivityPanel {
     return `${diffDay}d ago`;
   }
 
-  // ---------------------------------------------------------------------------
-  // Private — mock data
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Pre-populate the panel with 10 representative mock entries so the panel
-   * is not empty on first open during development.
-   *
-   * @returns {void}
-   */
-  _seedMockEntries() {
-    const now = Date.now();
-
-    /** @type {Array<{type: string, message: string, offsetMs: number}>} */
-    const seeds = [
-      { type: 'memory',    message: 'Recalled 4 relevant episodes for context',           offsetMs:   0 },
-      { type: 'goal',      message: 'Goal "Learn Spanish" progressed — evidence added',   offsetMs:   2 * 60 * 1000 },
-      { type: 'proactive', message: 'Suppressed nudge: social cost too high (0.82)',       offsetMs:   5 * 60 * 1000 },
-      { type: 'task',      message: 'Background task "summarise_notes" completed',         offsetMs:   9 * 60 * 1000 },
-      { type: 'memory',    message: 'Consolidated 12 short-term memories into episodes',  offsetMs:  18 * 60 * 1000 },
-      { type: 'goal',      message: 'Goal "Read more" created from conversation',          offsetMs:  32 * 60 * 1000 },
-      { type: 'proactive', message: 'Triggered proactive thought — confidence 0.74',      offsetMs:  47 * 60 * 1000 },
-      { type: 'task',      message: 'Curiosity thread "quantum computing" started',        offsetMs:  65 * 60 * 1000 },
-      { type: 'memory',    message: 'Surprising connection found: music ↔ mathematics',   offsetMs:  90 * 60 * 1000 },
-      { type: 'goal',      message: 'Goal "Exercise daily" decay threshold reached',       offsetMs: 120 * 60 * 1000 },
-    ];
-
-    // Add in reverse order so the most-recent entry (index 0) ends up on top
-    // after insertBefore-to-firstChild in _prependEntryElement.
-    for (const seed of seeds) {
-      this.addEntry(seed.type, seed.message, new Date(now - seed.offsetMs));
-    }
-  }
 }

@@ -658,8 +658,3 @@ class SemanticService:
 
         except Exception as e:
             logging.error(f"Failed to track access: {e}")
-
-
-# ── Backwards compatibility aliases ──────────────────────────────────
-SemanticStorageService = SemanticService
-SemanticRetrievalService = SemanticService

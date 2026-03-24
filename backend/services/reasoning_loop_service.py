@@ -39,9 +39,8 @@ from typing import Optional, List, Dict, Any
 
 from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
-from services.semantic_storage_service import SemanticStorageService
-from services.semantic_retrieval_service import SemanticRetrievalService
-from services.episodic_retrieval_service import EpisodicRetrievalService
+from services.semantic_service import SemanticService
+from services.episodic_service import EpisodicService
 from services.embedding_service import EmbeddingService
 from services.background_llm_queue import create_background_llm_proxy
 from services.database_service import get_lightweight_db_service
@@ -174,13 +173,13 @@ class ReasoningLoopService:
         # Database + services
         self.db_service = get_lightweight_db_service()
         self.embedding_service = EmbeddingService()
-        self.semantic_storage = SemanticStorageService(self.db_service)
-        self.semantic_retrieval = SemanticRetrievalService(
+        self.semantic_storage = SemanticService(self.db_service)
+        self.semantic_retrieval = SemanticService(
             self.db_service, self.embedding_service, self.semantic_storage
         )
 
         episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        self.episodic_retrieval = EpisodicRetrievalService(self.db_service, episodic_config)
+        self.episodic_retrieval = EpisodicService(self.db_service, episodic_config)
 
         # LLM for thought synthesis — refreshable so provider changes take effect without restart
         self.ollama = create_background_llm_proxy("cognitive-drift")

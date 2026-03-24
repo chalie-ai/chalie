@@ -52,7 +52,7 @@ def _patch_lazy_imports():
     return (
         patch('services.constraint_memory_service.ConstraintMemoryService', mock_cms_cls),
         patch('services.database_service.get_shared_db_service', mock_db),
-        patch('services.episodic_storage_service.EpisodicStorageService', mock_episodic_cls),
+        patch('services.episodic_service.EpisodicService', mock_episodic_cls),
         patch('services.embedding_service.get_embedding_service', mock_emb_svc),
         mock_cms_cls,
         mock_db,
@@ -84,7 +84,7 @@ class TestConstraintConsolidation:
 
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('services.episodic_storage_service.EpisodicStorageService', return_value=mock_episodic), \
+             patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
              patch('services.embedding_service.get_embedding_service'):
             service._consolidate_constraints()
 
@@ -113,7 +113,7 @@ class TestConstraintConsolidation:
 
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('services.episodic_storage_service.EpisodicStorageService', return_value=mock_episodic), \
+             patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
              patch('services.embedding_service.get_embedding_service', return_value=mock_emb_svc), \
              patch.object(IdleConsolidationService, '_find_similar_constraint_episode', return_value=None):
             service._consolidate_constraints()
@@ -152,7 +152,7 @@ class TestConstraintConsolidation:
 
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.episodic_storage_service.EpisodicStorageService', return_value=mock_episodic), \
+             patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
              patch('services.embedding_service.get_embedding_service', return_value=mock_emb_svc), \
              patch.object(IdleConsolidationService, '_find_similar_constraint_episode', return_value=existing), \
              patch.object(IdleConsolidationService, '_boost_episode_activation') as mock_boost:
@@ -189,7 +189,7 @@ class TestConstraintConsolidation:
 
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('services.episodic_storage_service.EpisodicStorageService', return_value=mock_episodic), \
+             patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
              patch('services.embedding_service.get_embedding_service', return_value=mock_emb_svc), \
              patch.object(IdleConsolidationService, '_find_similar_constraint_episode', side_effect=find_similar_side_effect), \
              patch.object(IdleConsolidationService, '_boost_episode_activation') as mock_boost:
@@ -206,7 +206,7 @@ class TestConstraintConsolidation:
 
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('services.episodic_storage_service.EpisodicStorageService'), \
+             patch('services.episodic_service.EpisodicService'), \
              patch('services.embedding_service.get_embedding_service'):
             service._consolidate_constraints()
 

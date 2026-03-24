@@ -171,7 +171,7 @@ class IdleConsolidationService:
         try:
             from services.constraint_memory_service import ConstraintMemoryService
             from services.database_service import get_shared_db_service
-            from services.episodic_storage_service import EpisodicStorageService
+            from services.episodic_service import EpisodicService
             from services.embedding_service import get_embedding_service
 
             cms = ConstraintMemoryService()
@@ -191,7 +191,7 @@ class IdleConsolidationService:
                 return
 
             db = get_shared_db_service()
-            episodic = EpisodicStorageService(db)
+            episodic = EpisodicService(db)
             emb_service = get_embedding_service()
 
             created = 0

@@ -307,13 +307,13 @@ class ContextAssemblyService:
             Formatted episodic memory string, or empty string when nothing relevant is found.
         """
         try:
-            from services.episodic_retrieval_service import EpisodicRetrievalService
+            from services.episodic_service import EpisodicService
             from services.database_service import get_shared_db_service
             from services.config_service import ConfigService
 
             episodic_config = ConfigService.resolve_agent_config("episodic-memory")
             db_service = get_shared_db_service()
-            retrieval = EpisodicRetrievalService(db_service, episodic_config)
+            retrieval = EpisodicService(db_service, episodic_config)
 
             # Extract semantic concepts from act_history for boost
             semantic_concepts = self._extract_semantic_from_history(act_history)
@@ -378,8 +378,8 @@ class ContextAssemblyService:
             Formatted concepts string with header, or empty string when nothing qualifies.
         """
         try:
-            from services.semantic_retrieval_service import SemanticRetrievalService
-            retrieval = SemanticRetrievalService()
+            from services.semantic_service import SemanticService
+            retrieval = SemanticService()
             concepts = retrieval.retrieve_concepts(query=prompt, limit=5, query_embedding=message_embedding)
 
             if not concepts:

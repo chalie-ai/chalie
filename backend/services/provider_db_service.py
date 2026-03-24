@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 def _infer_vision_support(platform: str, model: str) -> bool:
     """Infer vision support from platform and model name."""
     model_lower = model.lower()
-    if platform == 'anthropic':
+    if platform in ('anthropic', 'claude_code'):
         return any(x in model_lower for x in ('sonnet', 'opus', 'haiku'))
     elif platform == 'openai':
         return any(x in model_lower for x in ('gpt-4', 'gpt-5'))

@@ -139,15 +139,15 @@ def _get_recent_iterations(topic: str, limit: int) -> List[Dict]:
 
 
 def _get_relevant_episodes(query: str, topic: str, limit: int) -> List[Dict]:
-    """Retrieve relevant episodes via EpisodicRetrievalService."""
+    """Retrieve relevant episodes via EpisodicService."""
     try:
         from services.database_service import get_shared_db_service
-        from services.episodic_retrieval_service import EpisodicRetrievalService
+        from services.episodic_service import EpisodicService
         from services.config_service import ConfigService
 
         db = get_shared_db_service()
         episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        retrieval = EpisodicRetrievalService(db, episodic_config)
+        retrieval = EpisodicService(db, episodic_config)
         episodes = retrieval.retrieve_episodes(query_text=query, topic=topic, limit=limit)
         # Return simplified dicts
         return [
@@ -164,13 +164,13 @@ def _get_relevant_episodes(query: str, topic: str, limit: int) -> List[Dict]:
 
 
 def _get_relevant_concepts(query: str, limit: int) -> List[Dict]:
-    """Retrieve relevant concepts via SemanticRetrievalService."""
+    """Retrieve relevant concepts via SemanticService."""
     try:
         from services.database_service import get_shared_db_service
-        from services.semantic_retrieval_service import SemanticRetrievalService
+        from services.semantic_service import SemanticService
 
         db = get_shared_db_service()
-        retrieval = SemanticRetrievalService(db)
+        retrieval = SemanticService(db)
         concepts = retrieval.retrieve_concepts(query=query, limit=limit)
         return [
             {
