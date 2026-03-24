@@ -1,7 +1,7 @@
 {
   "name": "Chalie",
   "short_name": "Chalie",
-  "description": "Ambient intelligence AI assistant",
+  "description": "Personal intelligence that thinks ahead",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
