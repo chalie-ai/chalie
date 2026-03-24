@@ -45,8 +45,9 @@ try:
         ACT_LOOP_COMPLETE,
     )
     _TELEMETRY_AVAILABLE = True
-except Exception:  # pragma: no cover
+except Exception as e:  # pragma: no cover
     _TELEMETRY_AVAILABLE = False
+    logging.debug(f"Telemetry service import unavailable: {e}")
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[ACT ORCHESTRATOR]"
@@ -256,8 +257,8 @@ class ACTOrchestrator:
                             iteration_start - act_loop.start_time, 2
                         ),
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"{LOG_PREFIX} ACT_LOOP_ITERATION telemetry emit failed: {e}")
 
             # ── Collect tool names for health hints ───────────────────
             _tool_names = set()
@@ -646,8 +647,8 @@ class ACTOrchestrator:
                     "elapsed_seconds": loop_telemetry.get("elapsed_seconds"),
                     "actions_total": loop_telemetry.get("actions_total"),
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} ACT_LOOP_COMPLETE telemetry emit failed: {e}")
 
         try:
             from services.database_service import get_shared_db_service

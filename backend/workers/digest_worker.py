@@ -190,7 +190,8 @@ def get_mode_router():
                 with open(generated_path, 'r') as f:
                     router_config = json.load(f)
                 logging.info("[DIGEST] Loaded generated mode router config")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"[DIGEST] Failed to load generated mode router config, using default: {e}")
                 router_config = ConfigService.get_agent_config("mode-router")
         else:
             router_config = ConfigService.get_agent_config("mode-router")
@@ -1158,8 +1159,8 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
 
         try:
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex-scheduled-tool")
-        except Exception:
-            logging.warning("[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config")
+        except Exception as e:
+            logging.warning(f"[CRON TOOL] frontal-cortex-scheduled-tool.json not found, using frontal-cortex config: {e}")
             scheduled_tool_config = ConfigService.resolve_agent_config("frontal-cortex")
 
         _cron_classification = {
@@ -1396,8 +1397,8 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
         try:
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex-proactive")
-        except Exception:
-            logging.warning("[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config")
+        except Exception as e:
+            logging.warning(f"[PROACTIVE] frontal-cortex-proactive.json not found, falling back to frontal-cortex config: {e}")
             proactive_config = ConfigService.resolve_agent_config("frontal-cortex")
 
         inclusion_map = None
@@ -1967,8 +1968,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     try:
         from services import transcript_service
         transcript_service.append(context_topic, 'user', _wm_text)
-    except Exception:
-        logging.debug("[DIGEST] Transcript append (user) failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Transcript append (user) failed: {e}", exc_info=True)
 
     # Situational intelligence — update conversation phase and situation model for this
     # user message.  Both calls are non-blocking, fail-open, and write to MemoryStore
@@ -1977,14 +1978,14 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         from services.conversation_phase_service import get_conversation_phase_service
         _phase_svc = get_conversation_phase_service()
         _phase_svc.update(thread_id, text, is_user=True, topic=context_topic)
-    except Exception:
-        logging.debug("[DIGEST] Phase update failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Phase update failed: {e}", exc_info=True)
 
     try:
         from services.situation_model_service import get_situation_model_service
         get_situation_model_service().update_on_message(thread_id)
-    except Exception:
-        logging.debug("[DIGEST] Situation update failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Situation update failed: {e}", exc_info=True)
 
     # IIP: Immediate Identity Promotion — synchronous, before any LLM call
     # Detects explicit name statements and writes to MemoryStore + SQLite immediately.
@@ -2395,8 +2396,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     try:
         from services import transcript_service
         transcript_service.append(topic, 'assistant', response_data['response'])
-    except Exception:
-        logging.debug("[DIGEST] Transcript append (assistant) failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Transcript append (assistant) failed: {e}", exc_info=True)
 
     # Fire compaction if context is approaching budget
     try:
@@ -2410,8 +2411,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         except Exception as e:
             logger.debug(f"[DIGEST] Context limit resolution failed, using default: {e}", exc_info=True)
         compaction_service.check_and_compact(topic, _ctx_budget)
-    except Exception:
-        logging.debug("[DIGEST] Compaction check failed", exc_info=True)
+    except Exception as e:
+        logging.debug(f"[DIGEST] Compaction check failed: {e}", exc_info=True)
 
     # Update conversation phase with Chalie's response so momentum and direction
     # reflect the full exchange, not just the user turn.

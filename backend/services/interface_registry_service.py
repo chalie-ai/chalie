@@ -504,8 +504,9 @@ class InterfaceRegistryService:
             health_data = resp.json()
             if health_data.get("status") != "ok":
                 raise ValueError("Health check returned non-ok status")
-        except Exception:
+        except Exception as e:
             # Increment failure count
+            logger.debug("[INTERFACE] Health check failed for %s: %s", interface_id[:8], e)
             count = _failure_counts.get(interface_id, 0) + 1
             _failure_counts[interface_id] = count
 
@@ -578,8 +579,8 @@ class InterfaceRegistryService:
 
             wrapper_svc = WrapperAuthService(self._db)
             wrapper_svc.revoke(f"iface_{interface_id[:8]}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[INTERFACE] Signal token revocation failed for %s: %s", interface_id[:8], e)
 
         def _delete_all(_id=interface_id, _db=self._db):
             """Delete interface tools and the interface record together.

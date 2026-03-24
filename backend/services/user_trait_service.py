@@ -612,7 +612,8 @@ class UserTraitService:
                 value_str, confidence = row
                 try:
                     return _json.loads(value_str)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[USER_TRAITS] communication style JSON parse failed: {e}")
                     return {}
         except Exception as e:
             logger.debug(f"[USER_TRAITS] get_communication_style failed: {e}")

@@ -524,7 +524,8 @@ class WorldStateService:
                         bucket['best_salience'] = salience
                         bucket['best_content'] = content
 
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[WORLD STATE] external signal parse failed: {e}")
                     continue
 
             # Build one world state item per source — most salient signal wins

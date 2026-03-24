@@ -769,7 +769,8 @@ class ListService:
                         recency = f"{total_seconds // 3600}h ago"
                     else:
                         recency = f"{delta.days} days ago"
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[LIST] recency calculation failed: {e}")
                     recency = "unknown"
             else:
                 recency = "unknown"

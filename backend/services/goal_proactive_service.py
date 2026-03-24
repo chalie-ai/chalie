@@ -90,8 +90,8 @@ def check_and_execute(goal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "action_taken": style,
                 "goal_id": goal_id,
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Telemetry emit for proactive trigger failed: {e}")
 
         return result
 
@@ -115,8 +115,8 @@ def _calculate_social_cost() -> float:
         inference = AmbientInferenceService()
         if inference.is_user_deep_focus():
             cost += 0.3
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Deep focus check failed: {e}")
 
     # Recent ignored attempts
     try:
@@ -125,8 +125,8 @@ def _calculate_social_cost() -> float:
         recent_ignored = store.get('goal:recent_ignored_count')
         if recent_ignored and int(recent_ignored) >= 2:
             cost += 0.3
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Recent ignored attempts check failed: {e}")
 
     # Message momentum: active conversation = higher cost
     try:
@@ -145,14 +145,14 @@ def _calculate_social_cost() -> float:
             # Re-entry after gap (2-8 hours) — good time to suggest
             elif 7200 < gap_seconds < 28800:
                 cost -= 0.15
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Message momentum check failed: {e}")
 
     # Quiet hours: learned from interaction log
     try:
         cost += _get_quiet_hours_cost()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Quiet hours cost check failed: {e}")
 
     # Rapid conversation pace: multiple messages in quick succession
     try:
@@ -161,8 +161,8 @@ def _calculate_social_cost() -> float:
         recent_count = store.get('recent_message_count_5min')
         if recent_count and int(recent_count) >= 3:
             cost += 0.25  # User is in active conversation, don't interrupt
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"{LOG_PREFIX} Rapid conversation pace check failed: {e}")
 
     return min(1.0, cost)
 
@@ -312,8 +312,8 @@ def _execute_via_persistent_task(goal: Dict[str, Any]) -> Dict[str, Any]:
                 cursor.close()
                 if row:
                     account_id = row[0]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Account ID resolution failed, using default: {e}")
 
         # Check for duplicate tasks (don't re-create for the same goal)
         existing = task_service.find_duplicate(task_goal)
