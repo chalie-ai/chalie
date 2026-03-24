@@ -35,7 +35,7 @@ try:
         GOAL_LIFECYCLE,
     )
     _TELEMETRY_AVAILABLE = True
-except Exception:  # pragma: no cover
+except Exception as e:  # pragma: no cover
     _TELEMETRY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -138,8 +138,8 @@ def _trigger_strategy_generation(goal_id: str, goal_type: str) -> None:
                     cursor.close()
                     if row:
                         description = row[0] or ''
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Failed to fetch goal description for strategy generation: {e}")
 
             generate_strategy({'id': goal_id, 'type': goal_type, 'description': description})
         except Exception as e:
@@ -625,8 +625,8 @@ class GoalEcologyService:
                     parent_row = cursor.fetchone()
                     if parent_row:
                         parent_salience = parent_row[0] or 0.0
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"{LOG_PREFIX} Parent salience lookup failed for goal {goal_id[:8]}: {e}")
 
             cursor.close()
 
@@ -1167,8 +1167,8 @@ class GoalEcologyService:
                 for s in cluster_signals:
                     try:
                         store.delete(s['key'])
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"{LOG_PREFIX} Failed to delete consumed signal key {s['key']}: {e}")
 
                 created.append(goal)
 
@@ -1407,7 +1407,8 @@ class GoalEcologyService:
                  'salience': r[4], 'confidence': r[5]}
                 for r in rows
             ]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} get_children failed for goal {goal_id[:8]}: {e}")
             return []
 
     # ── Mute / Unmute ────────────────────────────────────────────────────────

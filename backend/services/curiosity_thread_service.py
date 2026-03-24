@@ -298,8 +298,8 @@ class CuriosityThreadService:
                         "thread_id": thread_id,
                         "source": source,
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[CURIOSITY] telemetry record failed: {e}")
 
             return updated
 

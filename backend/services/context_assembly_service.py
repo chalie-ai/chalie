@@ -16,8 +16,9 @@ try:
         CONTEXT_ASSEMBLY,
     )
     _TELEMETRY_AVAILABLE = True
-except Exception:  # pragma: no cover
+except Exception as e:  # pragma: no cover
     _TELEMETRY_AVAILABLE = False
+    logging.debug(f"Telemetry service import unavailable: {e}")
 
 RELIABILITY_WEIGHT = {
     'reliable':    1.0,
@@ -111,7 +112,8 @@ class ContextAssemblyService:
                 sections['self_awareness'] = service.format_for_prompt()
             else:
                 sections['self_awareness'] = ""
-        except Exception:
+        except Exception as e:
+            logging.debug(f"[CONTEXT] Self-awareness retrieval failed: {e}")
             sections['self_awareness'] = ""
 
         # Estimate total tokens
@@ -280,7 +282,8 @@ class ContextAssemblyService:
                             date_str = pinned_at.strftime("%d %b %Y")
                         else:
                             date_str = str(pinned_at)[:10]
-                    except Exception:
+                    except Exception as e:
+                        logging.debug(f"[CONTEXT] Moment date formatting failed: {e}")
                         date_str = ""
                 lines.append(f"- {summary} (pinned {date_str})")
 

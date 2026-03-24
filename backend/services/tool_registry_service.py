@@ -384,7 +384,8 @@ class ToolRegistryService:
             from services.config_service import ConfigService
             fc_config = ConfigService.get_agent_config("frontal-cortex")
             self._enabled = fc_config.get("tools_enabled", True)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[TOOL REGISTRY] config load failed, defaulting to enabled: {e}")
             self._enabled = True
 
         if not self._enabled:

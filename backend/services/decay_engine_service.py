@@ -19,8 +19,9 @@ try:
         GOAL_LIFECYCLE,
     )
     _TELEMETRY_AVAILABLE = True
-except Exception:  # pragma: no cover
+except Exception as e:  # pragma: no cover
     _TELEMETRY_AVAILABLE = False
+    logging.getLogger(__name__).debug(f"Telemetry import unavailable: {e}")
 
 logger = logging.getLogger(__name__)
 
