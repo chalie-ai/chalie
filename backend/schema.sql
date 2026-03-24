@@ -373,7 +373,8 @@ CREATE TABLE IF NOT EXISTS providers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     platform TEXT NOT NULL,
-    model TEXT NOT NULL,
+    model TEXT NOT NULL,                     -- default model
+    models TEXT,                             -- JSON array of available models (NULL = [model])
     host TEXT,
     api_key BLOB,                            -- encrypted storage
     dimensions INTEGER,
@@ -388,6 +389,7 @@ CREATE TABLE IF NOT EXISTS job_provider_assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_name TEXT UNIQUE NOT NULL,
     provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model TEXT,                              -- model override (NULL = use provider default)
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

@@ -153,10 +153,17 @@ class ConfigService:
         try:
             from services.provider_cache_service import ProviderCacheService
 
-            assignment_provider = ProviderCacheService.get_job_assignment(agent_name)
+            assignment_provider, model_override = ProviderCacheService.get_job_assignment(agent_name)
             if assignment_provider:
                 config['provider'] = assignment_provider
-                logger.debug(f"[ConfigService] Using cached provider '{assignment_provider}' for job '{agent_name}'")
+                # Model override takes precedence over provider default.
+                # resolve_provider() merges as: provider defaults < agent config,
+                # so setting config['model'] here wins over the provider's model.
+                if model_override:
+                    config['model'] = model_override
+                logger.debug(f"[ConfigService] Using cached provider '{assignment_provider}'"
+                             f"{f' model={model_override}' if model_override else ''}"
+                             f" for job '{agent_name}'")
             else:
                 # No explicit assignment — fall back to the first active provider.
                 providers = ConfigService.get_providers()

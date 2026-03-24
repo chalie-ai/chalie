@@ -429,10 +429,12 @@ async function submitSetupForm() {
     const platform = currentPlatform;
     const config = PLATFORM_CONFIG[platform];
 
+    const modelVal = document.getElementById('setupModel').value.trim();
     const body = {
         name: document.getElementById('setupName').value.trim(),
         platform: platform,
-        model: document.getElementById('setupModel').value.trim(),
+        model: modelVal,
+        models: [modelVal],
     };
 
     if (config.hasHost) {
