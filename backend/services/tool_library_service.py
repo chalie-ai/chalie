@@ -13,6 +13,7 @@ from tools.web_search import execute as _web_search_execute
 from tools.code_eval import execute as _code_eval_execute
 from tools.programming_docs_search import execute as _docs_execute
 from tools.search.search import execute as _search_execute
+from tools.news.news import execute as _news_execute
 
 
 # -- Handler registry ----------------------------------------------------------
@@ -23,6 +24,7 @@ TOOL_HANDLERS = {
     "search": _search_execute,
     "code_eval": _code_eval_execute,
     "programming_docs_search": _docs_execute,
+    "news": _news_execute,
 }
 
 ALL_TOOL_NAMES: frozenset = frozenset(TOOL_HANDLERS.keys())
@@ -321,6 +323,98 @@ TOOL_METADATA: dict = {
             "Supports frameworks directly: django, flask, numpy, pandas, node, react, vue, laravel, spring, rails, flutter",
             "Prefer this over web_search when you know the language/framework",
         ],
+    },
+
+    "news": {
+        "name": "news",
+        "description": (
+            "Search and browse news from 56 global RSS sources across 8 categories. "
+            "Get real-time headlines, search for specific topics, discover trending "
+            "stories, and explore available sources."
+        ),
+        "documentation": (
+            "News search and browsing tool with 4 actions:\n\n"
+            "**search** — Find news articles matching a query. Optionally filter by source.\n"
+            "  Required: query (string)\n"
+            "  Optional: source (string), limit (integer, default 10)\n\n"
+            "**digest** — Get a curated news digest with international headlines and local news.\n"
+            "  Optional: category (string), source (string)\n\n"
+            "**trending** — Discover trending stories clustered by topic coverage across multiple sources.\n"
+            "  Optional: category (string, default 'international'), limit (integer, default 5), "
+            "min_sources (integer, default 2)\n\n"
+            "**sources** — List available news sources. Filter by category or search by name.\n"
+            "  Optional: category (string), query (string via 'source' param)"
+        ),
+        "category": "research",
+        "icon": "fa-solid fa-newspaper",
+        "trigger": {"type": "on_demand"},
+        "parameters": {
+            "action": {
+                "type": "string",
+                "required": True,
+                "description": "Action to perform: search, digest, trending, or sources",
+            },
+            "query": {
+                "type": "string",
+                "required": False,
+                "description": "Search query (required for search action)",
+            },
+            "category": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "News category: international, us, uk, tech, business, "
+                    "science, sports, entertainment"
+                ),
+            },
+            "source": {
+                "type": "string",
+                "required": False,
+                "description": "Source ID or name to filter by",
+            },
+            "limit": {
+                "type": "integer",
+                "required": False,
+                "description": "Maximum number of results (default 10, max 20)",
+                "default": 10,
+            },
+            "min_sources": {
+                "type": "integer",
+                "required": False,
+                "description": "Minimum sources for a trending cluster (default 2)",
+                "default": 2,
+            },
+        },
+        "returns": {
+            "text": {"type": "string", "description": "Formatted news results"},
+            "title": {"type": "string", "description": "Result section title"},
+            "error": {"type": "string", "description": "Error message if any"},
+        },
+        "output": {
+            "synthesize": True,
+            "card": {"enabled": False},
+        },
+        "tips": [
+            "Use 'search' with a query to find specific news topics",
+            "Use 'trending' to see what stories are being covered by multiple sources",
+            "Use 'digest' for a quick overview of current headlines",
+        ],
+        "ambient": {"enabled": False},
+        "config_schema": {
+            "preferred_source": {
+                "type": "string",
+                "description": "Default news source ID",
+                "default": "bbc_world",
+            },
+            "topics": {
+                "type": "string",
+                "description": "Comma-separated interest topics for digest",
+            },
+            "location_override": {
+                "type": "string",
+                "description": "Override location for local news",
+            },
+        },
     },
 }
 
