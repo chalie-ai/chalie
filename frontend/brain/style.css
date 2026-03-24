@@ -1263,6 +1263,87 @@ body::before {
 
 .doc-folder-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #00F0FF; margin-left: 6px; opacity: 0.7; }
 
+/* --- Delete / Purge icon visibility & colour --- */
+
+/**
+ * Delete icon button: hidden at rest, revealed on row hover.
+ * Transition covers both opacity (reveal) and colour (danger state).
+ */
+.doc-row__delete {
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+}
+
+/** Reveal the delete icon when the parent row is hovered. */
+.doc-row:hover .doc-row__delete { opacity: 1; }
+
+/** Turn delete icon red when the icon itself is hovered. */
+.doc-row__delete:hover { color: #ff4d4d !important; }
+
+/** Turn purge icon red when hovered (irreversible action indicator). */
+.doc-row__purge:hover { color: #ff4d4d !important; }
+
+/* --- Row info clickability --- */
+
+/**
+ * Signal that the info area of a document row is a click target
+ * (opens the metadata editor modal).
+ */
+.doc-row__info { cursor: pointer; }
+
+/* --- Toast action button --- */
+
+/**
+ * Inline action button rendered inside a toast notification.
+ * Used for "Undo" on soft-delete operations.
+ */
+.toast-action {
+    background: none;
+    border: none;
+    color: var(--accent-primary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 12px;
+    padding: 0;
+    text-decoration: underline;
+}
+.toast-action:hover { opacity: 0.8; }
+
+/* --- Metadata editor overlay fields --- */
+
+/**
+ * Vertical stack of labelled inputs inside the metadata editor modal.
+ */
+.doc-meta-overlay-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/**
+ * Individual label + input pair inside the metadata editor form.
+ */
+.doc-meta-overlay-fields label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/**
+ * Text input inside the metadata editor form fields.
+ */
+.doc-meta-overlay-fields input {
+    background: var(--bg-input, rgba(255,255,255,0.06));
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
 /* =====================================================
    Watched Folders
    ===================================================== */
