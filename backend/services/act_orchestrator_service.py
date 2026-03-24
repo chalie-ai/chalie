@@ -20,10 +20,11 @@ Termination model (fatigue-free):
   - Hard iteration cap: max_iterations (default 30)
   - Cumulative timeout: safety net for runaway loops
   - Semantic repetition: embedding-based (>0.85 cosine similarity)
-  - Type-based repetition: same action 3x in a row
   - No actions returned by LLM: natural completion signal
   - Soft nudge: at iteration 10, inject a prompt hint encouraging
     the LLM to conclude if it has enough information.
+  - Forced-exit synthesis: when loop exits without a final response,
+    one last tool-free LLM call synthesizes from accumulated results.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -83,7 +84,7 @@ class ACTOrchestrator:
         per_action_timeout: float = 10.0,
         critic_enabled: bool = False,
         smart_repetition: bool = True,
-        escalation_hints: bool = False,
+        escalation_hints: bool = False,  # Deprecated — type-based repetition removed
         persistent_task_exit: bool = False,
         execution_gate: bool = True,
     ):
@@ -96,7 +97,9 @@ class ACTOrchestrator:
             critic_enabled: Deprecated — accepted for backward compatibility but
                 ignored. Post-loop reflection always runs via _post_loop_reflection().
             smart_repetition: Embedding-based semantic repetition detection
-            escalation_hints: Inject pivot hints on type-based repetition
+            escalation_hints: Deprecated — accepted for backward compatibility but
+                ignored. Type-based repetition was removed; smart (embedding-based)
+                repetition detection is the sole mechanism.
             persistent_task_exit: Exit loop when a persistent_task is dispatched
             execution_gate: Whether to apply the autonomous execution gate to
                 non-safe actions. False for user-initiated ACT loops (the user
@@ -230,9 +233,6 @@ class ACTOrchestrator:
         )
 
         # ── Repetition detection state ──────────────────────────────────
-        consecutive_same_action = 0
-        last_action_type = None
-        pivot_hint_injected = False
         recent_action_entries = []  # (fingerprint, types_set) for smart repetition
 
         # ── Tool health tracking (cross-loop via MemoryStore) ─────────
@@ -361,49 +361,7 @@ class ACTOrchestrator:
                     except Exception as e:
                         logger.error(f"{LOG_PREFIX} Narration callback error: {e}", exc_info=True)
 
-            # ── Repetition detection (type-based) ───────────────────────
-            if actions and len(actions) == 1:
-                current_type = actions[0].get('type', '')
-                if current_type == last_action_type:
-                    consecutive_same_action += 1
-                else:
-                    consecutive_same_action = 1
-                last_action_type = current_type
-            elif actions:
-                consecutive_same_action = 0
-                last_action_type = None
-
-            if consecutive_same_action >= 3:
-                if self.escalation_hints and not pivot_hint_injected:
-                    # Digest-worker style: inject pivot hint, give one more chance
-                    logger.info(
-                        f"{LOG_PREFIX} Repetition '{last_action_type}' x{consecutive_same_action} "
-                        f"— injecting pivot hint"
-                    )
-                    act_loop.append_results([{
-                        'action_type': 'system',
-                        'status': 'info',
-                        'execution_time': 0.0,
-                        'result': (
-                            f"SYSTEM: You have called '{last_action_type}' "
-                            f"{consecutive_same_action} times with similar queries. "
-                            "Try a DIFFERENT action type that builds on existing results, "
-                            "or return empty actions to finish."
-                        ),
-                    }])
-                    pivot_hint_injected = True
-                    consecutive_same_action = 0
-                    can_continue, termination_reason = act_loop.can_continue()
-                else:
-                    # Tool-worker style: hard exit on repetition
-                    logger.warning(
-                        f"{LOG_PREFIX} Repetition detected: '{last_action_type}' "
-                        f"x{consecutive_same_action} — forcing exit"
-                    )
-                    termination_reason = 'repetition_detected'
-                    can_continue = False
-            else:
-                can_continue, termination_reason = act_loop.can_continue()
+            can_continue, termination_reason = act_loop.can_continue()
 
             # ── Soft nudge at iteration 10 ───────────────────────────────
             if (
@@ -605,6 +563,41 @@ class ACTOrchestrator:
 
             if termination_reason:
                 break
+
+        # ── Post-loop: synthesis call for forced exits ────────────────
+        # When the loop was forced to exit (timeout, repetition, etc.)
+        # the LLM never got a chance to produce a final text response.
+        # Make one last call WITHOUT tools so it can synthesize from the
+        # accumulated tool results in _messages.
+        if not _final_response and termination_reason and termination_reason != 'generation_error':
+            logger.info(
+                f"{LOG_PREFIX} Forced exit ({termination_reason}) with no final response "
+                f"— running synthesis call"
+            )
+            _messages.append({
+                "role": "user",
+                "content": (
+                    "SYSTEM: The action loop has ended. Based on the results above, "
+                    "respond to the user now. Do NOT call any tools."
+                ),
+            })
+            try:
+                _synth = cortex_service.generate_response_appended(
+                    system_prompt=_system_prompt,
+                    messages=self._prune_messages(_messages, _context_budget),
+                    cache_prefix=True,
+                )
+                _final_response = (
+                    _synth.get('response', '') or _synth.get('narration', '')
+                )
+                if _final_response:
+                    logger.info(
+                        f"{LOG_PREFIX} Synthesis produced {len(_final_response)} chars"
+                    )
+            except Exception as _synth_err:
+                logger.warning(
+                    f"{LOG_PREFIX} Synthesis call failed: {_synth_err}"
+                )
 
         # ── Post-loop: batch write iterations ───────────────────────────
         if act_loop.iteration_logs:
