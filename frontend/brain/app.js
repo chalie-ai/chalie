@@ -83,17 +83,43 @@ async function apiFetch(path, options = {}, isMultipart = false) {
 // ==========================================
 // Toast
 // ==========================================
-function showToast(message, type = 'info') {
+/**
+ * Displays a toast notification, optionally with an action button.
+ *
+ * @param {string} message - The notification message to display.
+ * @param {'info'|'success'|'error'|'warning'} [type='info'] - Visual style of the toast.
+ * @param {{ action?: string, onAction?: () => void, duration?: number }} [options={}]
+ *   - action:    Label for an optional action button (e.g. "Undo").
+ *   - onAction:  Callback invoked when the action button is clicked; also dismisses the toast.
+ *   - duration:  Auto-dismiss delay in milliseconds (default: 3000).
+ * @returns {void}
+ */
+function showToast(message, type = 'info', options = {}) {
+    const { action, onAction, duration = 3000 } = options;
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
+
+    if (action && typeof onAction === 'function') {
+        const btn = document.createElement('button');
+        btn.className = 'toast-action';
+        btn.textContent = action;
+        btn.addEventListener('click', () => {
+            onAction();
+            toast.remove();
+        });
+        toast.appendChild(btn);
+    }
+
     container.appendChild(toast);
-    setTimeout(() => {
+
+    const dismiss = () => {
         toast.style.opacity = '0';
         toast.style.transition = 'opacity 0.3s';
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    };
+    setTimeout(dismiss, duration);
 }
 
 // ==========================================
@@ -2351,7 +2377,7 @@ function renderDocuments() {
 
         el.innerHTML = sortedKeys.map(key => `
             <div class="doc-group">
-                <div class="doc-group__header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <div class="doc-group__header">
                     <span class="doc-group__chevron">▾</span>
                     <span class="doc-group__name">${escapeHtml(key)}</span>
                     <span class="doc-group__count">${groups[key].length}</span>
@@ -2379,17 +2405,31 @@ function getDocIcon(mime) {
     return '<i data-lucide="file-text"></i>';
 }
 
-async function previewDocument(id) {
-    const overlay = document.getElementById('docPreviewOverlay');
-    const title = document.getElementById('docPreviewTitle');
-    const meta = document.getElementById('docPreviewMeta');
-    const body = document.getElementById('docPreviewBody');
-    const downloadLink = document.getElementById('docDownloadLink');
-    const previewLink = document.getElementById('docPreviewOpenBtn');
-    const deleteBtn = document.getElementById('docPreviewDeleteBtn');
+/**
+ * Opens the metadata editor modal (`#docMetaOverlay`) for the given document.
+ *
+ * Fetches the document details from the API and populates:
+ *  - The modal title with the document's filename.
+ *  - Metadata pills (type, language, pages, chunks, project, date).
+ *  - Classification fields (category, project, date) with a delegated Save button.
+ *
+ * No chunk content is shown here — use `openPreview()` for raw document content.
+ *
+ * @param {string} id - Document ID to load metadata for.
+ * @returns {Promise<void>}
+ */
+async function openMetaEditor(id) {
+    const overlay = document.getElementById('docMetaOverlay');
+    const titleEl = document.getElementById('docMetaTitle');
+    const pillsEl = document.getElementById('docMetaPills');
+    const bodyEl  = document.getElementById('docMetaBody');
+    const footerEl = document.getElementById('docMetaFooter');
 
-    overlay.style.display = 'flex';
-    body.innerHTML = '<div class="loading">Loading content...</div>';
+    titleEl.textContent = 'Loading…';
+    pillsEl.innerHTML   = '';
+    bodyEl.innerHTML    = '<div class="loading">Loading…</div>';
+    footerEl.innerHTML  = '';
+    overlay.classList.remove('hidden');
 
     try {
         const res = await apiFetch(`/documents/${id}`);
@@ -2397,47 +2437,163 @@ async function previewDocument(id) {
         const data = await res.json();
         const doc = data.item;
 
-        title.textContent = doc.original_name;
+        titleEl.textContent = doc.original_name;
 
+        // Build metadata pills
         const em = doc.extracted_metadata || {};
-        let metaHtml = '';
-        if (em.document_type?.value) metaHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
-        if (doc.language) metaHtml += `<span class="doc-meta-pill">${doc.language}</span> `;
-        if (doc.page_count) metaHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
-        metaHtml += `<span class="doc-meta-pill">${doc.chunk_count} chunks</span>`;
-        if (doc.doc_project) metaHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
-        if (doc.doc_date) metaHtml += ` <span class="doc-meta-pill">${doc.doc_date}</span>`;
-        metaHtml += `<div class="doc-classify-fields">
-            <label>Category <input type="text" class="doc-classify-input" id="docClassCategory" value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt..."></label>
-            <label>Project <input type="text" class="doc-classify-input" id="docClassProject" value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation..."></label>
-            <label>Date <input type="date" class="doc-classify-input" id="docClassDate" value="${doc.doc_date || ''}"></label>
-            <button class="tool-card__btn" onclick="saveDocClassification('${id}')">Save</button>
-        </div>`;
-        meta.innerHTML = metaHtml;
+        let pillsHtml = '';
+        if (em.document_type?.value) pillsHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language)   pillsHtml += `<span class="doc-meta-pill">${escapeHtml(doc.language)}</span> `;
+        if (doc.page_count) pillsHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        pillsHtml += `<span class="doc-meta-pill">${doc.chunk_count || 0} chunks</span>`;
+        if (doc.doc_project) pillsHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
+        if (doc.doc_date)    pillsHtml += ` <span class="doc-meta-pill">${escapeHtml(doc.doc_date)}</span>`;
+        pillsEl.innerHTML = pillsHtml;
 
-        // Render chunks
-        const chunks = doc.chunks || [];
-        if (chunks.length === 0) {
-            body.innerHTML = '<div class="obs-empty">No content extracted.</div>';
+        // Build classification fields (no inline onclick — delegated via #docMetaOverlay)
+        bodyEl.innerHTML = `
+            <div class="doc-classify-fields">
+                <label>Category
+                    <input type="text" class="doc-classify-input" id="docClassCategory"
+                           value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt…">
+                </label>
+                <label>Project
+                    <input type="text" class="doc-classify-input" id="docClassProject"
+                           value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation…">
+                </label>
+                <label>Date
+                    <input type="date" class="doc-classify-input" id="docClassDate"
+                           value="${doc.doc_date || ''}">
+                </label>
+            </div>`;
+
+        footerEl.innerHTML = `<button class="tool-card__btn doc-meta-save-btn" data-doc-id="${id}">Save</button>`;
+    } catch {
+        bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+    }
+}
+
+/**
+ * Opens the document preview modal (`#docPreviewOverlay`) for the given document.
+ *
+ * Fetches document details and renders the content using the most appropriate renderer
+ * based on MIME type:
+ *  - `image/*`                        → `<img>` served from the server preview endpoint
+ *  - `text/html`                      → sandboxed `<iframe srcdoc="…">`
+ *  - `text/markdown` / `*.md`         → `marked.parse()` rendered into a `<div>`
+ *  - `application/json`               → `<pre>` with indented JSON
+ *  - `text/plain`, `text/csv`, others → `<pre>` plain text
+ *  - `application/pdf`                → `<iframe>` pointing at server preview endpoint
+ *  - DOCX (`wordprocessingml`)        → `mammoth.convertToHtml()` client-side
+ *  - PPTX (`presentationml`)          → `<iframe>` server-rendered fallback
+ *
+ * A download link is always rendered in the modal footer.
+ *
+ * @param {string} id - Document ID to preview.
+ * @returns {Promise<void>}
+ */
+async function openPreview(id) {
+    const overlay   = document.getElementById('docPreviewOverlay');
+    const titleEl   = document.getElementById('docPreviewTitle');
+    const metaEl    = document.getElementById('docPreviewMeta');
+    const bodyEl    = document.getElementById('docPreviewBody');
+    const footerEl  = document.getElementById('docPreviewFooter');
+
+    titleEl.textContent = 'Loading…';
+    metaEl.innerHTML    = '';
+    bodyEl.innerHTML    = '<div class="loading">Loading content…</div>';
+    footerEl.innerHTML  = '';
+    overlay.classList.remove('hidden');
+
+    try {
+        const res = await apiFetch(`/documents/${id}`);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        const doc = data.item;
+
+        titleEl.textContent = doc.original_name;
+
+        // Metadata pills
+        const em = doc.extracted_metadata || {};
+        let pillsHtml = '';
+        if (em.document_type?.value) pillsHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language)   pillsHtml += `<span class="doc-meta-pill">${escapeHtml(doc.language)}</span> `;
+        if (doc.page_count) pillsHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        pillsHtml += `<span class="doc-meta-pill">${doc.chunk_count || 0} chunks</span>`;
+        metaEl.innerHTML = pillsHtml;
+
+        // Download link in footer
+        footerEl.innerHTML = `<a class="btn btn-secondary" href="${API_BASE}/documents/${id}/download" download>
+            <i data-lucide="download"></i> Download
+        </a>`;
+        if (typeof lucide !== 'undefined') lucide.createIcons({ node: footerEl });
+
+        // Render body based on MIME type
+        const mime = doc.mime_type || '';
+        const previewUrl = `${API_BASE}/documents/${id}/preview`;
+
+        if (mime.startsWith('image/')) {
+            bodyEl.innerHTML = `<div class="doc-preview-image"><img src="${previewUrl}" alt="${escapeHtml(doc.original_name)}" style="max-width:100%;border-radius:6px;"></div>`;
+
+        } else if (mime.includes('pdf')) {
+            bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="PDF Preview"></iframe>`;
+
+        } else if (mime.includes('presentationml') || mime.includes('pptx')) {
+            bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Presentation Preview"></iframe>`;
+
+        } else if (mime.includes('wordprocessingml') || mime.includes('docx')) {
+            bodyEl.innerHTML = '<div class="loading">Rendering document…</div>';
+            try {
+                const dlRes = await apiFetch(`/documents/${id}/download`);
+                const arrayBuffer = await dlRes.arrayBuffer();
+                const result = await mammoth.convertToHtml({ arrayBuffer });
+                bodyEl.innerHTML = `<div class="doc-preview-html" style="font-family:sans-serif;line-height:1.6;padding:8px;">${result.value}</div>`;
+            } catch {
+                bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Document Preview"></iframe>`;
+            }
+
+        } else if (mime.includes('html')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const html = await txtRes.text();
+                bodyEl.innerHTML = `<iframe srcdoc="${escapeHtml(html)}" sandbox="allow-same-origin" style="width:100%;height:70vh;border:none;border-radius:6px;" title="HTML Preview"></iframe>`;
+            } catch {
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load HTML preview.</div>';
+            }
+
+        } else if (mime.includes('markdown') || doc.original_name?.endsWith('.md')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                const html = (typeof marked !== 'undefined') ? marked.parse(text) : `<pre>${escapeHtml(text)}</pre>`;
+                bodyEl.innerHTML = `<div class="doc-preview-html" style="line-height:1.6;padding:8px;">${html}</div>`;
+            } catch {
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load Markdown preview.</div>';
+            }
+
+        } else if (mime.includes('json')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                let formatted = text;
+                try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep raw */ }
+                bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(formatted)}</pre>`;
+            } catch {
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load JSON preview.</div>';
+            }
+
         } else {
-            body.innerHTML = chunks.map(c => {
-                const pageLabel = c.page_number ? `<span class="doc-chunk-page">Page ${c.page_number}</span>` : '';
-                const sectionLabel = c.section_title ? `<span class="doc-chunk-section">${escapeHtml(c.section_title)}</span>` : '';
-                return `<div class="doc-chunk">
-                    <div class="doc-chunk__header">${pageLabel}${sectionLabel}</div>
-                    <div class="doc-chunk__content">${escapeHtml(c.content)}</div>
-                </div>`;
-            }).join('');
+            // Plain text, CSV, XML, and all other text-based types
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(text)}</pre>`;
+            } catch {
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load preview.</div>';
+            }
         }
-
-        downloadLink.href = `${API_BASE}/documents/${id}/download`;
-        previewLink.href = `${API_BASE}/documents/${id}/preview`;
-        deleteBtn.onclick = async () => {
-            await deleteDocument(id);
-            overlay.style.display = 'none';
-        };
-    } catch (e) {
-        body.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+    } catch {
+        bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
     }
 }
 
@@ -2460,13 +2616,27 @@ async function saveDocClassification(id) {
     } catch { showToast('Failed to save classification', 'error'); }
 }
 
+/**
+ * Soft-deletes a document immediately, without a confirmation dialog.
+ *
+ * Shows a 6-second toast with an "Undo" action button. Clicking "Undo"
+ * calls `POST /documents/{id}/restore` to reverse the deletion.
+ * The document list is refreshed immediately after deletion so the row
+ * disappears without waiting for the toast to expire.
+ *
+ * @param {string} id - ID of the document to soft-delete.
+ * @returns {Promise<void>}
+ */
 async function deleteDocument(id) {
-    if (!confirm('Delete this document? It can be restored within 30 days.')) return;
     try {
         const res = await apiFetch(`/documents/${id}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Document deleted', 'success');
             loadDocuments();
+            showToast('Document deleted', 'success', {
+                action: 'Undo',
+                onAction: () => restoreDocument(id),
+                duration: 6000,
+            });
         } else {
             showToast('Failed to delete document', 'error');
         }
@@ -2551,10 +2721,98 @@ document.getElementById('docUploadBtn')?.addEventListener('click', () => {
 
 // Document preview modal close
 document.getElementById('docPreviewClose')?.addEventListener('click', () => {
-    document.getElementById('docPreviewOverlay').style.display = 'none';
+    document.getElementById('docPreviewOverlay').classList.add('hidden');
 });
 document.getElementById('docPreviewOverlay')?.addEventListener('click', (e) => {
-    if (e.target.id === 'docPreviewOverlay') e.target.style.display = 'none';
+    if (e.target.id === 'docPreviewOverlay') e.target.classList.add('hidden');
+});
+
+// Document metadata editor modal — consolidated click handler
+// Handles: close button, background-click dismiss, and delegated Save button.
+document.getElementById('docMetaClose')?.addEventListener('click', () => {
+    document.getElementById('docMetaOverlay').classList.add('hidden');
+});
+document.getElementById('docMetaOverlay')?.addEventListener('click', (e) => {
+    // Dismiss on overlay background click
+    if (e.target.id === 'docMetaOverlay') {
+        e.target.classList.add('hidden');
+        return;
+    }
+    // Delegated save-classification button
+    const saveBtn = e.target.closest('.doc-meta-save-btn');
+    if (saveBtn) {
+        const docId = saveBtn.dataset.docId;
+        if (docId) saveDocClassification(docId);
+    }
+});
+
+// ==========================================
+// Document list — delegated event handler
+// ==========================================
+
+/**
+ * Single delegated click handler for the entire `#docList` container.
+ *
+ * Routes clicks based on the closest matching CSS class:
+ *  - `.doc-group__header`  → toggle group collapsed state
+ *  - `.doc-row__info`      → open metadata editor modal
+ *  - `.doc-row__preview`   → open rich content preview modal
+ *  - `.doc-row__delete`    → soft-delete with 6-second undo toast
+ *  - `.doc-row__restore`   → restore a soft-deleted document
+ *  - `.doc-row__purge`     → permanently purge with confirm dialog
+ *
+ * Using a single delegated listener avoids re-attaching handlers each
+ * time the list is re-rendered.
+ */
+document.getElementById('docList')?.addEventListener('click', (e) => {
+    // Group header collapse toggle
+    const groupHeader = e.target.closest('.doc-group__header');
+    if (groupHeader) {
+        groupHeader.parentElement.classList.toggle('collapsed');
+        return;
+    }
+
+    // Resolve the document ID from the nearest row
+    const row = e.target.closest('.doc-row[data-doc-id]');
+    if (!row) return;
+    const id = row.dataset.docId;
+
+    if (e.target.closest('.doc-row__preview')) { openPreview(id);      return; }
+    if (e.target.closest('.doc-row__delete'))  { deleteDocument(id);   return; }
+    if (e.target.closest('.doc-row__restore')) { restoreDocument(id);  return; }
+    if (e.target.closest('.doc-row__purge'))   { purgeDocument(id);    return; }
+    // Info area click — do not fire if a button was the target
+    if (e.target.closest('.doc-row__actions')) return;
+    if (e.target.closest('.doc-row__info'))    { openMetaEditor(id);   return; }
+});
+
+// ==========================================
+// Global Escape key handler — closes topmost visible modal
+// ==========================================
+
+/**
+ * Closes the topmost visible modal when the Escape key is pressed.
+ *
+ * Priority order (highest to lowest):
+ *  1. `#docPreviewOverlay`
+ *  2. `#docMetaOverlay`
+ *  3. `#watchFolderModal`
+ *
+ * @param {KeyboardEvent} e
+ */
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const previewOverlay    = document.getElementById('docPreviewOverlay');
+    const metaOverlay       = document.getElementById('docMetaOverlay');
+    const watchFolderModal  = document.getElementById('watchFolderModal');
+
+    if (previewOverlay && !previewOverlay.classList.contains('hidden')) {
+        previewOverlay.classList.add('hidden');
+    } else if (metaOverlay && !metaOverlay.classList.contains('hidden')) {
+        metaOverlay.classList.add('hidden');
+    } else if (watchFolderModal && !watchFolderModal.classList.contains('hidden')) {
+        watchFolderModal.classList.add('hidden');
+    }
 });
 
 // ==========================================
