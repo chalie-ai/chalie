@@ -88,6 +88,21 @@ export class EventRouter {
     const blocks = data.blocks || [];
     if (!blocks.length) return;
 
+    // Proactive thought card — render directly in the conversation spine.
+    // Handled before the 'response' sending-guard so thought cards always
+    // appear regardless of whether a sync /chat request is in flight.
+    if (data.type === 'thought') {
+      const meta = {
+        topic: data.topic,
+        type: data.type,
+        ts: new Date(),
+        mode: data.mode || '',
+        confidence: data.confidence || 0,
+      };
+      this._renderer.appendChalieForm(blocks, meta);
+      return;
+    }
+
     // Ignore 'response' events from the drift stream while a /chat SSE request
     // is in flight — the chat SSE already renders the reply via resolvePendingForm.
     if (data.type === 'response' && this._isSendingGetter()) return;
