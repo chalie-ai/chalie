@@ -2561,6 +2561,14 @@ document.getElementById('docPreviewOverlay')?.addEventListener('click', (e) => {
 // Watched Folders
 // ==========================================
 
+/**
+ * Loads the current list of watched folders from the server and either
+ * renders the panel (when folders exist) or hides it (when empty).
+ *
+ * Uses the `.hidden` CSS class to show/hide the panel — never `style.display`.
+ *
+ * @returns {Promise<void>}
+ */
 async function loadWatchedFolders() {
     try {
         const res = await apiFetch('/documents/watched-folders');
@@ -2569,15 +2577,33 @@ async function loadWatchedFolders() {
         const folders = data.items || [];
         const panel = document.getElementById('watchedFoldersPanel');
         if (folders.length > 0) {
-            panel.style.display = '';
+            panel.classList.remove('hidden');
             renderWatchedFolders(folders);
         } else {
-            panel.style.display = 'none';
+            panel.classList.add('hidden');
         }
     } catch (e) { console.error('[WatchedFolders] load error:', e); }
 }
 
 
+/**
+ * Renders the list of watched folders into the `#watchedFoldersList` element.
+ *
+ * All interactive controls use `data-folder-id` attributes instead of inline
+ * `onclick`/`onchange` handlers. Actual event wiring is handled by the
+ * delegated listener attached to `#watchedFoldersList` below.
+ *
+ * @param {Array<{
+ *   id: string,
+ *   enabled: boolean,
+ *   label: string|null,
+ *   folder_path: string,
+ *   last_scan_at: string|null,
+ *   last_scan_files: number,
+ *   last_scan_error: string|null
+ * }>} folders - Watched-folder objects returned by the API.
+ * @returns {void}
+ */
 function renderWatchedFolders(folders) {
     const el = document.getElementById('watchedFoldersList');
     el.innerHTML = folders.map(f => {
@@ -2597,16 +2623,47 @@ function renderWatchedFolders(folders) {
             </div>
             <div class="watched-folder-actions">
                 <label class="toggle-switch" title="${disabled ? 'Enable' : 'Disable'}">
-                    <input type="checkbox" ${disabled ? '' : 'checked'} onchange="toggleWatchFolder('${f.id}', this.checked)">
+                    <input type="checkbox" class="wf-toggle" data-folder-id="${f.id}" ${disabled ? '' : 'checked'}>
                     <span class="slider"></span>
                 </label>
-                <button class="btn-icon scan-btn" title="Scan now" onclick="triggerFolderScan('${f.id}')">⟳</button>
-                <button class="btn-icon" title="Edit" onclick="openWatchFolderModal('${f.id}')">✎</button>
-                <button class="btn-icon delete-btn" title="Delete" onclick="deleteWatchFolder('${f.id}')">✕</button>
+                <button class="btn-icon scan-btn wf-scan" data-folder-id="${f.id}" title="Scan now">⟳</button>
+                <button class="btn-icon wf-edit" data-folder-id="${f.id}" title="Edit">✎</button>
+                <button class="btn-icon delete-btn wf-delete" data-folder-id="${f.id}" title="Delete">✕</button>
             </div>
         </div>`;
     }).join('');
 }
+
+/**
+ * Delegated event handler for all interactive controls inside
+ * `#watchedFoldersList`.  Routing is based on the CSS class of the
+ * closest matching ancestor:
+ *
+ * - `.wf-toggle`  (checkbox)  → toggleWatchFolder(id, checked)
+ * - `.wf-scan`    (button)    → triggerFolderScan(id)
+ * - `.wf-edit`    (button)    → openWatchFolderModal(id)
+ * - `.wf-delete`  (button)    → deleteWatchFolder(id)
+ *
+ * Using a single delegated listener avoids attaching per-row handlers
+ * every time the list is re-rendered.
+ */
+document.getElementById('watchedFoldersList')?.addEventListener('change', (e) => {
+    const toggle = e.target.closest('.wf-toggle');
+    if (toggle) {
+        const id = toggle.dataset.folderId;
+        toggleWatchFolder(id, toggle.checked);
+    }
+});
+
+document.getElementById('watchedFoldersList')?.addEventListener('click', (e) => {
+    const scan   = e.target.closest('.wf-scan');
+    const edit   = e.target.closest('.wf-edit');
+    const del    = e.target.closest('.wf-delete');
+
+    if (scan)  { triggerFolderScan(scan.dataset.folderId); return; }
+    if (edit)  { openWatchFolderModal(edit.dataset.folderId); return; }
+    if (del)   { deleteWatchFolder(del.dataset.folderId); return; }
+});
 
 // Toggle watched folders panel
 document.getElementById('watchedFoldersToggle')?.addEventListener('click', () => {
