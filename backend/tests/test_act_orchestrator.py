@@ -159,13 +159,13 @@ class TestMaxIterationsTermination:
         assert result.termination_reason == 'max_iterations'
 
 
-# ── Orchestrator: type-based repetition ────────────────────────────
+# ── Orchestrator: same-type actions allowed ────────────────────────
 
 @pytest.mark.unit
-class TestTypeRepetition:
+class TestSameTypeActionsAllowed:
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_type_repetition_hard_exit(self, MockActLoop):
-        """Same action type 3x in a row → hard exit (no escalation_hints)."""
+    def test_same_type_does_not_abort(self, MockActLoop):
+        """Same action type 3x in a row should NOT abort — smart repetition handles it."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
@@ -174,24 +174,30 @@ class TestTypeRepetition:
         mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
         mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
+        # can_continue called twice per iteration: before + after execution
+        mock_loop.can_continue.side_effect = [
+            (True, None), (True, None),   # iter 0
+            (True, None), (True, None),   # iter 1
+            (True, None), (False, 'max_iterations'),  # iter 2
+        ]
         mock_loop.execute_actions.return_value = [
             _make_action_result('recall', 'success', 'found'),
         ]
         MockActLoop.return_value = mock_loop
 
-        # 3 identical recall actions → repetition_detected
+        # 3 recall actions with different queries — all should execute
         cortex = _make_cortex_service([
-            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
-            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
-            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'topic A'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'topic B'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'topic C'}]),
         ])
 
         orchestrator = ACTOrchestrator(
-            config={}, max_iterations=10,
-            smart_repetition=False, escalation_hints=False,
+            config={}, max_iterations=3,
+            smart_repetition=False,
         )
         result = orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
@@ -199,43 +205,45 @@ class TestTypeRepetition:
             chat_history=[],
         )
 
-        assert result.termination_reason == 'repetition_detected'
+        # All 3 iterations should execute — exits via max_iterations, not repetition
+        assert result.termination_reason == 'max_iterations'
+        assert mock_loop.execute_actions.call_count == 3
 
 
-# ── Orchestrator: escalation hints (pivot + budget warning) ────────
+# ── Orchestrator: synthesis call on forced exit ────────────────────
 
 @pytest.mark.unit
-class TestEscalationHints:
+class TestForcedExitSynthesis:
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_pivot_hint_on_repetition(self, MockActLoop):
-        """With escalation_hints=True, repetition injects pivot hint first."""
+    def test_synthesis_call_on_forced_exit(self, MockActLoop):
+        """When loop exits via max_iterations, a synthesis LLM call produces final_response."""
         mock_loop = MagicMock()
         mock_loop.get_history_context.return_value = '(none)'
         mock_loop.act_history = []
         mock_loop.iteration_logs = []
         mock_loop.iteration_number = 0
-        mock_loop.fatigue = 0.0
         mock_loop._critic = None
         mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
         mock_loop.get_loop_telemetry.return_value = {}
         mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
+        # Run 1 iteration then hit max
+        mock_loop.can_continue.side_effect = [
+            (True, None), (False, 'max_iterations'),
+        ]
         mock_loop.execute_actions.return_value = [
-            _make_action_result('recall', 'success', 'found'),
+            _make_action_result('recall', 'success', 'found data'),
         ]
         MockActLoop.return_value = mock_loop
 
-        # 3x recall (triggers pivot), then no actions (exit)
+        # 1 recall action → max_iterations exit → 2nd call is synthesis
         cortex = _make_cortex_service([
             _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
-            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
-            _make_response(actions=[{'type': 'recall', 'query': 'x'}]),
-            _make_response(actions=[]),  # after pivot hint, LLM stops
+            {'response': 'Here is what I found from the data.', 'actions': [], 'confidence': 0.9},
         ])
 
         orchestrator = ACTOrchestrator(
-            config={}, max_iterations=10,
-            smart_repetition=False, escalation_hints=True,
+            config={}, max_iterations=1, smart_repetition=False,
         )
         result = orchestrator.run(
             topic='test', text='hello', cortex_service=cortex,
@@ -243,13 +251,43 @@ class TestEscalationHints:
             chat_history=[],
         )
 
-        # Should have injected a system result as pivot hint
-        assert mock_loop.append_results.called
-        system_calls = [
-            call for call in mock_loop.append_results.call_args_list
-            if any(r.get('action_type') == 'system' for r in call[0][0])
-        ]
-        assert len(system_calls) >= 1
+        assert result.termination_reason == 'max_iterations'
+        assert result.final_response == 'Here is what I found from the data.'
+        # 1 loop iteration + 1 synthesis call = 2 total LLM calls
+        assert cortex.generate_response_appended.call_count == 2
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_synthesis_skipped_on_generation_error(self, MockActLoop):
+        """No synthesis call when termination was due to generation_error."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop._critic = None
+        mock_loop._escalation_hint_injected = False
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        MockActLoop.return_value = mock_loop
+
+        # First call raises → generation_error, no synthesis should follow
+        cortex = _make_cortex_service([Exception('LLM down')])
+
+        orchestrator = ACTOrchestrator(
+            config={}, max_iterations=5, smart_repetition=False,
+        )
+        result = orchestrator.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+
+        assert result.termination_reason == 'generation_error'
+        assert result.final_response == ''
+        # Only 1 LLM call (the failed one), no synthesis
+        assert cortex.generate_response_appended.call_count == 1
 
 
 # ── Orchestrator: persistent_task exit ─────────────────────────────
