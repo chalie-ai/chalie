@@ -23,6 +23,19 @@ LOG_PREFIX = "[GOAL-AUTOBIO BRIDGE]"
 
 IDENTITY_DIMS = ['curiosity', 'assertiveness', 'warmth', 'playfulness', 'skepticism', 'emotional_intensity']
 
+# Sentence-length motive descriptions yield more reliable embedding similarity than
+# single words because sentence embeddings encode richer semantic context.
+# Threshold is lower (0.35 vs 0.5) because sentence-to-sentence cosine similarity
+# has a smaller absolute range than word-to-word similarity.
+MOTIVE_SENTENCES = {
+    'coherence': 'Consistency, making sense of the world, resolving contradictions',
+    'truthfulness': 'Honesty, accuracy, integrity, and factual correctness',
+    'competence_growth': 'Building skills, learning, mastery, and professional growth',
+    'relationship_preservation': 'Social connection, community, relationships, and being part of a group',
+    'initiative': 'Making independent choices, self-direction, taking action proactively',
+}
+MOTIVE_SIM_THRESHOLD = 0.35
+
 
 def compute_goal_alignment(
     goal_description: str,
@@ -61,14 +74,16 @@ def compute_goal_alignment(
         emb_service = get_embedding_service()
         goal_emb = emb_service.generate_embedding_np(goal_description)
 
-        # Match against CORE_MOTIVES using keyword embeddings
-        from services.goal_ecology_service import CORE_MOTIVES
-        for motive_name in CORE_MOTIVES:
-            motive_emb = emb_service.generate_embedding_np(motive_name.replace('_', ' '))
+        # Match against CORE_MOTIVES using sentence-level embeddings.
+        # Sentences encode richer semantic context than single words, giving
+        # more reliable similarity scores. Threshold is lower (MOTIVE_SIM_THRESHOLD)
+        # because sentence-to-sentence cosine similarity has a smaller absolute range.
+        for motive_name, motive_sentence in MOTIVE_SENTENCES.items():
+            motive_emb = emb_service.generate_embedding_np(motive_sentence)
             sim = float(np.dot(goal_emb, motive_emb) / (
                 np.linalg.norm(goal_emb) * np.linalg.norm(motive_emb) + 1e-8
             ))
-            if sim > 0.5:
+            if sim > MOTIVE_SIM_THRESHOLD:
                 parent_motives.append(motive_name)
 
         # Match against identity vector dimensions

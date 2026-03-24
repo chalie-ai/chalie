@@ -15,6 +15,7 @@ State machine:
                                                   → evolved
 """
 
+import concurrent.futures
 import json
 import logging
 import struct
@@ -80,6 +81,13 @@ DECAY_THRESHOLD = 0.05
 # MemoryStore key prefix for unmatched signals
 UNMATCHED_SIGNAL_PREFIX = "goal:unmatched:"
 UNMATCHED_SIGNAL_TTL = 14 * 24 * 3600  # 14 days
+
+# Bounded pool for background strategy generation.  max_workers=2 keeps
+# concurrent LLM calls predictable; excess submissions queue internally
+# and run when a slot frees up.
+_strategy_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="strategy-gen"
+)
 
 
 def _infer_timescale_from_signals(signals: list) -> str:
@@ -148,9 +156,11 @@ def _trigger_strategy_generation(goal_id: str, goal_type: str) -> None:
                 f"goal {goal_id[:8]}: {e}"
             )
 
-    thread = threading.Thread(target=_run, daemon=True, name=f"goal-strategy-{goal_id[:8]}")
-    thread.start()
-    logger.debug(f"{LOG_PREFIX} Strategy generation thread spawned for goal {goal_id[:8]}")
+    try:
+        _strategy_pool.submit(_run)
+        logger.debug(f"{LOG_PREFIX} Strategy generation submitted to pool for goal {goal_id[:8]}")
+    except concurrent.futures.BrokenExecutor:
+        logger.warning(f"{LOG_PREFIX} Strategy pool broken, skipping generation for goal {goal_id[:8]}")
 
 
 from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
@@ -315,13 +325,16 @@ class GoalEcologyService:
         )
 
         # Post-creation: compute autobiography alignment (non-blocking, non-fatal)
+        # Merge with any caller-provided motives/links rather than replacing.
         try:
             from services.goal_autobiography_bridge import compute_goal_alignment
             alignment = compute_goal_alignment(description)
-            if alignment['parent_motives'] or alignment['identity_links']:
+            merged_motives = list(dict.fromkeys((parent_motives or []) + alignment['parent_motives']))
+            merged_links = list(dict.fromkeys((identity_links or []) + alignment['identity_links']))
+            if merged_motives or merged_links:
                 _align_params = (
-                    json.dumps(alignment['parent_motives']),
-                    json.dumps(alignment['identity_links']),
+                    json.dumps(merged_motives),
+                    json.dumps(merged_links),
                     utc_now().isoformat(),
                     goal_id,
                 )
@@ -924,6 +937,60 @@ class GoalEcologyService:
         if current_strategy:
             feedback_entry['strategy_hash'] = hash(current_strategy) % 10000
         feedback.append(feedback_entry)
+
+        # ── Outcome feedback compaction ──────────────────────────────────────
+        # Keep the 15 most-recent entries verbatim; compact everything older
+        # into a single summary object so the JSON column stays small.
+        _KEEP = 15
+        _COMPACT_THRESHOLD = 20
+        if len(feedback) > _COMPACT_THRESHOLD:
+            # Separate any existing compaction summary from raw entries.
+            existing_summary = next(
+                (f for f in feedback if isinstance(f, dict) and f.get('_compacted')),
+                None,
+            )
+            raw_entries = [f for f in feedback if not (isinstance(f, dict) and f.get('_compacted'))]
+
+            # Oldest entries to compact (everything beyond the tail we keep).
+            to_compact = raw_entries[:-_KEEP]
+            recent = raw_entries[-_KEEP:]
+
+            # Response-type counters for entries being compacted now.
+            _response_types = ('engaged', 'rejected', 'acknowledged', 'ignored')
+            new_counts: dict = {rt: 0 for rt in _response_types}
+            for entry in to_compact:
+                rt = entry.get('response', '')
+                if rt in new_counts:
+                    new_counts[rt] += 1
+
+            # Merge with any prior compacted summary.
+            if existing_summary:
+                merged_total = existing_summary.get('total', 0) + len(to_compact)
+                merged_counts = {
+                    rt: existing_summary.get(rt, 0) + new_counts[rt]
+                    for rt in _response_types
+                }
+                # Extend the period span.
+                prior_period_start = existing_summary.get('period', '').split(' to ')[0]
+                new_period_end = now.strftime('%Y-%m')
+                period_str = f"{prior_period_start} to {new_period_end}"
+            else:
+                merged_total = len(to_compact)
+                merged_counts = new_counts
+                # Derive period from oldest/newest of the compacted entries.
+                timestamps = [
+                    e.get('timestamp', '') for e in to_compact if e.get('timestamp')
+                ]
+                if timestamps:
+                    period_start = parse_utc(min(timestamps)).strftime('%Y-%m')
+                    period_end = parse_utc(max(timestamps)).strftime('%Y-%m')
+                else:
+                    period_start = period_end = now.strftime('%Y-%m')
+                period_str = f"{period_start} to {period_end}"
+
+            compacted_entry: dict = {'_compacted': True, 'total': merged_total, 'period': period_str}
+            compacted_entry.update(merged_counts)
+            feedback = [compacted_entry] + recent
 
         strategy_update = ""
         if current_strategy:
