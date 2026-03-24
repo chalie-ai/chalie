@@ -28,7 +28,7 @@ import time
 import logging
 
 logger = logging.getLogger(__name__)
-from services import ConfigService, FrontalCortexService, OrchestratorService, PromptQueue, SessionService
+from services import ConfigService, FrontalCortexService, OrchestratorService, SessionService
 from services.llm_service import create_llm_service
 from services.recent_topic_service import RecentTopicService
 from services.world_state_service import WorldStateService
@@ -379,27 +379,6 @@ def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool
     return warmth
 
 
-def classify_prompt(text, existing_topics, recent_topic, gist_context, world_state, classifier_config, classifier_prompt):
-    """Classify the prompt and return classification result with timing."""
-    parts = []
-    if gist_context and gist_context != "No previous conversation context available":
-        parts.append(f"## Context\n{gist_context}")
-    if world_state:
-        parts.append(f"## World State\n{world_state}")
-    parts.append(f"## Prompt\n{text}")
-    if existing_topics:
-        topics_list = '\n'.join([f"- {topic}" for topic in existing_topics])
-        parts.append(f"## Existing Topics\n{topics_list}")
-
-    user_message = "\n\n".join(parts)
-    classifier = create_llm_service(classifier_config)
-    start_time = time.time()
-    response = classifier.send_message(classifier_prompt, user_message).text
-    classification_time = time.time() - start_time
-
-    return json.loads(response), classification_time
-
-
 def _format_visual_context(image_contexts: list) -> str:
     """Format image analysis results as a markdown section for the prompt."""
     parts = []
@@ -412,167 +391,6 @@ def _format_visual_context(image_contexts: list) -> str:
             part += f"\n> Extracted text: {ocr[:500]}"
         parts.append(part)
     return "\n\n".join(parts)
-
-
-def generate_for_mode(topic, text, mode, classification, thread_conv_service, cortex_config, cortex_prompt_map, metadata=None, act_history_context=None, thread_id=None, returning_from_silence=False, signals=None, message_embedding=None):
-    """
-    Generate response for a terminal mode.
-
-    Single LLM call with mode-specific prompt. No decision gate, no alternative paths.
-
-    Args:
-        act_history_context: Optional act_history string from a preceding ACT loop.
-            When present, the LLM can reference tool results in its response.
-        thread_id: Thread ID for working memory + world state context.
-        signals: Routing signals dict for context relevance computation.
-
-    Returns:
-        dict: {mode, modifiers, response, generation_time, actions, confidence}
-    """
-    from services.config_service import ConfigService
-
-    prompt = cortex_prompt_map.get(mode, cortex_prompt_map['UNIFIED'])
-
-    # Load mode-specific config
-    config_name = f"frontal-cortex-{mode.lower()}"
-    try:
-        config = ConfigService.resolve_agent_config(config_name)
-        logging.info(f"[Mode:{mode}] Using config {config_name}.json with model {config.get('model')}")
-    except Exception as e:
-        logging.warning(f"[Mode:{mode}] Config {config_name}.json not found, using base config: {e}")
-        config = cortex_config
-
-    # Compute context inclusion map using relevance service
-    inclusion_map = None
-    try:
-        context_relevance_service = get_context_relevance_service()
-        relevance_mode = mode
-        inclusion_map = context_relevance_service.compute_inclusion_map(
-            mode=relevance_mode,
-            signals=signals or {},
-            classification=classification,
-            returning_from_silence=returning_from_silence,
-        )
-    except Exception as e:
-        logging.warning(f"[Mode:{mode}] Context relevance computation failed: {e}, proceeding without inclusion_map")
-
-    assembled_context = None
-    try:
-        assembled_context = get_context_assembly_service().assemble(
-            prompt=text,
-            topic=topic,
-            thread_id=thread_id,
-            message_embedding=message_embedding,
-        )
-    except Exception as e:
-        logging.warning(f"[Mode:{mode}] Context assembly failed: {e}")
-
-    # Phase 2 — Ingestion detection: run contradiction check in parallel with
-    # context assembly. Time-boxed to 600ms — skip if slow.
-    # Runs for UNIFIED mode (has conversational context to weave into).
-    if mode == 'UNIFIED' and assembled_context is not None:
-        try:
-            from services.contradiction_classifier_service import ContradictionClassifierService
-            from services.uncertainty_service import UncertaintyService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            classifier = ContradictionClassifierService(db_service=db)
-            conflict = classifier.check_ingestion(text)
-            if conflict:
-                conflict_type = conflict.get('classification')  # e.g. 'temporal_change', 'true_contradiction'
-                mem_a = conflict.get('memory_a', {})
-                mem_b = conflict.get('memory_b', {})
-                unc_svc = UncertaintyService(db)
-
-                if conflict_type == 'temporal_change' and conflict.get('temporal_signal'):
-                    # Auto-supersede silently — don't surface in response
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_id = unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=True,
-                        )
-                        unc_svc.resolve_uncertainty(
-                            uncertainty_id=unc_id,
-                            strategy='temporal_supersede',
-                            detail=conflict.get('reasoning', ''),
-                        )
-                elif conflict_type in ('true_contradiction', 'context_dependent'):
-                    # Flag for response weaving
-                    if assembled_context is None:
-                        assembled_context = {}
-                    assembled_context['contradiction_context'] = {
-                        'classification': conflict_type,
-                        'memory_a_text': mem_a.get('text', ''),
-                        'memory_b_text': mem_b.get('text', ''),
-                        'reasoning': conflict.get('reasoning', ''),
-                        'surface_context': conflict.get('surface_context', ''),
-                    }
-                    # Create uncertainty record if not already tracked
-                    if mem_b.get('id') and not classifier.pair_already_tracked('incoming', mem_b['id']):
-                        unc_svc.create_uncertainty(
-                            memory_a_type=mem_b['type'],
-                            memory_a_id=mem_b['id'],
-                            uncertainty_type='contradiction',
-                            detection_context='ingestion',
-                            reasoning=conflict.get('reasoning'),
-                            temporal_signal=False,
-                            surface_context=conflict.get('surface_context'),
-                        )
-        except Exception as e:
-            logging.debug(f"[Mode:{mode}] Ingestion contradiction check skipped: {e}")
-
-    # Inject visual context from attached images into assembled_context
-    image_contexts = (metadata or {}).get('image_contexts', [])
-    if image_contexts:
-        if assembled_context is None:
-            assembled_context = {}
-        assembled_context['visual_context'] = _format_visual_context(image_contexts)
-
-    # Propagate message embedding so WorldStateService can apply semantic scoring
-    if message_embedding is not None:
-        if assembled_context is None:
-            assembled_context = {}
-        assembled_context['message_embedding'] = message_embedding
-
-    cortex_service = FrontalCortexService(config)
-    chat_history = thread_conv_service.get_conversation_history(thread_id) if thread_id else []
-
-    # Use appended path (no tools) — produces a text response without JSON parsing.
-    # The unified prompt uses native tool calling protocol, not JSON output.
-    system_prompt = cortex_service.build_system_prompt(
-        system_prompt_template=prompt,
-        original_prompt=text,
-        classification=classification,
-        chat_history=chat_history,
-        assembled_context=assembled_context,
-        thread_id=thread_id,
-        returning_from_silence=returning_from_silence,
-        inclusion_map=inclusion_map,
-    )
-    # Act history goes in the message array (not system prompt) for cache efficiency
-    act_history = act_history_context or "(none)"
-    user_content = text
-    if act_history and act_history != "(none)":
-        user_content = f"{text}\n\nPrevious Internal Actions:\n{act_history}"
-    messages = [{"role": "user", "content": user_content}]
-    response_data = cortex_service.generate_response_appended(
-        system_prompt=system_prompt,
-        messages=messages,
-        cache_prefix=True,
-    )
-
-    # Router decided the mode, not the LLM
-    response_data['mode'] = mode
-
-    # Ensure non-empty response for terminal modes
-    if mode != 'IGNORE' and not response_data.get('response', '').strip():
-        response_data['response'] = "I understand. Let me think about that."
-
-    return response_data
 
 
 def unified_generate(topic, text, classification, thread_conv_service,
@@ -1509,22 +1327,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     except Exception as e:
         logging.error(f"[PROACTIVE] Failed: {e}")
         return f"Topic '{topic}' | ERROR: proactive - {e}"
-
-
-def _log_cycle_event(event_type: str, payload: dict, topic: str):
-    """Log a cycle-related event to interaction_log."""
-    try:
-        from services.database_service import get_shared_db_service
-        db_service = get_shared_db_service()
-        log_service = InteractionLogService(db_service)
-        log_service.log_event(
-            event_type=event_type,
-            payload=payload,
-            topic=topic,
-            source='cycle_service',
-        )
-    except Exception as e:
-        logger.debug(f"[DIGEST] Failed to log cycle event '{event_type}': {e}", exc_info=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

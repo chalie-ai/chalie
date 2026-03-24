@@ -2,7 +2,7 @@
 Interaction Log Service - Immutable audit trail of all raw events.
 
 Append-only SQLite-backed log of user inputs, classifications, and system responses.
-Follows EpisodicStorageService pattern (DatabaseService injection, get_connection/release_connection).
+Follows EpisodicService pattern (DatabaseService injection, get_connection/release_connection).
 """
 
 import json

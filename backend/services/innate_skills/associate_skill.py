@@ -62,13 +62,13 @@ def handle_associate(topic: str, params: dict) -> str:
     include_weak = params.get("include_weak", True)
 
     try:
-        from services.semantic_retrieval_service import SemanticRetrievalService
+        from services.semantic_service import SemanticService
         from services.embedding_service import get_embedding_service
         from services.database_service import get_shared_db_service
 
         db_service = get_shared_db_service()
         embedding_service = get_embedding_service()
-        retrieval_service = SemanticRetrievalService(db_service, embedding_service)
+        retrieval_service = SemanticService(db_service, embedding_service)
 
         # Resolve seed names to concept IDs
         seed_ids = _resolve_seeds(retrieval_service, seeds)

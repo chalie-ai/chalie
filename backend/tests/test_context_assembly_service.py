@@ -125,11 +125,11 @@ class TestContextAssemblyService:
         assert result['working_memory'] == ''
 
     def test_episodes_failure_returns_empty_string(self):
-        """If EpisodicRetrievalService fails, _get_episodes returns ''."""
+        """If EpisodicService fails, _get_episodes returns ''."""
         config = {}
         svc = ContextAssemblyService(config)
 
-        with patch('services.episodic_retrieval_service.EpisodicRetrievalService', side_effect=Exception('boom')):
+        with patch('services.episodic_service.EpisodicService', side_effect=Exception('boom')):
             result = svc._get_episodes('prompt', 'topic')
 
         assert result == ''
@@ -213,7 +213,7 @@ class TestContextAssemblyService:
         mock_retrieval = MagicMock()
         mock_retrieval.retrieve_concepts.return_value = mock_concepts
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+        with patch('services.semantic_service.SemanticService', return_value=mock_retrieval):
             result = svc._get_concepts('What is Python?', 'programming')
 
         assert '## Relevant Concepts' in result
@@ -230,7 +230,7 @@ class TestContextAssemblyService:
         mock_retrieval = MagicMock()
         mock_retrieval.retrieve_concepts.return_value = []
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+        with patch('services.semantic_service.SemanticService', return_value=mock_retrieval):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
@@ -245,16 +245,16 @@ class TestContextAssemblyService:
         mock_retrieval = MagicMock()
         mock_retrieval.retrieve_concepts.return_value = mock_concepts
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', return_value=mock_retrieval):
+        with patch('services.semantic_service.SemanticService', return_value=mock_retrieval):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
     def test_get_concepts_returns_empty_on_service_failure(self):
-        """_get_concepts() gracefully returns '' when SemanticRetrievalService fails."""
+        """_get_concepts() gracefully returns '' when SemanticService fails."""
         svc = ContextAssemblyService({})
 
-        with patch('services.semantic_retrieval_service.SemanticRetrievalService', side_effect=Exception('DB down')):
+        with patch('services.semantic_service.SemanticService', side_effect=Exception('DB down')):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''

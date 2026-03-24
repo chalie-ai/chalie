@@ -102,9 +102,9 @@ def make_trait_row(
 
 
 # ─── episodes ────────────────────────────────────────────────────────
-# Used by episodic_retrieval_service._hybrid_retrieve() which returns dicts,
+# Used by episodic_service._hybrid_retrieve() which returns dicts,
 # but the raw query returns tuples.  This factory returns a dict matching
-# the service's output format (since retrieval service converts internally).
+# the service's output format (since the service converts internally).
 
 def make_episode_row(
     episode_id=1,

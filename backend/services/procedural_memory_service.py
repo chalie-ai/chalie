@@ -2,7 +2,7 @@
 Procedural Memory Service - Policy weights and skill success stats.
 
 Tracks action outcomes to learn which actions work well over time.
-Follows EpisodicStorageService pattern (DatabaseService injection).
+Follows EpisodicService pattern (DatabaseService injection).
 """
 
 import json

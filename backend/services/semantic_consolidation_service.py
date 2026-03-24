@@ -15,7 +15,7 @@ import logging
 import json
 import struct
 from typing import Dict, List, Optional
-from services.semantic_storage_service import SemanticStorageService
+from services.semantic_service import SemanticService
 from services.config_service import ConfigService
 
 
@@ -28,7 +28,7 @@ class SemanticConsolidationService:
     def __init__(
         self,
         ollama_service,
-        storage_service: SemanticStorageService,
+        storage_service: SemanticService,
         config_service: ConfigService
     ):
         """
@@ -36,7 +36,7 @@ class SemanticConsolidationService:
 
         Args:
             ollama_service: LLM service for inference
-            storage_service: SemanticStorageService for persistence
+            storage_service: SemanticService for persistence
             config_service: ConfigService for semantic memory config
         """
         self.ollama = ollama_service

@@ -1,11 +1,11 @@
-"""Tests for EpisodicStorageService — reduced mock depth (mock exactly one layer: DatabaseService)."""
+"""Tests for EpisodicService storage — reduced mock depth (mock exactly one layer: DatabaseService)."""
 
 import json
 import uuid
 import pytest
 from unittest.mock import MagicMock, patch
 
-from services.episodic_storage_service import EpisodicStorageService
+from services.episodic_service import EpisodicService
 
 
 pytestmark = pytest.mark.unit
@@ -30,7 +30,7 @@ def _make_episode_data(**overrides):
 
 @pytest.fixture
 def storage_env():
-    """EpisodicStorageService with mocked DatabaseService — one-layer mock.
+    """EpisodicService with mocked DatabaseService — one-layer mock.
 
     Returns (service, mock_cursor) so tests can set cursor behavior.
     """
@@ -41,7 +41,7 @@ def storage_env():
     mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
     mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
 
-    svc = EpisodicStorageService(mock_db)
+    svc = EpisodicService(mock_db)
     return svc, mock_cursor
 
 

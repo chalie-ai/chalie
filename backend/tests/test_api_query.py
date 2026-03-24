@@ -139,7 +139,7 @@ def _make_world_service_mock():
 
 
 def _make_episodic_service_mock(results=None):
-    """Return a mock EpisodicRetrievalService *instance*."""
+    """Return a mock EpisodicService *instance*."""
     instance = MagicMock()
     instance.retrieve_episodes.return_value = results or [
         {
@@ -296,7 +296,7 @@ class TestRelevanceEndpoint:
 
         stack = ExitStack()
         stack.enter_context(
-            patch("api.query._get_episodic_retrieval_service", return_value=ep_cls)
+            patch("api.query._get_episodic_service", return_value=ep_cls)
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
         stack.enter_context(
@@ -384,10 +384,10 @@ class TestRelevanceEndpoint:
         assert resp.status_code == 403
 
     def test_service_error_returns_defaults(self, cookie_app):
-        """_get_episodic_retrieval_service failure → relevance 0.0, recommendation defer."""
+        """_get_episodic_service failure → relevance 0.0, recommendation defer."""
         with cookie_app.test_client() as client:
             with _patch_cookie_auth(), \
-                 patch("api.query._get_episodic_retrieval_service", side_effect=Exception("no db")), \
+                 patch("api.query._get_episodic_service", side_effect=Exception("no db")), \
                  patch("api.query._get_db_service", side_effect=Exception("no db")), \
                  patch("api.query._get_memory_client", side_effect=Exception("no store")):
                 resp = client.get("/api/query/relevance?q=test")
@@ -614,7 +614,7 @@ class TestMemoryEndpoint:
 
         stack = ExitStack()
         stack.enter_context(
-            patch("api.query._get_episodic_retrieval_service", return_value=ep_cls)
+            patch("api.query._get_episodic_service", return_value=ep_cls)
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
         return stack, ep_instance
@@ -697,7 +697,7 @@ class TestMemoryEndpoint:
     def test_service_unavailable_returns_empty(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth(), \
-                 patch("api.query._get_episodic_retrieval_service", side_effect=Exception("no db")), \
+                 patch("api.query._get_episodic_service", side_effect=Exception("no db")), \
                  patch("api.query._get_db_service", side_effect=Exception("no db")):
                 resp = client.get("/api/query/memory?q=test")
         assert resp.status_code == 200
@@ -748,7 +748,7 @@ class TestCompositeEndpoint:
         ep_cls = MagicMock(return_value=ep_instance)
         stack = ExitStack()
         stack.enter_context(
-            patch("api.query._get_episodic_retrieval_service", return_value=ep_cls)
+            patch("api.query._get_episodic_service", return_value=ep_cls)
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=MagicMock()))
         return stack
@@ -1025,7 +1025,7 @@ class TestDispatchSlice:
         mc_cls = MagicMock()
         mc_cls.create_connection.return_value = store
 
-        with patch("api.query._get_episodic_retrieval_service", return_value=ep_cls), \
+        with patch("api.query._get_episodic_service", return_value=ep_cls), \
              patch("api.query._get_db_service", return_value=MagicMock()), \
              patch("api.query._get_memory_client", return_value=mc_cls):
             result = _dispatch_slice("relevance:unit tests")
@@ -1064,7 +1064,7 @@ class TestDispatchSlice:
         ep_instance = _make_episodic_service_mock()
         ep_cls = MagicMock(return_value=ep_instance)
 
-        with patch("api.query._get_episodic_retrieval_service", return_value=ep_cls), \
+        with patch("api.query._get_episodic_service", return_value=ep_cls), \
              patch("api.query._get_db_service", return_value=MagicMock()):
             result = _dispatch_slice("memory")
 

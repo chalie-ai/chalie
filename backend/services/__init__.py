@@ -9,8 +9,6 @@ from .world_state_service import WorldStateService
 from .database_service import DatabaseService
 from .schema_service import SchemaService
 from .episodic_service import EpisodicService
-from .episodic_service import EpisodicService as EpisodicStorageService
-from .episodic_service import EpisodicService as EpisodicRetrievalService
 from .salience_service import SalienceService
 from .session_service import SessionService
 
@@ -22,6 +20,5 @@ __all__ = [
     'FrontalCortexService', 'OrchestratorService',
     'WorldStateService', 'DatabaseService',
     'SchemaService', 'EpisodicService',
-    'EpisodicStorageService', 'EpisodicRetrievalService',
     'SalienceService', 'SessionService',
 ]

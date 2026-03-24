@@ -8,7 +8,7 @@ import time
 import re
 from datetime import datetime, timezone
 from services.time_utils import utc_now
-from services import ConfigService, DatabaseService, EpisodicStorageService, SalienceService
+from services import ConfigService, DatabaseService, EpisodicService, SalienceService
 from services.llm_service import create_llm_service
 from services.thread_conversation_service import ThreadConversationService
 import logging
@@ -147,7 +147,7 @@ def episodic_memory_worker(job_data: dict) -> str:
 
         # Initialize services
         database_service = get_lightweight_db_service()
-        storage_service = EpisodicStorageService(database_service)
+        storage_service = EpisodicService(database_service)
         ollama_service = create_llm_service(config)
         salience_service = SalienceService(config)
         conversation_service = ThreadConversationService()

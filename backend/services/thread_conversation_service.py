@@ -433,11 +433,11 @@ class ThreadConversationService:
             db = get_shared_db_service()
             with db.connection() as conn:
                 cursor = conn.cursor()
-                # Prefer active thread (survives restart in SQLite)
+                # Prefer active thread with most recent activity
                 cursor.execute("""
                     SELECT thread_id FROM threads
                     WHERE state = 'active'
-                    ORDER BY created_at DESC
+                    ORDER BY COALESCE(last_activity, created_at) DESC
                     LIMIT 1
                 """)
                 row = cursor.fetchone()

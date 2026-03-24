@@ -152,7 +152,7 @@ class TestStoreEpisode:
         # Patch the lazy imports at the exact module path _store_episode uses
         with patch('services.database_service.get_lightweight_db_service', return_value=mock_db), \
              patch('services.embedding_service.get_embedding_service', return_value=mock_emb), \
-             patch('services.episodic_storage_service.EpisodicStorageService', return_value=mock_storage):
+             patch('services.episodic_service.EpisodicService', return_value=mock_storage):
             service._store_episode(
                 observation, 'python', 'what is new',
                 [{'tool': 'search', 'result': 'stuff'}]

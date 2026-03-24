@@ -692,9 +692,3 @@ class EpisodicService:
 
         boost = min(10, (matched_concepts / len(concepts)) * 10) if concepts else 0
         return boost
-
-
-# ── Backwards compatibility aliases ──────────────────────────────────
-# Allow old imports to resolve without changing every caller immediately.
-EpisodicStorageService = EpisodicService
-EpisodicRetrievalService = EpisodicService

@@ -184,11 +184,11 @@ def _search_working_memory(topic: str, query: str, limit: int) -> tuple:
 def _search_episodes(topic: str, query: str, limit: int) -> tuple:
     """Search episodic memory via hybrid retrieval."""
     try:
-        from services.episodic_retrieval_service import EpisodicRetrievalService
+        from services.episodic_service import EpisodicService
         from services.database_service import get_shared_db_service
 
         db_service = get_shared_db_service()
-        service = EpisodicRetrievalService(db_service)
+        service = EpisodicService(db_service)
 
         episodes = service.retrieve_episodes(
             query_text=query,
@@ -222,13 +222,13 @@ def _search_episodes(topic: str, query: str, limit: int) -> tuple:
 def _search_concepts(topic: str, query: str, limit: int) -> tuple:
     """Search semantic concepts via hybrid retrieval."""
     try:
-        from services.semantic_retrieval_service import SemanticRetrievalService
+        from services.semantic_service import SemanticService
         from services.embedding_service import get_embedding_service
         from services.database_service import get_shared_db_service
 
         db_service = get_shared_db_service()
         embedding_service = get_embedding_service()
-        service = SemanticRetrievalService(db_service, embedding_service)
+        service = SemanticService(db_service, embedding_service)
 
         concepts = service.retrieve_concepts(query=query, limit=limit)
 
