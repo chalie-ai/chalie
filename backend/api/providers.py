@@ -43,10 +43,13 @@ def create_provider():
         if not data:
             return jsonify({"error": "Request body is required"}), 400
 
-        required = ["name", "platform", "model"]
-        for field in required:
-            if field not in data:
-                return jsonify({"error": f"Missing required field: {field}"}), 400
+        # Require name + platform + (model or models)
+        if "name" not in data:
+            return jsonify({"error": "Missing required field: name"}), 400
+        if "platform" not in data:
+            return jsonify({"error": "Missing required field: platform"}), 400
+        if "model" not in data and "models" not in data:
+            return jsonify({"error": "Missing required field: model or models"}), 400
 
         service = get_provider_service()
 
@@ -340,15 +343,16 @@ def list_job_assignments():
 @providers_bp.route('/jobs/<job_name>', methods=['PUT'])
 @require_session
 def assign_job_provider(job_name):
-    """Assign a provider to a job."""
+    """Assign a provider (and optionally a specific model) to a job."""
     try:
         data = request.get_json()
         if not data or "provider_id" not in data:
             return jsonify({"error": "Request body must contain 'provider_id'"}), 400
 
         provider_id = data["provider_id"]
+        model = data.get("model")  # optional model override
         service = get_provider_service()
-        assignment = service.set_job_assignment(job_name, provider_id)
+        assignment = service.set_job_assignment(job_name, provider_id, model)
 
         # Invalidate provider cache so workers pick up the new assignment
         try:
@@ -364,6 +368,40 @@ def assign_job_provider(job_name):
     except Exception as e:
         logger.error(f"[REST API] Failed to assign job provider: {e}")
         return jsonify({"error": "Failed to assign job provider"}), 500
+
+
+@providers_bp.route('/jobs/groups/<group_name>', methods=['PUT'])
+@require_session
+def assign_group_provider(group_name):
+    """Batch-assign a provider+model to all jobs in a capability group.
+
+    Groups are derived from cognitive_jobs.json caps:
+      vision, reasoning, analytical, utility
+    """
+    try:
+        data = request.get_json()
+        if not data or "provider_id" not in data:
+            return jsonify({"error": "Request body must contain 'provider_id'"}), 400
+
+        provider_id = data["provider_id"]
+        model = data.get("model")
+        service = get_provider_service()
+        assignments = service.set_group_assignments(group_name, provider_id, model)
+
+        # Invalidate provider cache
+        try:
+            from services.provider_cache_service import ProviderCacheService
+            ProviderCacheService.invalidate()
+        except Exception as e:
+            logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
+        return jsonify({"assignments": assignments}), 200
+    except ValueError as e:
+        logger.warning(f"[REST API] Group assignment error: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"[REST API] Failed to assign group provider: {e}")
+        return jsonify({"error": "Failed to assign group provider"}), 500
 
 
 @providers_bp.route('/jobs/<job_name>/stats', methods=['GET'])

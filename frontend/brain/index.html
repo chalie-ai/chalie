@@ -75,7 +75,7 @@
 
             <!-- Jobs sub-panel (existing content, unchanged) -->
             <div class="cognition-subpanel active" id="subtab-jobs">
-                <p class="panel-desc">Assign each cognitive job to an LLM provider. Changes auto-save.</p>
+                <p class="panel-desc">Assign providers and models to capability groups. Use Advanced to override individual jobs.</p>
                 <div id="cognitionList" class="cognition-list">
                     <div class="loading">Loading...</div>
                 </div>
@@ -316,8 +316,12 @@
                     <input type="password" id="editApiKey" placeholder="Leave blank to keep existing key">
                 </div>
                 <div class="form-group">
-                    <label>Model</label>
-                    <input type="text" id="editModel" placeholder="e.g. qwen3:8b" list="editModelSuggestions">
+                    <label>Models</label>
+                    <div class="model-tags-container" id="editModelTags"></div>
+                    <div class="model-input-row">
+                        <input type="text" id="editModelInput" placeholder="e.g. claude-opus-4" list="editModelSuggestions">
+                        <button type="button" id="addModelBtn" class="btn btn-secondary btn-sm">Add</button>
+                    </div>
                     <datalist id="editModelSuggestions"></datalist>
                 </div>
                 <div id="testResult" class="test-result hidden"></div>

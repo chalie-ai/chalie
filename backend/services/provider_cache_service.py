@@ -1,7 +1,7 @@
 """Provider cache service — in-memory lazy cache with MemoryStore-backed invalidation."""
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +18,8 @@ class ProviderCacheService:
     """
 
     # Class-level state (shared across all calls in this process)
-    _providers: Dict[str, Any] = {}  # {name: {platform, model, host, api_key, ...}}
-    _job_assignments: Dict[str, str] = {}  # {job_name: provider_name}
+    _providers: Dict[str, Any] = {}  # {name: {platform, model, models, host, api_key, ...}}
+    _job_assignments: Dict[str, Tuple[str, Optional[str]]] = {}  # {job_name: (provider_name, model_override)}
     _version: Optional[int] = None  # Last seen MemoryStore version
 
 
@@ -29,7 +29,7 @@ class ProviderCacheService:
         Get all providers with lazy caching and MemoryStore-based invalidation.
 
         Returns:
-            dict: {provider_name: {platform, model, host, api_key, ...}}
+            dict: {provider_name: {platform, model, models, host, api_key, ...}}
         """
         # Check if MemoryStore version has changed (cross-process invalidation)
         try:
@@ -68,18 +68,20 @@ class ProviderCacheService:
             # Convert to providers dict keyed by name
             providers_dict = {}
             for p in db_providers:
-                providers_dict[p['name']] = {
+                entry = {
                     'platform': p['platform'],
                     'model': p['model'],
+                    'models': p.get('models', [p['model']]),
                 }
                 if p.get('host'):
-                    providers_dict[p['name']]['host'] = p['host']
+                    entry['host'] = p['host']
                 if p.get('api_key'):
-                    providers_dict[p['name']]['api_key'] = p['api_key']
+                    entry['api_key'] = p['api_key']
                 if p.get('dimensions'):
-                    providers_dict[p['name']]['dimensions'] = p['dimensions']
+                    entry['dimensions'] = p['dimensions']
                 if p.get('timeout'):
-                    providers_dict[p['name']]['timeout'] = p['timeout']
+                    entry['timeout'] = p['timeout']
+                providers_dict[p['name']] = entry
 
             # Fetch job assignments (skip assignments pointing to inactive/deleted providers)
             job_assignments = {}
@@ -88,7 +90,10 @@ class ProviderCacheService:
                 for assignment in all_assignments:
                     provider = service.get_provider_by_id(assignment['provider_id'])
                     if provider and provider.get('is_active', True):
-                        job_assignments[assignment['job_name']] = provider['name']
+                        job_assignments[assignment['job_name']] = (
+                            provider['name'],
+                            assignment.get('model'),  # model override or None
+                        )
             except Exception as e:
                 logger.debug(f"[ProviderCache] Could not load job assignments: {e}")
 
@@ -115,23 +120,27 @@ class ProviderCacheService:
 
 
     @staticmethod
-    def get_job_assignment(job_name: str) -> Optional[str]:
+    def get_job_assignment(job_name: str) -> Tuple[Optional[str], Optional[str]]:
         """
-        Get the assigned provider name for a job.
+        Get the assigned provider name and model override for a job.
 
         Args:
-            job_name: Job identifier (e.g., 'frontal-cortex', 'memory-chunker')
+            job_name: Job identifier (e.g., 'frontal-cortex', 'document-ocr')
 
         Returns:
-            Provider name if assigned, None otherwise
+            Tuple of (provider_name, model_override). Both None if unassigned.
+            model_override is None when the job should use the provider's default model.
         """
         # Ensure cache is warm
         ProviderCacheService.get_providers()
 
         assignment = ProviderCacheService._job_assignments.get(job_name)
         if assignment:
-            logger.debug(f"[ProviderCache] Job '{job_name}' assigned to provider '{assignment}'")
-        return assignment
+            provider_name, model_override = assignment
+            logger.debug(f"[ProviderCache] Job '{job_name}' assigned to provider '{provider_name}'"
+                         f"{f' (model: {model_override})' if model_override else ''}")
+            return provider_name, model_override
+        return None, None
 
 
     @staticmethod
@@ -142,6 +151,10 @@ class ProviderCacheService:
         Resolution order:
           1. Job-specific assignment (set via /api/providers/jobs)
           2. First available provider, optionally filtered by platform
+
+        If the assignment has a model override, the returned config's 'model'
+        field is set to that override. Downstream consumers always see a single
+        model string.
 
         Args:
             job_name:  Job identifier (e.g. 'document-ocr', 'frontal-cortex')
@@ -157,16 +170,20 @@ class ProviderCacheService:
             return None
 
         # 1. Job-specific assignment
-        assigned_name = ProviderCacheService.get_job_assignment(job_name)
+        assigned_name, model_override = ProviderCacheService.get_job_assignment(job_name)
         if assigned_name and assigned_name in providers:
-            logger.debug(f"[ProviderCache] Resolved job '{job_name}' → assigned provider '{assigned_name}'")
-            return providers[assigned_name]
+            config = dict(providers[assigned_name])
+            if model_override:
+                config['model'] = model_override
+            logger.debug(f"[ProviderCache] Resolved job '{job_name}' → provider '{assigned_name}'"
+                         f"{f' model={model_override}' if model_override else ''}")
+            return config
 
         # 2. Fallback: first provider matching the platform filter (or any provider)
         for name, config in providers.items():
             if platforms is None or config.get('platform') in platforms:
                 logger.debug(f"[ProviderCache] No assignment for '{job_name}', falling back to '{name}'")
-                return config
+                return dict(config)
 
         logger.warning(f"[ProviderCache] No provider found for job '{job_name}' (platforms={platforms})")
         return None

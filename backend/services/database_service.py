@@ -556,6 +556,10 @@ class DatabaseService:
                 ("semantic_concepts", "reliability", "TEXT DEFAULT 'reliable'", None),
                 # Migration 006 — fast mute column on goals (avoids JSON deserialisation)
                 ("goals", "is_muted", "INTEGER DEFAULT 0", None),
+                # Multi-model providers — JSON array of available models per provider
+                ("providers", "models", "TEXT", None),
+                # Per-job model override — overrides provider default when set
+                ("job_provider_assignments", "model", "TEXT", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")

@@ -21,6 +21,7 @@ let assignments = {};
 let editPlatform = 'ollama';
 let editingProviderId = null;
 let deletingProviderId = null;
+let editModels = [];  // multi-model tag input state
 
 // Cognition observability state
 let obsData = {};               // cached API responses keyed by subtab name
@@ -182,7 +183,7 @@ function selectPlatform(platform, context) {
     document.getElementById('editApiKeyGroup').style.display = config.hasApiKey ? '' : 'none';
 
     // Update model input
-    const modelInput = document.getElementById('editModel');
+    const modelInput = document.getElementById('editModelInput');
     modelInput.placeholder = config.modelPlaceholder;
 
     // Update datalist for curated platforms
@@ -311,13 +312,16 @@ function renderProviders() {
         el.innerHTML = '<div class="empty-state"><h3>No providers</h3><p>Add your first LLM provider to get started.</p></div>';
         return;
     }
-    el.innerHTML = providers.map(p => `
+    el.innerHTML = providers.map(p => {
+        const modelsList = (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
+        const modelsDisplay = modelsList.map(m => escapeHtml(m)).join(', ') || 'no model';
+        return `
         <div class="provider-card" data-id="${p.id}">
             <div class="provider-info">
                 <div class="provider-name">${escapeHtml(p.name)}</div>
                 <div class="provider-meta">
                     <span class="provider-platform-badge badge-${p.platform}">${p.platform}</span>
-                    ${escapeHtml(p.model)}
+                    ${modelsDisplay}
                     ${p.host ? ` · ${escapeHtml(p.host)}` : ''}
                 </div>
             </div>
@@ -326,7 +330,8 @@ function renderProviders() {
                 <button class="btn btn-danger" data-delete-id="${p.id}" data-delete-name="${escapeHtml(p.name)}">Delete</button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     // Wire delete/edit buttons via data attributes — never interpolate user data into JS strings.
     el.querySelectorAll('[data-edit-id]').forEach(btn => {
@@ -349,18 +354,22 @@ function openEditModal(id) {
 
     // Reset form
     document.getElementById('providerForm').reset();
+    editModels = [];
 
     if (id) {
         const p = providers.find(x => x.id === id);
         if (p) {
             editPlatform = p.platform;
             document.getElementById('editName').value = p.name;
-            document.getElementById('editModel').value = p.model;
+            // Populate models from array or fall back to single model
+            editModels = (p.models && p.models.length > 0) ? [...p.models] : (p.model ? [p.model] : []);
             if (p.host) document.getElementById('editHost').value = p.host;
         }
     } else {
         editPlatform = 'ollama';
     }
+
+    renderModelTags();
 
     // Clear any previous test result
     const testResult = document.getElementById('testResult');
@@ -369,6 +378,38 @@ function openEditModal(id) {
 
     selectPlatform(editPlatform, 'edit');
     modal.classList.remove('hidden');
+}
+
+function renderModelTags() {
+    const container = document.getElementById('editModelTags');
+    container.innerHTML = editModels.map((m, i) => `
+        <span class="model-tag" data-index="${i}">
+            ${escapeHtml(m)}
+            <button type="button" class="model-tag__remove" data-index="${i}">&times;</button>
+        </span>
+    `).join('');
+
+    // Wire remove buttons
+    container.querySelectorAll('.model-tag__remove').forEach(btn => {
+        btn.addEventListener('click', () => {
+            editModels.splice(Number(btn.dataset.index), 1);
+            renderModelTags();
+        });
+    });
+}
+
+function addModelFromInput() {
+    const input = document.getElementById('editModelInput');
+    const val = input.value.trim();
+    if (!val) return;
+    if (editModels.includes(val)) {
+        showToast('Model already added', 'info');
+        return;
+    }
+    editModels.push(val);
+    input.value = '';
+    renderModelTags();
+    input.focus();
 }
 
 document.getElementById('closeProviderModal').addEventListener('click', () => {
@@ -387,6 +428,15 @@ document.getElementById('editPlatformTabs').addEventListener('click', (e) => {
         const testResult = document.getElementById('testResult');
         testResult.className = 'test-result hidden';
         testResult.innerHTML = '';
+    }
+});
+
+// Model tag input — add button and enter key
+document.getElementById('addModelBtn').addEventListener('click', addModelFromInput);
+document.getElementById('editModelInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        addModelFromInput();
     }
 });
 
@@ -418,9 +468,11 @@ document.getElementById('testProviderBtn').addEventListener('click', async () =>
     const platform = editPlatform;
     const config = PLATFORM_CONFIG[platform];
 
+    // Test with first model (or whatever is in the input)
+    const testModel = document.getElementById('editModelInput').value.trim() || (editModels.length > 0 ? editModels[0] : '');
     const body = {
         platform,
-        model: document.getElementById('editModel').value.trim(),
+        model: testModel,
     };
 
     if (id) body.provider_id = id;
@@ -464,7 +516,7 @@ document.getElementById('providerForm').addEventListener('submit', async (e) => 
     const body = {
         name: document.getElementById('editName').value.trim(),
         platform: platform,
-        model: document.getElementById('editModel').value.trim(),
+        models: editModels,
     };
 
     if (config.hasHost) {
@@ -547,7 +599,7 @@ async function loadAssignments() {
             const data = await res.json();
             assignments = {};
             (data.assignments || []).forEach(a => {
-                assignments[a.job_name] = a.provider_id;
+                assignments[a.job_name] = { provider_id: a.provider_id, model: a.model || null };
             });
         }
     } catch (e) {
@@ -558,6 +610,38 @@ async function loadAssignments() {
 const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification' };
 const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
 
+// ── Group derivation ──
+
+const GROUP_META = {
+    vision:     { name: 'Vision',     desc: 'Jobs requiring visual understanding (OCR, image analysis)', icon: '\u25CE' },
+    reasoning:  { name: 'Reasoning',  desc: 'High reasoning or creativity \u2014 needs your best model', icon: '\u25C6' },
+    analytical: { name: 'Analytical', desc: 'Structured output and classification tasks', icon: '\u25A3' },
+    utility:    { name: 'Utility',    desc: 'Lightweight tasks \u2014 fast/cheap models work well', icon: '\u25AA' },
+};
+
+function computeJobGroup(caps) {
+    if (caps.vision && caps.vision !== 'none') return 'vision';
+    if (caps.reasoning === 'high' || caps.creativity === 'high') return 'reasoning';
+    if (caps.structured === 'high' || caps.classification === 'high') return 'analytical';
+    return 'utility';
+}
+
+function groupJobs(jobList) {
+    const groups = { vision: [], reasoning: [], analytical: [], utility: [] };
+    for (const job of jobList) {
+        const g = computeJobGroup(job.caps || {});
+        groups[g].push(job);
+    }
+    return groups;
+}
+
+function getProviderModels(providerId) {
+    if (!providerId) return [];
+    const p = providers.find(x => x.id === providerId);
+    if (!p) return [];
+    return (p.models && p.models.length > 0) ? p.models : (p.model ? [p.model] : []);
+}
+
 function renderCognition() {
     const el = document.getElementById('cognitionList');
     if (providers.length === 0) {
@@ -565,71 +649,264 @@ function renderCognition() {
         return;
     }
     if (jobs.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions…</h3></div>';
+        el.innerHTML = '<div class="empty-state"><h3>Loading job definitions\u2026</h3></div>';
         return;
     }
 
-    const cardsHtml = jobs.map(job => {
-        const currentAssignment = assignments[job.id];
-        const options = providers.map(p =>
-            `<option value="${p.id}" ${p.id === currentAssignment ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+    const groups = groupJobs(jobs);
+    const groupOrder = ['reasoning', 'analytical', 'vision', 'utility'];
+
+    const cardsHtml = groupOrder.filter(g => groups[g].length > 0).map(groupName => {
+        const meta = GROUP_META[groupName];
+        const groupJobs = groups[groupName];
+
+        // Determine current group-level assignment (only if all jobs share the same provider+model)
+        let groupProviderId = null;
+        let groupModel = null;
+        let isUniform = true;
+
+        const firstAssign = assignments[groupJobs[0].id];
+        if (firstAssign && firstAssign.provider_id) {
+            groupProviderId = firstAssign.provider_id;
+            groupModel = firstAssign.model || null;
+            for (let i = 1; i < groupJobs.length; i++) {
+                const a = assignments[groupJobs[i].id];
+                if (!a || a.provider_id !== groupProviderId || a.model !== groupModel) {
+                    isUniform = false;
+                    groupProviderId = null;
+                    groupModel = null;
+                    break;
+                }
+            }
+        } else {
+            isUniform = false;
+        }
+
+        // Provider dropdown options
+        const providerOptions = providers.map(p =>
+            `<option value="${p.id}" ${isUniform && p.id === groupProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
         ).join('');
 
-        const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
-            `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
+        // Model dropdown options (based on selected provider)
+        const selectedProviderModels = isUniform && groupProviderId ? getProviderModels(groupProviderId) : [];
+        const modelOptions = selectedProviderModels.map(m =>
+            `<option value="${escapeHtml(m)}" ${m === groupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
         ).join('');
 
-        return `
-            <div class="job-card">
-                <div class="job-card__top">
-                    <div class="job-info">
-                        <div class="job-name">${escapeHtml(job.name)}</div>
-                        <div class="job-desc">${escapeHtml(job.desc)}</div>
+        const statusText = isUniform
+            ? `<span class="group-status group-status--set">All ${groupJobs.length} jobs assigned</span>`
+            : `<span class="group-status group-status--mixed">Mixed assignments</span>`;
+
+        // Advanced individual job overrides
+        const jobRowsHtml = groupJobs.map(job => {
+            const a = assignments[job.id] || {};
+            const jobProviderId = a.provider_id || null;
+            const jobModel = a.model || null;
+
+            const jobProviderOpts = providers.map(p =>
+                `<option value="${p.id}" ${p.id === jobProviderId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
+            ).join('');
+
+            const jobModels = jobProviderId ? getProviderModels(jobProviderId) : [];
+            const jobModelOpts = jobModels.map(m =>
+                `<option value="${escapeHtml(m)}" ${m === jobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
+            ).join('');
+
+            const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
+                `<span class="job-cap ${CAP_LEVELS[level] || 'cap--none'}" title="${CAP_LABELS[key] || key}: ${level}">${CAP_LABELS[key] || key}</span>`
+            ).join('');
+
+            return `
+                <div class="job-override-row" data-job-id="${escapeHtml(job.id)}">
+                    <div class="job-override-info">
+                        <span class="job-override-name">${escapeHtml(job.name)}</span>
+                        <span class="job-override-caps">${capsHtml}</span>
                     </div>
-                    <div class="job-assign">
-                        <select class="provider-select" data-job="${job.id}" onchange="assignJob('${job.id}', this)">
-                            <option value="">-- Select provider --</option>
-                            ${options}
+                    <div class="job-override-selects">
+                        <select class="provider-select provider-select--sm job-provider-select" data-job="${escapeHtml(job.id)}">
+                            <option value="">-- inherit --</option>
+                            ${jobProviderOpts}
                         </select>
-                        <span class="save-indicator" id="save-${job.id}">Saved ✓</span>
+                        <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
+                            <option value="">-- model --</option>
+                            ${jobModelOpts}
+                        </select>
+                        <button class="btn-stats" data-stats-job="${escapeHtml(job.id)}" data-stats-name="${escapeHtml(job.name)}" title="Token usage stats">\u229E</button>
+                        <span class="save-indicator" id="save-${escapeHtml(job.id)}">Saved \u2713</span>
                     </div>
                 </div>
-                <div class="job-card__meta">
-                    <div class="job-caps">${capsHtml}</div>
-                    <button class="btn-stats" onclick="openJobStats('${job.id}', '${escapeHtml(job.name)}')" title="Token usage stats">⊡</button>
+            `;
+        }).join('');
+
+        return `
+            <div class="group-card" data-group="${groupName}">
+                <div class="group-card__header">
+                    <div class="group-card__title">
+                        <span class="group-card__icon">${meta.icon}</span>
+                        <span class="group-card__name">${escapeHtml(meta.name)}</span>
+                        <span class="group-card__count">${groupJobs.length} job${groupJobs.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="group-card__desc">${escapeHtml(meta.desc)}</div>
+                </div>
+                <div class="group-card__assign">
+                    <div class="group-card__selects">
+                        <select class="provider-select group-provider-select" data-group="${groupName}">
+                            <option value="">-- Select provider --</option>
+                            ${providerOptions}
+                        </select>
+                        <select class="provider-select group-model-select" data-group="${groupName}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
+                            <option value="">-- Select model --</option>
+                            ${modelOptions}
+                        </select>
+                    </div>
+                    ${statusText}
+                </div>
+                <div class="group-card__advanced">
+                    <button class="group-advanced-toggle" data-group="${groupName}">Advanced \u25B8</button>
+                    <div class="group-advanced-body" data-group="${groupName}" style="display:none">
+                        ${jobRowsHtml}
+                    </div>
                 </div>
             </div>
         `;
     }).join('');
 
-    const legendHtml = `
-        <div class="cap-legend">
-            <span class="cap-legend__title">Capability requirements:</span>
-            <span class="job-cap cap--high">High</span>
-            <span class="job-cap cap--medium">Medium</span>
-            <span class="job-cap cap--low">Low</span>
-            <span class="job-cap cap--none">None</span>
-        </div>
-    `;
-
-    el.innerHTML = cardsHtml + legendHtml;
+    el.innerHTML = cardsHtml;
+    wireGroupCardEvents(el);
 }
 
-async function assignJob(jobName, selectEl) {
-    const providerId = parseInt(selectEl.value);
+function wireGroupCardEvents(el) {
+    // Group provider select → update model dropdown and assign group
+    el.querySelectorAll('.group-provider-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const groupName = sel.dataset.group;
+            const providerId = parseInt(sel.value) || null;
+            const modelSel = el.querySelector(`.group-model-select[data-group="${groupName}"]`);
+
+            // Repopulate model dropdown
+            const models = providerId ? getProviderModels(providerId) : [];
+            modelSel.innerHTML = '<option value="">-- Select model --</option>' +
+                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+            modelSel.disabled = models.length === 0;
+
+            // Auto-select first model if only one
+            if (models.length === 1) {
+                modelSel.value = models[0];
+                assignGroup(groupName, providerId, models[0]);
+            } else if (models.length === 0 && providerId) {
+                assignGroup(groupName, providerId, null);
+            }
+        });
+    });
+
+    // Group model select → assign group
+    el.querySelectorAll('.group-model-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const groupName = sel.dataset.group;
+            const providerSel = el.querySelector(`.group-provider-select[data-group="${groupName}"]`);
+            const providerId = parseInt(providerSel.value) || null;
+            const model = sel.value || null;
+            if (providerId) assignGroup(groupName, providerId, model);
+        });
+    });
+
+    // Advanced toggle
+    el.querySelectorAll('.group-advanced-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const body = el.querySelector(`.group-advanced-body[data-group="${btn.dataset.group}"]`);
+            const isOpen = body.style.display !== 'none';
+            body.style.display = isOpen ? 'none' : '';
+            btn.textContent = isOpen ? 'Advanced \u25B8' : 'Advanced \u25BE';
+        });
+    });
+
+    // Individual job provider select → update that job's model dropdown
+    el.querySelectorAll('.job-provider-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const jobId = sel.dataset.job;
+            const providerId = parseInt(sel.value) || null;
+            const row = sel.closest('.job-override-row');
+            const modelSel = row.querySelector('.job-model-select');
+
+            const models = providerId ? getProviderModels(providerId) : [];
+            modelSel.innerHTML = '<option value="">-- model --</option>' +
+                models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+            modelSel.disabled = models.length === 0;
+
+            if (models.length === 1) {
+                modelSel.value = models[0];
+                assignJob(jobId, providerId, models[0]);
+            } else if (providerId) {
+                assignJob(jobId, providerId, null);
+            }
+        });
+    });
+
+    // Individual job model select → assign job
+    el.querySelectorAll('.job-model-select').forEach(sel => {
+        sel.addEventListener('change', () => {
+            const jobId = sel.dataset.job;
+            const row = sel.closest('.job-override-row');
+            const providerSel = row.querySelector('.job-provider-select');
+            const providerId = parseInt(providerSel.value) || null;
+            const model = sel.value || null;
+            if (providerId) assignJob(jobId, providerId, model);
+        });
+    });
+
+    // Stats buttons
+    el.querySelectorAll('[data-stats-job]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            openJobStats(btn.dataset.statsJob, btn.dataset.statsName);
+        });
+    });
+}
+
+async function assignGroup(groupName, providerId, model) {
     if (!providerId) return;
 
     try {
-        const res = await apiFetch(`/providers/jobs/${jobName}`, {
+        const res = await apiFetch(`/providers/jobs/groups/${groupName}`, {
             method: 'PUT',
-            body: JSON.stringify({ provider_id: providerId }),
+            body: JSON.stringify({ provider_id: providerId, model: model }),
         });
 
         if (res.ok) {
-            assignments[jobName] = providerId;
+            // Update local assignments for all jobs in this group
+            const groups = groupJobs(jobs);
+            const groupJobList = groups[groupName] || [];
+            for (const job of groupJobList) {
+                assignments[job.id] = { provider_id: providerId, model: model };
+            }
+            showToast(`${GROUP_META[groupName].name} group assigned`, 'success');
+            renderCognition();
+        } else {
+            showToast('Failed to save group assignment', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+async function assignJob(jobName, providerId, model) {
+    if (!providerId) return;
+
+    try {
+        const body = { provider_id: providerId };
+        if (model) body.model = model;
+
+        const res = await apiFetch(`/providers/jobs/${jobName}`, {
+            method: 'PUT',
+            body: JSON.stringify(body),
+        });
+
+        if (res.ok) {
+            assignments[jobName] = { provider_id: providerId, model: model };
             const indicator = document.getElementById(`save-${jobName}`);
-            indicator.classList.add('visible');
-            setTimeout(() => indicator.classList.remove('visible'), 2000);
+            if (indicator) {
+                indicator.classList.add('visible');
+                setTimeout(() => indicator.classList.remove('visible'), 2000);
+            }
         } else {
             showToast('Failed to save assignment', 'error');
         }

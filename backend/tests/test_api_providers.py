@@ -354,4 +354,4 @@ class TestProvidersAPI:
         data = response.get_json()
         assert data["assignment"]["job_name"] == "trait-extraction"
         assert data["assignment"]["provider_id"] == 3
-        mock_service.set_job_assignment.assert_called_once_with("trait-extraction", 3)
+        mock_service.set_job_assignment.assert_called_once_with("trait-extraction", 3, None)
