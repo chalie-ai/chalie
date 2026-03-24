@@ -212,8 +212,19 @@ def _fire_item(item: dict):
         from workers.digest_worker import digest_worker
 
         client_context_text = ClientContextService().format_for_prompt()
+        # Frame as an execution instruction — without this, the LLM reads the
+        # raw message (e.g. "At 09:30 every morning, check …") and interprets
+        # it as a new scheduling request instead of executing the task.
+        execution_prompt = (
+            f"[SCHEDULED TASK — EXECUTE NOW]\n"
+            f"This is a previously scheduled prompt that is now due. "
+            f"Execute the task described below immediately. "
+            f"Do NOT create a new schedule or reminder — it is already scheduled "
+            f"and will fire again automatically.\n\n"
+            f"{message}"
+        )
         queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-        queue.enqueue(message, {
+        queue.enqueue(execution_prompt, {
             "source": source,
             "destination": "web",
             "scheduled_at": item.get("due_at", datetime.now(timezone.utc)).isoformat() if isinstance(item.get("due_at"), datetime) else str(item.get("due_at", "")),

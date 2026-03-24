@@ -160,4 +160,5 @@ class TestFireItem:
             scheduler_svc._fire_item(item)
             assert mock_queue.enqueue.called
             enqueue_args = mock_queue.enqueue.call_args[0]
-            assert enqueue_args[0] == "How did I do this week?"
+            assert "How did I do this week?" in enqueue_args[0]
+            assert "[SCHEDULED TASK" in enqueue_args[0]
