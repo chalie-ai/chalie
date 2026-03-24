@@ -71,8 +71,17 @@ async function apiFetch(path, options = {}) {
 // ==========================================
 // Phase Management
 // ==========================================
+
+/**
+ * Show the named onboarding phase panel and hide all others.
+ *
+ * The `completionPhase` is no longer part of the flow — successful provider
+ * setup redirects directly to `/`. Only the three active phases are toggled.
+ *
+ * @param {string} phaseId - One of 'accountPhase' | 'loginPhase' | 'setupPhase'.
+ */
 function showPhase(phaseId) {
-    const phases = ['accountPhase', 'loginPhase', 'setupPhase', 'completionPhase'];
+    const phases = ['accountPhase', 'loginPhase', 'setupPhase'];
     phases.forEach(phase => {
         const el = document.getElementById(phase);
         if (el) {
@@ -273,6 +282,15 @@ async function testProviderConnection() {
 // ==========================================
 // Event Listeners
 // ==========================================
+
+/**
+ * Attach all interactive event listeners for the onboarding flow.
+ *
+ * Covers: account creation form, login form, provider connection test, and
+ * the provider setup form. The former completion-phase buttons
+ * (gotoChalieBtn / gotoDashboardBtn) have been removed; successful provider
+ * setup now redirects directly to `/` inside {@link submitSetupForm}.
+ */
 function setupEventListeners() {
     // Account form submit
     document.getElementById('accountForm').addEventListener('submit', async (e) => {
@@ -295,15 +313,6 @@ function setupEventListeners() {
     document.getElementById('setupForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         await submitSetupForm();
-    });
-
-    // Completion buttons
-    document.getElementById('gotoChalieBtn').addEventListener('click', () => {
-        window.location.href = '/';
-    });
-
-    document.getElementById('gotoDashboardBtn').addEventListener('click', () => {
-        window.location.href = '/brain/';
     });
 }
 
@@ -404,6 +413,14 @@ async function submitLoginForm() {
     }
 }
 
+/**
+ * Submit the provider setup form to the backend.
+ *
+ * On success, redirects immediately to `/` — no completion screen is shown.
+ * On error, re-enables the submit button so the user can correct and retry.
+ *
+ * @returns {Promise<void>}
+ */
 async function submitSetupForm() {
     const btn = document.getElementById('setupSubmitBtn');
     btn.disabled = true;
@@ -433,11 +450,9 @@ async function submitSetupForm() {
         });
 
         if (res.ok) {
-            // Show completion screen
-            document.getElementById('setupPhase').style.display = 'none';
-            document.getElementById('completionPhase').style.display = '';
-
+            // Provider saved — skip completion screen and go straight to the app.
             showToast('Provider configured successfully!', 'success');
+            window.location.href = '/';
         } else {
             const err = await res.json();
             showToast(err.error || 'Failed to save provider', 'error');

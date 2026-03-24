@@ -250,6 +250,19 @@ class ChalieApp {
   // Start
   // ---------------------------------------------------------------------------
 
+  /**
+   * Start the application after the backend is ready.
+   *
+   * Sequence:
+   *  1. Poll until the backend signals ready (or timeout / skip).
+   *  2. Dismiss the loading overlay.
+   *  3. Initialise voice I/O.
+   *  4. Show the first-visit welcome message exactly once (localStorage guard).
+   *  5. Load conversation history and bind the chat module.
+   *  6. Boot remaining modules (task strip, apps panel, WebSocket event router).
+   *
+   * @returns {Promise<void>}
+   */
   async _start() {
     try {
       await this._pollUntilReady();
@@ -262,6 +275,16 @@ class ChalieApp {
         document.body.classList.add('voice-available');
         document.getElementById('voiceModeBtn')?.classList.remove('hidden');
         if (lsGet('chalie_voice_mode')) this._voiceMode.enterMode();
+      }
+
+      // First-visit welcome message — shown exactly once via a localStorage flag.
+      // Rendered before history so it appears at the top of the conversation spine.
+      if (!lsGet('chalie_welcomed')) {
+        lsSet('chalie_welcomed', '1');
+        this.renderer.appendChalieForm(
+          [{ type: 'text', content: "Hello. I'm Chalie." }],
+          { mode: 'UNIFIED', confidence: 1 },
+        );
       }
 
       // Load conversation history
