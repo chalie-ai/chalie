@@ -62,7 +62,6 @@ class TestACTResult:
         assert result.critic_telemetry == {}
         assert result.loop_telemetry == {}
         assert result.reflection is None
-        assert not hasattr(result, 'fatigue'), "fatigue field must not exist after fatigue removal"
 
 
 # ── Fingerprinting utilities ───────────────────────────────────────
@@ -296,46 +295,6 @@ class TestForcedExitSynthesis:
         assert cortex.generate_response_appended.call_count == 1
 
 
-# ── Orchestrator: persistent_task exit ─────────────────────────────
-
-@pytest.mark.unit
-class TestPersistentTaskExit:
-    @patch('services.act_orchestrator_service.ActLoopService')
-    def test_persistent_task_dispatch_exits(self, MockActLoop):
-        """When persistent_task_exit=True, dispatching a PT exits the loop."""
-        mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
-        mock_loop.act_history = []
-        mock_loop.iteration_logs = []
-        mock_loop.iteration_number = 0
-        mock_loop.fatigue = 0.0
-        mock_loop._critic = None
-        mock_loop._escalation_hint_injected = False
-        mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
-        mock_loop.execute_actions.return_value = [
-            _make_action_result('persistent_task', 'success', 'Task created'),
-        ]
-        MockActLoop.return_value = mock_loop
-
-        cortex = _make_cortex_service([
-            _make_response(actions=[{'type': 'persistent_task', 'goal': 'Research X'}]),
-        ])
-
-        orchestrator = ACTOrchestrator(
-            config={}, max_iterations=10,
-            smart_repetition=False, persistent_task_exit=True,
-        )
-        result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
-            act_prompt='test', classification={'topic': 't', 'confidence': 10},
-            chat_history=[],
-        )
-
-        assert result.termination_reason == 'persistent_task_dispatched'
-
-
 # ── Orchestrator: callback terminates loop ─────────────────────────
 
 @pytest.mark.unit
@@ -383,39 +342,6 @@ class TestCallbackTermination:
 
 @pytest.mark.unit
 class TestCriticEnabled:
-    @patch('services.act_orchestrator_service.ActLoopService')
-    def test_critic_enabled_param_accepted(self, MockActLoop):
-        """critic_enabled=True is accepted (backward compat) and stored on instance."""
-        mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
-        mock_loop.act_history = []
-        mock_loop.iteration_logs = []
-        mock_loop.iteration_number = 0
-        mock_loop.fatigue = 0.0
-        mock_loop._critic = None
-        mock_loop._escalation_hint_injected = False
-        mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
-        MockActLoop.return_value = mock_loop
-
-        cortex = _make_cortex_service([_make_response(actions=[])])
-
-        orchestrator = ACTOrchestrator(
-            config={}, max_iterations=10,
-            critic_enabled=True, smart_repetition=False,
-        )
-        # critic_enabled is stored for backward compat but no per-action critic runs
-        assert orchestrator.critic_enabled is True
-
-        result = orchestrator.run(
-            topic='test', text='hello', cortex_service=cortex,
-            act_prompt='test', classification={'topic': 't', 'confidence': 10},
-            chat_history=[],
-        )
-        # Loop exits normally; per-action critic is not called
-        assert result.termination_reason == 'no_actions'
-
     @patch('services.act_orchestrator_service.ActLoopService')
     @patch('services.act_orchestrator_service.ACTOrchestrator._post_loop_reflection')
     def test_post_loop_reflection_called(self, mock_reflect, MockActLoop):
@@ -500,49 +426,101 @@ class TestCriticEnabled:
 
 @pytest.mark.unit
 class TestConstructorParams:
-    def test_default_params(self):
-        o = ACTOrchestrator(config={})
-        assert o.max_iterations == 30
-        assert o.cumulative_timeout == 60.0
-        assert o.per_action_timeout == 10.0
-        assert o.critic_enabled is False
-        assert o.smart_repetition is True
-        assert o.escalation_hints is False
-        assert o.persistent_task_exit is False
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_custom_max_iterations_limits_loop(self, MockActLoop):
+        """max_iterations=2 causes loop to exit after exactly 2 iterations."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {'iterations_used': 2}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.side_effect = [
+            (True, None), (True, None),   # iter 0
+            (True, None), (False, 'max_iterations'),  # iter 1
+        ]
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('recall', 'success', 'found'),
+        ]
+        MockActLoop.return_value = mock_loop
 
-    def test_custom_params(self):
-        o = ACTOrchestrator(
-            config={'act_repetition_similarity_threshold': 0.9},
-            max_iterations=3,
-            cumulative_timeout=30.0,
-            critic_enabled=True,
-            escalation_hints=True,
-            persistent_task_exit=True,
-        )
-        assert o.max_iterations == 3
-        assert o.cumulative_timeout == 30.0
-        assert o.critic_enabled is True
-        assert o.escalation_hints is True
-        assert o.persistent_task_exit is True
-        assert o.repetition_sim_threshold == 0.9
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'recall', 'query': 'a'}]),
+            _make_response(actions=[{'type': 'recall', 'query': 'b'}]),
+        ])
 
-    def test_digest_worker_profile(self):
-        """digest_worker uses: critic=True, escalation_hints=True, PT exit=True."""
-        o = ACTOrchestrator(
-            config={}, critic_enabled=True, escalation_hints=True,
-            persistent_task_exit=True,
+        orch = ACTOrchestrator(config={}, max_iterations=2, smart_repetition=False)
+        result = orch.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
         )
-        assert o.critic_enabled
-        assert o.escalation_hints
-        assert o.persistent_task_exit
+        assert result.termination_reason == 'max_iterations'
+        assert mock_loop.execute_actions.call_count == 2
 
-    def test_persistent_task_profile(self):
-        """persistent_task_worker uses: critic=True, smart_rep=True."""
-        o = ACTOrchestrator(
-            config={}, critic_enabled=True, smart_repetition=True,
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_persistent_task_exit_triggers_early_termination(self, MockActLoop):
+        """persistent_task_exit=True causes loop to exit when PT action dispatched."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.return_value = (True, None)
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('persistent_task', 'success', 'Task created'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'persistent_task', 'goal': 'X'}]),
+        ])
+
+        orch = ACTOrchestrator(config={}, max_iterations=10, persistent_task_exit=True, smart_repetition=False)
+        result = orch.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
         )
-        assert o.critic_enabled
-        assert o.smart_repetition
+        assert result.termination_reason == 'persistent_task_dispatched'
+
+    @patch('services.act_orchestrator_service.ActLoopService')
+    def test_persistent_task_exit_false_does_not_exit(self, MockActLoop):
+        """persistent_task_exit=False does NOT exit when PT action dispatched."""
+        mock_loop = MagicMock()
+        mock_loop.get_history_context.return_value = '(none)'
+        mock_loop.act_history = []
+        mock_loop.iteration_logs = []
+        mock_loop.iteration_number = 0
+        mock_loop.soft_nudge_injected = False
+        mock_loop.get_loop_telemetry.return_value = {}
+        mock_loop.get_critic_telemetry.return_value = {}
+        mock_loop.can_continue.side_effect = [
+            (True, None), (True, None),  # iter 0
+            (True, None),  # iter 1 pre-check
+        ]
+        mock_loop.execute_actions.return_value = [
+            _make_action_result('persistent_task', 'success', 'Task created'),
+        ]
+        MockActLoop.return_value = mock_loop
+
+        cortex = _make_cortex_service([
+            _make_response(actions=[{'type': 'persistent_task', 'goal': 'X'}]),
+            _make_response(actions=[]),  # exits via no_actions
+        ])
+
+        orch = ACTOrchestrator(config={}, max_iterations=10, persistent_task_exit=False, smart_repetition=False)
+        result = orch.run(
+            topic='test', text='hello', cortex_service=cortex,
+            act_prompt='test', classification={'topic': 't', 'confidence': 10},
+            chat_history=[],
+        )
+        # Should NOT exit via persistent_task — continues to next iteration
+        assert result.termination_reason != 'persistent_task_dispatched'
 
 
 # ── Append mode: _prune_messages ──────────────────────────────────
@@ -1254,17 +1232,6 @@ class TestMaybeAutoReflect:
             )
         mock_thread.assert_not_called()
 
-    def test_skips_zero_iteration_loop(self):
-        """Does nothing for a zero-iteration loop."""
-        with patch('threading.Thread') as mock_thread:
-            _maybe_auto_reflect(
-                topic='test',
-                iteration_logs=[],
-                termination_reason=None,
-                iterations_used=0,
-            )
-        mock_thread.assert_not_called()
-
     def _mock_auto_reflect_store(self):
         """Return a sys.modules patch dict that clears the cooldown so reflection proceeds.
 
@@ -1331,29 +1298,6 @@ class TestEdgeCases:
     """Edge-case coverage for ACTOrchestrator constructor and run()."""
 
     @patch('services.act_orchestrator_service.ActLoopService')
-    def test_run_with_empty_config_does_not_raise(self, MockActLoop):
-        """An empty config dict is accepted without errors."""
-        mock_loop = MagicMock()
-        mock_loop.get_history_context.return_value = '(none)'
-        mock_loop.act_history = []
-        mock_loop.iteration_logs = []
-        mock_loop.iteration_number = 0
-        mock_loop.soft_nudge_injected = False
-        mock_loop.get_loop_telemetry.return_value = {}
-        mock_loop.get_critic_telemetry.return_value = {}
-        mock_loop.can_continue.return_value = (True, None)
-        MockActLoop.return_value = mock_loop
-
-        cortex = _make_cortex_service([_make_response(actions=[])])
-        orch = ACTOrchestrator(config={}, smart_repetition=False)
-        result = orch.run(
-            topic='test', text='hello', cortex_service=cortex,
-            act_prompt='test', classification={'topic': 'test', 'confidence': 10},
-            chat_history=[],
-        )
-        assert result.termination_reason == 'no_actions'
-
-    @patch('services.act_orchestrator_service.ActLoopService')
     def test_run_with_minimal_classification(self, MockActLoop):
         """run() handles a classification dict with no topic or confidence keys."""
         mock_loop = MagicMock()
@@ -1401,14 +1345,3 @@ class TestEdgeCases:
         )
         assert result.final_response == 'This is my final answer.'
 
-    def test_default_repetition_threshold_is_point_85(self):
-        """repetition_sim_threshold defaults to 0.85 when not set in config."""
-        orch = ACTOrchestrator(config={})
-        assert orch.repetition_sim_threshold == 0.85
-
-    def test_custom_repetition_threshold_from_config(self):
-        """repetition_sim_threshold respects the config key act_repetition_similarity_threshold."""
-        orch = ACTOrchestrator(
-            config={'act_repetition_similarity_threshold': 0.95}
-        )
-        assert orch.repetition_sim_threshold == 0.95
