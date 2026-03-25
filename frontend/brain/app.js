@@ -84,17 +84,32 @@ async function apiFetch(path, options = {}, isMultipart = false) {
 // ==========================================
 // Toast
 // ==========================================
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', options = {}) {
+    const { action, onAction, duration = 3000 } = options;
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
+
+    if (action && typeof onAction === 'function') {
+        const btn = document.createElement('button');
+        btn.className = 'toast-action';
+        btn.textContent = action;
+        btn.addEventListener('click', () => {
+            onAction();
+            toast.remove();
+        });
+        toast.appendChild(btn);
+    }
+
     container.appendChild(toast);
-    setTimeout(() => {
+
+    const dismiss = () => {
         toast.style.opacity = '0';
         toast.style.transition = 'opacity 0.3s';
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    };
+    setTimeout(dismiss, duration);
 }
 
 // ==========================================
@@ -2528,19 +2543,18 @@ function renderDocumentRow(doc) {
 
     let actions = '';
     if (isDeleted) {
-        actions = `<button class="tool-card__btn" onclick="restoreDocument('${doc.id}')">Restore</button>
-                   <button class="tool-card__btn btn-danger-sm" onclick="purgeDocument('${doc.id}')">Purge</button>`;
+        actions = `<button class="tool-card__btn doc-row__restore" title="Restore"><i data-lucide="undo-2"></i></button>
+                   <button class="tool-card__btn doc-row__purge" title="Permanently delete"><i data-lucide="trash-2"></i></button>`;
     } else {
-        actions = `<button class="tool-card__btn btn-danger-sm" onclick="deleteDocument('${doc.id}')">Delete</button>
-                   <button class="tool-card__btn" onclick="previewDocument('${doc.id}')">View</button>
-                   <button class="tool-card__btn" onclick="window.open('${API_BASE}/documents/${doc.id}/preview', '_blank')">Preview</button>`;
+        actions = `<button class="tool-card__btn doc-row__preview" title="Preview"><i data-lucide="eye"></i></button>
+                   <button class="tool-card__btn doc-row__delete" title="Delete"><i data-lucide="x"></i></button>`;
     }
 
     const imageThumbnail = doc.mime_type?.startsWith('image/')
         ? `<div class="doc-row__image-preview"><img src="${API_BASE}/documents/${doc.id}/preview" alt="${escapeHtml(doc.original_name)}" class="doc-row__image-thumb" loading="lazy"></div>`
         : '';
 
-    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}">
+    return `<div class="doc-row ${isDeleted ? 'doc-row--deleted' : ''}" data-doc-id="${doc.id}">
         ${imageThumbnail}
         <div class="doc-row__info">
             <div class="doc-row__name">
@@ -2611,7 +2625,7 @@ function renderDocuments() {
 
         el.innerHTML = sortedKeys.map(key => `
             <div class="doc-group">
-                <div class="doc-group__header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <div class="doc-group__header">
                     <span class="doc-group__chevron">▾</span>
                     <span class="doc-group__name">${escapeHtml(key)}</span>
                     <span class="doc-group__count">${groups[key].length}</span>
@@ -2621,11 +2635,11 @@ function renderDocuments() {
                 </div>
             </div>
         `).join('');
-        return;
+    } else {
+        // Flat view (default)
+        el.innerHTML = docs.map(renderDocumentRow).join('');
     }
 
-    // Flat view (default)
-    el.innerHTML = docs.map(renderDocumentRow).join('');
     if (typeof lucide !== 'undefined') lucide.createIcons({ node: el });
 }
 
@@ -2638,17 +2652,18 @@ function getDocIcon(mime) {
     return '<i data-lucide="file-text"></i>';
 }
 
-async function previewDocument(id) {
-    const overlay = document.getElementById('docPreviewOverlay');
-    const title = document.getElementById('docPreviewTitle');
-    const meta = document.getElementById('docPreviewMeta');
-    const body = document.getElementById('docPreviewBody');
-    const downloadLink = document.getElementById('docDownloadLink');
-    const previewLink = document.getElementById('docPreviewOpenBtn');
-    const deleteBtn = document.getElementById('docPreviewDeleteBtn');
+async function openMetaEditor(id) {
+    const overlay = document.getElementById('docMetaOverlay');
+    const titleEl = document.getElementById('docMetaTitle');
+    const pillsEl = document.getElementById('docMetaPills');
+    const bodyEl  = document.getElementById('docMetaBody');
+    const footerEl = document.getElementById('docMetaFooter');
 
-    overlay.style.display = 'flex';
-    body.innerHTML = '<div class="loading">Loading content...</div>';
+    titleEl.textContent = 'Loading...';
+    pillsEl.innerHTML   = '';
+    bodyEl.innerHTML    = '<div class="loading">Loading...</div>';
+    footerEl.innerHTML  = '';
+    overlay.classList.remove('hidden');
 
     try {
         const res = await apiFetch(`/documents/${id}`);
@@ -2656,54 +2671,159 @@ async function previewDocument(id) {
         const data = await res.json();
         const doc = data.item;
 
-        title.textContent = doc.original_name;
+        titleEl.textContent = doc.original_name;
 
         const em = doc.extracted_metadata || {};
-        let metaHtml = '';
-        if (em.document_type?.value) metaHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
-        if (doc.language) metaHtml += `<span class="doc-meta-pill">${doc.language}</span> `;
-        if (doc.page_count) metaHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
-        metaHtml += `<span class="doc-meta-pill">${doc.chunk_count} chunks</span>`;
-        if (doc.doc_project) metaHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
-        if (doc.doc_date) metaHtml += ` <span class="doc-meta-pill">${doc.doc_date}</span>`;
-        metaHtml += `<div class="doc-classify-fields">
-            <label>Category <input type="text" class="doc-classify-input" id="docClassCategory" value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt..."></label>
-            <label>Project <input type="text" class="doc-classify-input" id="docClassProject" value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation..."></label>
-            <label>Date <input type="date" class="doc-classify-input" id="docClassDate" value="${doc.doc_date || ''}"></label>
-            <button class="tool-card__btn" onclick="saveDocClassification('${id}')">Save</button>
-        </div>`;
-        meta.innerHTML = metaHtml;
+        let pillsHtml = '';
+        if (em.document_type?.value) pillsHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language)   pillsHtml += `<span class="doc-meta-pill">${escapeHtml(doc.language)}</span> `;
+        if (doc.page_count) pillsHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        pillsHtml += `<span class="doc-meta-pill">${doc.chunk_count || 0} chunks</span>`;
+        if (doc.doc_project) pillsHtml += ` <span class="doc-meta-pill doc-project-pill">${escapeHtml(doc.doc_project)}</span>`;
+        if (doc.doc_date)    pillsHtml += ` <span class="doc-meta-pill">${escapeHtml(doc.doc_date)}</span>`;
+        pillsEl.innerHTML = pillsHtml;
 
-        // Render chunks
-        const chunks = doc.chunks || [];
-        if (chunks.length === 0) {
-            body.innerHTML = '<div class="obs-empty">No content extracted.</div>';
-        } else {
-            body.innerHTML = chunks.map(c => {
-                const pageLabel = c.page_number ? `<span class="doc-chunk-page">Page ${c.page_number}</span>` : '';
-                const sectionLabel = c.section_title ? `<span class="doc-chunk-section">${escapeHtml(c.section_title)}</span>` : '';
-                return `<div class="doc-chunk">
-                    <div class="doc-chunk__header">${pageLabel}${sectionLabel}</div>
-                    <div class="doc-chunk__content">${escapeHtml(c.content)}</div>
-                </div>`;
-            }).join('');
-        }
+        bodyEl.innerHTML = `
+            <div class="doc-meta-overlay-fields">
+                <label>Category
+                    <input type="text" class="doc-classify-input" id="docClassCategory"
+                           value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt...">
+                </label>
+                <label>Project
+                    <input type="text" class="doc-classify-input" id="docClassProject"
+                           value="${escapeHtml(doc.doc_project || '')}" placeholder="e.g. Home Renovation...">
+                </label>
+                <label>Date
+                    <input type="date" class="doc-classify-input" id="docClassDate"
+                           value="${doc.doc_date || ''}">
+                </label>
+            </div>`;
 
-        downloadLink.href = `${API_BASE}/documents/${id}/download`;
-        previewLink.href = `${API_BASE}/documents/${id}/preview`;
-        deleteBtn.onclick = async () => {
-            await deleteDocument(id);
-            overlay.style.display = 'none';
-        };
+        footerEl.innerHTML = `<button class="tool-card__btn doc-meta-save-btn" data-doc-id="${id}">Save</button>`;
     } catch (e) {
-        body.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+        console.error('[DocMeta]', e);
+        bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
+    }
+}
+
+async function openPreview(id) {
+    const overlay   = document.getElementById('docPreviewOverlay');
+    const titleEl   = document.getElementById('docPreviewTitle');
+    const metaEl    = document.getElementById('docPreviewMeta');
+    const bodyEl    = document.getElementById('docPreviewBody');
+    const footerEl  = document.getElementById('docPreviewFooter');
+
+    titleEl.textContent = 'Loading...';
+    metaEl.innerHTML    = '';
+    bodyEl.innerHTML    = '<div class="loading">Loading content...</div>';
+    footerEl.innerHTML  = '';
+    overlay.classList.remove('hidden');
+
+    try {
+        const res = await apiFetch(`/documents/${id}`);
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        const doc = data.item;
+
+        titleEl.textContent = doc.original_name;
+
+        const em = doc.extracted_metadata || {};
+        let pillsHtml = '';
+        if (em.document_type?.value) pillsHtml += `<span class="doc-type-badge">${escapeHtml(em.document_type.value)}</span> `;
+        if (doc.language)   pillsHtml += `<span class="doc-meta-pill">${escapeHtml(doc.language)}</span> `;
+        if (doc.page_count) pillsHtml += `<span class="doc-meta-pill">${doc.page_count} pages</span> `;
+        pillsHtml += `<span class="doc-meta-pill">${doc.chunk_count || 0} chunks</span>`;
+        metaEl.innerHTML = pillsHtml;
+
+        footerEl.innerHTML = `<a class="btn btn-secondary" href="${API_BASE}/documents/${id}/download" download>
+            <i data-lucide="download"></i> Download
+        </a>`;
+        if (typeof lucide !== 'undefined') lucide.createIcons({ node: footerEl });
+
+        const mime = doc.mime_type || '';
+        const previewUrl = `${API_BASE}/documents/${id}/preview`;
+
+        if (mime.startsWith('image/')) {
+            bodyEl.innerHTML = `<div class="doc-preview-image"><img src="${previewUrl}" alt="${escapeHtml(doc.original_name)}" style="max-width:100%;border-radius:6px;"></div>`;
+
+        } else if (mime.includes('pdf')) {
+            bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="PDF Preview"></iframe>`;
+
+        } else if (mime.includes('presentationml') || mime.includes('pptx')) {
+            bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Presentation Preview"></iframe>`;
+
+        } else if (mime.includes('wordprocessingml') || mime.includes('docx')) {
+            bodyEl.innerHTML = '<div class="loading">Rendering document...</div>';
+            try {
+                const dlRes = await apiFetch(`/documents/${id}/download`);
+                const arrayBuffer = await dlRes.arrayBuffer();
+                const result = await mammoth.convertToHtml({ arrayBuffer });
+                bodyEl.innerHTML = `<div class="doc-preview-html" style="font-family:sans-serif;line-height:1.6;padding:8px;">${result.value}</div>`;
+            } catch (e) {
+                console.error('[DocPreview/DOCX]', e);
+                bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Document Preview"></iframe>`;
+            }
+
+        } else if (mime.includes('html')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const html = await txtRes.text();
+                const iframe = document.createElement('iframe');
+                iframe.sandbox = 'allow-same-origin';
+                iframe.style.cssText = 'width:100%;height:70vh;border:none;border-radius:6px;';
+                iframe.title = 'HTML Preview';
+                iframe.srcdoc = html;
+                bodyEl.innerHTML = '';
+                bodyEl.appendChild(iframe);
+            } catch (err) {
+                console.error('[DocPreview] HTML render failed:', err);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load HTML preview.</div>';
+            }
+
+        } else if (mime.includes('markdown') || doc.original_name?.endsWith('.md')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                const html = (typeof marked !== 'undefined') ? marked.parse(text) : `<pre>${escapeHtml(text)}</pre>`;
+                bodyEl.innerHTML = `<div class="doc-preview-html" style="line-height:1.6;padding:8px;">${html}</div>`;
+            } catch (e) {
+                console.error('[DocPreview/Markdown]', e);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load Markdown preview.</div>';
+            }
+
+        } else if (mime.includes('json')) {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                let formatted = text;
+                try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch (_parseErr) { /* keep raw */ }
+                bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(formatted)}</pre>`;
+            } catch (e) {
+                console.error('[DocPreview/JSON]', e);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load JSON preview.</div>';
+            }
+
+        } else {
+            try {
+                const txtRes = await apiFetch(`/documents/${id}/preview`);
+                const text = await txtRes.text();
+                bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(text)}</pre>`;
+            } catch (e) {
+                console.error('[DocPreview/Text]', e);
+                bodyEl.innerHTML = '<div class="obs-empty">Failed to load preview.</div>';
+            }
+        }
+    } catch (e) {
+        console.error('[DocPreview]', e);
+        bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
     }
 }
 
 async function saveDocClassification(id) {
-    const category = document.getElementById('docClassCategory')?.value?.trim() || null;
-    const project = document.getElementById('docClassProject')?.value?.trim() || null;
-    const date = document.getElementById('docClassDate')?.value || null;
+    const overlay = document.getElementById('docMetaOverlay');
+    const category = overlay.querySelector('#docClassCategory')?.value?.trim() || null;
+    const project = overlay.querySelector('#docClassProject')?.value?.trim() || null;
+    const date = overlay.querySelector('#docClassDate')?.value || null;
     try {
         const res = await apiFetch(`/documents/${id}/classify`, {
             method: 'PUT',
@@ -2716,20 +2836,26 @@ async function saveDocClassification(id) {
         } else {
             showToast('Failed to save classification', 'error');
         }
-    } catch { showToast('Failed to save classification', 'error'); }
+    } catch (e) {
+        console.error('[saveDocClassification]', e);
+        showToast('Failed to save classification', 'error');
+    }
 }
 
 async function deleteDocument(id) {
-    if (!confirm('Delete this document? It can be restored within 30 days.')) return;
     try {
         const res = await apiFetch(`/documents/${id}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Document deleted', 'success');
             loadDocuments();
+            showToast('Document deleted', 'success', {
+                action: 'Undo',
+                onAction: () => restoreDocument(id),
+                duration: 6000,
+            });
         } else {
             showToast('Failed to delete document', 'error');
         }
-    } catch { showToast('Failed to delete document', 'error'); }
+    } catch (e) { console.error('[deleteDocument]', e); showToast('Failed to delete document', 'error'); }
 }
 
 async function restoreDocument(id) {
@@ -2741,7 +2867,7 @@ async function restoreDocument(id) {
         } else {
             showToast('Failed to restore document', 'error');
         }
-    } catch { showToast('Failed to restore document', 'error'); }
+    } catch (e) { console.error('[restoreDocument]', e); showToast('Failed to restore document', 'error'); }
 }
 
 async function purgeDocument(id) {
@@ -2754,7 +2880,7 @@ async function purgeDocument(id) {
         } else {
             showToast('Failed to purge document', 'error');
         }
-    } catch { showToast('Failed to purge document', 'error'); }
+    } catch (e) { console.error('[purgeDocument]', e); showToast('Failed to purge document', 'error'); }
 }
 
 // Document filter tabs
@@ -2784,7 +2910,7 @@ document.getElementById('docSearchInput')?.addEventListener('input', () => rende
 document.getElementById('docUploadBtn')?.addEventListener('click', () => {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
+    fileInput.accept = '.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml,.jpg,.jpeg,.png,.webp,.gif';
     fileInput.addEventListener('change', async () => {
         const file = fileInput.files[0];
         if (!file) return;
@@ -2810,10 +2936,62 @@ document.getElementById('docUploadBtn')?.addEventListener('click', () => {
 
 // Document preview modal close
 document.getElementById('docPreviewClose')?.addEventListener('click', () => {
-    document.getElementById('docPreviewOverlay').style.display = 'none';
+    document.getElementById('docPreviewOverlay').classList.add('hidden');
 });
 document.getElementById('docPreviewOverlay')?.addEventListener('click', (e) => {
-    if (e.target.id === 'docPreviewOverlay') e.target.style.display = 'none';
+    if (e.target.id === 'docPreviewOverlay') e.target.classList.add('hidden');
+});
+
+// Document metadata editor modal
+document.getElementById('docMetaClose')?.addEventListener('click', () => {
+    document.getElementById('docMetaOverlay').classList.add('hidden');
+});
+document.getElementById('docMetaOverlay')?.addEventListener('click', (e) => {
+    if (e.target.id === 'docMetaOverlay') {
+        e.target.classList.add('hidden');
+        return;
+    }
+    const saveBtn = e.target.closest('.doc-meta-save-btn');
+    if (saveBtn) {
+        const docId = saveBtn.dataset.docId;
+        if (docId) saveDocClassification(docId);
+    }
+});
+
+// Document list — delegated event handler
+document.getElementById('docList')?.addEventListener('click', (e) => {
+    const groupHeader = e.target.closest('.doc-group__header');
+    if (groupHeader) {
+        groupHeader.parentElement.classList.toggle('collapsed');
+        return;
+    }
+
+    const row = e.target.closest('.doc-row[data-doc-id]');
+    if (!row) return;
+    const id = row.dataset.docId;
+
+    if (e.target.closest('.doc-row__preview')) { openPreview(id);      return; }
+    if (e.target.closest('.doc-row__delete'))  { deleteDocument(id);   return; }
+    if (e.target.closest('.doc-row__restore')) { restoreDocument(id);  return; }
+    if (e.target.closest('.doc-row__purge'))   { purgeDocument(id);    return; }
+    if (e.target.closest('.doc-row__actions')) return;
+    if (e.target.closest('.doc-row__info'))    { openMetaEditor(id);   return; }
+});
+
+// Global Escape key handler — closes topmost visible modal
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const previewOverlay    = document.getElementById('docPreviewOverlay');
+    const metaOverlay       = document.getElementById('docMetaOverlay');
+    const watchFolderModal  = document.getElementById('watchFolderModal');
+
+    if (previewOverlay && !previewOverlay.classList.contains('hidden')) {
+        previewOverlay.classList.add('hidden');
+    } else if (metaOverlay && !metaOverlay.classList.contains('hidden')) {
+        metaOverlay.classList.add('hidden');
+    } else if (watchFolderModal && !watchFolderModal.classList.contains('hidden')) {
+        watchFolderModal.classList.add('hidden');
+    }
 });
 
 // ==========================================
@@ -2828,10 +3006,10 @@ async function loadWatchedFolders() {
         const folders = data.items || [];
         const panel = document.getElementById('watchedFoldersPanel');
         if (folders.length > 0) {
-            panel.style.display = '';
+            panel.classList.remove('hidden');
             renderWatchedFolders(folders);
         } else {
-            panel.style.display = 'none';
+            panel.classList.add('hidden');
         }
     } catch (e) { console.error('[WatchedFolders] load error:', e); }
 }
@@ -2856,16 +3034,30 @@ function renderWatchedFolders(folders) {
             </div>
             <div class="watched-folder-actions">
                 <label class="toggle-switch" title="${disabled ? 'Enable' : 'Disable'}">
-                    <input type="checkbox" ${disabled ? '' : 'checked'} onchange="toggleWatchFolder('${f.id}', this.checked)">
+                    <input type="checkbox" class="wf-toggle" data-folder-id="${f.id}" ${disabled ? '' : 'checked'}>
                     <span class="slider"></span>
                 </label>
-                <button class="btn-icon scan-btn" title="Scan now" onclick="triggerFolderScan('${f.id}')">⟳</button>
-                <button class="btn-icon" title="Edit" onclick="openWatchFolderModal('${f.id}')">✎</button>
-                <button class="btn-icon delete-btn" title="Delete" onclick="deleteWatchFolder('${f.id}')">✕</button>
+                <button class="btn-icon scan-btn wf-scan" data-folder-id="${f.id}" title="Scan now">⟳</button>
+                <button class="btn-icon wf-edit" data-folder-id="${f.id}" title="Edit">✎</button>
+                <button class="btn-icon delete-btn wf-delete" data-folder-id="${f.id}" title="Delete">✕</button>
             </div>
         </div>`;
     }).join('');
 }
+
+// Watched folder event delegation
+document.getElementById('watchedFoldersList')?.addEventListener('change', (e) => {
+    const toggle = e.target.closest('.wf-toggle');
+    if (toggle) toggleWatchFolder(toggle.dataset.folderId, toggle.checked);
+});
+document.getElementById('watchedFoldersList')?.addEventListener('click', (e) => {
+    const scan = e.target.closest('.wf-scan');
+    const edit = e.target.closest('.wf-edit');
+    const del  = e.target.closest('.wf-delete');
+    if (scan) { triggerFolderScan(scan.dataset.folderId); return; }
+    if (edit) { openWatchFolderModal(edit.dataset.folderId); return; }
+    if (del)  { deleteWatchFolder(del.dataset.folderId); return; }
+});
 
 // Toggle watched folders panel
 document.getElementById('watchedFoldersToggle')?.addEventListener('click', () => {
@@ -2960,13 +3152,20 @@ async function browseDirectory(path) {
             listEl.innerHTML = '<div class="dir-browser-empty">No subdirectories</div>';
         } else {
             listEl.innerHTML = data.directories.map(d =>
-                `<div class="dir-browser-item" onclick="browseDirectory('${escapeHtml(data.current)}/${escapeHtml(d)}')">${escapeHtml(d)}</div>`
+                `<div class="dir-browser-item" data-dir-path="${escapeHtml(data.current)}/${escapeHtml(d)}">${escapeHtml(d)}</div>`
             ).join('');
         }
     } catch (e) {
         listEl.innerHTML = '<div class="dir-browser-empty">Failed to browse directory</div>';
     }
 }
+
+// Directory browser — delegated click handler
+document.getElementById('dirBrowserList')?.addEventListener('click', (e) => {
+    const item = e.target.closest('.dir-browser-item');
+    if (!item) return;
+    browseDirectory(item.dataset.dirPath);
+});
 
 // Watch Folder form submit
 document.getElementById('watchFolderForm')?.addEventListener('submit', async (e) => {

@@ -1263,6 +1263,34 @@ body::before {
 
 .doc-folder-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #00F0FF; margin-left: 6px; opacity: 0.7; }
 
+/* --- Delete / Purge icon visibility & colour --- */
+.doc-row__delete { opacity: 0; transition: opacity 0.2s, color 0.2s; }
+.doc-row:hover .doc-row__delete { opacity: 1; }
+.doc-row__delete:hover { color: #ff4d4d !important; }
+.doc-row__purge:hover { color: #ff4d4d !important; }
+
+.doc-row__info { cursor: pointer; }
+
+/* --- Toast action button --- */
+.toast-action {
+    background: none; border: none; color: var(--accent-primary);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    margin-left: 12px; padding: 0; text-decoration: underline;
+}
+.toast-action:hover { opacity: 0.8; }
+
+/* --- Metadata editor overlay fields --- */
+.doc-meta-overlay-fields { display: flex; flex-direction: column; gap: 12px; }
+.doc-meta-overlay-fields label {
+    font-size: 13px; color: var(--text-secondary);
+    display: flex; flex-direction: column; gap: 4px;
+}
+.doc-meta-overlay-fields input {
+    background: var(--bg-input, rgba(255,255,255,0.06));
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; color: var(--text-primary); font-size: 13px;
+}
+
 /* =====================================================
    Watched Folders
    ===================================================== */
