@@ -2672,7 +2672,7 @@ async function deleteDocument(id) {
         } else {
             showToast('Failed to delete document', 'error');
         }
-    } catch { showToast('Failed to delete document', 'error'); }
+    } catch (e) { console.error('[deleteDocument]', e); showToast('Failed to delete document', 'error'); }
 }
 
 async function restoreDocument(id) {
@@ -2684,7 +2684,7 @@ async function restoreDocument(id) {
         } else {
             showToast('Failed to restore document', 'error');
         }
-    } catch { showToast('Failed to restore document', 'error'); }
+    } catch (e) { console.error('[restoreDocument]', e); showToast('Failed to restore document', 'error'); }
 }
 
 async function purgeDocument(id) {
@@ -2697,7 +2697,7 @@ async function purgeDocument(id) {
         } else {
             showToast('Failed to purge document', 'error');
         }
-    } catch { showToast('Failed to purge document', 'error'); }
+    } catch (e) { console.error('[purgeDocument]', e); showToast('Failed to purge document', 'error'); }
 }
 
 // Document filter tabs
@@ -2746,7 +2746,7 @@ document.getElementById('docUploadBtn')?.addEventListener('click', () => {
                 const err = await res.json().catch(() => ({}));
                 showToast(err.error || 'Upload failed', 'error');
             }
-        } catch { showToast('Upload failed', 'error'); }
+        } catch (e) { console.error('[docUpload]', e); showToast('Upload failed', 'error'); }
     });
     fileInput.click();
 });
@@ -3009,7 +3009,7 @@ async function openWatchFolderModal(editId) {
                 document.getElementById('watchFolderInterval').value = folder.scan_interval || 300;
                 _currentBrowsePath = folder.folder_path;
             }
-        } catch { /* fallthrough */ }
+        } catch (e) { console.error('[openWatchFolderModal/fetchEdit]', e); /* fallthrough to show modal with defaults */ }
     } else {
         title.textContent = 'Watch Folder';
         saveBtn.textContent = 'Watch';
@@ -3115,7 +3115,7 @@ document.getElementById('watchFolderForm')?.addEventListener('submit', async (e)
             const err = await res.json().catch(() => ({}));
             showToast(err.error || 'Failed to save', 'error');
         }
-    } catch { showToast('Failed to save watched folder', 'error'); }
+    } catch (e) { console.error('[saveWatchedFolder]', e); showToast('Failed to save watched folder', 'error'); }
 });
 
 // Close / cancel watch folder modal
@@ -3137,7 +3137,7 @@ async function toggleWatchFolder(id, enabled) {
             body: JSON.stringify({ enabled }),
         });
         loadWatchedFolders();
-    } catch { showToast('Failed to toggle folder', 'error'); }
+    } catch (e) { console.error('[toggleWatchFolder]', e); showToast('Failed to toggle folder', 'error'); }
 }
 
 async function triggerFolderScan(id) {
@@ -3148,7 +3148,7 @@ async function triggerFolderScan(id) {
         } else {
             showToast('Failed to trigger scan', 'error');
         }
-    } catch { showToast('Failed to trigger scan', 'error'); }
+    } catch (e) { console.error('[triggerFolderScan]', e); showToast('Failed to trigger scan', 'error'); }
 }
 
 async function deleteWatchFolder(id) {
@@ -3161,7 +3161,7 @@ async function deleteWatchFolder(id) {
         } else {
             showToast('Failed to remove folder watch', 'error');
         }
-    } catch { showToast('Failed to remove folder watch', 'error'); }
+    } catch (e) { console.error('[deleteWatchFolder]', e); showToast('Failed to remove folder watch', 'error'); }
 }
 
 // ==========================================
