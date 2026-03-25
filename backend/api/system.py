@@ -386,12 +386,11 @@ def observability_identity():
 @system_bp.route('/system/observability/tasks', methods=['GET'])
 @require_session
 def observability_tasks():
-    """Active persistent tasks and curiosity threads."""
+    """Active persistent tasks."""
     try:
         result = {
             'generated_at': _now_iso(),
             'persistent_tasks': [],
-            'curiosity_threads': [],
         }
 
         # Persistent tasks
@@ -406,19 +405,6 @@ def observability_tasks():
             result['persistent_tasks'] = svc.get_active_tasks(account_id)
         except Exception as e:
             logger.warning(f"[OBS] persistent tasks error: {e}")
-
-        # Curiosity threads — datetime fields need str() conversion
-        try:
-            from services.curiosity_thread_service import CuriosityThreadService
-            svc = CuriosityThreadService()
-            threads = svc.get_active_threads()
-            for t in threads:
-                for key in ('last_explored_at', 'created_at', 'last_surfaced_at'):
-                    if key in t and t[key] is not None and not isinstance(t[key], str):
-                        t[key] = str(t[key])
-            result['curiosity_threads'] = threads
-        except Exception as e:
-            logger.warning(f"[OBS] curiosity threads error: {e}")
 
         # Goal ecology stats
         try:
@@ -667,24 +653,6 @@ def observability_pipeline_health():
     except Exception as e:
         logger.error(f"[REST API] observability/pipeline-health error: {e}")
         return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
-
-
-@system_bp.route('/system/observability/capability-gaps', methods=['GET'])
-@require_session
-def observability_capability_gaps():
-    """Capability gaps — things users ask for that Chalie cannot do."""
-    try:
-        from services.self_model_service import SelfModelService
-        service = SelfModelService()
-        gaps = service.get_frequent_gaps(min_occurrences=1, limit=20)
-        return jsonify({
-            'generated_at': datetime.now(timezone.utc).isoformat(),
-            'total_unresolved': len(gaps),
-            'gaps': gaps,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/capability-gaps error: {e}")
-        return jsonify({"error": "Failed to retrieve capability gaps"}), 500
 
 
 @system_bp.route('/system/activity', methods=['GET'])

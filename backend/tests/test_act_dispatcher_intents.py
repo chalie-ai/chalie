@@ -38,8 +38,7 @@ def _auto_execute_gate():
 @pytest.fixture
 def service(_auto_execute_gate):
     """ActDispatcherService with innate-skill registration suppressed."""
-    with patch("services.innate_skills.register_innate_skills"), \
-         patch("services.self_model_service.SelfModelService.log_capability_gap"):
+    with patch("services.innate_skills.register_innate_skills"):
         svc = ActDispatcherService(timeout=2.0)
         yield svc
 

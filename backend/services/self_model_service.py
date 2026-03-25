@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from services.memory_client import MemoryClientService
 
@@ -51,7 +51,6 @@ SEVERITY_STALE_HEARTBEAT = 0.5
 SEVERITY_QUEUE_CONGESTION = 0.4
 SEVERITY_HIGH_RECALL_FAILURE = 0.3
 SEVERITY_LOW_ACTIVATION = 0.2
-SEVERITY_CAPABILITY_GAP = 0.2
 
 
 def _utc_now() -> datetime:
@@ -169,11 +168,6 @@ class SelfModelService:
                 directives.add(
                     "Background processing may be slower than usual. "
                     "If a task requires multiple steps, set expectations about timing."
-                )
-            if "capability_gap" in signal:
-                directives.add(
-                    "If the user asks for something you lack a tool for, explain the "
-                    "limitation and suggest alternatives rather than simply refusing."
                 )
             if "thread" in signal.lower():
                 directives.add(
@@ -697,132 +691,7 @@ class SelfModelService:
                 "severity": SEVERITY_LOW_ACTIVATION,
             })
 
-        # Recurring capability gaps (severity: 0.2)
-        cap = snapshot.get("capability", {})
-        gaps = cap.get("frequent_gaps", [])
-        if gaps:
-            top = gaps[0]
-            notes.append({
-                "signal": f"Recurring capability_gap: {top['request_summary'][:60]} ({top['occurrences']}x)",
-                "severity": SEVERITY_CAPABILITY_GAP,
-            })
-
         return notes
-
-    # ── Capability gap learning ─────────────────────────────────
-
-    def log_capability_gap(
-        self,
-        request_summary: str,
-        detection_source: str,
-        detected_category: Optional[str] = None,
-        confidence: float = 0.5,
-    ) -> None:
-        """
-        Log a capability gap. Deduplicates by exact match on request_summary.
-
-        Args:
-            request_summary: What the user asked for (truncated to 200 chars)
-            detection_source: 'act_loop', 'triage', 'user_correction'
-            detected_category: Optional category from CATEGORY_KEYWORDS
-            confidence: 0.0-1.0 confidence that this is a real gap
-        """
-        try:
-            db = self._get_db()
-            summary = request_summary[:200].strip()
-            if not summary:
-                return
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-
-                # Check for existing unresolved gap
-                cursor.execute(
-                    "SELECT id, occurrences FROM capability_gaps "
-                    "WHERE resolved_at IS NULL AND request_summary = ? LIMIT 1",
-                    (summary,)
-                )
-                existing = cursor.fetchone()
-
-                if existing:
-                    cursor.execute(
-                        "UPDATE capability_gaps SET occurrences = occurrences + 1, "
-                        "last_seen_at = datetime('now') WHERE id = ?",
-                        (existing[0],)
-                    )
-                else:
-                    cursor.execute(
-                        "INSERT INTO capability_gaps "
-                        "(request_summary, detected_category, detection_source, confidence) "
-                        "VALUES (?, ?, ?, ?)",
-                        (summary, detected_category, detection_source, confidence)
-                    )
-                conn.commit()
-                cursor.close()
-
-            logger.debug(f"{LOG_PREFIX} Logged capability gap: {summary[:50]}")
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to log capability gap: {e}")
-
-    def get_frequent_gaps(self, min_occurrences: int = 3, limit: int = 5) -> list:
-        """Get most frequently requested capabilities Chalie lacks."""
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id, request_summary, detected_category, occurrences, first_seen_at "
-                    "FROM capability_gaps "
-                    "WHERE resolved_at IS NULL AND occurrences >= ? "
-                    "ORDER BY occurrences DESC LIMIT ?",
-                    (min_occurrences, limit)
-                )
-                rows = cursor.fetchall()
-                cursor.close()
-                return [
-                    {
-                        "id": r[0],
-                        "request_summary": r[1],
-                        "category": r[2],
-                        "occurrences": r[3],
-                        "first_seen": r[4],
-                    }
-                    for r in rows
-                ]
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get frequent gaps: {e}", exc_info=True)
-            return []
-
-    def link_gap_to_curiosity(self, gap_id: int, thread_id: str) -> None:
-        """Link a capability gap to a seeded curiosity thread."""
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE capability_gaps SET seeded_curiosity_thread_id = ? WHERE id = ?",
-                    (thread_id, gap_id)
-                )
-                conn.commit()
-                cursor.close()
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to link gap to curiosity: {e}")
-
-    def resolve_gap(self, gap_id: int, resolved_by: str) -> None:
-        """Mark a capability gap as resolved (e.g., when a new tool fills it)."""
-        try:
-            db = self._get_db()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE capability_gaps SET resolved_at = datetime('now'), "
-                    "resolved_by = ? WHERE id = ?",
-                    (resolved_by, gap_id)
-                )
-                conn.commit()
-                cursor.close()
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to resolve gap: {e}")
 
 
 # ── Background worker ───────────────────────────────────────────

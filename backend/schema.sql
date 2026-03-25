@@ -283,31 +283,6 @@ CREATE INDEX IF NOT EXISTS idx_user_traits_category ON user_traits(category);
 CREATE INDEX IF NOT EXISTS idx_user_traits_confidence ON user_traits(confidence);
 
 -- ────────────────────────────────────────────────────────────────
--- DEPRECATED: unused, scheduled for removal
--- MESSAGE CYCLES — processing unit tracking
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS message_cycles (
-    cycle_id TEXT PRIMARY KEY,
-    parent_cycle_id TEXT REFERENCES message_cycles(cycle_id),
-    root_cycle_id TEXT NOT NULL,
-    topic TEXT NOT NULL,
-    cycle_type TEXT NOT NULL,
-    source TEXT NOT NULL,
-    content TEXT,
-    intent TEXT,                              -- JSONB
-    metadata TEXT DEFAULT '{}',              -- JSONB
-    status TEXT DEFAULT 'pending',
-    depth INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_cycles_parent ON message_cycles(parent_cycle_id);
-CREATE INDEX IF NOT EXISTS idx_cycles_root ON message_cycles(root_cycle_id);
-CREATE INDEX IF NOT EXISTS idx_cycles_topic_created ON message_cycles(topic, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cycles_status_type ON message_cycles(status, cycle_type);
-
--- ────────────────────────────────────────────────────────────────
 -- THREADS — conversation threads
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS threads (
@@ -574,30 +549,6 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- ────────────────────────────────────────────────────────────────
--- CURIOSITY THREADS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS curiosity_threads (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    rationale TEXT,
-    thread_type TEXT NOT NULL CHECK (thread_type IN ('learning', 'behavioral')),
-    status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'dormant', 'abandoned')),
-    seed_topic TEXT,
-    learning_notes TEXT NOT NULL DEFAULT '[]',  -- JSONB
-    last_explored_at TEXT,
-    exploration_count INTEGER NOT NULL DEFAULT 0,
-    last_surfaced_at TEXT,
-    engagement_score REAL NOT NULL DEFAULT 0.5,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_curiosity_threads_status ON curiosity_threads(status);
-CREATE INDEX IF NOT EXISTS idx_curiosity_threads_explore
-    ON curiosity_threads(status, last_explored_at)
-    WHERE status = 'active';
 
 -- NOTE: moments were previously stored in a dedicated `moments` table.
 -- They are now stored as documents with source_type='moment' in the documents
@@ -677,27 +628,6 @@ CREATE TABLE IF NOT EXISTS watched_folders (
 CREATE INDEX IF NOT EXISTS idx_watched_folders_enabled
     ON watched_folders(enabled) WHERE enabled = 1;
 
--- ────────────────────────────────────────────────────────────────
--- CAPABILITY GAPS — user requests Chalie could not fulfill
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS capability_gaps (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_summary TEXT NOT NULL,
-    detected_category TEXT,
-    detection_source TEXT NOT NULL,
-    confidence REAL DEFAULT 0.5,
-    occurrences INTEGER DEFAULT 1,
-    first_seen_at TEXT DEFAULT (datetime('now')),
-    last_seen_at TEXT DEFAULT (datetime('now')),
-    resolved_at TEXT,
-    resolved_by TEXT,
-    seeded_curiosity_thread_id TEXT REFERENCES curiosity_threads(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_capability_gaps_category
-    ON capability_gaps(detected_category) WHERE resolved_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_capability_gaps_occurrences
-    ON capability_gaps(occurrences DESC) WHERE resolved_at IS NULL;
 
 -- ────────────────────────────────────────────────────────────────
 -- DOCUMENTS — document metadata + chunks
@@ -965,4 +895,34 @@ CREATE TABLE IF NOT EXISTS topic_compactions (
     token_count INTEGER DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (compacted_up_to_id) REFERENCES topic_transcript(id)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- BROWSER SNAPSHOTS — page monitoring change detection
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS browser_snapshots (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id   INTEGER NOT NULL,
+    snapshot_key TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    content_text TEXT NOT NULL,
+    captured_at  TEXT NOT NULL,
+    UNIQUE(account_id, snapshot_key)
+);
+
+-- ────────────────────────────────────────────────────────────────
+-- BROWSER CREDENTIALS — encrypted credential vault
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS browser_credentials (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id      INTEGER NOT NULL,
+    domain          TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    credential_type TEXT NOT NULL,
+    encrypted_data  TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    last_used_at    TEXT,
+    UNIQUE(account_id, domain, label)
 );

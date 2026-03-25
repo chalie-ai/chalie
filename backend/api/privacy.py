@@ -57,7 +57,7 @@ def data_summary():
                 "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
-                "curiosity_threads", "documents", "document_chunks",
+                "documents", "document_chunks",
             ]:
                 try:
                     cursor = conn.cursor()
@@ -95,7 +95,7 @@ def export_data():
         "user_traits", "threads", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
-        "place_fingerprints", "curiosity_threads",
+        "place_fingerprints",
         "interaction_log", "cortex_iterations",
         "procedural_memory", "topics", "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
@@ -288,7 +288,6 @@ def delete_all():
 
             # Misc
             "fok:*",
-            "curiosity:*",
             "bg_llm:*",
         ]:
             keys = store.keys(pattern)
@@ -329,12 +328,10 @@ def delete_all():
                 # Behavioral/derived data
                 "interaction_log",
                 "cortex_iterations",
-                "message_cycles",
                 "procedural_memory",
                 "topics",
                 "tool_performance_metrics",
                 "user_tool_preferences",
-                "curiosity_threads",
             ]:
                 try:
                     cursor.execute(f"DELETE FROM {table}")

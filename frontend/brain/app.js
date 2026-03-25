@@ -2209,9 +2209,8 @@ async function loadTasksObs() {
         obsSetTimestamp(data.generated_at);
 
         const tasks = data.persistent_tasks || [];
-        const threads = data.curiosity_threads || [];
 
-        let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'} and exploring ${threads.length} curiosity thread${threads.length === 1 ? '' : 's'}.</p>`;
+        let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'}.</p>`;
 
         // Persistent tasks
         if (tasks.length > 0) {
@@ -2237,27 +2236,6 @@ async function loadTasksObs() {
         } else {
             html += '<div class="obs-section-title">Background Tasks</div>';
             html += '<div class="obs-empty">No active background tasks.</div>';
-        }
-
-        // Curiosity threads
-        if (threads.length > 0) {
-            html += '<div class="obs-section-title">Curiosity Threads</div>';
-            for (const t of threads) {
-                const typeClass = t.thread_type === 'learning' ? '--learning' : '--behavioral';
-                const engagement = t.engagement_score !== undefined ? obsPct(t.engagement_score) + '% engagement' : '';
-                const explorations = t.exploration_count !== undefined ? t.exploration_count + ' explorations' : '';
-                const meta = [engagement, explorations].filter(Boolean).join(' · ');
-                html += `<div class="obs-task-card">
-                    <div class="obs-task-card__header">
-                        <span class="obs-task-card__title">${escapeHtml(t.title || 'Untitled thread')}</span>
-                        <span class="obs-task-card__badge ${typeClass}">${escapeHtml(t.thread_type || 'learning')}</span>
-                    </div>
-                    <div class="obs-task-card__meta">${escapeHtml(meta)}</div>
-                </div>`;
-            }
-        } else {
-            html += '<div class="obs-section-title">Curiosity Threads</div>';
-            html += '<div class="obs-empty">No active curiosity threads.</div>';
         }
 
         el.innerHTML = html;

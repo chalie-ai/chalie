@@ -44,7 +44,7 @@ Every service belongs to exactly one of three layers. Failures are contained wit
 | **Capability** | Tools/Hands | External tools, document processing, scheduling, list management | ...you lose specific abilities, but you find alternatives or report inability |
 
 **Cognitive services:**
-DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, CuriosityThread/Pursuit, GoalInference, SelfModel
+DecayEngine, SemanticConsolidation, EpisodicMemoryWorker, MemoryChunker, ReasoningLoopService, ContextAssembly, ModeRouter, PlanDecomposition, CriticService, UncertaintyService, ContradictionClassifier, IdleConsolidation, GrowthPattern, AutobiographySynthesis, GoalInference, SelfModel
 
 **Embodiment services:**
 AmbientInference, PlaceLearning, ClientContext, EventBridge, VoiceService, FolderWatcher, TemporalPattern, EpisodicMemoryObserver, ThreadExpiry
@@ -98,7 +98,6 @@ class ReasoningSignal:
 | `task_state_changed` | Persistent task state transition | persistent_task_service | 0.5–0.6 |
 | `schedule_fired` | Scheduled reminder/task fired | scheduler_service | 0.5 |
 | `thread_expired` | Conversation thread expired | thread_expiry_service | 0.3 |
-| `curiosity_finding` | Curiosity thread produced a finding | curiosity_pursuit_service | 0.5 |
 | `user_message` | User sent a chat message | websocket | 1.0 |
 | `goal_inferred` | Recurring topic pattern detected as potential goal | goal_inference_service | 0.6 |
 
@@ -227,7 +226,6 @@ def run_signal_loop(self):
 | **PersistentTaskService** | `task_state_changed` | Request/timer | 973 |
 | **SchedulerService** | `schedule_fired` | 60s timer | 974 |
 | **ThreadExpiryService** | `thread_expired` | 5min timer | 975 |
-| **CuriosityPursuitService** | `curiosity_finding` | 6h timer | 976 |
 | **GoalInferenceService** | `goal_inferred` | Idle-time check (6h cooldown) | — |
 
 ### Phase 2 Complete (Signal-Driven, No Timer)

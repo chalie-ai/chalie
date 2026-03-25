@@ -133,7 +133,6 @@ class ReasoningLoopService:
         'novel_observation': '_handle_reasoning_signal',
         'ambient_context': '_handle_reasoning_signal',
         'episode_created': '_handle_reasoning_signal',
-        'curiosity_finding': '_handle_reasoning_signal',
         'goal_inferred': '_handle_reasoning_signal',
         # Lightweight handlers: update state, no full reasoning cycle
         'trait_changed': '_handle_trait_changed',
@@ -219,19 +218,12 @@ class ReasoningLoopService:
         from services.autonomous_actions.nothing_action import NothingAction
         from services.autonomous_actions.communicate_action import CommunicateAction
         from services.autonomous_actions.reflect_action import ReflectAction
-        from services.autonomous_actions.seed_thread_action import SeedThreadAction
-
         router = ActionDecisionRouter()
 
         # Always register NOTHING (fallback)
         router.register(NothingAction())
 
         action_config = self.config.get('autonomous_actions', {})
-
-        # Register SEED_THREAD (priority 6, above REFLECT=5)
-        seed_config = action_config.get('seed_thread', {})
-        if seed_config.get('enabled', True):
-            router.register(SeedThreadAction(config=seed_config))
 
         # Register PLAN (priority 7)
         from services.autonomous_actions.plan_action import PlanAction
@@ -1415,11 +1407,6 @@ class ReasoningLoopService:
                 reflection = (
                     f"I notice my memory recall is struggling. "
                     f"I should consolidate what I know into stronger semantic concepts."
-                )
-            elif 'capability_gap' in signal:
-                reflection = (
-                    f"Users keep asking me to do something I can't: {signal.split(':', 1)[-1].strip()}. "
-                    f"I should think about how to help them differently."
                 )
             elif 'queue' in signal or 'congestion' in signal:
                 reflection = (

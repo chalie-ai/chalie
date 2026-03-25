@@ -76,20 +76,6 @@ class TestStoreEpisodeSuccess:
 
         assert result == test_uuid
 
-    def test_curiosity_pursuit_failure_non_fatal(self, storage_env):
-        """CuriosityPursuitService failure doesn't prevent episode storage."""
-        svc, mock_cursor = storage_env
-        test_uuid = 'd862db4f-bd83-4724-92a8-33fcf3bd38e8'
-
-        # Even if curiosity service fails (ImportError, etc.), store still succeeds
-        with patch('services.episodic_service.uuid') as mock_uuid_mod, \
-             patch('services.episodic_service.CuriosityPursuitService',
-                   side_effect=ImportError("not available"), create=True):
-            mock_uuid_mod.uuid4.return_value = uuid.UUID(test_uuid)
-            result = svc.store_episode(_make_episode_data())
-
-        assert result == test_uuid
-
 
 # ── update_episode ───────────────────────────────────────────────────
 

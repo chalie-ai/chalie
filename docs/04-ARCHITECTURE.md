@@ -97,9 +97,7 @@ frontend/
 
 #### Autonomous Behavior
 - **`reasoning_loop_service.py`** — Signal-driven continuous reasoning; dispatches signal types through handlers; falls back to salient/insight discovery on idle; attention-gated
-- **`autonomous_actions/`** — Decision routing by priority: CommunicateAction (10), PlanAction (7), SeedThreadAction (6), AmbientToolAction (6), ReflectAction (5), ReconcileAction (4), NothingAction (-1)
-- **`curiosity_thread_service.py`** — Self-directed exploration threads (learning and behavioral) seeded from cognitive drift
-- **`curiosity_pursuit_service.py`** — Background worker exploring active threads via ACT loop
+- **`autonomous_actions/`** — Decision routing by priority: CommunicateAction (10), PlanAction (7), AmbientToolAction (6), ReflectAction (5), ReconcileAction (4), NothingAction (-1)
 - **`decay_engine_service.py`** — Periodic decay (episodic 0.05/hr, semantic 0.03/hr)
 
 #### Ambient Awareness

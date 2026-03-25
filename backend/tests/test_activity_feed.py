@@ -51,7 +51,7 @@ class TestActivityEventTypes:
         from services.interaction_log_service import _ACTIVITY_EVENT_TYPES
         expected = {
             'proactive_sent', 'act_loop_telemetry', 'cron_tool_executed',
-            'plan_proposed', 'curiosity_thread_seeded',
+            'plan_proposed',
         }
         for t in expected:
             assert t in _ACTIVITY_EVENT_TYPES

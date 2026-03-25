@@ -117,10 +117,8 @@ class DecayEngineService:
             semantic_count = self._decay_semantic()
             identity_count = self._apply_identity_inertia()
             external_count = self._decay_external_knowledge()
-            thread_dormancy = self._apply_thread_dormancy()
         else:
             semantic_count = identity_count = external_count = 0
-            thread_dormancy = {}
             logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
 
         logger.info(
@@ -130,7 +128,6 @@ class DecayEngineService:
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
             f"traits={trait_stats.get('decayed', 0)} decayed/{trait_stats.get('deleted', 0)} deleted, "
-            f"threads={thread_dormancy} dormancy-applied, "
             f"goals={goal_decay_count} decayed"
         )
 
@@ -449,24 +446,6 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] User trait decay failed: {e}")
             return {'decayed': 0, 'deleted': 0}
 
-    def _apply_thread_dormancy(self) -> int:
-        """
-        Apply dormancy rules to curiosity threads.
-
-        Active threads not explored in 45 days → dormant.
-        Dormant + engagement < 0.2 + dormant > 60 days → abandoned.
-
-        Returns:
-            Number of threads transitioned
-        """
-        try:
-            from .curiosity_thread_service import CuriosityThreadService
-            return CuriosityThreadService().apply_dormancy()
-        except ImportError:
-            return 0
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Thread dormancy failed: {e}")
-            return 0
 
     def _apply_identity_inertia(self) -> int:
         """Pull identity activations toward their baselines via the inertia mechanism.

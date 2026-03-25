@@ -206,7 +206,7 @@ Used only for non-user flows (cognitive drift, proactive notifications, fallback
 
 ### 4b. ACT Mode — The Action Loop
 
-Used by background workers (tool_worker, persistent_task_worker, curiosity_pursuit) and when the mode router (non-user flows) selects ACT.
+Used by background workers (tool_worker, persistent_task_worker) and when the mode router (non-user flows) selects ACT.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -453,7 +453,6 @@ topics                     Phase A (new topic)             topic_classifier
 threads                    session management              session_service
 topic_transcript           Phase D                         context_assembly
 place_fingerprints         ambient inference               place_learning_service
-curiosity_threads          drift (SEED_THREAD action)      curiosity_pursuit_service
 ```
 
 ---

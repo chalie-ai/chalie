@@ -30,7 +30,6 @@ DATA_TABLES = [
     'threads',
     'scheduled_items',
     'autobiography',
-    'curiosity_threads',
     'lists',
     'list_items',
     'list_events',

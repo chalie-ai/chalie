@@ -298,14 +298,9 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def test_observability_tasks_returns_all_sections(self, client):
-        """GET /system/observability/tasks returns persistent_tasks and curiosity_threads."""
+        """GET /system/observability/tasks returns persistent_tasks."""
         mock_pt_svc = MagicMock()
         mock_pt_svc.get_active_tasks.return_value = [{'id': 1, 'goal': 'research X', 'state': 'active'}]
-
-        mock_ct_svc = MagicMock()
-        mock_ct_svc.get_active_threads.return_value = [
-            {'id': 2, 'question': 'Why is the sky blue?', 'last_explored_at': datetime(2026, 2, 26), 'created_at': '2026-02-25', 'last_surfaced_at': None},
-        ]
 
         mock_conn = MagicMock()
         mock_conn.execute.return_value.fetchone.return_value = (1,)
@@ -316,7 +311,6 @@ class TestSystemAPI:
         mock_db.connection.return_value = mock_ctx
 
         with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=mock_ct_svc), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/tasks')
 
@@ -324,24 +318,16 @@ class TestSystemAPI:
         data = resp.get_json()
         assert len(data['persistent_tasks']) == 1
         assert data['persistent_tasks'][0]['goal'] == 'research X'
-        assert len(data['curiosity_threads']) == 1
-        # datetime objects should be stringified
-        assert data['curiosity_threads'][0]['last_explored_at'] == '2026-02-26 00:00:00'
-        # Already a string, should be left as-is
-        assert data['curiosity_threads'][0]['created_at'] == '2026-02-25'
         assert 'generated_at' in data
 
     def test_observability_tasks_handles_sub_service_failures(self, client):
         """GET /system/observability/tasks gracefully handles individual sub-service failures."""
-        with patch('services.persistent_task_service.PersistentTaskService', side_effect=RuntimeError('pt down')), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', side_effect=RuntimeError('ct down')):
+        with patch('services.persistent_task_service.PersistentTaskService', side_effect=RuntimeError('pt down')):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
         data = resp.get_json()
-        # All sections fallback to empty defaults
         assert data['persistent_tasks'] == []
-        assert data['curiosity_threads'] == []
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
@@ -505,8 +491,7 @@ class TestSystemAPI:
         mock_pt_cls = MagicMock(return_value=mock_pt_svc)
 
         with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.curiosity_thread_service.CuriosityThreadService', return_value=MagicMock(get_active_threads=MagicMock(return_value=[]))):
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200

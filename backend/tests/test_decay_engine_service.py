@@ -65,8 +65,7 @@ class TestDecayEngineService:
              patch.object(svc, '_decay_semantic', return_value=3) as mock_sem, \
              patch.object(svc, '_apply_identity_inertia', return_value=2) as mock_id, \
              patch.object(svc, '_decay_external_knowledge', return_value=1) as mock_ext, \
-             patch.object(svc, '_decay_user_traits', return_value={'decayed': 4, 'deleted': 1}) as mock_traits, \
-             patch.object(svc, '_apply_thread_dormancy', return_value=0) as mock_threads:
+             patch.object(svc, '_decay_user_traits', return_value={'decayed': 4, 'deleted': 1}) as mock_traits:
 
             svc.run_decay_cycle()
 
@@ -75,7 +74,6 @@ class TestDecayEngineService:
         mock_id.assert_called_once()
         mock_ext.assert_called_once()
         mock_traits.assert_called_once()
-        mock_threads.assert_called_once()
 
     # ── Individual decay targets ──────────────────────────────────────
 
@@ -127,21 +125,6 @@ class TestDecayEngineService:
 
         assert result == {'decayed': 0, 'deleted': 0}
 
-    def test_apply_thread_dormancy_returns_zero_on_import_error(self):
-        """Thread dormancy should return 0 on ImportError."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
-        with patch(
-            'services.curiosity_thread_service.CuriosityThreadService',
-            side_effect=ImportError('no module'),
-        ):
-            result = svc._apply_thread_dormancy()
-
-        assert result == 0
 
     def test_apply_identity_inertia_returns_zero_on_failure(self):
         """Identity inertia should return 0 on any exception."""

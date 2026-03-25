@@ -205,7 +205,6 @@ if __name__ == "__main__":
     from services.thread_expiry_service import thread_expiry_worker
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
-    from services.curiosity_pursuit_service import curiosity_pursuit_worker
     from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import process_document_job, document_purge_worker
 
@@ -270,7 +269,6 @@ if __name__ == "__main__":
     manager.register_service("thread-expiry-service", thread_expiry_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("autobiography-synthesis-service", autobiography_synthesis_worker)
-    manager.register_service("curiosity-pursuit-service", curiosity_pursuit_worker)
     manager.register_service("persistent-task-worker", persistent_task_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 

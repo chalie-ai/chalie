@@ -51,16 +51,10 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 - Event Bridge: stabilization windows, cooldowns, confidence gating, focus gates
 - See `docs/16-AMBIENT-AWARENESS.md`
 
-### Curiosity System
-- Self-directed curiosity threads (learning and behavioral types)
-- Seeded from cognitive drift; pursued via bounded ACT loop on 6h cycle
-- Findings enter normal memory pipeline; surface naturally in future conversations
-- See `docs/17-CURIOSITY-SYSTEM.md`
-
 ### Cognitive Drift Engine (DMN)
 - Default Mode Network: spontaneous thoughts during idle periods
 - Attention-gated: suppressed during deep focus
-- Autonomous actions: COMMUNICATE, REFLECT, PLAN, SeedThreadAction, RECONCILE (uncertainty)
+- Autonomous actions: COMMUNICATE, REFLECT, PLAN, RECONCILE (uncertainty)
 
 ### Memory Observability
 - Brain dashboard observability tab: autobiography, traits, routing, memory, tools, identity, tasks
