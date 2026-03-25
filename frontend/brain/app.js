@@ -2614,10 +2614,22 @@ async function openPreview(id) {
     }
 }
 
+/**
+ * Persists classification metadata for a document via the API.
+ *
+ * Reads the category, project, and date values from the fields rendered
+ * inside `#docMetaOverlay` by {@link openMetaEditor}. Queries are scoped
+ * to the overlay container to prevent accidental matches against any future
+ * elements that might share the same IDs elsewhere in the DOM.
+ *
+ * @param {string} id - The document ID to classify.
+ * @returns {Promise<void>}
+ */
 async function saveDocClassification(id) {
-    const category = document.getElementById('docClassCategory')?.value?.trim() || null;
-    const project = document.getElementById('docClassProject')?.value?.trim() || null;
-    const date = document.getElementById('docClassDate')?.value || null;
+    const overlay = document.getElementById('docMetaOverlay');
+    const category = overlay.querySelector('#docClassCategory')?.value?.trim() || null;
+    const project = overlay.querySelector('#docClassProject')?.value?.trim() || null;
+    const date = overlay.querySelector('#docClassDate')?.value || null;
     try {
         const res = await apiFetch(`/documents/${id}/classify`, {
             method: 'PUT',
@@ -2630,7 +2642,10 @@ async function saveDocClassification(id) {
         } else {
             showToast('Failed to save classification', 'error');
         }
-    } catch { showToast('Failed to save classification', 'error'); }
+    } catch (e) {
+        console.error('[saveDocClassification]', e);
+        showToast('Failed to save classification', 'error');
+    }
 }
 
 /**
