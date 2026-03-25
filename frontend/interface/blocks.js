@@ -100,6 +100,11 @@ export class BlockRenderer {
       case 'alert':     return this._renderAlert(block);
       case 'loading':   return this._renderLoading(block);
       case 'thought':   return this._renderThought(block);
+      case 'metric':    return this._renderMetric(block);
+      case 'card':      return this._renderCard(block);
+      case 'chart':     return this._renderChart(block);
+      case 'progress':  return this._renderProgress(block);
+      case 'timeline':  return this._renderTimeline(block);
       default:          return this._renderUnknown(block);
     }
   }
@@ -830,6 +835,309 @@ export class BlockRenderer {
     card.appendChild(actions);
 
     return card;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rich render blocks (metric, card, chart, progress, timeline)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * metric block — prominent KPI display with optional trend indicator.
+   * { type: "metric", label: "...", value: "...", unit?: "...", change?: "...", trend?: "up"|"down"|"neutral" }
+   */
+  _renderMetric(block) {
+    if (typeof block.label !== 'string' || block.value == null) return null;
+
+    const div = document.createElement('div');
+    div.className = 'block-metric';
+    if (block.trend) div.classList.add(`block-metric--${block.trend}`);
+
+    const label = document.createElement('span');
+    label.className = 'block-metric__label';
+    label.textContent = block.label;
+    div.appendChild(label);
+
+    const valueRow = document.createElement('div');
+    valueRow.className = 'block-metric__value-row';
+
+    const value = document.createElement('span');
+    value.className = 'block-metric__value';
+    value.textContent = String(block.value);
+    valueRow.appendChild(value);
+
+    if (block.unit) {
+      const unit = document.createElement('span');
+      unit.className = 'block-metric__unit';
+      unit.textContent = block.unit;
+      valueRow.appendChild(unit);
+    }
+
+    div.appendChild(valueRow);
+
+    if (block.change) {
+      const change = document.createElement('span');
+      change.className = 'block-metric__change';
+      change.textContent = block.change;
+      div.appendChild(change);
+    }
+
+    return div;
+  }
+
+  /**
+   * card block — titled container with optional icon and accent.
+   * { type: "card", title: "...", body?: "...", icon?: "...", accent?: "violet"|"cyan"|"magenta"|"green"|"red"|"amber" }
+   */
+  _renderCard(block) {
+    if (typeof block.title !== 'string' || !block.title) return null;
+
+    const card = document.createElement('div');
+    card.className = 'block-card';
+    if (block.accent) card.classList.add(`block-card--${block.accent}`);
+
+    const header = document.createElement('div');
+    header.className = 'block-card__header';
+
+    if (block.icon) {
+      const icon = document.createElement('span');
+      icon.className = 'block-card__icon';
+      icon.textContent = block.icon;
+      header.appendChild(icon);
+    }
+
+    const title = document.createElement('span');
+    title.className = 'block-card__title';
+    title.textContent = block.title;
+    header.appendChild(title);
+
+    card.appendChild(header);
+
+    if (block.body && typeof block.body === 'string') {
+      const body = document.createElement('div');
+      body.className = 'block-card__body';
+      body.innerHTML = this._parseInlineMarkdown(block.body);
+      card.appendChild(body);
+    }
+
+    return card;
+  }
+
+  /**
+   * chart block — lightweight SVG chart (bar, line, sparkline).
+   * { type: "chart", series: [{label, values: [n...]}], labels?: [...], title?: "...", chartType?: "bar"|"line"|"sparkline" }
+   */
+  _renderChart(block) {
+    if (!Array.isArray(block.series) || block.series.length === 0) return null;
+
+    const container = document.createElement('div');
+    container.className = 'block-chart';
+
+    if (block.title) {
+      const title = document.createElement('div');
+      title.className = 'block-chart__title';
+      title.textContent = block.title;
+      container.appendChild(title);
+    }
+
+    const chartType = block.type === 'chart' ? (block.chartType || block['type'] || 'bar') : 'bar';
+    // Normalize: block.type is always 'chart', use chartType field
+    const kind = block.chartType || 'bar';
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const W = 320;
+    const H = kind === 'sparkline' ? 48 : 140;
+    const PAD = { top: 8, right: 8, bottom: 24, left: 8 };
+
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('class', 'block-chart__svg');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    const series = block.series[0];
+    if (!series || !Array.isArray(series.values) || series.values.length === 0) {
+      container.appendChild(svg);
+      return container;
+    }
+
+    const vals = series.values.map(v => typeof v === 'number' ? v : parseFloat(v) || 0);
+    const max = Math.max(...vals, 1);
+    const min = Math.min(...vals, 0);
+    const range = max - min || 1;
+    const plotW = W - PAD.left - PAD.right;
+    const plotH = H - PAD.top - PAD.bottom;
+
+    const COLORS = ['#8A5CFF', '#00F0FF', '#FF2FD1', '#34d399', '#f59e0b'];
+
+    if (kind === 'bar') {
+      const barW = Math.max(4, (plotW / vals.length) - 2);
+      const gap = (plotW - barW * vals.length) / (vals.length + 1);
+
+      vals.forEach((v, i) => {
+        const barH = ((v - Math.min(min, 0)) / range) * plotH;
+        const x = PAD.left + gap + i * (barW + gap);
+        const y = PAD.top + plotH - barH;
+
+        const rect = document.createElementNS(svgNS, 'rect');
+        rect.setAttribute('x', x);
+        rect.setAttribute('y', y);
+        rect.setAttribute('width', barW);
+        rect.setAttribute('height', Math.max(barH, 1));
+        rect.setAttribute('rx', 2);
+        rect.setAttribute('fill', COLORS[0]);
+        rect.setAttribute('opacity', '0.85');
+        svg.appendChild(rect);
+      });
+    } else {
+      // line / sparkline
+      const points = vals.map((v, i) => {
+        const x = PAD.left + (i / Math.max(vals.length - 1, 1)) * plotW;
+        const y = PAD.top + plotH - ((v - min) / range) * plotH;
+        return `${x},${y}`;
+      });
+
+      // Area fill
+      const area = document.createElementNS(svgNS, 'polygon');
+      const firstX = PAD.left;
+      const lastX = PAD.left + plotW;
+      const baseY = PAD.top + plotH;
+      area.setAttribute('points', `${firstX},${baseY} ${points.join(' ')} ${lastX},${baseY}`);
+      area.setAttribute('fill', COLORS[0]);
+      area.setAttribute('opacity', '0.1');
+      svg.appendChild(area);
+
+      // Line
+      const polyline = document.createElementNS(svgNS, 'polyline');
+      polyline.setAttribute('points', points.join(' '));
+      polyline.setAttribute('fill', 'none');
+      polyline.setAttribute('stroke', COLORS[0]);
+      polyline.setAttribute('stroke-width', kind === 'sparkline' ? '1.5' : '2');
+      polyline.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(polyline);
+    }
+
+    // Labels along the bottom
+    if (Array.isArray(block.labels) && block.labels.length > 0 && kind !== 'sparkline') {
+      const step = Math.max(1, Math.floor(block.labels.length / 6));
+      block.labels.forEach((lbl, i) => {
+        if (i % step !== 0 && i !== block.labels.length - 1) return;
+        const x = PAD.left + (i / Math.max(block.labels.length - 1, 1)) * plotW;
+        const text = document.createElementNS(svgNS, 'text');
+        text.setAttribute('x', x);
+        text.setAttribute('y', H - 2);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('class', 'block-chart__label');
+        text.textContent = String(lbl);
+        svg.appendChild(text);
+      });
+    }
+
+    container.appendChild(svg);
+
+    // Legend for multi-series
+    if (block.series.length > 1) {
+      const legend = document.createElement('div');
+      legend.className = 'block-chart__legend';
+      block.series.forEach((s, i) => {
+        const item = document.createElement('span');
+        item.className = 'block-chart__legend-item';
+        const dot = document.createElement('span');
+        dot.className = 'block-chart__legend-dot';
+        dot.style.backgroundColor = COLORS[i % COLORS.length];
+        item.appendChild(dot);
+        item.appendChild(document.createTextNode(s.label || `Series ${i + 1}`));
+        legend.appendChild(item);
+      });
+      container.appendChild(legend);
+    }
+
+    return container;
+  }
+
+  /**
+   * progress block — horizontal progress bar.
+   * { type: "progress", label: "...", value: 0-100, max?: 100, variant?: "info"|"success"|"warning"|"error" }
+   */
+  _renderProgress(block) {
+    if (typeof block.label !== 'string' || typeof block.value !== 'number') return null;
+
+    const max = typeof block.max === 'number' ? block.max : 100;
+    const pct = Math.max(0, Math.min(100, (block.value / max) * 100));
+
+    const div = document.createElement('div');
+    div.className = 'block-progress';
+
+    const header = document.createElement('div');
+    header.className = 'block-progress__header';
+
+    const label = document.createElement('span');
+    label.className = 'block-progress__label';
+    label.textContent = block.label;
+    header.appendChild(label);
+
+    const pctLabel = document.createElement('span');
+    pctLabel.className = 'block-progress__pct';
+    pctLabel.textContent = `${Math.round(pct)}%`;
+    header.appendChild(pctLabel);
+
+    div.appendChild(header);
+
+    const track = document.createElement('div');
+    track.className = 'block-progress__track';
+
+    const fill = document.createElement('div');
+    fill.className = 'block-progress__fill';
+    if (block.variant) fill.classList.add(`block-progress__fill--${block.variant}`);
+    fill.style.width = `${pct}%`;
+
+    track.appendChild(fill);
+    div.appendChild(track);
+
+    return div;
+  }
+
+  /**
+   * timeline block — vertical event sequence.
+   * { type: "timeline", events: [{label, detail?, status?: "done"|"active"|"pending"}] }
+   */
+  _renderTimeline(block) {
+    if (!Array.isArray(block.events) || block.events.length === 0) return null;
+
+    const div = document.createElement('div');
+    div.className = 'block-timeline';
+
+    block.events.forEach((evt) => {
+      if (!evt || typeof evt.label !== 'string') return;
+
+      const item = document.createElement('div');
+      item.className = 'block-timeline__item';
+
+      const status = evt.status || 'pending';
+      item.classList.add(`block-timeline__item--${status}`);
+
+      const dot = document.createElement('div');
+      dot.className = 'block-timeline__dot';
+      item.appendChild(dot);
+
+      const content = document.createElement('div');
+      content.className = 'block-timeline__content';
+
+      const label = document.createElement('div');
+      label.className = 'block-timeline__label';
+      label.textContent = evt.label;
+      content.appendChild(label);
+
+      if (evt.detail && typeof evt.detail === 'string') {
+        const detail = document.createElement('div');
+        detail.className = 'block-timeline__detail';
+        detail.textContent = evt.detail;
+        content.appendChild(detail);
+      }
+
+      item.appendChild(content);
+      div.appendChild(item);
+    });
+
+    return div;
   }
 
   // ---------------------------------------------------------------------------
