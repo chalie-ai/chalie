@@ -128,6 +128,8 @@ def _manifest_to_schema(manifest: dict) -> dict | None:
             prop["default"] = pdef["default"]
         if pdef.get("enum"):
             prop["enum"] = pdef["enum"]
+        if pdef.get("items"):
+            prop["items"] = pdef["items"]
         properties[pname] = prop
         if pdef.get("required", False):
             required.append(pname)
