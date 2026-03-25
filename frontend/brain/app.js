@@ -2955,6 +2955,23 @@ document.getElementById('watchedFoldersList')?.addEventListener('click', (e) => 
     if (del)   { deleteWatchFolder(del.dataset.folderId); return; }
 });
 
+/**
+ * Delegated click handler for the directory browser list (`#dirBrowserList`).
+ *
+ * Listens on the static container so the handler survives re-renders of the
+ * list contents by `browseDirectory()`. When the user clicks a
+ * `.dir-browser-item` element the target's `data-dir-path` attribute is read
+ * and passed to `browseDirectory()`.
+ *
+ * Attached once at module-evaluation time — never inside `browseDirectory()`
+ * itself — to avoid accumulating duplicate listeners on each render.
+ */
+document.getElementById('dirBrowserList')?.addEventListener('click', (e) => {
+    const item = e.target.closest('.dir-browser-item');
+    if (!item) return;
+    browseDirectory(item.dataset.dirPath);
+});
+
 // Toggle watched folders panel
 document.getElementById('watchedFoldersToggle')?.addEventListener('click', () => {
     document.getElementById('watchedFoldersPanel').classList.toggle('collapsed');
@@ -3048,7 +3065,7 @@ async function browseDirectory(path) {
             listEl.innerHTML = '<div class="dir-browser-empty">No subdirectories</div>';
         } else {
             listEl.innerHTML = data.directories.map(d =>
-                `<div class="dir-browser-item" onclick="browseDirectory('${escapeHtml(data.current)}/${escapeHtml(d)}')">${escapeHtml(d)}</div>`
+                `<div class="dir-browser-item" data-dir-path="${escapeHtml(data.current)}/${escapeHtml(d)}">${escapeHtml(d)}</div>`
             ).join('');
         }
     } catch (e) {
