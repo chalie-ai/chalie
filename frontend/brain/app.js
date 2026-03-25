@@ -2452,7 +2452,7 @@ async function openMetaEditor(id) {
 
         // Build classification fields (no inline onclick — delegated via #docMetaOverlay)
         bodyEl.innerHTML = `
-            <div class="doc-classify-fields">
+            <div class="doc-meta-overlay-fields">
                 <label>Category
                     <input type="text" class="doc-classify-input" id="docClassCategory"
                            value="${escapeHtml(doc.doc_category || '')}" placeholder="e.g. Invoice, Receipt…">
