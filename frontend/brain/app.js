@@ -2556,8 +2556,19 @@ async function openPreview(id) {
             try {
                 const txtRes = await apiFetch(`/documents/${id}/preview`);
                 const html = await txtRes.text();
-                bodyEl.innerHTML = `<iframe srcdoc="${escapeHtml(html)}" sandbox="allow-same-origin" style="width:100%;height:70vh;border:none;border-radius:6px;" title="HTML Preview"></iframe>`;
-            } catch {
+                // Build the iframe via DOM API so that `srcdoc` is set as a JS
+                // property (raw HTML string), not as an HTML attribute.  Setting
+                // it as an attribute would require escaping <, >, &, and " which
+                // makes the iframe receive escaped markup instead of live HTML.
+                const iframe = document.createElement('iframe');
+                iframe.sandbox = 'allow-same-origin';
+                iframe.style.cssText = 'width:100%;height:70vh;border:none;border-radius:6px;';
+                iframe.title = 'HTML Preview';
+                iframe.srcdoc = html;
+                bodyEl.innerHTML = '';
+                bodyEl.appendChild(iframe);
+            } catch (err) {
+                console.error('[DocPreview] HTML render failed:', err);
                 bodyEl.innerHTML = '<div class="obs-empty">Failed to load HTML preview.</div>';
             }
 
