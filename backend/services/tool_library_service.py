@@ -15,6 +15,13 @@ from tools.programming_docs_search import execute as _docs_execute
 from tools.search.search import execute as _search_execute
 from tools.news.news import execute as _news_execute
 
+# Optional: headless browser (requires playwright + chromium)
+try:
+    from tools.browser.browser import execute as _browser_execute
+    _BROWSER_AVAILABLE = True
+except ImportError:
+    _BROWSER_AVAILABLE = False
+
 
 # -- Handler registry ----------------------------------------------------------
 
@@ -26,6 +33,9 @@ TOOL_HANDLERS = {
     "programming_docs_search": _docs_execute,
     "news": _news_execute,
 }
+
+if _BROWSER_AVAILABLE:
+    TOOL_HANDLERS["browser"] = _browser_execute
 
 ALL_TOOL_NAMES: frozenset = frozenset(TOOL_HANDLERS.keys())
 
@@ -417,6 +427,189 @@ TOOL_METADATA: dict = {
         },
     },
 }
+
+
+if _BROWSER_AVAILABLE:
+    TOOL_METADATA["browser"] = {
+        "name": "browser",
+        "description": (
+            "Render JavaScript-heavy web pages, take screenshots, fill forms, "
+            "and monitor pages for changes. Use when the read skill returns "
+            "empty or broken content, when interaction with a web page is needed, "
+            "or when you need to visually verify page state."
+        ),
+        "documentation": (
+            "Headless browser for the modern web. Four actions:\n\n"
+            "**render** — Load URL with full JavaScript execution, extract clean text. "
+            "Use when the read skill fails on JS-heavy pages (SPAs, dynamic content, "
+            "Cloudflare-protected sites). Returns extracted text + page links.\n\n"
+            "**screenshot** — Capture visual state of a page as PNG. Optionally run OCR "
+            "to extract text from the image. Use for dashboards, visual verification, "
+            "or when text extraction fails.\n\n"
+            "**interact** — Fill forms, click buttons, select dropdowns, navigate "
+            "multi-step flows. Provide an ordered list of steps. Use for login flows, "
+            "search filtering, form submission, multi-page navigation. Steps execute "
+            "sequentially; stops on first failure with partial results.\n\n"
+            "**monitor** — Track page changes over time. Renders a page, extracts "
+            "content, compares against the previous snapshot. Use in persistent tasks "
+            "to watch prices, availability, status changes. Requires a unique "
+            "snapshot_key to identify what's being monitored.\n\n"
+            "The read skill is faster for static pages — try it first. "
+            "Use browser when JavaScript rendering or page interaction is required.\n\n"
+            "Supports custom wait strategies: 'networkidle' (default), "
+            "'domcontentloaded', 'selector:<css>' (wait for element), "
+            "'timeout:<ms>' (fixed wait)."
+        ),
+        "category": "research",
+        "icon": "fa-globe",
+        "trigger": {"type": "on_demand"},
+        "parameters": {
+            "action": {
+                "type": "string",
+                "required": True,
+                "description": "Action: render, screenshot, interact, monitor",
+            },
+            "url": {
+                "type": "string",
+                "required": True,
+                "description": "URL to load",
+            },
+            "wait_for": {
+                "type": "string",
+                "required": False,
+                "default": "networkidle",
+                "description": (
+                    "Wait strategy: 'networkidle' (default), 'domcontentloaded', "
+                    "'selector:<css>' (wait for element to appear), "
+                    "'timeout:<ms>' (fixed additional wait)"
+                ),
+            },
+            "selector": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "CSS selector to scope extraction or screenshot to a specific "
+                    "element (e.g. 'main', 'article', '#content', '.price-display')"
+                ),
+            },
+            "extract": {
+                "type": "string",
+                "required": False,
+                "default": "text",
+                "description": "Extraction format for render action: 'text' or 'html'",
+            },
+            "max_chars": {
+                "type": "integer",
+                "required": False,
+                "default": 8000,
+                "description": "Maximum characters to extract",
+            },
+            "steps": {
+                "type": "array",
+                "required": False,
+                "description": (
+                    "Interaction steps for interact action. Each step: "
+                    "{action: click|fill|select|check|wait|scroll|press|hover|type, "
+                    "selector: 'css', value: 'text', timeout: ms}"
+                ),
+            },
+            "snapshot_key": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Unique identifier for monitor action snapshots. Use a descriptive "
+                    "key like 'price-watch-amazon-xyz' or 'flight-lhr-mla-jun15'"
+                ),
+            },
+            "viewport_width": {
+                "type": "integer",
+                "required": False,
+                "default": 1280,
+                "description": "Browser viewport width in pixels",
+            },
+            "viewport_height": {
+                "type": "integer",
+                "required": False,
+                "default": 720,
+                "description": "Browser viewport height in pixels",
+            },
+            "full_page": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": "Capture full scrollable page (screenshot action)",
+            },
+            "screenshot_after": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": "Take screenshot after interaction steps complete",
+            },
+            "ocr": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": "Run OCR on screenshot to extract text from image",
+            },
+            "save_session": {
+                "type": "boolean",
+                "required": False,
+                "default": False,
+                "description": (
+                    "Save session cookies after successful interaction (encrypted). "
+                    "Enables cookie replay on future visits to the same domain."
+                ),
+            },
+            "credential_label": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Load stored credentials for this label. Injects saved cookies "
+                    "for the URL's domain into the browser context."
+                ),
+            },
+        },
+        "returns": {
+            "text": {"type": "string", "description": "Extracted page text"},
+            "screenshot_b64": {"type": "string", "description": "Base64 PNG screenshot"},
+            "ocr_text": {"type": "string", "description": "OCR-extracted text from screenshot"},
+            "title": {"type": "string", "description": "Page title"},
+            "url": {"type": "string", "description": "Final URL after redirects"},
+            "links": {"type": "array", "description": "Navigable page links [{text, url}]"},
+            "changed": {"type": "boolean", "description": "Whether monitored page changed (monitor)"},
+            "diff": {"type": "string", "description": "Unified diff of changes (monitor)"},
+            "change_ratio": {"type": "number", "description": "Fraction of content changed (monitor)"},
+            "first_check": {"type": "boolean", "description": "True if no previous snapshot (monitor)"},
+            "steps_completed": {"type": "integer", "description": "Steps completed (interact)"},
+            "steps_total": {"type": "integer", "description": "Total steps (interact)"},
+            "step_error": {"type": "string", "description": "First failed step error (interact)"},
+            "error": {"type": "string", "description": "Error message if any"},
+        },
+        "constraints": {"timeout_seconds": 90},
+        "config_schema": {},
+        "output": {
+            "synthesize": True,
+            "card": {
+                "enabled": True,
+                "mode": "immediate",
+                "title": "Browser",
+                "accent_color": "#00C8FF",
+                "background_color": "rgba(0, 200, 255, 0.06)",
+            },
+        },
+        "ambient": {"enabled": False},
+        "tips": [
+            "Use 'render' when the read skill returned empty or garbled content from a JS-heavy site",
+            "Use 'screenshot' + ocr=true for visual content that resists text extraction",
+            "Use 'interact' for multi-step workflows: login, form fill, apply filters, navigate pages",
+            "Use 'monitor' with snapshot_key in persistent tasks to track page changes over time",
+            "Always try the read skill first — it is much faster for static pages",
+            "Use wait_for='selector:.price' to wait for a specific element before extracting",
+            "For shopping: use interact with fill + select steps to apply filters, then extract results",
+            "For flight search: interact to set dates/routes, wait for results, extract and compare",
+            "Use save_session=true after login to persist cookies for future visits",
+        ],
+    }
 
 
 def get_metadata(name: str) -> dict | None:
