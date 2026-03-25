@@ -197,6 +197,39 @@ CREATE INDEX IF NOT EXISTS idx_procedural_action_name ON procedural_memory(actio
 CREATE INDEX IF NOT EXISTS idx_procedural_weight ON procedural_memory(weight DESC);
 
 -- ────────────────────────────────────────────────────────────────
+-- KNOWLEDGE — unified knowledge store (traits, procedures, concepts, relationships)
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS knowledge (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,
+    entity      TEXT NOT NULL DEFAULT 'user',
+    key         TEXT NOT NULL,
+    value       TEXT,
+    data        TEXT,
+    decay_class TEXT NOT NULL DEFAULT 'standard',
+    confidence  REAL NOT NULL DEFAULT 0.5,
+    reliability TEXT NOT NULL DEFAULT 'reliable',
+    source      TEXT,
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_accessed_at TEXT,
+    deleted_at  TEXT,
+    UNIQUE(entity, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_kind ON knowledge(kind);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entity ON knowledge(entity);
+CREATE INDEX IF NOT EXISTS idx_knowledge_key ON knowledge(key);
+CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge(confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_decay_class ON knowledge(decay_class);
+CREATE INDEX IF NOT EXISTS idx_knowledge_deleted ON knowledge(deleted_at) WHERE deleted_at IS NULL;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    key, value, kind, entity, content='knowledge', content_rowid='rowid'
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- TOPICS — semantic attractors
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS topics (

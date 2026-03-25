@@ -96,6 +96,7 @@ class SchemaService:
             ("persistent_tasks_vec", self.embedding_dimensions),
             ("lists_vec", self.embedding_dimensions),
             ("goals_vec", self.embedding_dimensions),
+            ("knowledge_vec", self.embedding_dimensions),
         ]
 
         for table_name, dims in vec_tables:
