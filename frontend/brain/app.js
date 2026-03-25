@@ -607,7 +607,7 @@ async function loadAssignments() {
     }
 }
 
-const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification' };
+const CAP_LABELS = { reasoning: 'Reasoning', structured: 'Structured Output', creativity: 'Creativity', classification: 'Classification', vision: 'Vision' };
 const CAP_LEVELS = { high: 'cap--high', medium: 'cap--medium', low: 'cap--low', none: 'cap--none' };
 
 // ── Group derivation ──
@@ -664,6 +664,7 @@ function renderCognition() {
         let groupProviderId = null;
         let groupModel = null;
         let isUniform = true;
+        let assignedCount = groupJobs.filter(j => assignments[j.id] && assignments[j.id].provider_id).length;
 
         const firstAssign = assignments[groupJobs[0].id];
         if (firstAssign && firstAssign.provider_id) {
@@ -693,9 +694,16 @@ function renderCognition() {
             `<option value="${escapeHtml(m)}" ${m === groupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
         ).join('');
 
-        const statusText = isUniform
-            ? `<span class="group-status group-status--set">All ${groupJobs.length} jobs assigned</span>`
-            : `<span class="group-status group-status--mixed">Mixed assignments</span>`;
+        let statusText;
+        if (isUniform) {
+            statusText = `<span class="group-status group-status--set">All ${groupJobs.length} jobs assigned</span>`;
+        } else if (assignedCount === 0) {
+            statusText = `<span class="group-status group-status--unset">Not assigned</span>`;
+        } else if (assignedCount === groupJobs.length) {
+            statusText = `<span class="group-status group-status--mixed">${assignedCount} jobs assigned (mixed)</span>`;
+        } else {
+            statusText = `<span class="group-status group-status--mixed">${assignedCount} of ${groupJobs.length} assigned</span>`;
+        }
 
         // Advanced individual job overrides
         const jobRowsHtml = groupJobs.map(job => {
@@ -708,6 +716,7 @@ function renderCognition() {
             ).join('');
 
             const jobModels = jobProviderId ? getProviderModels(jobProviderId) : [];
+            const jobModelDefault = jobProviderId ? '-- default --' : '-- model --';
             const jobModelOpts = jobModels.map(m =>
                 `<option value="${escapeHtml(m)}" ${m === jobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
             ).join('');
@@ -728,7 +737,7 @@ function renderCognition() {
                             ${jobProviderOpts}
                         </select>
                         <select class="provider-select provider-select--sm job-model-select" data-job="${escapeHtml(job.id)}" ${jobModels.length === 0 ? 'disabled' : ''}>
-                            <option value="">-- model --</option>
+                            <option value="">${jobModelDefault}</option>
                             ${jobModelOpts}
                         </select>
                         <button class="btn-stats" data-stats-job="${escapeHtml(job.id)}" data-stats-name="${escapeHtml(job.name)}" title="Token usage stats">\u229E</button>
@@ -751,7 +760,7 @@ function renderCognition() {
                 <div class="group-card__assign">
                     <div class="group-card__selects">
                         <select class="provider-select group-provider-select" data-group="${groupName}">
-                            <option value="">-- Select provider --</option>
+                            <option value="">${!isUniform && assignedCount > 0 ? `-- Assign all ${groupJobs.length} jobs --` : '-- Select provider --'}</option>
                             ${providerOptions}
                         </select>
                         <select class="provider-select group-model-select" data-group="${groupName}" ${selectedProviderModels.length === 0 ? 'disabled' : ''}>
@@ -762,8 +771,8 @@ function renderCognition() {
                     ${statusText}
                 </div>
                 <div class="group-card__advanced">
-                    <button class="group-advanced-toggle" data-group="${groupName}">Advanced \u25B8</button>
-                    <div class="group-advanced-body" data-group="${groupName}" style="display:none">
+                    <button class="group-advanced-toggle" data-group="${groupName}">${!isUniform && assignedCount > 0 ? 'Per-job assignments \u25BE' : 'Advanced \u25B8'}</button>
+                    <div class="group-advanced-body" data-group="${groupName}" style="${!isUniform && assignedCount > 0 ? 'display:block' : 'display:none'}">
                         ${jobRowsHtml}
                     </div>
                 </div>
@@ -815,8 +824,8 @@ function wireGroupCardEvents(el) {
         btn.addEventListener('click', () => {
             const body = el.querySelector(`.group-advanced-body[data-group="${btn.dataset.group}"]`);
             const isOpen = body.style.display !== 'none';
-            body.style.display = isOpen ? 'none' : '';
-            btn.textContent = isOpen ? 'Advanced \u25B8' : 'Advanced \u25BE';
+            body.style.display = isOpen ? 'none' : 'block';
+            btn.textContent = isOpen ? 'Advanced \u25B8' : 'Per-job assignments \u25BE';
         });
     });
 
@@ -829,7 +838,7 @@ function wireGroupCardEvents(el) {
             const modelSel = row.querySelector('.job-model-select');
 
             const models = providerId ? getProviderModels(providerId) : [];
-            modelSel.innerHTML = '<option value="">-- model --</option>' +
+            modelSel.innerHTML = `<option value="">${providerId ? '-- default --' : '-- model --'}</option>` +
                 models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
             modelSel.disabled = models.length === 0;
 

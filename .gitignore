@@ -10,9 +10,6 @@ backend/configs/generated/
 # Search tool embedding cache (auto-generated on first boot)
 backend/tools/search/data/providers_cache.sqlite
 
-# Dev-only providers (never shipped)
-backend/services/dev_providers/
-
 # Python
 __pycache__/
 *.pyc

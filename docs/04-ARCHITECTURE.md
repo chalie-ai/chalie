@@ -154,7 +154,6 @@ frontend/
 #### Documents & File Management
 - **`document_service.py`** — Document CRUD, chunk storage, hybrid search (semantic via sqlite-vec + FTS5 + keyword boost via Reciprocal Rank Fusion), soft delete with 30-day purge window, dual-layer duplicate detection (SHA-256 hash + cosine similarity on summary embeddings)
 - **`document_processing_service.py`** — Full extraction pipeline: text extraction (pdfplumber, python-docx, python-pptx, trafilatura), regex-based metadata extraction (dates, companies, monetary values, reference numbers, document type heuristic), adaptive chunk sizing by document type, SimHash fingerprinting, language detection (langdetect)
-- **`camera_ocr_service.py`** — Vision LLM-based text extraction from camera-captured images; multi-provider (Anthropic, OpenAI, Gemini, Ollama); 10MB image limit
 - **`document_card_service.py`** — Inline HTML card emission for document search results (source attribution with type badges, confidence indicators), upload confirmations, document previews, and lifecycle events; cyan `#00F0FF` accent
 
 ### Innate Skills (`backend/services/innate_skills/` and `backend/skills/`)

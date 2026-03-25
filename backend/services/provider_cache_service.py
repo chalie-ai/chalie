@@ -125,7 +125,7 @@ class ProviderCacheService:
         Get the assigned provider name and model override for a job.
 
         Args:
-            job_name: Job identifier (e.g., 'frontal-cortex', 'document-ocr')
+            job_name: Job identifier (e.g., 'frontal-cortex', 'chat-vision')
 
         Returns:
             Tuple of (provider_name, model_override). Both None if unassigned.
@@ -157,7 +157,7 @@ class ProviderCacheService:
         model string.
 
         Args:
-            job_name:  Job identifier (e.g. 'document-ocr', 'frontal-cortex')
+            job_name:  Job identifier (e.g. 'frontal-cortex', 'chat-vision')
             platforms: Optional set of platform names to restrict the fallback
                        (e.g. {'gemini', 'anthropic', 'openai'}). Has no effect
                        on the job-assigned provider — that is always returned as-is.

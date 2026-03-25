@@ -103,12 +103,6 @@
       "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
     },
     {
-      "id": "document-ocr",
-      "name": "Document OCR",
-      "desc": "Extracts text from image-only PDFs and scanned documents via vision LLM.",
-      "caps": { "reasoning": "none", "structured": "medium", "creativity": "none", "classification": "low", "vision": "high" }
-    },
-    {
       "id": "compaction",
       "name": "Compaction",
       "desc": "Compresses older conversation turns into dense summaries preserving facts, decisions, and preferences.",

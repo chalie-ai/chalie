@@ -1500,6 +1500,7 @@ body::before {
 }
 .group-status--set { color: var(--success); }
 .group-status--mixed { color: var(--warning); }
+.group-status--unset { color: var(--text-muted, #666); }
 
 /* Advanced toggle + body */
 .group-card__advanced {

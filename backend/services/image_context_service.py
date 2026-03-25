@@ -10,7 +10,7 @@ Safety invariants applied before any LLM call:
   - Dimensions normalized to max 2048px (reduces API cost and latency)
   - SHA-256 hash deduplication (same image → same image_id in same session)
 
-Provider job: 'chat-vision' (falls back to 'document-ocr' if unassigned).
+Provider job: 'chat-vision'.
 """
 
 import base64
@@ -122,7 +122,7 @@ def has_vision_provider() -> bool:
 
     Returns:
         ``True`` if at least one Gemini, Anthropic, or OpenAI provider is
-        assigned to the ``chat-vision`` or ``document-ocr`` job.
+        assigned to the ``chat-vision`` job.
     """
     return _get_vision_provider() is not None
 
@@ -205,17 +205,14 @@ def _get_vision_provider() -> Optional[dict]:
 
     Resolution order:
       1. Job-specific assignment for 'chat-vision'
-      2. Job-specific assignment for 'document-ocr' (fallback — no extra config needed)
-      3. First available vision-capable provider
+      2. First available vision-capable provider
     """
     try:
         from services.provider_cache_service import ProviderCacheService
-        # Try chat-vision job first
         config = ProviderCacheService.resolve_for_job('chat-vision', platforms=_VISION_PLATFORMS)
         if config:
             return config
-        # Fall back to document-ocr job (same vision providers, different default model)
-        return ProviderCacheService.resolve_for_job('document-ocr', platforms=_VISION_PLATFORMS)
+        return None
     except Exception as e:
         logger.debug(f'[IMAGE CTX] Provider resolution failed: {e}')
         return None
