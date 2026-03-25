@@ -487,16 +487,12 @@ class SelfModelService:
         # Provider features
         provider_features = self._get_provider_features()
 
-        # Frequent capability gaps (Phase 3)
-        frequent_gaps = self.get_frequent_gaps(min_occurrences=2, limit=3)
-
         return {
             "tool_count": len(tool_names),
             "tool_names": sorted(tool_names),
             "innate_skills": innate_skills,
             "capability_categories": capability_categories,
             "provider_features": provider_features,
-            "frequent_gaps": frequent_gaps,
         }
 
     def _get_provider_features(self) -> dict:
