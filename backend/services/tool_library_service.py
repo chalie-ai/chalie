@@ -512,6 +512,16 @@ if _BROWSER_AVAILABLE:
                     "{action: click|fill|select|check|wait|scroll|press|hover|type, "
                     "selector: 'css', value: 'text', timeout: ms}"
                 ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "click|fill|select|check|wait|scroll|press|hover|type"},
+                        "selector": {"type": "string", "description": "CSS selector for target element"},
+                        "value": {"type": "string", "description": "Value for fill/select/type/press actions"},
+                        "timeout": {"type": "integer", "description": "Step timeout in ms (default 5000)"},
+                    },
+                    "required": ["action"],
+                },
             },
             "snapshot_key": {
                 "type": "string",
