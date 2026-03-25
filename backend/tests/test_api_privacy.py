@@ -59,8 +59,7 @@ class TestPrivacyAPI:
             data = response.get_json()
             # Table counts should be present (new expanded list)
             assert "episodes" in data
-            assert "semantic_concepts" in data
-            assert "user_traits" in data
+            assert "knowledge" in data
             assert "threads" in data
             assert "autobiography" in data
             assert "persistent_tasks" in data

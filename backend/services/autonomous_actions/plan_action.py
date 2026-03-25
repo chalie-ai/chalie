@@ -446,11 +446,11 @@ class PlanAction(AutonomousAction):
         """Record outcome in procedural memory (non-fatal)."""
         try:
             from services.database_service import get_shared_db_service
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
 
             db = get_shared_db_service()
-            proc = ProceduralMemoryService(db)
-            proc.record_action_outcome(
+            ks = KnowledgeService(db)
+            ks.record_procedure_outcome(
                 action_name='PLAN',
                 success=success,
                 reward=reward,

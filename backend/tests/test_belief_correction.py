@@ -208,65 +208,66 @@ class TestBeliefCorrectionHook:
         """'I don't like sushi' when favourite_food=sushi deletes the trait."""
         from workers.digest_worker import _run_belief_correction_hook
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.get_all_traits.return_value = [
-            {'trait_key': 'favourite_food', 'trait_value': 'sushi', 'confidence': 0.8, 'category': 'preference'},
+        mock_ks = MagicMock()
+        mock_ks.get_by_kind.return_value = [
+            {'key': 'favourite_food', 'value': 'sushi', 'confidence': 0.8, 'data': '{"category": "preference"}'},
         ]
 
         with patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
-             patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+             patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             _run_belief_correction_hook("I don't like sushi")
 
-        mock_trait_svc.delete_trait.assert_called_once_with('favourite_food')
+        mock_ks.forget.assert_called_once_with('user', 'favourite_food')
 
     def test_replacement_corrects_trait(self):
         """'Actually my name is Dylan' when name=Dan corrects the trait."""
         from workers.digest_worker import _run_belief_correction_hook
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.get_all_traits.return_value = [
-            {'trait_key': 'name', 'trait_value': 'dan', 'confidence': 0.9, 'category': 'core'},
+        mock_ks = MagicMock()
+        mock_ks.get_by_kind.return_value = [
+            {'key': 'name', 'value': 'dan', 'confidence': 0.9, 'data': '{"category": "core"}'},
         ]
 
         with patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
-             patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+             patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             _run_belief_correction_hook("Actually my name is Dylan")
 
-        mock_trait_svc.correct_trait.assert_called_once()
-        call_args = mock_trait_svc.correct_trait.call_args
-        assert call_args[0][0] == 'name'
-        assert 'dylan' in call_args[0][1].lower()
+        mock_ks.update.assert_called_once()
+        call_args = mock_ks.update.call_args
+        assert call_args[0][0] == 'user'
+        assert call_args[0][1] == 'name'
+        assert 'dylan' in call_args[1]['value'].lower()
 
     def test_low_confidence_trait_skipped(self):
         """Traits below 0.4 confidence are not modified (guardrail 2)."""
         from workers.digest_worker import _run_belief_correction_hook
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.get_all_traits.return_value = [
-            {'trait_key': 'favourite_food', 'trait_value': 'sushi', 'confidence': 0.3, 'category': 'preference'},
+        mock_ks = MagicMock()
+        mock_ks.get_by_kind.return_value = [
+            {'key': 'favourite_food', 'value': 'sushi', 'confidence': 0.3, 'data': '{"category": "preference"}'},
         ]
 
         with patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
-             patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+             patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             _run_belief_correction_hook("I don't like sushi")
 
-        mock_trait_svc.delete_trait.assert_not_called()
+        mock_ks.forget.assert_not_called()
 
     def test_no_matching_trait_value_no_mutation(self):
         """Message matching pattern but trait value not in message — no mutation."""
         from workers.digest_worker import _run_belief_correction_hook
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.get_all_traits.return_value = [
-            {'trait_key': 'favourite_food', 'trait_value': 'pizza', 'confidence': 0.8, 'category': 'preference'},
+        mock_ks = MagicMock()
+        mock_ks.get_by_kind.return_value = [
+            {'key': 'favourite_food', 'value': 'pizza', 'confidence': 0.8, 'data': '{"category": "preference"}'},
         ]
 
         with patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
-             patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+             patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             _run_belief_correction_hook("I don't like weather")
 
-        mock_trait_svc.delete_trait.assert_not_called()
-        mock_trait_svc.correct_trait.assert_not_called()
+        mock_ks.forget.assert_not_called()
+        mock_ks.update.assert_not_called()
 
     def test_hook_error_does_not_raise(self):
         """Hook failures are swallowed (non-fatal)."""
@@ -279,16 +280,16 @@ class TestBeliefCorrectionHook:
         """Replacement value is capped at 3 words to avoid trailing clause capture."""
         from workers.digest_worker import _run_belief_correction_hook
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.get_all_traits.return_value = [
-            {'trait_key': 'name', 'trait_value': 'dan', 'confidence': 0.9, 'category': 'core'},
+        mock_ks = MagicMock()
+        mock_ks.get_by_kind.return_value = [
+            {'key': 'name', 'value': 'dan', 'confidence': 0.9, 'data': '{"category": "core"}'},
         ]
 
         with patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
-             patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+             patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             _run_belief_correction_hook("Actually my name is Dylan by the way")
 
-        call_args = mock_trait_svc.correct_trait.call_args
-        new_value = call_args[0][1]
+        call_args = mock_ks.update.call_args
+        new_value = call_args[1]['value']
         # Should be at most 3 words
         assert len(new_value.split()) <= 3

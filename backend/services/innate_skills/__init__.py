@@ -15,8 +15,7 @@ Do NOT define local skill sets elsewhere. Import from the registry.
 """
 
 import logging
-from services.innate_skills.recall_skill import handle_recall
-from services.innate_skills.memorize_skill import handle_memorize
+from services.innate_skills.memory_skill import handle_memory
 from services.innate_skills.introspect_skill import handle_introspect
 from services.innate_skills.associate_skill import handle_associate
 from services.innate_skills.scheduler_skill import handle_scheduler
@@ -29,11 +28,17 @@ from services.innate_skills.read_skill import handle_read
 from services.innate_skills.reflect_skill import handle_reflect
 from services.innate_skills.find_tools_skill import handle_find_tools
 from services.innate_skills.goals_skill import handle_goals
+from services.innate_skills.rich_render_skill import handle_rich_render
+
+# Backward-compat: import old handlers so existing code referencing them doesn't break
+from services.innate_skills.recall_skill import handle_recall
+from services.innate_skills.memorize_skill import handle_memorize
 
 
 _SKILL_HANDLERS = {
-    'recall': handle_recall,
-    'memorize': handle_memorize,
+    'memory': handle_memory,
+    'recall': handle_memory,       # backward-compat alias
+    'memorize': handle_memory,     # backward-compat alias
     'introspect': handle_introspect,
     'associate': handle_associate,
     'schedule': handle_scheduler,
@@ -46,6 +51,7 @@ _SKILL_HANDLERS = {
     'reflect': handle_reflect,
     'find_tools': handle_find_tools,
     'goals': handle_goals,
+    'rich_render': handle_rich_render,
 }
 
 
@@ -62,8 +68,7 @@ def register_innate_skills(dispatcher) -> None:
         dispatcher: ActDispatcherService instance
     """
     # Register innate skills
-    dispatcher.handlers["recall"] = lambda topic, action: handle_recall(topic, action)
-    dispatcher.handlers["memorize"] = lambda topic, action: handle_memorize(topic, action)
+    dispatcher.handlers["memory"] = lambda topic, action: handle_memory(topic, action)
     dispatcher.handlers["introspect"] = lambda topic, action: handle_introspect(topic, action)
     dispatcher.handlers["associate"] = lambda topic, action: handle_associate(topic, action)
     dispatcher.handlers["schedule"] = lambda topic, action: handle_scheduler(topic, action)
@@ -76,13 +81,16 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["reflect"] = lambda topic, action: handle_reflect(topic, action)
     dispatcher.handlers["find_tools"] = lambda topic, action: handle_find_tools(topic, action)
     dispatcher.handlers["goals"] = lambda topic, action: handle_goals(topic, action)
+    dispatcher.handlers["rich_render"] = lambda topic, action: handle_rich_render(topic, action)
 
-    # Backward-compatibility aliases (old name -> new handler)
-    dispatcher.handlers["memory_query"] = lambda topic, action: handle_recall(topic, action)
-    dispatcher.handlers["memory_write"] = lambda topic, action: handle_memorize(topic, action)
+    # Backward-compatibility aliases (old name -> unified memory handler)
+    dispatcher.handlers["recall"] = lambda topic, action: handle_memory(topic, action)
+    dispatcher.handlers["memorize"] = lambda topic, action: handle_memory(topic, action)
+    dispatcher.handlers["memory_query"] = lambda topic, action: handle_memory(topic, action)
+    dispatcher.handlers["memory_write"] = lambda topic, action: handle_memory(topic, action)
     dispatcher.handlers["world_state_read"] = lambda topic, action: handle_introspect(topic, action)
-    dispatcher.handlers["internal_reasoning"] = lambda topic, action: handle_recall(topic, action)
-    dispatcher.handlers["semantic_query"] = lambda topic, action: handle_recall(topic, action)
+    dispatcher.handlers["internal_reasoning"] = lambda topic, action: handle_memory(topic, action)
+    dispatcher.handlers["semantic_query"] = lambda topic, action: handle_memory(topic, action)
 
     # Register on_demand tools from the tool registry (dynamic plugins)
     try:

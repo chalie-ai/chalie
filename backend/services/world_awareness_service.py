@@ -79,12 +79,15 @@ class WorldAwarenessService:
         try:
             conn = self._db.get_connection()
             cursor = conn.execute(
-                """SELECT trait_key, trait_value, confidence, reinforcement_count
-                   FROM user_traits
-                   WHERE confidence >= ?
-                     AND reinforcement_count >= ?
+                """SELECT key, value, confidence, evidence_count
+                   FROM knowledge
+                   WHERE kind IN ('trait', 'preference')
+                     AND entity = 'user'
+                     AND deleted_at IS NULL
+                     AND confidence >= ?
+                     AND evidence_count >= ?
                      AND reliability = 'reliable'
-                     AND category IN ('preference', 'core')
+                     AND json_extract(data, '$.category') IN ('preference', 'core')
                    ORDER BY confidence DESC""",
                 (TRAIT_MIN_CONFIDENCE, TRAIT_MIN_REINFORCEMENTS),
             )

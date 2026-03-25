@@ -164,18 +164,18 @@ def _get_relevant_episodes(query: str, topic: str, limit: int) -> List[Dict]:
 
 
 def _get_relevant_concepts(query: str, limit: int) -> List[Dict]:
-    """Retrieve relevant concepts via SemanticService."""
+    """Retrieve relevant concepts via KnowledgeService."""
     try:
+        from services.knowledge_service import KnowledgeService
         from services.database_service import get_shared_db_service
-        from services.semantic_service import SemanticService
 
         db = get_shared_db_service()
-        retrieval = SemanticService(db)
-        concepts = retrieval.retrieve_concepts(query=query, limit=limit)
+        ks = KnowledgeService(db)
+        concepts = ks.recall(query, kinds=['concept'], limit=limit)
         return [
             {
-                'concept_name': c.get('concept_name', ''),
-                'description': (c.get('description', '') or '')[:200],
+                'concept_name': c.get('key', ''),
+                'description': (c.get('value', '') or '')[:200],
                 'confidence': c.get('confidence', 0),
             }
             for c in concepts

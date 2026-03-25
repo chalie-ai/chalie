@@ -216,7 +216,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
         def _extract_traits():
             try:
                 import json
-                from services.user_trait_service import UserTraitService
+                from services.knowledge_service import KnowledgeService
                 from services.database_service import get_shared_db_service
                 from services.provider_cache_service import ProviderCacheService
 
@@ -270,7 +270,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 }
 
                 db = get_shared_db_service()
-                trait_service = UserTraitService(db)
+                ks = KnowledgeService(db)
 
                 # Stop words to strip from trait values (LLMs sometimes
                 # include pronouns/conjunctions like "alex and i")
@@ -289,6 +289,8 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                         words.pop()
                     return ' '.join(words) if words else v
 
+                _DECAY_MAP = {'core': 'permanent', 'behavioral': 'slow'}
+
                 for trait in traits:
                     key = trait.get('key', '').lower().strip()
                     value = _clean_value(trait.get('value', '').strip())
@@ -300,11 +302,11 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                     confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
                     category = 'core' if key in CORE_KEYS else 'preference'
 
-                    trait_service.store_trait(
-                        trait_key=key,
-                        trait_value=value,
-                        confidence=confidence,
-                        category=category,
+                    ks.store(
+                        kind='trait', entity='user', key=key, value=value,
+                        data={'category': category},
+                        decay_class=_DECAY_MAP.get(category, 'standard'),
+                        confidence=confidence, source='llm_extraction',
                     )
 
             except Exception as e:
@@ -512,6 +514,9 @@ def unified_generate(topic, text, classification, thread_conv_service,
 
     # Build system prompt and native tool schemas for the first call
     all_skills = list(ALL_SKILL_NAMES)
+    # Voice mode: exclude visual-only skills (rich_render outputs blocks unusable via TTS)
+    if (metadata or {}).get('source') == 'voice':
+        all_skills = [s for s in all_skills if s != 'rich_render']
     from services.tool_schema_service import get_skill_schemas
     native_tools = get_skill_schemas(all_skills)
 
@@ -1389,12 +1394,11 @@ def _run_iip_hook(text: str, database_service) -> None:
             'name', matched_name, confidence=0.95, provisional=False
         )
 
-        from services.user_trait_service import UserTraitService
-        UserTraitService(database_service).store_trait(
-            trait_key='name',
-            trait_value=matched_name,
-            confidence=0.95,
-            category='core',
+        from services.knowledge_service import KnowledgeService
+        KnowledgeService(database_service).store(
+            kind='trait', entity='user', key='name', value=matched_name,
+            data={'category': 'core'},
+            decay_class='permanent', confidence=0.95, source='iip_hook',
         )
         logging.info(f"[IIP] Promoted name='{matched_name}' → MemoryStore + SQLite")
 
@@ -1440,17 +1444,17 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
         return
 
     try:
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
         from services.database_service import get_shared_db_service
-        trait_service = UserTraitService(get_shared_db_service())
+        ks = KnowledgeService(get_shared_db_service())
 
-        traits = trait_service.get_all_traits()
+        traits = ks.get_by_kind('trait', entity='user', limit=100)
         if not traits:
             return
 
         for trait in traits:
-            key = trait.get('trait_key', '')
-            value = trait.get('trait_value', '')
+            key = trait.get('key', '')
+            value = trait.get('value', '')
             confidence = trait.get('confidence', 0)
 
             # GUARDRAIL 2: Skip low-confidence traits — don't churn noisy data
@@ -1470,7 +1474,7 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
                     text_lower
                 )
                 if negation_near_value:
-                    trait_service.delete_trait(key)
+                    ks.forget('user', key)
                     logging.info(f"[BELIEF CORRECTION] Deleted trait '{key}={value}' — user negated it")
                     continue
 
@@ -1485,7 +1489,7 @@ def _run_belief_correction_hook(text: str, thread_id: str = None):
                 # Cap at 3 words to avoid trailing clause capture
                 new_value = " ".join(raw_value.split()[:3])
                 if new_value and new_value.lower() != value.lower():
-                    trait_service.correct_trait(key, new_value, category=trait.get('category'))
+                    ks.update('user', key, value=new_value)
                     logging.info(f"[BELIEF CORRECTION] Corrected trait '{key}': '{value}' → '{new_value}'")
 
     except Exception as e:
@@ -1607,7 +1611,7 @@ def _detect_fork_response(text: str, thread_id: str):
     try:
         from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
 
         store = MemoryClientService.create_connection()
         fork_type = store.get(f"adaptive_fork_pending:{thread_id}")
@@ -1619,12 +1623,12 @@ def _detect_fork_response(text: str, thread_id: str):
         for pref_key, patterns in _FORK_RESPONSE_PATTERNS.items():
             if any(_re.search(p, text_lower) for p in patterns):
                 db_service = get_shared_db_service()
-                trait_service = UserTraitService(db_service)
-                trait_service.store_trait(
-                    trait_key=pref_key,
-                    trait_value='true',
-                    confidence=0.75,
-                    category='preference',
+                ks = KnowledgeService(db_service)
+                ks.store(
+                    kind='trait', entity='user', key=pref_key, value='true',
+                    data={'category': 'preference'},
+                    decay_class='standard', confidence=0.75,
+                    source='fork_response',
                 )
                 logging.info(f"[DIGEST] Fork response detected → stored micro-preference: {pref_key}")
                 # Clear the pending key

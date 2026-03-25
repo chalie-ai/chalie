@@ -623,12 +623,15 @@ class ContradictionClassifierService:
                 # Search traits
                 try:
                     cursor.execute("""
-                        SELECT t.id, t.trait_key, t.trait_value, t.confidence,
-                               t.reinforcement_count, t.reliability,
-                               t.created_at
-                        FROM user_traits_vec v
-                        JOIN user_traits t ON t.rowid = v.rowid
+                        SELECT k.id, k.key, k.value, k.confidence,
+                               k.evidence_count, k.reliability,
+                               k.created_at
+                        FROM knowledge_vec v
+                        JOIN knowledge k ON k.rowid = v.rowid
                         WHERE v.embedding MATCH ? AND k = 5
+                          AND k.kind IN ('trait', 'preference')
+                          AND k.entity = 'user'
+                          AND k.deleted_at IS NULL
                         ORDER BY v.distance
                     """, (packed,))
                     trait_rows = cursor.fetchall()
@@ -661,12 +664,13 @@ class ContradictionClassifierService:
                 # Search concepts
                 try:
                     cursor.execute("""
-                        SELECT sc.id, sc.concept_name, sc.definition, sc.confidence,
-                               sc.access_count, sc.reliability, sc.created_at
-                        FROM semantic_concepts_vec v
-                        JOIN semantic_concepts sc ON sc.rowid = v.rowid
+                        SELECT k.id, k.key, k.value, k.confidence,
+                               k.access_count, k.reliability, k.created_at
+                        FROM knowledge_vec v
+                        JOIN knowledge k ON k.rowid = v.rowid
                         WHERE v.embedding MATCH ? AND k = 5
-                          AND sc.deleted_at IS NULL
+                          AND k.kind = 'concept'
+                          AND k.deleted_at IS NULL
                         ORDER BY v.distance
                     """, (packed,))
                     concept_rows = cursor.fetchall()
@@ -714,13 +718,16 @@ class ContradictionClassifierService:
 
                 # Sample top traits by confidence
                 cursor.execute("""
-                    SELECT t.id, t.trait_key, t.trait_value, t.confidence,
-                           t.reinforcement_count, t.reliability,
-                           v.embedding, t.created_at
-                    FROM user_traits t
-                    LEFT JOIN user_traits_vec v ON v.rowid = t.rowid
-                    WHERE t.confidence > 0.3
-                    ORDER BY t.confidence DESC, t.reinforcement_count DESC
+                    SELECT k.id, k.key, k.value, k.confidence,
+                           k.evidence_count, k.reliability,
+                           v.embedding, k.created_at
+                    FROM knowledge k
+                    LEFT JOIN knowledge_vec v ON v.rowid = k.rowid
+                    WHERE k.kind IN ('trait', 'preference')
+                      AND k.entity = 'user'
+                      AND k.deleted_at IS NULL
+                      AND k.confidence > 0.3
+                    ORDER BY k.confidence DESC, k.evidence_count DESC
                     LIMIT ?
                 """, (n_traits,))
                 for row in cursor.fetchall():
@@ -741,13 +748,16 @@ class ContradictionClassifierService:
 
                 # Sample top concepts by strength
                 cursor.execute("""
-                    SELECT sc.id, sc.concept_name, sc.definition, sc.confidence,
-                           sc.access_count, sc.reliability,
-                           v.embedding, sc.created_at
-                    FROM semantic_concepts sc
-                    LEFT JOIN semantic_concepts_vec v ON v.rowid = sc.rowid
-                    WHERE sc.deleted_at IS NULL AND sc.confidence > 0.3
-                    ORDER BY sc.access_count DESC, sc.strength DESC
+                    SELECT k.id, k.key, k.value, k.confidence,
+                           k.access_count, k.reliability,
+                           v.embedding, k.created_at
+                    FROM knowledge k
+                    LEFT JOIN knowledge_vec v ON v.rowid = k.rowid
+                    WHERE k.kind = 'concept'
+                      AND k.deleted_at IS NULL
+                      AND k.confidence > 0.3
+                    ORDER BY k.access_count DESC,
+                             CAST(json_extract(k.data, '$.strength') AS REAL) DESC
                     LIMIT ?
                 """, (n_concepts,))
                 for row in cursor.fetchall():

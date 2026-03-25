@@ -46,7 +46,7 @@ class TestMemoryAPI:
         """GET /memory/search with q returns results array."""
         with patch('services.database_service.get_shared_db_service') as mock_db_fn, \
              patch('services.episodic_service.EpisodicService') as mock_er_cls, \
-             patch('services.semantic_service.SemanticService') as mock_sr_cls, \
+             patch('services.knowledge_service.KnowledgeService') as mock_ks_cls, \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
             mock_db_fn.return_value = MagicMock()
 
@@ -56,11 +56,11 @@ class TestMemoryAPI:
             ]
             mock_er_cls.return_value = mock_er
 
-            mock_sr = MagicMock()
-            mock_sr.retrieve_concepts.return_value = [
-                {"name": "coffee", "definition": "a beverage", "score": 0.8, "strength": 5},
+            mock_ks = MagicMock()
+            mock_ks.recall.return_value = [
+                {"key": "coffee", "value": "a beverage", "confidence": 0.8, "kind": "concept", "rrf_score": 0.8},
             ]
-            mock_sr_cls.return_value = mock_sr
+            mock_ks_cls.return_value = mock_ks
 
             response = client.get('/memory/search?q=coffee')
 

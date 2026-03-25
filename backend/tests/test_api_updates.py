@@ -79,8 +79,8 @@ def unauthed_client():
 class TestUpdateBelief:
     def test_cookie_auth_stores_trait(self, cookie_client):
         svc_mock = MagicMock()
-        svc_mock.store_trait.return_value = True
-        with patch("services.user_trait_service.UserTraitService", return_value=svc_mock), \
+        svc_mock.store.return_value = True
+        with patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
              patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
             resp = cookie_client.post(
                 "/api/updates/belief",
@@ -119,8 +119,8 @@ class TestUpdateBelief:
     def test_invalid_category_defaults_to_preference(self, cookie_client):
         """An unrecognised category should be silently coerced to preference."""
         svc_mock = MagicMock()
-        svc_mock.store_trait.return_value = True
-        with patch("services.user_trait_service.UserTraitService", return_value=svc_mock), \
+        svc_mock.store.return_value = True
+        with patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
              patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
             resp = cookie_client.post(
                 "/api/updates/belief",
@@ -128,14 +128,15 @@ class TestUpdateBelief:
                 content_type="application/json",
             )
         assert resp.status_code == 200
-        call_kwargs = svc_mock.store_trait.call_args
-        assert call_kwargs.kwargs.get("category") == "preference"
+        call_kwargs = svc_mock.store.call_args
+        # Category is now passed inside data dict, not as top-level kwarg
+        assert call_kwargs.kwargs.get("data") == {"category": "preference"}
 
     def test_trait_validation_failure_returns_422(self, cookie_client):
-        """store_trait returning False (validation rejection) yields 422."""
+        """KnowledgeService.store() returning False (validation rejection) yields 422."""
         svc_mock = MagicMock()
-        svc_mock.store_trait.return_value = False
-        with patch("services.user_trait_service.UserTraitService", return_value=svc_mock), \
+        svc_mock.store.return_value = False
+        with patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
              patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
             resp = cookie_client.post(
                 "/api/updates/belief",
@@ -173,9 +174,9 @@ class TestUpdateBelief:
             permissions={"update": ["belief"]}
         )
         svc_mock = MagicMock()
-        svc_mock.store_trait.return_value = True
+        svc_mock.store.return_value = True
         with patch_session, patch_auth, \
-             patch("services.user_trait_service.UserTraitService", return_value=svc_mock), \
+             patch("services.knowledge_service.KnowledgeService", return_value=svc_mock), \
              patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
             with app.test_client() as client:
                 resp = client.post(

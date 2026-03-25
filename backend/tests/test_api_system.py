@@ -207,12 +207,17 @@ class TestSystemAPI:
             'wm:t1': 3, 'wm:t2': 5, 'prompt-queue': 0, 'output-queue': 0,
         }.get(key, 0)
 
+        def _fetch_all(sql, *a, **kw):
+            if 'episodes' in sql:
+                return [{'cnt': 42, 'avg_act': 0.7123}]
+            elif "kind = 'concept'" in sql:
+                return [{'cnt': 15}]
+            elif "kind IN ('trait', 'preference')" in sql:
+                return [{'cnt': 8, 'avg_conf': 0.6234}]
+            return []
+
         mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = lambda sql, *a, **kw: {
-            'episodes': [{'cnt': 42, 'avg_act': 0.7123}],
-            'semantic_concepts': [{'cnt': 15}],
-            'user_traits': [{'cnt': 8, 'avg_conf': 0.6234}],
-        }.get(next((t for t in ('episodes', 'semantic_concepts', 'user_traits') if t in sql), ''), [])
+        mock_db.fetch_all.side_effect = _fetch_all
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
@@ -456,8 +461,8 @@ class TestSystemAPI:
         mock_db = MagicMock()
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.user_trait_service.UserTraitService') as mock_svc_cls:
-            mock_svc_cls.return_value.delete_trait.return_value = False
+             patch('services.knowledge_service.KnowledgeService') as mock_svc_cls:
+            mock_svc_cls.return_value.forget.return_value = False
             resp = client.delete('/system/observability/traits/nonexistent')
 
         assert resp.status_code == 404
@@ -523,12 +528,17 @@ class TestSystemAPI:
         mock_store.keys.return_value = []
         mock_store.llen.return_value = 0
 
+        def _fetch_all(sql, *a, **kw):
+            if 'episodes' in sql:
+                return [{'cnt': 10, 'avg_act': 0.5}]
+            elif "kind = 'concept'" in sql:
+                return [{'cnt': 5}]
+            elif "kind IN ('trait', 'preference')" in sql:
+                return [{'cnt': 3, 'avg_conf': 0.4}]
+            return []
+
         mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = lambda sql, *a, **kw: {
-            'episodes': [{'cnt': 10, 'avg_act': 0.5}],
-            'semantic_concepts': [{'cnt': 5}],
-            'user_traits': [{'cnt': 3, 'avg_conf': 0.4}],
-        }.get(next((t for t in ('episodes', 'semantic_concepts', 'user_traits') if t in sql), ''), [])
+        mock_db.fetch_all.side_effect = _fetch_all
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):

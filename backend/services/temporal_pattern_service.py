@@ -393,10 +393,18 @@ class TemporalPatternService:
         Returns max 3 most salient lines, sanitized, total < 200 chars.
         """
         try:
-            from services.user_trait_service import UserTraitService
-            trait_service = UserTraitService(self.db)
-            all_traits = trait_service.get_all_traits()
-            traits = [t for t in all_traits if t.get('category') == 'behavioral']
+            from services.knowledge_service import KnowledgeService
+            ks = KnowledgeService(self.db)
+            all_traits = ks.get_by_kind('trait', entity='user', limit=50)
+            import json as _json
+            traits = []
+            for t in all_traits:
+                data = t.get('data', {})
+                if isinstance(data, str):
+                    try: data = _json.loads(data)
+                    except Exception: data = {}
+                if data.get('category') == 'behavioral':
+                    traits.append(t)
 
             if not traits:
                 return ''
@@ -409,8 +417,8 @@ class TemporalPatternService:
             lines = []
             for key in rhythm_keys:
                 for t in traits:
-                    if t.get('trait_key') == key and t.get('trait_value'):
-                        lines.append(t['trait_value'])
+                    if t.get('key') == key and t.get('value'):
+                        lines.append(t['value'])
                         break
                 if len(lines) >= 3:
                     break
@@ -420,8 +428,8 @@ class TemporalPatternService:
                 sorted_traits = sorted(traits, key=lambda t: t.get('confidence', 0),
                                        reverse=True)
                 for t in sorted_traits[:3]:
-                    if t.get('trait_value'):
-                        lines.append(t['trait_value'])
+                    if t.get('value'):
+                        lines.append(t['value'])
 
             if not lines:
                 return ''
@@ -963,16 +971,16 @@ class TemporalPatternService:
             return
 
         try:
-            from services.user_trait_service import UserTraitService
-            trait_service = UserTraitService(self.db)
+            from services.knowledge_service import KnowledgeService
+            ks = KnowledgeService(self.db)
 
             stored = 0
             for p in patterns:
-                result = trait_service.store_trait(
-                    trait_key=p['key'],
-                    trait_value=p['value'],
-                    confidence=p['confidence'],
-                    category='behavioral',
+                result = ks.store(
+                    kind='trait', entity='user', key=p['key'], value=p['value'],
+                    data={'category': 'behavioral'},
+                    decay_class='slow', confidence=p['confidence'],
+                    source='temporal_pattern',
                 )
                 if result:
                     stored += 1

@@ -62,7 +62,7 @@ Field definitions:
   - `ambiguous_goal` — the original request was too unclear to act on correctly
 - `root_cause`: A concise factual statement of what went wrong.
 - `lesson`: An actionable directive (e.g. "Always verify date before scheduling").
-- `affected_skill`: The action type or functional area (e.g. `web_search`, `plan_step`, `recall`).
+- `affected_skill`: The action type or functional area (e.g. `web_search`, `plan_step`, `memory`).
 - `severity`: `"minor"` or `"major"` only.
 - `confidence`: Float between 0.0 and 1.0 reflecting certainty in the analysis.
 - `generalizable`: `true` if this lesson applies broadly; `false` if highly context-specific.

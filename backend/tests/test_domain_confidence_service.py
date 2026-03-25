@@ -97,32 +97,32 @@ def svc_no_cache(db_service):
 
 
 def _insert_trait(db_service, domain, confidence=0.8, category="preference"):
-    """Insert a user_trait row whose key/value/category includes the domain."""
+    """Insert a knowledge row of kind 'trait' whose key/value/category includes the domain."""
     tid = str(uuid.uuid4())
-    # Use a UUID suffix to guarantee unique trait_key (table has UNIQUE(trait_key))
     unique_suffix = tid[:8]
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO user_traits (id, trait_key, trait_value, category, confidence)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+            VALUES ('trait', 'user', ?, ?, ?, ?)
             """,
-            (tid, f"{domain}_pref_{unique_suffix}", f"likes {domain}", category, confidence),
+            (f"{domain}_pref_{unique_suffix}", f"likes {domain}",
+             json.dumps({"category": category}), confidence),
         )
     return tid
 
 
 def _insert_concept(db_service, domain, confidence=0.7):
-    """Insert a semantic_concept row whose domain field matches the domain."""
+    """Insert a knowledge row of kind 'concept' whose domain field matches the domain."""
     cid = str(uuid.uuid4())
     with db_service.connection() as conn:
         conn.execute(
             """
-            INSERT INTO semantic_concepts
-                (id, concept_name, concept_type, definition, domain, confidence)
-            VALUES (?, ?, 'entity', ?, ?, ?)
+            INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+            VALUES ('concept', 'chalie', ?, ?, ?, ?)
             """,
-            (cid, f"{domain}_concept_{cid[:6]}", f"A concept about {domain}", domain, confidence),
+            (f"{domain}_concept_{cid[:6]}", f"A concept about {domain}",
+             json.dumps({"domain": domain}), confidence),
         )
     return cid
 
@@ -243,10 +243,10 @@ class TestTraitDensitySignal:
         with db_service.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO user_traits (id, trait_key, trait_value, category, confidence)
-                VALUES (?, ?, 'yes', ?, ?)
+                INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+                VALUES ('trait', 'user', ?, 'yes', ?, ?)
                 """,
-                (tid, f"prefers_morning_{tid[:8]}", "scheduling", 0.85),
+                (f"prefers_morning_{tid[:8]}", json.dumps({"category": "scheduling"}), 0.85),
             )
         score = svc_no_cache.compute_domain_confidence("scheduling")
         assert score > 0.15
@@ -325,32 +325,29 @@ class TestConceptDepthSignal:
 
     def test_soft_deleted_concepts_excluded(self, svc_no_cache, db_service):
         """Soft-deleted concepts (deleted_at IS NOT NULL) are not counted."""
-        cid = str(uuid.uuid4())
         with db_service.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO semantic_concepts
-                    (id, concept_name, concept_type, definition, domain, confidence, deleted_at)
-                VALUES (?, 'deleted_concept', 'entity', 'def', ?, 0.9, ?)
+                INSERT INTO knowledge (kind, entity, key, value, data, confidence, deleted_at)
+                VALUES ('concept', 'chalie', 'deleted_concept', 'def', ?, 0.9, ?)
                 """,
-                (cid, "deleted_domain", utc_now().isoformat()),
+                (json.dumps({"domain": "deleted_domain"}), utc_now().isoformat()),
             )
 
         score = svc_no_cache.compute_domain_confidence("deleted_domain")
         assert score <= 0.20  # near-zero since concept is excluded
 
     def test_concept_matched_by_definition(self, svc_no_cache, db_service):
-        """A concept is matched when its definition mentions the domain."""
-        cid = str(uuid.uuid4())
+        """A concept is matched when its value (definition) mentions the domain."""
         with db_service.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO semantic_concepts
-                    (id, concept_name, concept_type, definition, domain, confidence)
-                VALUES (?, 'alarm_setting', 'procedure',
-                        'User prefers early morning scheduling for meetings', 'general', ?)
+                INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+                VALUES ('concept', 'chalie', 'alarm_setting',
+                        'User prefers early morning scheduling for meetings',
+                        ?, ?)
                 """,
-                (cid, 0.75),
+                (json.dumps({"domain": "general", "concept_type": "procedure"}), 0.75),
             )
 
         score = svc_no_cache.compute_domain_confidence("scheduling")

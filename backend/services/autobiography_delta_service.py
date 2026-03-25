@@ -280,8 +280,11 @@ class AutobiographyDeltaService:
                 with self.db.get_session() as session:
                     result = session.execute(
                         text("""
-                        SELECT id, trait_key, trait_value, confidence
-                        FROM user_traits
+                        SELECT id, key, value, confidence
+                        FROM knowledge
+                        WHERE kind IN ('trait', 'preference')
+                          AND entity = 'user'
+                          AND deleted_at IS NULL
                         """),
                         {}
                     )
@@ -304,11 +307,11 @@ class AutobiographyDeltaService:
 
                             session.execute(
                                 text("""
-                                UPDATE user_traits
+                                UPDATE knowledge
                                 SET confidence = :confidence,
-                                    last_reinforced_at = datetime('now'),
                                     updated_at = datetime('now')
                                 WHERE id = :id
+                                  AND kind IN ('trait', 'preference')
                                 """),
                                 {"confidence": new_confidence, "id": trait_id}
                             )

@@ -345,9 +345,12 @@ class AdaptiveLayerService:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT trait_key, confidence
-                    FROM user_traits
-                    WHERE category = 'micro_preference'
+                    SELECT key, confidence
+                    FROM knowledge
+                    WHERE kind IN ('trait', 'preference')
+                      AND entity = 'user'
+                      AND deleted_at IS NULL
+                      AND json_extract(data, '$.category') = 'micro_preference'
                       AND confidence > 0.4
                     ORDER BY confidence DESC
                     LIMIT 3
@@ -380,10 +383,13 @@ class AdaptiveLayerService:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT trait_value
-                    FROM user_traits
-                    WHERE trait_key = 'challenge_tolerance'
-                      AND category = 'micro_preference'
+                    SELECT value
+                    FROM knowledge
+                    WHERE kind IN ('trait', 'preference')
+                      AND entity = 'user'
+                      AND deleted_at IS NULL
+                      AND key = 'challenge_tolerance'
+                      AND json_extract(data, '$.category') = 'micro_preference'
                     ORDER BY updated_at DESC
                     LIMIT 1
                 """)

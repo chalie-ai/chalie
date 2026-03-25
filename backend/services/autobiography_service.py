@@ -189,9 +189,13 @@ class AutobiographyService:
                 # Gather traits (confidence > 0.3)
                 result = session.execute(
                     text("""
-                    SELECT trait_key, trait_value, category, confidence, reinforcement_count
-                    FROM user_traits
-                    WHERE confidence > 0.3
+                    SELECT key, value, json_extract(data, '$.category') AS category,
+                           confidence, evidence_count
+                    FROM knowledge
+                    WHERE kind IN ('trait', 'preference')
+                      AND entity = 'user'
+                      AND deleted_at IS NULL
+                      AND confidence > 0.3
                     ORDER BY confidence DESC
                     """),
                     {}
@@ -208,9 +212,14 @@ class AutobiographyService:
                 # Gather concepts (top 30 by strength)
                 result = session.execute(
                     text("""
-                    SELECT concept_name, concept_type, definition, domain, strength
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL
+                    SELECT key,
+                           json_extract(data, '$.concept_type') AS concept_type,
+                           value,
+                           json_extract(data, '$.domain') AS domain,
+                           CAST(json_extract(data, '$.strength') AS REAL) AS strength
+                    FROM knowledge
+                    WHERE kind = 'concept'
+                      AND deleted_at IS NULL
                     ORDER BY strength DESC
                     LIMIT 30
                     """),
@@ -225,15 +234,17 @@ class AutobiographyService:
                         "strength": row[4]
                     })
 
-                # Gather relationships (join to resolve UUIDs -> names)
+                # Gather relationships (resolve source/target from data JSON)
                 result = session.execute(
                     text("""
-                    SELECT sc1.concept_name, sc2.concept_name, sr.relationship_type, sr.strength
-                    FROM semantic_relationships sr
-                    JOIN semantic_concepts sc1 ON sr.source_concept_id = sc1.id
-                    JOIN semantic_concepts sc2 ON sr.target_concept_id = sc2.id
-                    WHERE sr.deleted_at IS NULL
-                    ORDER BY sr.strength DESC
+                    SELECT json_extract(r.data, '$.source_name') AS source_name,
+                           json_extract(r.data, '$.target_name') AS target_name,
+                           json_extract(r.data, '$.relationship_type') AS relationship_type,
+                           CAST(json_extract(r.data, '$.strength') AS REAL) AS strength
+                    FROM knowledge r
+                    WHERE r.kind = 'relationship'
+                      AND r.deleted_at IS NULL
+                    ORDER BY strength DESC
                     LIMIT 50
                     """),
                     {}

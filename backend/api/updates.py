@@ -113,13 +113,14 @@ def update_belief():
     confidence = max(0.0, min(1.0, confidence))
 
     try:
-        from services.user_trait_service import UserTraitService
-        svc = UserTraitService(_get_db())
-        stored = svc.store_trait(
-            trait_key=key,
-            trait_value=str(value),
-            confidence=confidence,
-            category=category,
+        from services.knowledge_service import KnowledgeService
+        _DECAY_MAP = {'core': 'permanent', 'behavioral': 'slow'}
+        ks = KnowledgeService(_get_db())
+        stored = ks.store(
+            kind='trait', entity='user', key=key, value=str(value),
+            data={'category': category},
+            decay_class=_DECAY_MAP.get(category, 'standard'),
+            confidence=confidence, source='updates_api',
         )
         if not stored:
             logger.info(

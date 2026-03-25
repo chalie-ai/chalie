@@ -30,8 +30,8 @@ Evaluate whether the action result correctly fulfills what was intended, in the 
 
 Common issues to check:
 - Date/time mismatches (wrong day of week, wrong date, timezone errors)
-- Irrelevant or off-topic recall results
-- Incomplete or partial memorization
+- Irrelevant or off-topic memory recall results
+- Incomplete or partial memory storage
 - Scheduling actions with wrong parameters
 
 ## Output

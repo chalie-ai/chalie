@@ -816,9 +816,9 @@ class ACTOrchestrator:
             if lesson:
                 try:
                     from services.database_service import get_shared_db_service
-                    from services.procedural_memory_service import ProceduralMemoryService
+                    from services.knowledge_service import KnowledgeService
                     db = get_shared_db_service()
-                    proc_mem = ProceduralMemoryService(db)
+                    ks = KnowledgeService(db)
 
                     # Record outcome for each action type used in the loop
                     seen_types = set()
@@ -829,7 +829,7 @@ class ACTOrchestrator:
                         seen_types.add(atype)
                         success = outcome_quality >= 0.5
                         reward = (outcome_quality - 0.5) * 2.0  # map [0,1] → [-1,1]
-                        proc_mem.record_action_outcome(
+                        ks.record_procedure_outcome(
                             action_name=atype,
                             success=success,
                             reward=reward,

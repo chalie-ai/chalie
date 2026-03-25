@@ -5,16 +5,24 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 15 skills).
+register_innate_skills() in __init__.py (currently 13 skills + backward-compat aliases).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
 ALL_SKILL_NAMES: frozenset = frozenset({
-    'recall', 'memorize', 'introspect', 'associate',
+    'memory', 'introspect', 'associate',
     'schedule', 'autobiography', 'focus', 'list',
     'persistent_task', 'document',
     'read', 'reflect', 'find_tools', 'goals',
+    'rich_render',
 })
+
+# Backward-compat aliases — old names that map to the unified 'memory' skill.
+# These are NOT in ALL_SKILL_NAMES (they are aliases, not canonical skills).
+SKILL_ALIASES: dict = {
+    'recall': 'memory',
+    'memorize': 'memory',
+}
 
 # ── LLM-visible for planning ──────────────────────────────────────────────
 PLANNING_SKILLS: frozenset = ALL_SKILL_NAMES
@@ -26,7 +34,7 @@ REFLECTION_FILTER_SKILLS: frozenset = ALL_SKILL_NAMES
 # ── Cognitive primitives: always injected into ACT mode regardless of
 #    triage selection. These are the foundational memory operations. ─────────
 COGNITIVE_PRIMITIVES: frozenset = frozenset({
-    'recall', 'memorize', 'associate', 'find_tools',
+    'memory', 'associate', 'find_tools',
 })
 
 # ── Contextual skills: planning-visible skills minus primitives.
@@ -38,12 +46,11 @@ TRIAGE_VALID_SKILLS: frozenset = PLANNING_SKILLS
 
 # ── Ordered primitives list: used where insertion order matters
 #    (e.g., prepending to skill lists in triage) ───────────────────────────
-COGNITIVE_PRIMITIVES_ORDERED: list = ['recall', 'memorize', 'associate', 'find_tools']
+COGNITIVE_PRIMITIVES_ORDERED: list = ['memory', 'associate', 'find_tools']
 
 # ── Skill descriptions for tool profile bootstrapping ─────────────────────
 SKILL_DESCRIPTIONS: dict = {
-    'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',
-    'memorize': 'Store information, save a note, remember a fact, keep something for later',
+    'memory': 'Store, recall, update, or forget knowledge — facts, preferences, traits, concepts, procedures, metrics, or arbitrary key-value data',
     'introspect': 'Self-examine internal state, check how much is known about a topic, inspect confidence',
     'associate': 'Find related concepts, explore connections, brainstorm associations between ideas',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
@@ -56,12 +63,15 @@ SKILL_DESCRIPTIONS: dict = {
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
     'goals': 'View, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
+    'rich_render': 'Returns block rendering reference for producing rich visual output (metrics, cards, charts, progress, timelines)',
+    # Backward-compat aliases (for lookup only)
+    'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',
+    'memorize': 'Store information, save a note, remember a fact, keep something for later',
 }
 
 # ── Skill effort tiers (innate skills are controlled by us — no injection risk) ─
 SKILL_EFFORT: dict = {
-    'recall': 'trivial',
-    'memorize': 'trivial',
+    'memory': 'trivial',
     'introspect': 'trivial',
     'associate': 'light',
     'list': 'trivial',
@@ -74,12 +84,15 @@ SKILL_EFFORT: dict = {
     'reflect': 'light',
     'find_tools': 'trivial',
     'goals': 'trivial',
+    'rich_render': 'trivial',
+    # Backward-compat aliases
+    'recall': 'trivial',
+    'memorize': 'trivial',
 }
 
 # ── Skill categories ───────────────────────────────────────────────────────────
 SKILL_CATEGORIES: dict = {
-    'recall': 'memory',
-    'memorize': 'memory',
+    'memory': 'memory',
     'introspect': 'cognition',
     'associate': 'cognition',
     'list': 'productivity',
@@ -92,4 +105,8 @@ SKILL_CATEGORIES: dict = {
     'reflect': 'cognition',
     'find_tools': 'cognition',
     'goals': 'cognition',
+    'rich_render': 'presentation',
+    # Backward-compat aliases
+    'recall': 'memory',
+    'memorize': 'memory',
 }

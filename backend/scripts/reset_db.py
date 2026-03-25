@@ -21,11 +21,8 @@ logger = logging.getLogger(__name__)
 DATA_TABLES = [
     'episodes',
     'cortex_iterations',
-    'semantic_concepts',
-    'semantic_relationships',
+    'knowledge',
     'interaction_log',
-    'user_traits',
-    'procedural_memory',
     'topics',
     'threads',
     'scheduled_items',

@@ -66,7 +66,7 @@ Respond ONLY with valid JSON. Two formats allowed:
 ```json
 {
   "actions": [
-    {"type": "recall", "query": "what do I know about X"}
+    {"type": "memory", "action": "recall", "query": "what do I know about X"}
   ],
   "response": "",
   "progress_update": {

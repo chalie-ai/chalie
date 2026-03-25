@@ -53,7 +53,7 @@ def data_summary():
         # SQLite table counts — all user-data tables
         with db.connection() as conn:
             for table in [
-                "episodes", "semantic_concepts", "user_traits", "threads",
+                "episodes", "knowledge", "threads",
                 "autobiography", "scheduled_items", "persistent_tasks",
                 "lists", "list_items", "identity_vectors", "place_fingerprints",
                 "interaction_log", "cortex_iterations",
@@ -91,13 +91,13 @@ def export_data():
     """Export all user data as a streaming JSON download."""
 
     user_data_tables = [
-        "episodes", "semantic_concepts", "semantic_relationships",
-        "user_traits", "threads", "autobiography",
+        "episodes", "knowledge",
+        "threads", "autobiography",
         "scheduled_items", "persistent_tasks", "lists", "list_items",
         "list_events", "identity_vectors", "identity_events",
         "place_fingerprints",
         "interaction_log", "cortex_iterations",
-        "procedural_memory", "topics", "user_tool_preferences",
+        "topics", "user_tool_preferences",
         "documents", "document_chunks", "watched_folders",
     ]
 
@@ -306,9 +306,7 @@ def delete_all():
             for table in [
                 # User-personal data (critical)
                 "episodes",
-                "semantic_concepts",
-                "semantic_relationships",
-                "user_traits",
+                "knowledge",
                 "threads",
                 "autobiography",
                 "scheduled_items",
@@ -328,7 +326,6 @@ def delete_all():
                 # Behavioral/derived data
                 "interaction_log",
                 "cortex_iterations",
-                "procedural_memory",
                 "topics",
                 "tool_performance_metrics",
                 "user_tool_preferences",

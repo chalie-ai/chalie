@@ -108,44 +108,65 @@ def _insert_episode(db_service, gist="test episode", salience=5, topic="general"
 
 def _insert_trait(db_service, key="fav_color", value="blue",
                   category="preference", confidence=0.8):
-    """Insert a user_trait row."""
-    tid = str(uuid.uuid4())
+    """Insert a knowledge row of kind 'trait' (replaces old user_traits)."""
     with db_service.connection() as conn:
         conn.execute(
-            """INSERT INTO user_traits (id, trait_key, trait_value, category, confidence)
-               VALUES (?, ?, ?, ?, ?)""",
-            (tid, key, value, category, confidence)
+            """INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+               VALUES ('trait', 'user', ?, ?, ?, ?)""",
+            (key, value, json.dumps({"category": category}), confidence)
         )
-    return tid
+    # Return the rowid of the inserted row
+    with db_service.connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM knowledge WHERE key = ? ORDER BY id DESC LIMIT 1", (key,)
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 def _insert_concept(db_service, name="Python", ctype="knowledge",
                     definition="A programming language", domain="tech",
                     strength=0.9):
-    """Insert a semantic_concept row."""
-    cid = str(uuid.uuid4())
+    """Insert a knowledge row of kind 'concept' (replaces old semantic_concepts)."""
     with db_service.connection() as conn:
         conn.execute(
-            """INSERT INTO semantic_concepts
-               (id, concept_name, concept_type, definition, domain, strength)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (cid, name, ctype, definition, domain, strength)
+            """INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+               VALUES ('concept', 'chalie', ?, ?, ?, ?)""",
+            (name, definition,
+             json.dumps({"concept_type": ctype, "domain": domain, "strength": strength}),
+             strength)
         )
-    return cid
+    with db_service.connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM knowledge WHERE key = ? AND kind = 'concept' ORDER BY id DESC LIMIT 1",
+            (name,)
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 def _insert_relationship(db_service, source_id, target_id, rel_type="uses",
                           strength=0.85):
-    """Insert a semantic_relationship row."""
-    rid = str(uuid.uuid4())
+    """Insert a knowledge row of kind 'relationship' (replaces old semantic_relationships)."""
+    # Resolve source and target concept names from their IDs
+    with db_service.connection() as conn:
+        src_row = conn.execute("SELECT key FROM knowledge WHERE id = ?", (source_id,)).fetchone()
+        tgt_row = conn.execute("SELECT key FROM knowledge WHERE id = ?", (target_id,)).fetchone()
+    source_name = src_row[0] if src_row else "unknown"
+    target_name = tgt_row[0] if tgt_row else "unknown"
+    rel_key = f"{source_name}__{rel_type}__{target_name}"
     with db_service.connection() as conn:
         conn.execute(
-            """INSERT INTO semantic_relationships
-               (id, source_concept_id, target_concept_id, relationship_type, strength)
-               VALUES (?, ?, ?, ?, ?)""",
-            (rid, source_id, target_id, rel_type, strength)
+            """INSERT INTO knowledge (kind, entity, key, value, data, confidence)
+               VALUES ('relationship', 'chalie', ?, ?, ?, ?)""",
+            (rel_key, f"{source_name} {rel_type} {target_name}",
+             json.dumps({"source_name": source_name, "target_name": target_name,
+                         "relationship_type": rel_type, "strength": strength}),
+             strength)
         )
-    return rid
+    with db_service.connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM knowledge WHERE key = ? ORDER BY id DESC LIMIT 1", (rel_key,)
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 # ─── get_current_narrative ────────────────────────────────────────────────────

@@ -258,11 +258,15 @@ class SelfModelService:
     def _get_recall_failure_rate(self, topic: str) -> float:
         """Per-topic recall failure rate from procedural memory."""
         try:
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
             db = self._get_db()
-            service = ProceduralMemoryService(db)
-            action_stats = service.get_action_stats("recall")
-            context_stats = (action_stats or {}).get("context_stats") or {}
+            entry = KnowledgeService(db).get('chalie', 'recall')
+            import json as _json
+            data = entry.get('data', {}) if entry else {}
+            if isinstance(data, str):
+                try: data = _json.loads(data)
+                except Exception: data = {}
+            context_stats = data.get("context_stats") or {}
             if topic in context_stats:
                 topic_stats = context_stats[topic]
                 total = topic_stats.get("total", 0)
@@ -302,22 +306,23 @@ class SelfModelService:
     def _get_skill_reliability(self) -> dict:
         """Condensed skill reliability: only skills with >= 5 attempts."""
         try:
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
+            import json as _json
             db = self._get_db()
-            service = ProceduralMemoryService(db)
-            all_weights = service.get_all_policy_weights()
+            procedures = KnowledgeService(db).get_ranked_procedures(limit=50)
 
             result = {}
-            for action_name in all_weights:
-                stats = service.get_action_stats(action_name)
-                if not stats:
-                    continue
-                attempts = stats.get("total_attempts", 0)
+            for proc in procedures:
+                data = proc.get('data', {})
+                if isinstance(data, str):
+                    try: data = _json.loads(data)
+                    except Exception: data = {}
+                attempts = data.get("total_attempts", 0)
                 if attempts < 5:
                     continue
-                successes = stats.get("total_successes", 0)
+                successes = data.get("total_successes", 0)
                 reliability = (successes + 1) / (attempts + 2)  # Laplace smoothing
-                result[action_name] = {
+                result[proc.get('key', '')] = {
                     "reliability": round(reliability, 3),
                     "attempts": attempts,
                 }
@@ -404,10 +409,17 @@ class SelfModelService:
                 cursor.execute("SELECT COUNT(*) FROM episodes")
                 episode_count = cursor.fetchone()[0]
 
-                cursor.execute("SELECT COUNT(*) FROM semantic_concepts")
+                cursor.execute(
+                    "SELECT COUNT(*) FROM knowledge "
+                    "WHERE kind = 'concept' AND deleted_at IS NULL"
+                )
                 concept_count = cursor.fetchone()[0]
 
-                cursor.execute("SELECT COUNT(*) FROM user_traits")
+                cursor.execute(
+                    "SELECT COUNT(*) FROM knowledge "
+                    "WHERE kind IN ('trait', 'preference') "
+                    "AND entity = 'user' AND deleted_at IS NULL"
+                )
                 trait_count = cursor.fetchone()[0]
 
                 cursor.execute(

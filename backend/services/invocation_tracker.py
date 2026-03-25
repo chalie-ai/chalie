@@ -85,11 +85,11 @@ def track(
 
     # ── procedural_memory (learning) ──────────────────────────────────────
     try:
-        from services.procedural_memory_service import ProceduralMemoryService
+        from services.knowledge_service import KnowledgeService
         from services.database_service import get_shared_db_service
         db_service = get_shared_db_service()
         reward = _compute_reward(name, success, failure_class, result)
-        ProceduralMemoryService(db_service).record_action_outcome(
+        KnowledgeService(db_service).record_procedure_outcome(
             action_name=name,
             success=success,
             reward=reward,

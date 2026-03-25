@@ -206,20 +206,21 @@ class TestContextAssemblyService:
         """_get_concepts() returns '## Relevant Concepts' section when concepts are available."""
         svc = ContextAssemblyService({})
         mock_concepts = [
-            {'concept_name': 'Python', 'definition': 'A programming language', 'concept_type': 'technology', 'strength': 0.8},
-            {'concept_name': 'Weak', 'definition': 'A weak concept', 'concept_type': 'unknown', 'strength': 0.1},  # below 0.2 gate
-            {'concept_name': 'NoDef', 'definition': '', 'concept_type': 'other', 'strength': 0.9},  # no definition
+            {'key': 'Python', 'value': 'A programming language', 'kind': 'concept', 'confidence': 0.8, 'rrf_score': 0.8},
+            {'key': 'Weak', 'value': 'A weak concept', 'kind': 'concept', 'confidence': 0.1, 'rrf_score': 0.1},  # below 0.2 gate
+            {'key': 'NoDef', 'value': '', 'kind': 'concept', 'confidence': 0.9, 'rrf_score': 0.9},  # no value/definition
         ]
-        mock_retrieval = MagicMock()
-        mock_retrieval.retrieve_concepts.return_value = mock_concepts
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = mock_concepts
 
-        with patch('services.semantic_service.SemanticService', return_value=mock_retrieval):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
             result = svc._get_concepts('What is Python?', 'programming')
 
         assert '## Relevant Concepts' in result
         assert '**Python**' in result
         assert 'A programming language' in result
-        # Weak concept (strength 0.1) should be excluded
+        # Weak concept (confidence 0.1) should be excluded
         assert 'Weak' not in result
         # Concept without definition should be excluded
         assert 'NoDef' not in result
@@ -227,34 +228,37 @@ class TestContextAssemblyService:
     def test_get_concepts_returns_empty_when_no_concepts(self):
         """_get_concepts() returns '' when retrieval returns empty list."""
         svc = ContextAssemblyService({})
-        mock_retrieval = MagicMock()
-        mock_retrieval.retrieve_concepts.return_value = []
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = []
 
-        with patch('services.semantic_service.SemanticService', return_value=mock_retrieval):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
     def test_get_concepts_returns_empty_when_all_filtered(self):
-        """_get_concepts() returns '' when all concepts fail the strength/definition gate."""
+        """_get_concepts() returns '' when all concepts fail the confidence/definition gate."""
         svc = ContextAssemblyService({})
         mock_concepts = [
-            {'concept_name': 'Noisy', 'definition': '', 'concept_type': 'other', 'strength': 0.9},
-            {'concept_name': 'Weak', 'definition': 'Some def', 'concept_type': 'other', 'strength': 0.1},
+            {'key': 'Noisy', 'value': '', 'kind': 'concept', 'confidence': 0.9, 'rrf_score': 0.9},
+            {'key': 'Weak', 'value': 'Some def', 'kind': 'concept', 'confidence': 0.1, 'rrf_score': 0.1},
         ]
-        mock_retrieval = MagicMock()
-        mock_retrieval.retrieve_concepts.return_value = mock_concepts
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = mock_concepts
 
-        with patch('services.semantic_service.SemanticService', return_value=mock_retrieval):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
+             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
     def test_get_concepts_returns_empty_on_service_failure(self):
-        """_get_concepts() gracefully returns '' when SemanticService fails."""
+        """_get_concepts() gracefully returns '' when KnowledgeService fails."""
         svc = ContextAssemblyService({})
 
-        with patch('services.semantic_service.SemanticService', side_effect=Exception('DB down')):
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('DB down')), \
+             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
@@ -302,11 +306,11 @@ class TestGetProceduralHints:
 
     def test_returns_empty_when_no_ranked_skills(self):
         svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = []
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = []
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('research')
 
@@ -315,11 +319,11 @@ class TestGetProceduralHints:
     def test_excludes_skills_below_8_attempts(self):
         svc = self._make_service()
         skills = [self._make_skill('web_search', 0.90, 5)]  # < 8 attempts
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = skills
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = skills
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('research')
 
@@ -328,11 +332,11 @@ class TestGetProceduralHints:
     def test_includes_skills_with_exactly_8_attempts(self):
         svc = self._make_service()
         skills = [self._make_skill('web_search', 0.90, 8)]
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = skills
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = skills
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('research')
 
@@ -340,11 +344,11 @@ class TestGetProceduralHints:
 
     def test_reliable_label_above_85_percent(self):
         svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('recall', 0.92, 20)]
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = [self._make_skill('recall', 0.92, 20)]
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('test')
 
@@ -352,11 +356,11 @@ class TestGetProceduralHints:
 
     def test_moderate_label_between_70_and_85_percent(self):
         svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('calendar_check', 0.75, 15)]
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = [self._make_skill('calendar_check', 0.75, 15)]
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('test')
 
@@ -365,11 +369,11 @@ class TestGetProceduralHints:
     def test_less_consistent_label_below_70_percent(self):
         """Soft language avoids discouraging use of borderline skills."""
         svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('email_search', 0.55, 12)]
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = [self._make_skill('email_search', 0.55, 12)]
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('test')
 
@@ -379,11 +383,11 @@ class TestGetProceduralHints:
     def test_limits_to_top_3_skills(self):
         svc = self._make_service()
         skills = [self._make_skill(f'skill_{i}', 0.90, 10) for i in range(6)]
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = skills
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = skills
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('test')
 
@@ -392,11 +396,11 @@ class TestGetProceduralHints:
 
     def test_includes_percentage_and_attempt_count(self):
         svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('web_search', 0.88, 25)]
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = [self._make_skill('web_search', 0.88, 25)]
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('test')
 
@@ -412,11 +416,11 @@ class TestGetProceduralHints:
 
     def test_header_present_when_skills_surfaced(self):
         svc = self._make_service()
-        mock_proc = MagicMock()
-        mock_proc.get_ranked_skills.return_value = [self._make_skill('recall', 0.90, 10)]
+        mock_ks = MagicMock()
+        mock_ks.get_ranked_procedures.return_value = [self._make_skill('recall', 0.90, 10)]
         mock_db = MagicMock()
 
-        with patch('services.procedural_memory_service.ProceduralMemoryService', return_value=mock_proc), \
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             result = svc._get_procedural_hints('test')
 

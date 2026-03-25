@@ -38,6 +38,6 @@ Respond with ONLY valid JSON:
 Rules:
 - `outcome_quality`: 0.0 (complete failure) to 1.0 (perfect execution)
 - `what_worked` / `what_failed`: null if nothing notable
-- `lesson`: concrete and specific — e.g. "recall before schedule to avoid date errors" not "be more careful"
+- `lesson`: concrete and specific — e.g. "use memory recall before schedule to avoid date errors" not "be more careful"
 - `confidence`: how confident you are in this reflection (0.0–1.0)
 - If the execution was straightforward with no issues, set outcome_quality >= 0.8 and lesson to null

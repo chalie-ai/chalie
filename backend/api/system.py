@@ -145,14 +145,18 @@ def system_status():
             db = get_shared_db_service()
             with db.connection() as conn:
                 cursor = conn.cursor()
-                for table in ["episodes", "semantic_concepts", "user_traits"]:
+                for table_label, query in [
+                    ("episodes", "SELECT COUNT(*) FROM episodes"),
+                    ("concepts", "SELECT COUNT(*) FROM knowledge WHERE kind = 'concept' AND deleted_at IS NULL"),
+                    ("traits", "SELECT COUNT(*) FROM knowledge WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"),
+                ]:
                     try:
-                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        cursor.execute(query)
                         row = cursor.fetchone()
-                        result["storage"][table] = row[0] if row else 0
+                        result["storage"][table_label] = row[0] if row else 0
                     except Exception as e:
-                        logger.warning(f"[SYSTEM] Count query failed for table '{table}': {e}")
-                        result["storage"][table] = -1
+                        logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
+                        result["storage"][table_label] = -1
         except Exception as e:
             result["status"] = "degraded"
             result["database_error"] = str(e)
@@ -213,13 +217,15 @@ def observability_memory():
         avg_episode_activation = episode_row[0]['avg_act'] if episode_row else 0.0
 
         concept_row = db.fetch_all(
-            "SELECT COUNT(*) AS cnt FROM semantic_concepts"
+            "SELECT COUNT(*) AS cnt FROM knowledge "
+            "WHERE kind = 'concept' AND deleted_at IS NULL"
         )
         concepts = concept_row[0]['cnt'] if concept_row else 0
 
         trait_row = db.fetch_all(
             "SELECT COUNT(*) AS cnt, COALESCE(AVG(confidence), 0) AS avg_conf "
-            "FROM user_traits"
+            "FROM knowledge "
+            "WHERE kind IN ('trait', 'preference') AND entity = 'user' AND deleted_at IS NULL"
         )
         traits = trait_row[0]['cnt'] if trait_row else 0
         avg_trait_strength = trait_row[0]['avg_conf'] if trait_row else 0.0
@@ -501,9 +507,13 @@ def observability_traits():
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT trait_key, trait_value, confidence, category, "
-                "reinforcement_count, updated_at "
-                "FROM user_traits "
+                "SELECT key, value, confidence, "
+                "json_extract(data, '$.category') AS category, "
+                "evidence_count, updated_at "
+                "FROM knowledge "
+                "WHERE kind IN ('trait', 'preference') "
+                "AND entity = 'user' "
+                "AND deleted_at IS NULL "
                 "ORDER BY category, confidence DESC"
             )
             rows = cursor.fetchall()
@@ -536,11 +546,10 @@ def observability_delete_trait(trait_key):
     """Delete a specific user trait by key."""
     try:
         from services.database_service import get_shared_db_service
-        from services.user_trait_service import UserTraitService
+        from services.knowledge_service import KnowledgeService
 
         db = get_shared_db_service()
-        svc = UserTraitService(db)
-        deleted = svc.delete_trait(trait_key)
+        deleted = KnowledgeService(db).forget('user', trait_key)
 
         if deleted:
             return jsonify({'ok': True, 'deleted': trait_key}), 200

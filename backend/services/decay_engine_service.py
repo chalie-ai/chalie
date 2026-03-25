@@ -49,17 +49,14 @@ class DecayEngineService:
         try:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
             self.episodic_decay_rate = episodic_config.get('episodic_decay_rate', 0.05)
-            self.semantic_decay_rate = episodic_config.get('semantic_decay_rate', 0.03)
         except Exception as e:
             logger.warning(f"[DECAY ENGINE] Failed to load decay rates from config, using defaults: {e}")
             self.episodic_decay_rate = 0.05
-            self.semantic_decay_rate = 0.03
 
         logger.info(
             f"[DECAY ENGINE] Initialized "
             f"(interval={decay_interval}s, "
-            f"episodic_rate={self.episodic_decay_rate}, "
-            f"semantic_rate={self.semantic_decay_rate})"
+            f"episodic_rate={self.episodic_decay_rate})"
         )
 
     def run(self, shared_state: Optional[dict] = None) -> None:
@@ -100,34 +97,32 @@ class DecayEngineService:
     def run_decay_cycle(self, richness: float = 1.0):
         """Run one full decay cycle across all memory types.
 
-        When richness < 0.3, only essential sub-cycles run (episodic + traits).
-        Non-essential sub-cycles (semantic, identity, external knowledge, thread
-        dormancy) are skipped to conserve resources on sparse memory systems.
+        When richness < 0.3, only essential sub-cycles run (episodic + knowledge).
+        Non-essential sub-cycles (identity, external knowledge) are skipped to
+        conserve resources on sparse memory systems.
 
         Args:
             richness: Current memory richness score in [0.0, 1.0].  Values below
                 0.3 cause non-essential sub-cycles to be skipped.
         """
         episodic_count = self._decay_episodic()
-        trait_stats = self._decay_user_traits()
+        knowledge_count = self._decay_knowledge()
         goal_decay_count = self._decay_goals()
 
         # Non-essential sub-cycles gated on sufficient memory richness
         if richness >= 0.3:
-            semantic_count = self._decay_semantic()
             identity_count = self._apply_identity_inertia()
             external_count = self._decay_external_knowledge()
         else:
-            semantic_count = identity_count = external_count = 0
+            identity_count = external_count = 0
             logger.debug(f"[DECAY ENGINE] Richness {richness:.2f} < 0.3, ran essential sub-cycles only")
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
             f"episodic={episodic_count} updated, "
-            f"semantic={semantic_count} updated, "
+            f"knowledge={knowledge_count} updated, "
             f"identity={identity_count} inertia-adjusted, "
             f"external_knowledge={external_count} accelerated, "
-            f"traits={trait_stats.get('decayed', 0)} decayed/{trait_stats.get('deleted', 0)} deleted, "
             f"goals={goal_decay_count} decayed"
         )
 
@@ -273,90 +268,29 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] Could not initialize DB for episodic decay: {e}")
             return 0
 
-    def _decay_semantic(self) -> int:
-        """
-        Apply decay to semantic concept strength, respecting decay_resistance.
+    def _decay_knowledge(self) -> int:
+        """Apply decay to unified knowledge table via KnowledgeService.
 
-        Formula: strength = MAX(0.2, strength - (decay_rate * (1 - decay_resistance)))
+        Delegates to :meth:`KnowledgeService.decay_cycle` which handles
+        per-decay-class rates, reliability multipliers, soft-deletion at
+        confidence floor, and memory_pressure signal emission.
 
         Returns:
-            Number of concepts updated
+            Number of knowledge entries updated, or 0 on any error.
         """
         try:
             from .database_service import get_lightweight_db_service
+            from .knowledge_service import KnowledgeService
 
-            db_service = get_lightweight_db_service()
-
+            db = get_lightweight_db_service()
             try:
-                with db_service.connection() as conn:
-                    cursor = conn.cursor()
-
-                    # Batch update: decay strength respecting decay_resistance and reliability.
-                    # Reliability multiplier is embedded in SQL via CASE to keep this a
-                    # single-pass batch UPDATE (avoids a costly row-by-row Python loop).
-                    cursor.execute("""
-                        UPDATE semantic_concepts
-                        SET strength = MAX(
-                            0.2,
-                            strength - (
-                                ? * (1.0 - COALESCE(decay_resistance, 0.5)) *
-                                CASE COALESCE(reliability, 'reliable')
-                                    WHEN 'uncertain'    THEN 1.5
-                                    WHEN 'contradicted' THEN 2.0
-                                    WHEN 'superseded'   THEN 3.0
-                                    ELSE 1.0
-                                END
-                            )
-                        ),
-                        updated_at = datetime('now')
-                        WHERE deleted_at IS NULL
-                          AND strength > 0.2
-                          AND last_accessed_at < datetime('now', '-1 hour')
-                    """, (self.semantic_decay_rate,))
-
-                    updated = cursor.rowcount
-
-                    # Emit memory_pressure signals for concepts approaching forgetting threshold
-                    try:
-                        from services.cognitive_drift_engine import emit_reasoning_signal, ReasoningSignal
-                        cursor.execute("""
-                            SELECT id, concept_name, definition, strength, domain
-                            FROM semantic_concepts
-                            WHERE deleted_at IS NULL
-                              AND strength > 0.2 AND strength < 0.5
-                              AND last_accessed_at < datetime('now', '-24 hours')
-                            ORDER BY strength ASC
-                            LIMIT 3
-                        """)
-                        for row in cursor.fetchall():
-                            emit_reasoning_signal(ReasoningSignal(
-                                signal_type='memory_pressure',
-                                source='decay_engine',
-                                concept_id=row[0],
-                                concept_name=row[1],
-                                topic=row[4] or 'general',
-                                content=f"Fading concept '{row[1]}' (strength={row[3]:.2f}): {(row[2] or '')[:100]}",
-                                activation_energy=0.5,
-                            ))
-                    except Exception as e:
-                        logger.debug(f"[DECAY ENGINE] Reasoning signal emission failed: {e}")
-
-                    cursor.close()
-
-                    if updated > 0:
-                        logger.info(f"[DECAY ENGINE] Decayed {updated} semantic concept strengths")
-                    return updated
-
-            except Exception as e:
-                logger.error(f"[DECAY ENGINE] Semantic decay failed: {e}")
-                return 0
+                svc = KnowledgeService(db)
+                return svc.decay_cycle()
             finally:
-                db_service.close_pool()
-
+                db.close_pool()
         except Exception as e:
-            logger.error(f"[DECAY ENGINE] Could not initialize DB for semantic decay: {e}")
+            logger.error(f"[DECAY ENGINE] Knowledge decay failed: {e}", exc_info=True)
             return 0
-
 
     # Sources that qualify for accelerated external knowledge decay
     EXTERNAL_KNOWLEDGE_PREFIXES = ("external_specialist:",)
@@ -422,30 +356,6 @@ class DecayEngineService:
         except Exception as e:
             logger.error(f"[DECAY ENGINE] External knowledge decay failed: {e}")
             return 0
-
-    def _decay_user_traits(self) -> dict:
-        """
-        Apply confidence decay to user traits via UserTraitService.
-
-        Returns:
-            dict: {decayed: int, deleted: int}
-        """
-        try:
-            from .database_service import get_lightweight_db_service
-            from .user_trait_service import UserTraitService
-
-            db_service = get_lightweight_db_service()
-            try:
-                trait_service = UserTraitService(db_service)
-                return trait_service.apply_decay()
-            finally:
-                db_service.close_pool()
-        except ImportError:
-            return {'decayed': 0, 'deleted': 0}
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] User trait decay failed: {e}")
-            return {'decayed': 0, 'deleted': 0}
-
 
     def _apply_identity_inertia(self) -> int:
         """Pull identity activations toward their baselines via the inertia mechanism.

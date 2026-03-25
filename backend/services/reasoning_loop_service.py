@@ -39,7 +39,7 @@ from typing import Optional, List, Dict, Any
 
 from services.memory_client import MemoryClientService
 from services.config_service import ConfigService
-from services.semantic_service import SemanticService
+from services.knowledge_service import KnowledgeService
 from services.episodic_service import EpisodicService
 from services.embedding_service import EmbeddingService
 from services.background_llm_queue import create_background_llm_proxy
@@ -172,10 +172,7 @@ class ReasoningLoopService:
         # Database + services
         self.db_service = get_lightweight_db_service()
         self.embedding_service = EmbeddingService()
-        self.semantic_storage = SemanticService(self.db_service)
-        self.semantic_retrieval = SemanticService(
-            self.db_service, self.embedding_service, self.semantic_storage
-        )
+        self.knowledge_service = KnowledgeService(self.db_service)
 
         episodic_config = ConfigService.resolve_agent_config("episodic-memory")
         self.episodic_retrieval = EpisodicService(self.db_service, episodic_config)
@@ -654,16 +651,21 @@ class ReasoningLoopService:
         # Content-based lookup via semantic retrieval
         if signal.content:
             try:
-                concepts = self.semantic_retrieval.retrieve_concepts(signal.content, limit=3)
+                concepts = self.knowledge_service.recall(signal.content, kinds=['concept'], limit=3)
                 for concept in concepts:
                     cid = str(concept.get('id', ''))
                     if cid and not self._is_on_cooldown(cid):
+                        data = concept.get('data') or {}
+                        if isinstance(data, str):
+                            import json as _json
+                            try: data = _json.loads(data)
+                            except Exception: data = {}
                         return {
                             'concept_id': cid,
-                            'concept_name': concept.get('concept_name', ''),
-                            'definition': concept.get('definition', ''),
+                            'concept_name': concept.get('key', ''),
+                            'definition': concept.get('value', ''),
                             'seed_type': signal.signal_type,
-                            'topic': signal.topic or concept.get('domain', 'general'),
+                            'topic': signal.topic or data.get('domain', 'general'),
                         }
             except Exception as e:
                 logger.debug(f"{LOG_PREFIX} Semantic lookup for signal failed: {e}")
@@ -835,11 +837,56 @@ class ReasoningLoopService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Goal ecology cycle failed (non-fatal): {e}")
 
+    def _spreading_activation_knowledge(self, concept_name: str, max_depth: int = 2) -> list:
+        """BFS spreading activation over knowledge relationships."""
+        try:
+            from services.database_service import get_lightweight_db_service
+            db = get_lightweight_db_service()
+            try:
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    visited = {}
+                    queue = [(concept_name, 1.0, 0)]
+                    while queue:
+                        name, score, depth = queue.pop(0)
+                        if name in visited or depth > max_depth:
+                            continue
+                        visited[name] = score
+                        if depth < max_depth:
+                            cursor.execute("""
+                                SELECT key, data FROM knowledge
+                                WHERE kind = 'relationship' AND deleted_at IS NULL
+                                  AND (json_extract(data, '$.source_key') = ?
+                                   OR json_extract(data, '$.target_key') = ?)
+                            """, (name, name))
+                            for row in cursor.fetchall():
+                                import json as _json
+                                try:
+                                    d = _json.loads(row[1]) if row[1] else {}
+                                except Exception:
+                                    d = {}
+                                neighbor = d.get('target_key') if d.get('source_key') == name else d.get('source_key')
+                                if neighbor and neighbor not in visited:
+                                    strength = float(d.get('strength', 0.5))
+                                    queue.append((neighbor, score * 0.7 * strength, depth + 1))
+                    results = []
+                    for name, act_score in visited.items():
+                        entry = self.knowledge_service.get('chalie', name)
+                        if entry:
+                            entry['activation_score'] = act_score
+                            results.append(entry)
+                    return results
+            finally:
+                db.close_pool()
+        except Exception as e:
+            logger.debug(f"{LOG_PREFIX} Spreading activation failed: {e}")
+            return []
+
     def _reason_from_seed(self, seed: Dict, signal: ReasoningSignal) -> None:
         """Core reasoning pipeline: spreading activation → synthesis → action."""
         # Step 3: Spreading activation from seed
-        activated = self.semantic_retrieval.spreading_activation(
-            [seed['concept_id']], max_depth=self.max_activation_depth
+        activated = self._spreading_activation_knowledge(
+            seed['concept_name'], max_depth=self.max_activation_depth
         )
 
         # Step 4: Check activation energy threshold
@@ -1088,16 +1135,16 @@ class ReasoningLoopService:
         episode_topic = episode_row[2]
 
         # Use episode gist as embedding query against concepts
-        concepts = self.semantic_retrieval.retrieve_concepts(episode_gist, limit=5)
+        concepts = self.knowledge_service.recall(episode_gist, kinds=['concept'], limit=5)
 
         if not concepts:
             return None
 
         concept = random.choice(concepts)
         return {
-            'concept_id': concept['id'],
-            'concept_name': concept['concept_name'],
-            'definition': concept['definition'],
+            'concept_id': concept.get('id', ''),
+            'concept_name': concept.get('key', ''),
+            'definition': concept.get('value', ''),
             'seed_type': 'salient',
             'topic': episode_topic or concept.get('domain', 'general'),
         }
@@ -1272,18 +1319,15 @@ class ReasoningLoopService:
         # instead of generic philosophizing
         user_context = ''
         try:
-            from services.database_service import get_shared_db_service
-            from services.user_trait_service import UserTraitService
-            db = get_shared_db_service()
-            traits = UserTraitService(db).get_all_traits()
+            traits = self.knowledge_service.get_by_kind('trait', entity='user', limit=10, min_confidence=0.3)
             # Pick top traits by confidence, skip style_baseline (not human-readable)
             top_traits = [
                 t for t in sorted(traits, key=lambda t: t.get('confidence', 0), reverse=True)
-                if t.get('trait_key') != 'style_baseline'
+                if t.get('key') != 'style_baseline'
             ][:5]
             if top_traits:
                 lines = [
-                    f"- {t.get('trait_key', '?')}: {t.get('trait_value', '?')}"
+                    f"- {t.get('key', '?')}: {t.get('value', '?')}"
                     for t in top_traits
                 ]
                 user_context = '\n'.join(lines)
@@ -1531,12 +1575,14 @@ class ReasoningLoopService:
 
                         # Feed gate rejections into procedural memory as soft failures
                         try:
-                            from services.procedural_memory_service import ProceduralMemoryService
-                            proc = ProceduralMemoryService(db_service)
+                            from services.knowledge_service import KnowledgeService
+                            ks = KnowledgeService(db_service)
                             for r in meaningful:
-                                proc.record_gate_rejection(
+                                ks.record_procedure_outcome(
                                     action_name=r.get('action', 'unknown'),
-                                    reason=r.get('reason', ''),
+                                    success=False,
+                                    reward=0.0,
+                                    failure_class='gate_rejection',
                                 )
                         except Exception as e:
                             logger.debug(f"{LOG_PREFIX} Failed to record gate rejection in procedural memory: {e}", exc_info=True)

@@ -186,19 +186,22 @@ class DomainConfidenceService:
         """
         Score based on how many user traits relate to this domain.
 
-        Queries user_traits for rows whose category or trait_value contains the
-        domain string. Score = min(1.0, count / TRAIT_SATURATION) * avg(confidence).
+        Queries knowledge for trait/preference rows whose category, key, or value
+        contains the domain string. Score = min(1.0, count / TRAIT_SATURATION) * avg(confidence).
 
         Returns 0.0 when no matching traits exist.
         """
         sql = """
             SELECT COUNT(*) AS cnt,
                    AVG(confidence) AS avg_conf
-            FROM user_traits
-            WHERE (
-                lower(category) LIKE lower(?)
-                OR lower(trait_key) LIKE lower(?)
-                OR lower(trait_value) LIKE lower(?)
+            FROM knowledge
+            WHERE kind IN ('trait', 'preference')
+              AND entity = 'user'
+              AND deleted_at IS NULL
+              AND (
+                lower(json_extract(data, '$.category')) LIKE lower(?)
+                OR lower(key) LIKE lower(?)
+                OR lower(value) LIKE lower(?)
             )
         """
         pattern = f"%{domain}%"
@@ -277,8 +280,8 @@ class DomainConfidenceService:
         """
         Score based on how many semantic concepts relate to this domain.
 
-        Queries semantic_concepts for rows whose domain, concept_name, or
-        definition contains the domain string.
+        Queries knowledge for concept rows whose domain, key, or value
+        contains the domain string.
         Score = min(1.0, count / CONCEPT_SATURATION) * avg(confidence).
 
         Returns 0.0 when no matching concepts exist.
@@ -286,12 +289,13 @@ class DomainConfidenceService:
         sql = """
             SELECT COUNT(*) AS cnt,
                    AVG(confidence) AS avg_conf
-            FROM semantic_concepts
-            WHERE deleted_at IS NULL
+            FROM knowledge
+            WHERE kind = 'concept'
+              AND deleted_at IS NULL
               AND (
-                  lower(domain) LIKE lower(?)
-                  OR lower(concept_name) LIKE lower(?)
-                  OR lower(definition) LIKE lower(?)
+                  lower(json_extract(data, '$.domain')) LIKE lower(?)
+                  OR lower(key) LIKE lower(?)
+                  OR lower(value) LIKE lower(?)
               )
         """
         pattern = f"%{domain}%"

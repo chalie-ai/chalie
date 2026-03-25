@@ -479,31 +479,50 @@ class PromptAssemblyService:
         """Get user traits formatted for prompt injection.
 
         Retrieves core traits (always) and contextually relevant traits
-        (by embedding similarity), capped at 6 total.
+        (by embedding similarity), capped at 8 total.
 
         Args:
             prompt: Current user message (for contextual retrieval).
             topic: Current conversation topic.
             injection_threshold_override: When set, overrides the default
-                ``INJECTION_THRESHOLD`` (e.g. ``0.2`` when returning from silence).
+                injection threshold (e.g. ``0.2`` when returning from silence).
 
         Returns:
             str: Formatted user traits section, or empty string when unavailable.
         """
         try:
-            from services.user_trait_service import UserTraitService, INJECTION_THRESHOLD
+            from services.knowledge_service import KnowledgeService
             from services.database_service import get_shared_db_service
+            from services.embedding_service import get_embedding_service
 
             db_service = get_shared_db_service()
-            trait_service = UserTraitService(db_service)
-            effective_threshold = (
-                injection_threshold_override
-                if injection_threshold_override is not None
-                else INJECTION_THRESHOLD
-            )
-            return trait_service.get_traits_for_prompt(
-                prompt, injection_threshold=effective_threshold
-            )
+            ks = KnowledgeService(db_service)
+
+            # Generate embedding for contextual retrieval
+            query_embedding = None
+            try:
+                query_embedding = get_embedding_service().generate_embedding(prompt)
+            except Exception:
+                pass
+
+            traits = ks.get_traits_for_prompt(query_embedding=query_embedding)
+
+            if not traits:
+                return ""
+
+            effective_threshold = injection_threshold_override if injection_threshold_override is not None else 0.3
+
+            lines = ["## Known About the User"]
+            for t in traits:
+                if t.get('confidence', 0) < effective_threshold:
+                    continue
+                key = t.get('key', '')
+                value = t.get('value', '')
+                label = t.get('label', '')
+                if key and value:
+                    lines.append(f"- {key}: {value} {label}")
+
+            return "\n".join(lines) if len(lines) > 1 else ""
         except ImportError:
             return ""
         except Exception as e:
@@ -642,7 +661,7 @@ class PromptAssemblyService:
             from services.identity_state_service import IdentityStateService
             from services.memory_client import MemoryClientService
             from services.database_service import get_shared_db_service
-            from services.user_trait_service import UserTraitService
+            from services.knowledge_service import KnowledgeService
 
             # Read current exchange count from thread hash
             r = MemoryClientService.create_connection()
@@ -653,14 +672,12 @@ class PromptAssemblyService:
             onboarding_state = identity_state.get('_onboarding', {})
 
             # Build set of trait keys already known in permanent storage
-            # (user_traits survives MemoryStore TTL expiry)
+            # (knowledge table survives MemoryStore TTL expiry)
             try:
                 db = get_shared_db_service()
-                trait_svc = UserTraitService(db)
-                known_trait_keys = {
-                    t['trait_key'] for t in trait_svc.get_all_traits()
-                    if t.get('confidence', 0) >= 0.5
-                }
+                ks = KnowledgeService(db)
+                known_traits = ks.get_by_kind('trait', entity='user', min_confidence=0.5)
+                known_trait_keys = {t['key'] for t in known_traits if t.get('key')}
             except Exception:
                 known_trait_keys = set()
 
@@ -925,7 +942,7 @@ class PromptAssemblyService:
         try:
             from services.act_dispatcher_service import ActDispatcherService
             dispatcher = ActDispatcherService()
-            innate = ["recall", "memorize", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read", "goals"]
+            innate = ["memory", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read", "goals"]
             available = [s for s in innate if s in dispatcher.handlers]
             if available:
                 return "Available skills: " + ", ".join(available)
@@ -962,32 +979,33 @@ class PromptAssemblyService:
         """Build compact strategy hints from procedural memory for the ACT prompt.
 
         Args:
-            topic: Current conversation topic (currently unused but reserved for
-                future topic-scoped strategy filtering).
+            topic: Current conversation topic (used for topic-affinity ranking).
 
         Returns:
             str: Formatted ``## Strategy Hints`` section string listing up to 8
             action-reliability signals, or empty string when no data is available.
         """
         try:
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
             from services.database_service import get_shared_db_service
+
             db = get_shared_db_service()
-            proc = ProceduralMemoryService(db)
+            ks = KnowledgeService(db)
+            ranked = ks.get_ranked_procedures(topic=topic, limit=20)
 
             hints = []  # (extremity_score, hint_text) tuples
-            for action_name in proc.get_all_policy_weights():
-                stats = proc.get_action_stats(action_name)
-                if not stats or stats.get('total_attempts', 0) < 5:
+            for proc in ranked:
+                attempts = proc.get('attempts', 0)
+                if attempts < 5:
                     continue
-                attempts = stats['total_attempts']
-                successes = stats.get('total_successes', 0)
-                reliability = (successes + 1) / (attempts + 2)
+                sr = proc.get('success_rate', 0)
+                name = proc.get('name', '')
+                reliability = (sr * attempts + 1) / (attempts + 2)
                 extremity = abs(reliability - 0.5)
                 if reliability < 0.4:
-                    hints.append((extremity, f"{action_name}: low reliability ({int(reliability*100)}% over {attempts} uses)"))
+                    hints.append((extremity, f"{name}: low reliability ({int(reliability*100)}% over {attempts} uses)"))
                 elif reliability > 0.85:
-                    hints.append((extremity, f"{action_name}: reliable ({int(reliability*100)}% over {attempts} uses)"))
+                    hints.append((extremity, f"{name}: reliable ({int(reliability*100)}% over {attempts} uses)"))
 
             if not hints:
                 return ''

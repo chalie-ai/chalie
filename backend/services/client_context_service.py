@@ -452,25 +452,25 @@ class ClientContextService:
             return
 
         try:
-            from services.user_trait_service import UserTraitService
+            from services.knowledge_service import KnowledgeService
             from services.database_service import DatabaseService
 
             db = DatabaseService()
-            trait_service = UserTraitService(db)
-            trait_service.store_trait(
-                trait_key="culture_region",
-                trait_value=culture,
-                confidence=0.3,  # Possible tier
-                category="core",
+            ks = KnowledgeService(db)
+            ks.store(
+                kind='trait', entity='user', key='culture_region', value=culture,
+                data={'category': 'core'},
+                decay_class='permanent', confidence=0.3,
+                source='demographic_seeding',
             )
 
             # Also seed language preference
             if language:
-                trait_service.store_trait(
-                    trait_key="language_preference",
-                    trait_value=language,
-                    confidence=0.5,
-                    category="core",
+                ks.store(
+                    kind='trait', entity='user', key='language_preference', value=language,
+                    data={'category': 'core'},
+                    decay_class='permanent', confidence=0.5,
+                    source='demographic_seeding',
                 )
 
             self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days

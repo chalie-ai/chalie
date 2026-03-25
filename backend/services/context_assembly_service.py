@@ -366,7 +366,7 @@ class ContextAssemblyService:
     def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
         """Retrieve relevant semantic concepts for context injection.
 
-        Downweights unreliable or contradicted concepts before applying the strength filter.
+        Downweights unreliable or contradicted concepts before applying the confidence filter.
 
         Args:
             prompt: Current user prompt used as the semantic query.
@@ -378,29 +378,32 @@ class ContextAssemblyService:
             Formatted concepts string with header, or empty string when nothing qualifies.
         """
         try:
-            from services.semantic_service import SemanticService
-            retrieval = SemanticService()
-            concepts = retrieval.retrieve_concepts(query=prompt, limit=5, query_embedding=message_embedding)
+            from services.knowledge_service import KnowledgeService
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            ks = KnowledgeService(db)
+            concepts = ks.recall(prompt, kinds=['concept'], limit=5)
 
             if not concepts:
                 return ""
 
-            # Downweight unreliable concepts before the strength filter
+            # Downweight unreliable concepts before the confidence filter
             for c in concepts:
-                if isinstance(c, dict) and 'strength' in c:
+                if isinstance(c, dict) and 'confidence' in c:
                     reliability = c.get('reliability', 'reliable')
                     r_weight = max(RELIABILITY_FLOOR, RELIABILITY_WEIGHT.get(reliability, 1.0))
-                    c['strength'] = c['strength'] * r_weight
+                    c['confidence'] = c['confidence'] * r_weight
 
             lines = ["## Relevant Concepts"]
             for c in concepts:
-                name = c.get('concept_name', 'unknown')
-                definition = c.get('definition', '')
-                ctype = c.get('concept_type', '')
-                strength = c.get('strength', 0)
-                # Only surface concepts with meaningful definitions and non-trivial strength
-                if definition and strength > 0.2:
-                    lines.append(f"- **{name}** ({ctype}): {definition}")
+                name = c.get('key', 'unknown')
+                definition = c.get('value', '')
+                kind = c.get('kind', '')
+                confidence = c.get('confidence', 0)
+                # Only surface concepts with meaningful definitions and non-trivial confidence
+                if definition and confidence > 0.2:
+                    lines.append(f"- **{name}** ({kind}): {definition}")
 
             return "\n".join(lines) if len(lines) > 1 else ""
         except Exception as e:
@@ -417,13 +420,13 @@ class ContextAssemblyService:
         discouraging exploration of potentially useful skills.
         """
         try:
-            from services.procedural_memory_service import ProceduralMemoryService
+            from services.knowledge_service import KnowledgeService
             from services.database_service import get_shared_db_service
 
             db_service = get_shared_db_service()
-            service = ProceduralMemoryService(db_service)
+            ks = KnowledgeService(db_service)
 
-            ranked = service.get_ranked_skills(topic=topic)
+            ranked = ks.get_ranked_procedures(topic=topic)
             if not ranked:
                 return ""
 
