@@ -179,6 +179,17 @@ class ActDispatcherService:
             except Exception:
                 pass  # Gate unavailable — proceed with execution
 
+        # Determine effective timeout: tool metadata can override the default.
+        # This is generic — any tool can declare "timeout": <seconds> in TOOL_METADATA.
+        effective_timeout = self.timeout
+        try:
+            from services.tool_library_service import TOOL_METADATA
+            tool_timeout = TOOL_METADATA.get(action_type, {}).get('timeout')
+            if tool_timeout and tool_timeout > effective_timeout:
+                effective_timeout = float(tool_timeout)
+        except Exception:
+            pass
+
         # Execute with timeout
         try:
             result_container = {'result': None, 'error': None}
@@ -193,7 +204,7 @@ class ActDispatcherService:
             thread = Thread(target=target)
             thread.daemon = True
             thread.start()
-            thread.join(timeout=self.timeout)
+            thread.join(timeout=effective_timeout)
 
             execution_time = time.time() - start_time
             elapsed_ms = int(execution_time * 1000)
@@ -204,7 +215,7 @@ class ActDispatcherService:
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
-                    'result': f"Action exceeded {self.timeout}s timeout",
+                    'result': f"Action exceeded {effective_timeout}s timeout",
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',

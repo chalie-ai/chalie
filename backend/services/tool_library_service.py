@@ -432,6 +432,7 @@ TOOL_METADATA: dict = {
 if _BROWSER_AVAILABLE:
     TOOL_METADATA["browser"] = {
         "name": "browser",
+        "timeout": 90,
         "description": (
             "Render JavaScript-heavy web pages, take screenshots, fill forms, "
             "and monitor pages for changes. Use when the read skill returns "
