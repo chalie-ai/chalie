@@ -571,6 +571,11 @@ class DatabaseService:
                 if extra and extra[0]:
                     cursor.execute(extra[0])
 
+            # Data migration: populate providers.models from providers.model where NULL
+            cursor.execute("UPDATE providers SET models = json_array(model) WHERE models IS NULL AND model IS NOT NULL")
+            if cursor.rowcount > 0:
+                logger.info(f"Migrated {cursor.rowcount} providers: populated models from model")
+
             if pending_count == 0:
                 logger.info("No pending migrations")
             else:

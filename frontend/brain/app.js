@@ -689,9 +689,11 @@ function renderCognition() {
         ).join('');
 
         // Model dropdown options (based on selected provider)
+        // When no model override, default to provider's first model (the provider default)
         const selectedProviderModels = isUniform && groupProviderId ? getProviderModels(groupProviderId) : [];
+        const effectiveGroupModel = groupModel || (selectedProviderModels.length > 0 ? selectedProviderModels[0] : null);
         const modelOptions = selectedProviderModels.map(m =>
-            `<option value="${escapeHtml(m)}" ${m === groupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
+            `<option value="${escapeHtml(m)}" ${m === effectiveGroupModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
         ).join('');
 
         let statusText;
@@ -716,9 +718,10 @@ function renderCognition() {
             ).join('');
 
             const jobModels = jobProviderId ? getProviderModels(jobProviderId) : [];
+            const effectiveJobModel = jobModel || (jobModels.length > 0 ? jobModels[0] : null);
             const jobModelDefault = jobProviderId ? '-- default --' : '-- model --';
             const jobModelOpts = jobModels.map(m =>
-                `<option value="${escapeHtml(m)}" ${m === jobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
+                `<option value="${escapeHtml(m)}" ${m === effectiveJobModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
             ).join('');
 
             const capsHtml = Object.entries(job.caps || {}).map(([key, level]) =>
@@ -771,8 +774,8 @@ function renderCognition() {
                     ${statusText}
                 </div>
                 <div class="group-card__advanced">
-                    <button class="group-advanced-toggle" data-group="${groupName}">${!isUniform && assignedCount > 0 ? 'Per-job assignments \u25BE' : 'Advanced \u25B8'}</button>
-                    <div class="group-advanced-body" data-group="${groupName}" style="${!isUniform && assignedCount > 0 ? 'display:block' : 'display:none'}">
+                    <button class="group-advanced-toggle" data-group="${groupName}">Advanced \u25B8</button>
+                    <div class="group-advanced-body" data-group="${groupName}" style="display:none">
                         ${jobRowsHtml}
                     </div>
                 </div>
