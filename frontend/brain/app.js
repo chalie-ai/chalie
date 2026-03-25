@@ -2468,7 +2468,8 @@ async function openMetaEditor(id) {
             </div>`;
 
         footerEl.innerHTML = `<button class="tool-card__btn doc-meta-save-btn" data-doc-id="${id}">Save</button>`;
-    } catch {
+    } catch (e) {
+        console.error('[DocMeta]', e);
         bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
     }
 }
@@ -2548,7 +2549,8 @@ async function openPreview(id) {
                 const arrayBuffer = await dlRes.arrayBuffer();
                 const result = await mammoth.convertToHtml({ arrayBuffer });
                 bodyEl.innerHTML = `<div class="doc-preview-html" style="font-family:sans-serif;line-height:1.6;padding:8px;">${result.value}</div>`;
-            } catch {
+            } catch (e) {
+                console.error('[DocPreview/DOCX]', e);
                 bodyEl.innerHTML = `<iframe src="${previewUrl}" style="width:100%;height:70vh;border:none;border-radius:6px;" title="Document Preview"></iframe>`;
             }
 
@@ -2578,7 +2580,8 @@ async function openPreview(id) {
                 const text = await txtRes.text();
                 const html = (typeof marked !== 'undefined') ? marked.parse(text) : `<pre>${escapeHtml(text)}</pre>`;
                 bodyEl.innerHTML = `<div class="doc-preview-html" style="line-height:1.6;padding:8px;">${html}</div>`;
-            } catch {
+            } catch (e) {
+                console.error('[DocPreview/Markdown]', e);
                 bodyEl.innerHTML = '<div class="obs-empty">Failed to load Markdown preview.</div>';
             }
 
@@ -2587,9 +2590,10 @@ async function openPreview(id) {
                 const txtRes = await apiFetch(`/documents/${id}/preview`);
                 const text = await txtRes.text();
                 let formatted = text;
-                try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep raw */ }
+                try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch (_parseErr) { /* keep raw */ }
                 bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(formatted)}</pre>`;
-            } catch {
+            } catch (e) {
+                console.error('[DocPreview/JSON]', e);
                 bodyEl.innerHTML = '<div class="obs-empty">Failed to load JSON preview.</div>';
             }
 
@@ -2599,11 +2603,13 @@ async function openPreview(id) {
                 const txtRes = await apiFetch(`/documents/${id}/preview`);
                 const text = await txtRes.text();
                 bodyEl.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;">${escapeHtml(text)}</pre>`;
-            } catch {
+            } catch (e) {
+                console.error('[DocPreview/Text]', e);
                 bodyEl.innerHTML = '<div class="obs-empty">Failed to load preview.</div>';
             }
         }
-    } catch {
+    } catch (e) {
+        console.error('[DocPreview]', e);
         bodyEl.innerHTML = '<div class="obs-empty">Failed to load document.</div>';
     }
 }
