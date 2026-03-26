@@ -150,7 +150,7 @@ class TestStoreEpisode:
         mock_storage.store_episode.return_value = 'ep-123'
 
         # Patch the lazy imports at the exact module path _store_episode uses
-        with patch('services.database_service.get_lightweight_db_service', return_value=mock_db), \
+        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.embedding_service.get_embedding_service', return_value=mock_emb), \
              patch('services.episodic_service.EpisodicService', return_value=mock_storage):
             service._store_episode(
@@ -172,7 +172,7 @@ class TestStoreEpisode:
         mock_emb = MagicMock()
         mock_emb.generate_embedding.side_effect = KeyError('text')
 
-        with patch('services.database_service.get_lightweight_db_service', return_value=mock_db), \
+        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.embedding_service.get_embedding_service', return_value=mock_emb):
             with pytest.raises(KeyError):
                 service._store_episode(

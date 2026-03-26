@@ -671,7 +671,7 @@ class TestQuietHoursAndConversationPace:
 
     def test_learn_quiet_hours_insufficient_data(self, mock_store):
         """Less than 50 interactions should return None."""
-        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+        with patch('services.database_service.get_shared_db_service') as MockDb:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = [(10, 5), (14, 3)]  # Only 8 total
@@ -686,7 +686,7 @@ class TestQuietHoursAndConversationPace:
 
     def test_learn_quiet_hours_with_sufficient_data(self, mock_store):
         """Hours with < 5% of interactions should be marked quiet."""
-        with patch('services.database_service.get_lightweight_db_service') as MockDb:
+        with patch('services.database_service.get_shared_db_service') as MockDb:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             # Simulate: hours 9-17 have lots of interactions, others are sparse
