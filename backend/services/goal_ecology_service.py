@@ -479,11 +479,10 @@ class GoalEcologyService:
             source: Optional origin identifier (conversation ID, URL, etc.).
             strength: Numeric weight in the range 0–1 (default ``1.0``).
         """
-        evidence_id = str(uuid.uuid4())
         now = utc_now().isoformat()
 
         def _write_evidence(
-            eid=evidence_id, gid=goal_id, stype=signal_type,
+            gid=goal_id, stype=signal_type,
             cont=content, src=source, stren=strength, ts=now, db=self.db,
         ):
             """Atomically insert evidence and bump evidence_count on the write-queue thread."""
@@ -491,9 +490,9 @@ class GoalEcologyService:
                 cursor = conn.cursor()
                 cursor.execute(
                     """INSERT INTO goal_evidence
-                           (id, goal_id, signal_type, content, source, strength, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (eid, gid, stype, cont, src, stren, ts),
+                           (goal_id, signal_type, content, source, strength, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (gid, stype, cont, src, stren, ts),
                 )
                 cursor.execute(
                     """UPDATE goals

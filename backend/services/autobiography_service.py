@@ -209,14 +209,14 @@ class AutobiographyService:
                         "reinforcement_count": row[4]
                     })
 
-                # Gather concepts (top 30 by strength)
+                # Gather concepts (top 30 by confidence)
                 result = session.execute(
                     text("""
                     SELECT key,
                            json_extract(data, '$.concept_type') AS concept_type,
                            value,
-                           json_extract(data, '$.domain') AS domain,
-                           CAST(json_extract(data, '$.strength') AS REAL) AS strength
+                           COALESCE(json_extract(data, '$.domain'), 'general') AS domain,
+                           COALESCE(confidence, CAST(json_extract(data, '$.strength') AS REAL), 0.0) AS strength
                     FROM knowledge
                     WHERE kind = 'concept'
                       AND deleted_at IS NULL
@@ -231,16 +231,16 @@ class AutobiographyService:
                         "type": row[1],
                         "definition": row[2],
                         "domain": row[3],
-                        "strength": row[4]
+                        "strength": row[4] or 0.0
                     })
 
                 # Gather relationships (resolve source/target from data JSON)
                 result = session.execute(
                     text("""
-                    SELECT json_extract(r.data, '$.source_name') AS source_name,
-                           json_extract(r.data, '$.target_name') AS target_name,
-                           json_extract(r.data, '$.relationship_type') AS relationship_type,
-                           CAST(json_extract(r.data, '$.strength') AS REAL) AS strength
+                    SELECT COALESCE(json_extract(r.data, '$.source_name'), json_extract(r.data, '$.source_key')) AS source_name,
+                           COALESCE(json_extract(r.data, '$.target_name'), json_extract(r.data, '$.target_key')) AS target_name,
+                           COALESCE(json_extract(r.data, '$.relationship_type'), r.value) AS relationship_type,
+                           COALESCE(r.confidence, CAST(json_extract(r.data, '$.strength') AS REAL), 0.0) AS strength
                     FROM knowledge r
                     WHERE r.kind = 'relationship'
                       AND r.deleted_at IS NULL
@@ -254,7 +254,7 @@ class AutobiographyService:
                         "source": row[0],
                         "target": row[1],
                         "type": row[2],
-                        "strength": row[3]
+                        "strength": row[3] or 0.0
                     })
 
                 # Gather constraint learning episodes (from idle consolidation)
@@ -514,7 +514,7 @@ class AutobiographyService:
             for trait in inputs["traits"]:
                 lines.append(
                     f"- {trait['key']}: {trait['value']} "
-                    f"(confidence: {trait['confidence']:.2f}, category: {trait['category']})"
+                    f"(confidence: {trait['confidence']:.2f}, category: {trait.get('category') or 'general'})"
                 )
 
         if inputs["concepts"]:
@@ -522,7 +522,7 @@ class AutobiographyService:
             for concept in inputs["concepts"]:
                 lines.append(
                     f"- {concept['name']}: {concept['definition']} "
-                    f"(strength: {concept['strength']:.2f}, domain: {concept['domain']})"
+                    f"(strength: {concept['strength']:.2f}, domain: {concept.get('domain') or 'general'})"
                 )
 
         constraint_episodes = inputs.get("constraint_episodes", [])

@@ -727,7 +727,7 @@ class ReasoningLoopService:
         idle_signal = ReasoningSignal(
             signal_type='idle_discovery',
             source='reasoning_loop',
-            concept_id=int(seed['concept_id']) if seed['concept_id'].isdigit() else None,
+            concept_id=int(seed['concept_id']) if seed.get('concept_id') is not None else None,
             concept_name=seed.get('concept_name'),
             topic=seed.get('topic'),
             content=seed.get('definition'),

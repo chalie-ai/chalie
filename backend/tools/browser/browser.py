@@ -108,12 +108,14 @@ def _action_render(params: dict) -> dict:
             title = page.title()
             final_url = page.url
 
+            # Extract links BEFORE text — extract_text mutates the DOM
+            # (removes noise elements), which would strip links from nav/header
+            links = extract_links(page, final_url)
+
             if extract_mode == "html":
                 content = extract_html(page, selector, max_chars)
             else:
                 content = extract_text(page, selector, max_chars)
-
-            links = extract_links(page, final_url)
 
             selector_matched = True
             if selector:

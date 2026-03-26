@@ -55,31 +55,28 @@ def extract_text(page, selector: str | None = None, max_chars: int = 8000) -> st
     Returns:
         Clean text string.
     """
+    # Capture raw text BEFORE noise removal — noise removal mutates the DOM
+    # and can accidentally nuke real content on JS-heavy / e-commerce sites
+    raw_text = _inner_text(page, selector)
+
+    # Remove noise elements from the DOM (destructive — elements are deleted)
     try:
-        # Remove noise elements from the DOM (in-page mutation — does not affect
-        # the actual site, only our ephemeral context)
         page.evaluate("""(sel) => {
             document.querySelectorAll(sel).forEach(el => el.remove());
         }""", _NOISE_SELECTOR)
     except Exception:
         pass  # Page might block evaluate — proceed with noisy DOM
 
-    try:
-        if selector:
-            # Scope to specific element
-            el = page.query_selector(selector)
-            if el:
-                text = el.inner_text()
-            else:
-                text = page.inner_text("body")
-        else:
-            text = page.inner_text("body")
-    except Exception as e:
-        logger.warning("[BROWSER EXTRACT] inner_text failed: %s", e)
-        try:
-            text = page.text_content("body") or ""
-        except Exception:
-            text = ""
+    clean_text = _inner_text(page, selector)
+
+    # If noise removal stripped too much, fall back to the raw extraction.
+    # Threshold: cleaned text < 200 chars AND raw text had at least 2× more.
+    if len(clean_text.strip()) < 200 and len(raw_text.strip()) > len(clean_text.strip()) * 2:
+        logger.debug("[BROWSER EXTRACT] Noise removal too aggressive (%d→%d chars), using raw text",
+                     len(raw_text.strip()), len(clean_text.strip()))
+        text = raw_text
+    else:
+        text = clean_text
 
     # Collapse excessive whitespace
     text = _WHITESPACE_RE.sub("\n\n", text.strip())
@@ -88,6 +85,23 @@ def extract_text(page, selector: str | None = None, max_chars: int = 8000) -> st
         text = text[:max_chars]
 
     return text
+
+
+def _inner_text(page, selector: str | None) -> str:
+    """Get inner_text from page or scoped selector, with fallback."""
+    try:
+        if selector:
+            el = page.query_selector(selector)
+            if el:
+                return el.inner_text()
+            return page.inner_text("body")
+        return page.inner_text("body")
+    except Exception as e:
+        logger.warning("[BROWSER EXTRACT] inner_text failed: %s", e)
+        try:
+            return page.text_content("body") or ""
+        except Exception:
+            return ""
 
 
 def extract_html(page, selector: str | None = None, max_chars: int = 8000) -> str:

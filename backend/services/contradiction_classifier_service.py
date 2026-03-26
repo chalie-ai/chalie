@@ -757,7 +757,7 @@ class ContradictionClassifierService:
                       AND k.deleted_at IS NULL
                       AND k.confidence > 0.3
                     ORDER BY k.access_count DESC,
-                             CAST(json_extract(k.data, '$.strength') AS REAL) DESC
+                             k.confidence DESC
                     LIMIT ?
                 """, (n_concepts,))
                 for row in cursor.fetchall():

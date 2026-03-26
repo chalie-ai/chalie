@@ -446,9 +446,11 @@ class EpisodicService:
                       AND e.deleted_at IS NULL
                 """
                 import re as _re
-                fts_safe = _re.sub(r'[:\(\)\*\^"\\?,\'.]', ' ', query_text)
+                fts_safe = _re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text)
                 fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
-                fts_params = [fts_safe or '*']
+                # Quote each token to prevent FTS5 interpreting words as column names or operators
+                fts_terms = ' '.join(f'"{w}"' for w in fts_safe.split() if w)
+                fts_params = [fts_terms or '*']
 
                 if topic:
                     fts_query += " AND e.topic = ?"

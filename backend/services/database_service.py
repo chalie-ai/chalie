@@ -551,9 +551,8 @@ class DatabaseService:
                 ("tool_capability_profiles", "skill_category", "TEXT", None),
                 ("tool_capability_profiles", "descriptor", "TEXT", None),
                 # Uncertainty Engine Phase 1 — reliability columns on durable memory stores
-                ("user_traits",       "reliability", "TEXT DEFAULT 'reliable'", None),
+                # user_traits and semantic_concepts dropped in migration 019
                 ("episodes",          "reliability", "TEXT DEFAULT 'reliable'", None),
-                ("semantic_concepts", "reliability", "TEXT DEFAULT 'reliable'", None),
                 # Migration 006 — fast mute column on goals (avoids JSON deserialisation)
                 ("goals", "is_muted", "INTEGER DEFAULT 0", None),
                 # Multi-model providers — JSON array of available models per provider
@@ -563,7 +562,10 @@ class DatabaseService:
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")
-                existing_cols = {row[1] for row in cursor.fetchall()}
+                rows = cursor.fetchall()
+                if not rows:
+                    continue  # table doesn't exist (may have been dropped by a migration)
+                existing_cols = {row[1] for row in rows}
                 if col not in existing_cols:
                     cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
                     logger.info(f"Added column {table}.{col}")
