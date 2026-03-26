@@ -13,6 +13,7 @@ GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 
 # Installer flags (parsed from args)
 _DISABLE_VOICE=false
+_BRANCH=""
 
 # ─── Colours ────────────────────────────────────────────────────────────────
 _reset="\033[0m"
@@ -42,6 +43,8 @@ _parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --disable-voice)         _DISABLE_VOICE=true; shift ;;
+      --branch=*)              _BRANCH="${1#--branch=}"; shift ;;
+      --branch)                _BRANCH="$2"; shift 2 ;;
       --disable-default-tools) shift ;; # deprecated, ignored — tools are bundled in the repo
       *) shift ;;
     esac
@@ -283,11 +286,16 @@ _fetch_latest_tag() {
 
 _download_release() {
   _section "Downloading Chalie"
-  local tag
-  tag="$(_fetch_latest_tag)"
-  _info "Latest release: $tag"
-
-  local tarball_url="https://github.com/$CHALIE_REPO/archive/refs/tags/$tag.tar.gz"
+  local ref tarball_url
+  if [[ -n "$_BRANCH" ]]; then
+    ref="$_BRANCH"
+    _info "Branch: $ref"
+    tarball_url="https://github.com/$CHALIE_REPO/archive/refs/heads/$ref.tar.gz"
+  else
+    ref="$(_fetch_latest_tag)"
+    _info "Latest release: $ref"
+    tarball_url="https://github.com/$CHALIE_REPO/archive/refs/tags/$ref.tar.gz"
+  fi
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   local tarball="$tmp_dir/chalie.tar.gz"
@@ -299,7 +307,7 @@ _download_release() {
   if [[ ! -f "$tarball" ]] || [[ "$(stat -c%s "$tarball" 2>/dev/null || stat -f%z "$tarball" 2>/dev/null)" -lt 1024 ]]; then
     _error "Download failed (HTTP $http_code). The release archive could not be fetched."
     _error "URL: $tarball_url"
-    _error "This usually means the release tag '$tag' does not have a matching archive."
+    _error "This usually means the ref '$ref' does not have a matching archive."
     rm -rf "$tmp_dir"
     exit 1
   fi
@@ -314,7 +322,7 @@ _download_release() {
   fi
 
   rm -rf "$tmp_dir"
-  _ok "Source extracted ($tag)"
+  _ok "Source extracted ($ref)"
 }
 
 # ─── Python Virtualenv + Dependencies ───────────────────────────────────────
