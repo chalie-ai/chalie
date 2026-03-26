@@ -57,7 +57,7 @@ def persistent_task_worker(shared_state):
                         f"reason={signal.get('reason', 'unknown')}"
                     )
                 except Exception:
-                    pass
+                    logger.debug(f"{LOG_PREFIX} Failed to parse signal JSON", exc_info=True)
             else:
                 logger.debug(f"{LOG_PREFIX} Heartbeat timeout — scanning for eligible tasks")
 
@@ -250,6 +250,7 @@ def _execute_task_act_loop(task: dict) -> dict:
     try:
         cortex_config = ConfigService.resolve_agent_config("frontal-cortex-act")
     except Exception:
+        logger.debug(f"{LOG_PREFIX} frontal-cortex-act config not found, falling back to frontal-cortex", exc_info=True)
         cortex_config = ConfigService.resolve_agent_config("frontal-cortex")
 
     act_prompt = ConfigService.get_agent_prompt("persistent-task-act")

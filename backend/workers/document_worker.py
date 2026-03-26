@@ -65,7 +65,7 @@ def process_document_job(job_data: dict) -> str:
                 doc_id, 'failed', f'Processing timed out after {PROCESSING_TIMEOUT_SECONDS}s'
             )
         except Exception:
-            pass
+            logger.debug("[DOC WORKER] Failed to update document status after timeout", exc_info=True)
         return f"timeout: {doc_id}"
 
     if 'error' in result:
@@ -76,7 +76,7 @@ def process_document_job(job_data: dict) -> str:
                 doc_id, 'failed', result['error']
             )
         except Exception:
-            pass
+            logger.debug("[DOC WORKER] Failed to update document status after processing error", exc_info=True)
         return f"error: {doc_id}: {result['error']}"
 
     if result.get('status') == 'success':

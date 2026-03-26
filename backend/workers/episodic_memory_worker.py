@@ -13,6 +13,8 @@ from services.llm_service import create_llm_service
 from services.thread_conversation_service import ThreadConversationService
 import logging
 
+logger = logging.getLogger(__name__)
+
 
 def check_readiness(topic: str, thread_id: str = None, min_exchanges: int = 3, timeout_minutes: int = 10) -> tuple[bool, str, list]:
     """
@@ -240,7 +242,7 @@ def episodic_memory_worker(job_data: dict) -> str:
                 activation_energy=0.5,
             ))
         except Exception:
-            pass
+            logger.debug("[EPISODIC MEMORY WORKER] Failed to signal goal ecology", exc_info=True)
 
         # Feed the semantic consolidation tracker so concepts get created
         try:

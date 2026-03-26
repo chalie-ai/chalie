@@ -133,7 +133,7 @@ def _drain_output(daemon_name: str, proc: subprocess.Popen):
             if line:
                 logger.info("[daemon:%s] %s", daemon_name, line)
     except Exception:
-        pass
+        logger.debug("[DaemonWatcher] Failed to drain daemon output", exc_info=True)
 
 
 def _stop_daemon(daemon_name: str):
