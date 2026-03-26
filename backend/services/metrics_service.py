@@ -18,7 +18,7 @@ class MetricsService:
 
     def __init__(self):
         """Initialize metrics service with MemoryStore connection."""
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
     def start_trace(self) -> str:
         """

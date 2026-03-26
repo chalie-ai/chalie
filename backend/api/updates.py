@@ -247,7 +247,7 @@ def update_context():
     try:
         from services.memory_store import get_shared_store
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         STORE_KEY = "client_context:primary"
         TTL = 3600
 
@@ -316,7 +316,7 @@ def update_feedback():
         from services.memory_store import get_shared_store
         from services.time_utils import utc_now
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         feedback_key = f"intent_feedback:{intent_id}"
         record = {
             "intent_id": intent_id,

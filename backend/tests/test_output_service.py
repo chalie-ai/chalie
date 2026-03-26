@@ -28,8 +28,7 @@ class TestOutputService:
                 "topics": {"output_queue": "output-queue"},
             }
         }
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                    return_value=mock_store), \
+        with patch('services.output_service.get_shared_store', return_value=mock_store), \
              patch('services.config_service.ConfigService.connections',
                    return_value=connections):
             svc = OutputService()

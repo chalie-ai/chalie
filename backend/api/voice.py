@@ -374,7 +374,7 @@ def voice_synthesize():
         import numpy as np
         from services.memory_store import get_shared_store
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         silence = np.zeros(int(24000 * 0.3), dtype=np.float32)
         try:
             for i, chunk in enumerate(chunks):

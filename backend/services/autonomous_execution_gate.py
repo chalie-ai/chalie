@@ -199,7 +199,7 @@ class AutonomousExecutionGate:
                 from services.memory_store import get_shared_store
                 self._confidence_service = DomainConfidenceService(
                     get_shared_db_service(),
-                    MemoryClientService.create_connection(),
+                    get_shared_store(),
                 )
             return float(self._confidence_service.compute_domain_confidence(
                 domain, account_id

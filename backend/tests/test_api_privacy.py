@@ -52,7 +52,7 @@ class TestPrivacyAPI:
         mock_store = MagicMock()
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             response = client.get('/privacy/data-summary')
 
             assert response.status_code == 200
@@ -91,7 +91,7 @@ class TestPrivacyAPI:
         mock_db = MagicMock()
         mock_db.connection.return_value = mock_conn_ctx
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()
@@ -128,7 +128,7 @@ class TestPrivacyAPI:
         mock_db = MagicMock()
         mock_db.connection.return_value = mock_conn_ctx
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()

@@ -58,7 +58,7 @@ def readiness_check():
     # MemoryStore
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         store.ping()
         components['memory_store'] = {'status': 'ok'}
     except Exception as e:
@@ -126,7 +126,7 @@ def system_status():
         from services.memory_store import get_shared_store
         from services.database_service import get_shared_db_service
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         result = {"status": "ok", "memory": {}, "storage": {}, "queues": {}}
 
         # MemoryStore health
@@ -236,7 +236,7 @@ def observability_memory():
         queues = {}
 
         try:
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
 
             # Count total buffered turns across all active working-memory keys.
             # Each key is a list of JSON turn entries; sum their lengths.
@@ -415,7 +415,7 @@ def observability_tasks():
         # Goal ecology stats
         try:
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             result['goal_ecology_stats'] = {
                 'last_run': store.get('goal_ecology:last_run'),
                 'cycles_total': int(store.get('goal_ecology:cycles_total') or 0),
@@ -595,7 +595,7 @@ def observability_temporal():
         stats = service.get_observation_stats()
 
         # Add last mining run time from MemoryStore
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         last_run = store.get("temporal:last_mining_run")
         stats['mining_last_run'] = last_run if last_run else None
 

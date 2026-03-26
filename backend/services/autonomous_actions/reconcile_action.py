@@ -63,7 +63,7 @@ class ReconcileAction(AutonomousAction):
         config = config or {}
         services = services or {}
 
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self._db_service = services.get('db_service')
 
         self.cooldown_minutes = config.get('cooldown_minutes', _DEFAULT_COOLDOWN_MINUTES)

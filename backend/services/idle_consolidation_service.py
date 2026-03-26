@@ -38,7 +38,7 @@ class IdleConsolidationService:
         Args:
             check_interval: Seconds between idle checks (default: 300 = 5 minutes)
         """
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.tracker = SemanticConsolidationTracker()
         self.check_interval = check_interval
 

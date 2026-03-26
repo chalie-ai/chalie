@@ -15,18 +15,17 @@ pytestmark = pytest.mark.unit
 
 def _make_service(initial_blob: dict = None):
     """Create an IdentityStateService with a mocked MemoryStore connection."""
-    with patch('services.identity_state_service.MemoryClientService') as mock_cls:
-        mock_store = MagicMock()
-        mock_cls.create_connection.return_value = mock_store
+    mock_store = MagicMock()
 
-        if initial_blob is not None:
-            mock_store.get.return_value = json.dumps(initial_blob)
-        else:
-            mock_store.get.return_value = None
+    if initial_blob is not None:
+        mock_store.get.return_value = json.dumps(initial_blob)
+    else:
+        mock_store.get.return_value = None
 
+    with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
         from services.identity_state_service import IdentityStateService
         svc = IdentityStateService()
-        return svc, mock_store, mock_cls
+    return svc, mock_store
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -37,9 +36,9 @@ class TestIdentityStateServiceSetField:
 
     def test_set_field_stores_correct_values(self):
         """set_field('name', 'Dylan', 0.95) stores value, normalized, display."""
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.set_field('name', 'Dylan', 0.95)
 
         assert result is True
@@ -56,9 +55,9 @@ class TestIdentityStateServiceSetField:
 
     def test_set_field_normalizes_all_lowercase(self):
         """set_field with all-lowercase input → title-case display, lowercase normalized."""
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             svc.set_field('name', 'dylan', 0.95)
 
         written = json.loads(mock_store.setex.call_args[0][2])
@@ -68,9 +67,9 @@ class TestIdentityStateServiceSetField:
 
     def test_set_field_preserves_mixed_case(self):
         """Mixed-case input (e.g., O'Brien) stored as-is, not title-cased."""
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             svc.set_field('name', "O'Brien", 0.95)
 
         written = json.loads(mock_store.setex.call_args[0][2])
@@ -91,9 +90,9 @@ class TestIdentityStateServiceSetField:
                 'previous': [],
             }
         }
-        svc, mock_store, mock_cls = _make_service(initial_blob=existing)
+        svc, mock_store = _make_service(initial_blob=existing)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             svc.set_field('name', 'Dylan', 0.95)
 
         written = json.loads(mock_store.setex.call_args[0][2])
@@ -114,9 +113,9 @@ class TestIdentityStateServiceSetField:
                 'previous': [],
             }
         }
-        svc, mock_store, mock_cls = _make_service(initial_blob=existing)
+        svc, mock_store = _make_service(initial_blob=existing)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             # Set same name again with different casing
             svc.set_field('name', 'dylan', 0.95)
 
@@ -139,9 +138,9 @@ class TestIdentityStateServiceSetField:
                 'previous': existing_previous,
             }
         }
-        svc, mock_store, mock_cls = _make_service(initial_blob=existing)
+        svc, mock_store = _make_service(initial_blob=existing)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             svc.set_field('name', 'Name6', 0.95)
 
         written = json.loads(mock_store.setex.call_args[0][2])
@@ -151,9 +150,9 @@ class TestIdentityStateServiceSetField:
     def test_set_field_refreshes_ttl(self):
         """set_field always calls setex (refreshing TTL) on every write."""
         from services.identity_state_service import IdentityStateService
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             svc.set_field('name', 'Dylan', 0.95)
 
         assert mock_store.setex.called
@@ -162,19 +161,19 @@ class TestIdentityStateServiceSetField:
 
     def test_set_field_store_error_returns_false_no_raise(self):
         """MemoryStore error → returns False, does not raise."""
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
         mock_store.get.side_effect = ConnectionError("MemoryStore down")
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.set_field('name', 'Dylan', 0.95)
 
         assert result is False
 
     def test_set_field_store_key_is_fixed(self):
         """MemoryStore key is fixed as 'identity_state'."""
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             svc.set_field('name', 'Dylan', 0.95)
 
         call_args = mock_store.setex.call_args[0]
@@ -185,9 +184,9 @@ class TestIdentityStateServiceGetAll:
 
     def test_get_all_returns_empty_on_missing_key(self):
         """Missing MemoryStore key → get_all() returns {}."""
-        svc, mock_store, mock_cls = _make_service(initial_blob=None)
+        svc, mock_store = _make_service(initial_blob=None)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.get_all()
 
         assert result == {}
@@ -197,19 +196,19 @@ class TestIdentityStateServiceGetAll:
         blob = {'name': {'value': 'Dylan', 'normalized': 'dylan', 'display': 'Dylan',
                          'confidence': 0.95, 'updated_at': 0.0, 'provisional': False,
                          'previous': []}}
-        svc, mock_store, mock_cls = _make_service(initial_blob=blob)
+        svc, mock_store = _make_service(initial_blob=blob)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.get_all()
 
         assert result['name']['display'] == 'Dylan'
 
     def test_get_all_returns_empty_on_store_error(self):
         """MemoryStore error → returns {}, does not raise."""
-        svc, mock_store, mock_cls = _make_service()
+        svc, mock_store = _make_service()
         mock_store.get.side_effect = ConnectionError("MemoryStore down")
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.get_all()
 
         assert result == {}
@@ -222,9 +221,9 @@ class TestIdentityStateServiceGetAll:
                      'previous': []},
             '_onboarding': {'name': {'nudged_at_turn': 5, 'attempts': 1, 'backed_off': False}},
         }
-        svc, mock_store, mock_cls = _make_service(initial_blob=blob)
+        svc, mock_store = _make_service(initial_blob=blob)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.get_all()
 
         assert '_onboarding' in result
@@ -243,9 +242,9 @@ class TestIdentityStateServiceClearField:
                          'confidence': 0.8, 'updated_at': 0.0, 'provisional': False,
                          'previous': []},
         }
-        svc, mock_store, mock_cls = _make_service(initial_blob=blob)
+        svc, mock_store = _make_service(initial_blob=blob)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.clear_field('name')
 
         assert result is True
@@ -255,9 +254,9 @@ class TestIdentityStateServiceClearField:
 
     def test_clear_field_missing_key_returns_true(self):
         """clear_field on missing MemoryStore key returns True (idempotent)."""
-        svc, mock_store, mock_cls = _make_service(initial_blob=None)
+        svc, mock_store = _make_service(initial_blob=None)
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.clear_field('name')
 
         assert result is True
@@ -273,10 +272,10 @@ class TestIdentityStateServiceOnboardingState:
                      'confidence': 0.95, 'updated_at': 0.0, 'provisional': False,
                      'previous': []},
         }
-        svc, mock_store, mock_cls = _make_service(initial_blob=blob)
+        svc, mock_store = _make_service(initial_blob=blob)
         onboarding = {'name': {'nudged_at_turn': 5, 'attempts': 1}}
 
-        with patch('services.identity_state_service.MemoryClientService', mock_cls):
+        with patch('services.identity_state_service.get_shared_store', return_value=mock_store):
             result = svc.set_onboarding_state(onboarding)
 
         assert result is True

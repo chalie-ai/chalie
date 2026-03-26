@@ -299,7 +299,7 @@ class TwoSignalBoundaryService:
     def save_state(self):
         """Persist current state to MemoryStore with 24h TTL."""
         try:
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             store.setex(
                 self._store_key,
                 self._STORE_TTL,
@@ -327,7 +327,7 @@ class TwoSignalBoundaryService:
     def _load_state(self) -> dict:
         """Load persisted state from MemoryStore; fall back to fresh state."""
         try:
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             raw = store.get(self._store_key)
             if raw:
                 state = json.loads(raw)

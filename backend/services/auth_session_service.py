@@ -31,7 +31,7 @@ def create_session(response) -> str:
     from services.memory_store import get_shared_store
 
     token = secrets.token_urlsafe(32)
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
     store.setex(f"{SESSION_KEY_PREFIX}{token}", SESSION_TTL, "1")
 
     secure = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
@@ -65,7 +65,7 @@ def validate_session(request) -> bool:
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         return False
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
     key = f"{SESSION_KEY_PREFIX}{token}"
     exists = store.exists(key)
     if exists:
@@ -90,7 +90,7 @@ def destroy_session(request, response):
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if token:
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         store.delete(f"{SESSION_KEY_PREFIX}{token}")
     response.delete_cookie(SESSION_COOKIE_NAME)
     logger.info("[Session] Destroyed session")

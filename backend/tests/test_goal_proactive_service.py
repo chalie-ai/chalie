@@ -99,8 +99,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             cost = _calculate_social_cost()
 
         assert cost >= 0.3
@@ -115,8 +114,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             cost = _calculate_social_cost()
 
         assert cost < MAX_SOCIAL_COST
@@ -131,8 +129,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             cost = _calculate_social_cost()
 
         assert cost >= 0.3
@@ -147,8 +144,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             cost = _calculate_social_cost()
 
         assert cost >= MAX_SOCIAL_COST
@@ -179,8 +175,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             cost = _calculate_social_cost()
 
         assert cost <= 1.0
@@ -198,8 +193,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=store):
+             patch('services.memory_store.get_shared_store', return_value=store):
             cost = _calculate_social_cost()
 
         assert cost >= 0.2  # Active conversation penalty
@@ -219,8 +213,7 @@ class TestSocialCostBlocking:
 
         with patch('services.ambient_inference_service.AmbientInferenceService',
                    return_value=mock_inference), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=store):
+             patch('services.memory_store.get_shared_store', return_value=store):
             cost = _calculate_social_cost()
 
         # Should be negative (bonus) or at least lower than baseline
@@ -239,8 +232,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = _execute_proactive(goal, 'ask')
 
         assert result['style'] == 'ask'
@@ -257,8 +249,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = _execute_proactive(goal, 'suggest')
 
         assert result['style'] == 'suggest'
@@ -277,8 +268,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'ask')
 
         import json
@@ -303,8 +293,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'suggest')
 
         import json
@@ -328,8 +317,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'suggest')
 
         import json
@@ -353,8 +341,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'ask')
 
         import json
@@ -375,8 +362,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'suggest')
 
         import json
@@ -489,8 +475,7 @@ class TestProactiveExecution:
 
         with patch('services.database_service.get_shared_db_service',
                    side_effect=Exception("DB unavailable")), \
-             patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = _execute_via_persistent_task(goal)
 
         # Should fall back to proactive push with 'suggest' style
@@ -507,8 +492,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'ask')
 
         mock_store.rpush.assert_called_once()
@@ -525,8 +509,7 @@ class TestProactiveExecution:
 
         mock_store = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection',
-                   return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             _execute_via_proactive_push(goal, 'suggest')
 
         mock_store.rpush.assert_called_once()

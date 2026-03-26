@@ -59,7 +59,7 @@ class WrapperRateLimiter:
             window_seconds: Window width in seconds.  Defaults to
                 :data:`DEFAULT_WINDOW` (60).
             store: Optional MemoryStore connection.  When ``None`` the shared
-                singleton is obtained via ``MemoryClientService.create_connection()``.
+                singleton is obtained via ``get_shared_store()``.
         """
         self._limit = limit
         self._window = window_seconds
@@ -69,7 +69,7 @@ class WrapperRateLimiter:
         """Return the MemoryStore connection, lazily creating it if needed."""
         if self._store is not None:
             return self._store
-        return MemoryClientService.create_connection()
+        return get_shared_store()
 
     def is_allowed(self, wrapper_id: str) -> bool:
         """Check whether ``wrapper_id`` may emit another signal right now.

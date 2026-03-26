@@ -19,7 +19,7 @@ class SemanticConsolidationTracker:
 
     def __init__(self):
         """Initialize tracker with MemoryStore connection."""
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.state_key = "semantic_consolidation_state"
         self.salience_history_key = "semantic_consolidation_salience_history"
 

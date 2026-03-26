@@ -280,7 +280,7 @@ class AdaptiveLayerService:
                 return measured
 
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             key = f"style_baseline:{thread_id}"
             raw = store.get(key)
             if not raw:
@@ -306,7 +306,7 @@ class AdaptiveLayerService:
             if not thread_id:
                 return _MIN_OBSERVATION_COUNT  # no gating when thread unknown
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             val = store.get(f"style_obs_count:{thread_id}")
             return int(val) if val else 0
         except Exception:
@@ -318,7 +318,7 @@ class AdaptiveLayerService:
             if not thread_id:
                 return
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             key = f"style_obs_count:{thread_id}"
             store.incr(key)
             store.expire(key, _BASELINE_TTL)
@@ -557,7 +557,7 @@ class AdaptiveLayerService:
                 return ""
 
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
 
             cooldown_key = f"adaptive_fork_cooldown:{thread_id}"
             if store.exists(cooldown_key):

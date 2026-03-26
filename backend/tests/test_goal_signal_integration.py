@@ -118,7 +118,7 @@ class TestRouteCognitiveSignalCallable:
         }
 
         with patch('services.goal_ecology_service.GoalEcologyService', return_value=mock_ecology), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+             patch('services.memory_store.get_shared_store', return_value=mock_store):
             route_cognitive_signal(signal)  # Should not raise
 
     def test_called_with_matching_goal_routes_evidence(self):

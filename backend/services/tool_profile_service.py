@@ -128,7 +128,7 @@ class ToolProfileService:
 
     def _get_store(self):
         from services.memory_store import get_shared_store
-        return MemoryClientService.create_connection(decode_responses=True)
+        return get_shared_store()
 
     # -- Profile Building ------------------------------------------------------
 

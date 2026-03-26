@@ -46,7 +46,7 @@ def mock_store():
     """Mock MemoryStore so TwoSignalBoundaryService starts with fresh state."""
     from services.memory_store import MemoryStore
     store = MemoryStore()
-    with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+    with patch('services.memory_store.get_shared_store', return_value=store):
         yield store
 
 

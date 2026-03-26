@@ -1010,11 +1010,9 @@ def _run_adaptive(messages, embeddings) -> BenchmarkResult:
 
     tracker = CentroidTracker()
 
-    with patch('services.adaptive_boundary_detector.MemoryClientService') as mock_cls:
-        mock_store = MagicMock()
-        mock_cls.create_connection.return_value = mock_store
-        mock_store.get.return_value = None
-
+    mock_store = MagicMock()
+    mock_store.get.return_value = None
+    with patch('services.adaptive_boundary_detector.get_shared_store', return_value=mock_store):
         detector = AdaptiveBoundaryDetector(thread_id="benchmark")
         predictions = []
         diagnostics = []
@@ -1083,7 +1081,7 @@ def _run_two_signal_service(messages, embeddings) -> BenchmarkResult:
     from services.memory_store import MemoryStore
 
     store = MemoryStore()
-    with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+    with patch('services.memory_store.get_shared_store', return_value=store):
         detector = TwoSignalBoundaryService(thread_id="benchmark")
         predictions = []
         diagnostics = []

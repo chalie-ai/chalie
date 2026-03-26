@@ -309,7 +309,7 @@ class DecayEngineService:
         try:
             from services.memory_store import get_shared_store
 
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
 
             multiplier = 1.5
 

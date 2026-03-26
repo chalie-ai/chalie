@@ -47,7 +47,7 @@ def _push_update_event(info):
     """Publish update notification to output:events for WebSocket delivery."""
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         event = {
             "type": "app_update",
             "current_version": info.get("current_version"),

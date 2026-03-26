@@ -30,7 +30,7 @@ class ThreadConversationService:
     MAX_EXCHANGES = 120
 
     def __init__(self):
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self._insert_counter = 0
 
     # ── internal helpers ──────────────────────────────────────────

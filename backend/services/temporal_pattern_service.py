@@ -1081,7 +1081,7 @@ def temporal_pattern_worker(shared_state):
 
     _time.sleep(300)  # 5min warmup — avoid startup load
 
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
     throttle_key = "temporal:mining_throttle"
 
     while True:

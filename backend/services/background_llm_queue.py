@@ -53,7 +53,7 @@ class BackgroundLLMProxy:
                 Used for queue-depth logging and job tracking.
         """
         self.agent_name = agent_name
-        self._store = MemoryClientService.create_connection()
+        self._store = get_shared_store()
 
     def send_message(
         self,

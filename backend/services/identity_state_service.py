@@ -64,7 +64,7 @@ class IdentityStateService:
             bool: True if stored successfully, False on error. Never raises.
         """
         try:
-            r = MemoryClientService.create_connection()
+            r = get_shared_store()
 
             # Read-modify-write
             raw = r.get(self._store_key)
@@ -115,7 +115,7 @@ class IdentityStateService:
                   ``{}`` on missing key or MemoryStore error.  Never raises.
         """
         try:
-            r = MemoryClientService.create_connection()
+            r = get_shared_store()
             raw = r.get(self._store_key)
             if not raw:
                 return {}
@@ -147,7 +147,7 @@ class IdentityStateService:
             bool: True if successful, False on error. Never raises.
         """
         try:
-            r = MemoryClientService.create_connection()
+            r = get_shared_store()
             raw = r.get(self._store_key)
             if not raw:
                 return True
@@ -171,7 +171,7 @@ class IdentityStateService:
             bool: True if successful, False on error. Never raises.
         """
         try:
-            r = MemoryClientService.create_connection()
+            r = get_shared_store()
             raw = r.get(self._store_key)
             blob = json.loads(raw) if raw else {}
             blob['_onboarding'] = onboarding_state

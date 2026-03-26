@@ -32,8 +32,7 @@ def mock_store():
 @pytest.fixture
 def inference_service(mock_store):
     """Create AmbientInferenceService with mocked MemoryStore."""
-    with patch("services.ambient_inference_service.MemoryClientService") as mock_mcs:
-        mock_mcs.create_connection.return_value = mock_store
+    with patch("services.ambient_inference_service.get_shared_store", return_value=mock_store):
         from services.ambient_inference_service import AmbientInferenceService
         service = AmbientInferenceService(place_learning_service=None)
         service._store = mock_store
@@ -377,8 +376,7 @@ class TestSessionReentry:
                 if key in store:
                     store[key] = store[key][start:end + 1]
 
-        with patch("services.client_context_service.MemoryClientService") as mock_mcs:
-            mock_mcs.create_connection.return_value = FakeStore()
+        with patch("services.client_context_service.get_shared_store", return_value=FakeStore()):
             from services.client_context_service import ClientContextService
             service = ClientContextService()
             service._store = FakeStore()

@@ -23,7 +23,7 @@ class EventBusService:
 
     def __init__(self):
         """Initialize event bus with MemoryStore connection."""
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self._handlers: Dict[str, List[Callable]] = {}
 
     def _get_event_queue_key(self, event_type: str) -> str:

@@ -35,7 +35,7 @@ class TestPushNotifications:
         mock_store = MagicMock()
         mock_store.get.return_value = None
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch.dict('os.environ', {}, clear=True):
             keys = _get_vapid_keys()
 
@@ -61,7 +61,7 @@ class TestPushNotifications:
         mock_store = MagicMock()
         mock_store.get.return_value = json.dumps(cached_keys)
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch.dict('os.environ', {}, clear=True):
             keys = _get_vapid_keys()
 
@@ -70,7 +70,7 @@ class TestPushNotifications:
     def test_subscribe_stores_subscription(self, client):
         """Subscribe should store subscription in MemoryStore."""
         mock_store = MagicMock()
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             subscription = {
                 'endpoint': 'https://example.com/push',
                 'keys': {'p256dh': 'key1', 'auth': 'key2'}
@@ -83,7 +83,7 @@ class TestPushNotifications:
     def test_subscribe_invalid_payload(self, client):
         """Invalid subscription should return 400."""
         mock_store = MagicMock()
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             response = client.post('/push/subscribe', json={})
 
         assert response.status_code == 400
@@ -91,7 +91,7 @@ class TestPushNotifications:
     def test_unsubscribe_removes_subscription(self, client):
         """Unsubscribe should remove subscription from MemoryStore."""
         mock_store = MagicMock()
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             subscription = {'endpoint': 'https://example.com/push'}
 
             response = client.post('/push/unsubscribe', json=subscription)
@@ -112,7 +112,7 @@ class TestPushNotifications:
         mock_pywebpush.WebPushException = MockWebPushException
 
         with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('api.push._get_vapid_keys', return_value={'public': 'pub', 'private': 'priv'}):
             send_push_to_all("Test", "Body")
 
@@ -140,7 +140,7 @@ class TestPushNotifications:
         mock_webpush_fn.side_effect = [None, exc]
 
         with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('api.push._get_vapid_keys', return_value={'public': 'pub', 'private': 'priv'}):
             send_push_to_all("Test", "Body")
 
@@ -158,7 +158,7 @@ class TestPushNotifications:
         mock_pywebpush.WebPushException = MockWebPushException
 
         with patch.dict('sys.modules', {'pywebpush': mock_pywebpush}), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('api.push._get_vapid_keys', return_value={'public': 'pub', 'private': 'priv'}):
             send_push_to_all("Test", "Body")
 

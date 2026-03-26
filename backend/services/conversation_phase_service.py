@@ -187,7 +187,7 @@ class ConversationPhaseService:
 
     def _store(self):
         from services.memory_store import get_shared_store
-        return MemoryClientService.create_connection()
+        return get_shared_store()
 
     def _key(self, thread_id: str) -> str:
         return f"{_KEY_PREFIX}:{thread_id}"

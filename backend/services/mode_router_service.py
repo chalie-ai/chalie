@@ -150,7 +150,7 @@ def collect_routing_signals(
     # Memory confidence signal: FOK (Feeling-of-Knowing) per topic
     # Read from MemoryStore (set by recall skill), compute composite confidence score
     from services.memory_store import get_shared_store
-    store = MemoryClientService.create_connection(decode_responses=True)
+    store = get_shared_store()
     raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)

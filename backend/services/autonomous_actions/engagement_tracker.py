@@ -43,7 +43,7 @@ class EngagementTracker:
                     exceeding ``engaged_similarity``).
         """
         config = config or {}
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
         # Similarity thresholds
         self.engaged_similarity = config.get('engaged_similarity', 0.35)

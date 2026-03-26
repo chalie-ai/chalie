@@ -411,7 +411,7 @@ class OAuthService:
         """Store OAuth state data in MemoryStore with TTL."""
         try:
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             key = f"{self._STORE_STATE_PREFIX}{state}"
             payload = json.dumps(data)
             store.setex(key, self._STATE_TTL, payload)
@@ -433,7 +433,7 @@ class OAuthService:
         """Retrieve and delete OAuth state data from MemoryStore."""
         try:
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             key = f"{self._STORE_STATE_PREFIX}{state}"
             ttl = store.ttl(key)
             data = store.get(key)

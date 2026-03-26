@@ -34,7 +34,7 @@ def fake_store():
 @pytest.fixture
 def proxy(fake_store):
     """BackgroundLLMProxy wired to a MemoryStore instance."""
-    with patch("services.background_llm_queue.MemoryClientService.create_connection",
+    with patch("services.background_llm_queue.get_shared_store",
                return_value=fake_store):
         yield BackgroundLLMProxy("test-agent")
 
@@ -47,7 +47,7 @@ def proxy(fake_store):
 class TestBackgroundLLMProxy:
 
     def test_factory_returns_proxy(self, fake_store):
-        with patch("services.background_llm_queue.MemoryClientService.create_connection",
+        with patch("services.background_llm_queue.get_shared_store",
                    return_value=fake_store):
             proxy = create_background_llm_proxy("my-agent")
         assert isinstance(proxy, BackgroundLLMProxy)

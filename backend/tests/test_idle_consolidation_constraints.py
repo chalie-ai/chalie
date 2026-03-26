@@ -29,11 +29,9 @@ def mock_store():
 @pytest.fixture
 def service(mock_store):
     """IdleConsolidationService with mocked dependencies."""
-    with patch('services.idle_consolidation_service.MemoryClientService') as mock_mc, \
+    with patch('services.idle_consolidation_service.get_shared_store', return_value=mock_store), \
          patch('services.idle_consolidation_service.SemanticConsolidationTracker'), \
          patch('services.idle_consolidation_service.ConfigService') as mock_config:
-
-        mock_mc.create_connection.return_value = mock_store
         mock_config.connections.return_value = {
             "memory": {"topics": {}, "queues": {}}
         }

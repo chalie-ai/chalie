@@ -1217,7 +1217,7 @@ def get_shared_store() -> MemoryStore:
     """Return the process-wide MemoryStore singleton (thread-safe).
 
     This is the canonical way to obtain the shared store.  All callers that
-    previously went through ``MemoryClientService.create_connection()`` should
+    previously went through ``get_shared_store()`` should
     use this instead.
     """
     global _shared_store

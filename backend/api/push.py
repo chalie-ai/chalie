@@ -32,7 +32,7 @@ def _get_vapid_keys():
         return {'public': pub, 'private': priv}
 
     from services.memory_store import get_shared_store
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
 
     cached = store.get(VAPID_KEYS_KEY)
     if cached:
@@ -88,7 +88,7 @@ def push_subscribe():
 
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         store.sadd(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         logger.info(f"[Push] Stored subscription: {subscription['endpoint'][:60]}...")
         return jsonify({'ok': True}), 201
@@ -107,7 +107,7 @@ def push_unsubscribe():
 
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         store.srem(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         return jsonify({'ok': True}), 200
     except Exception as e:
@@ -122,7 +122,7 @@ def send_push_to_all(title, body, tag='chalie-message'):
         from services.memory_store import get_shared_store
 
         keys = _get_vapid_keys()
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         subscriptions = store.smembers(SUBSCRIPTIONS_KEY)
 
         if not subscriptions:

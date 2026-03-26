@@ -540,8 +540,7 @@ def evaluate_params(
     old_gate = _boundary_mod.SHORT_MSG_MAX_WORDS
     _boundary_mod.SHORT_MSG_MAX_WORDS = short_gate
 
-    with patch('services.memory_client.MemoryClientService.create_connection',
-               return_value=MemoryStore()):
+    with patch('services.memory_store.get_shared_store', return_value=MemoryStore()):
         for sample in samples:
             # Fresh detector per sample
             svc = TwoSignalBoundaryService(
@@ -691,8 +690,7 @@ def main():
 
     _boundary_mod.SHORT_MSG_MAX_WORDS = opt_g
     fp_samples = []
-    with patch('services.memory_client.MemoryClientService.create_connection',
-               return_value=MemoryStore()):
+    with patch('services.memory_store.get_shared_store', return_value=MemoryStore()):
         for sample in samples:
             if sample.expected_boundary:
                 continue
@@ -727,8 +725,7 @@ def main():
     print("=" * 70)
 
     fn_samples = []
-    with patch('services.memory_client.MemoryClientService.create_connection',
-               return_value=MemoryStore()):
+    with patch('services.memory_store.get_shared_store', return_value=MemoryStore()):
         for sample in samples:
             if not sample.expected_boundary:
                 continue

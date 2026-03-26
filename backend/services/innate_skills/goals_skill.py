@@ -431,7 +431,7 @@ def _handle_cluster_dismiss(ecology, params: dict) -> str:
 
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
 
         cluster_ids = sorted(goal_ids[:5])
         cluster_key = f"goal_cluster:{'|'.join(cluster_ids)}"

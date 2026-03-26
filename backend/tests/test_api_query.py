@@ -291,8 +291,6 @@ class TestRelevanceEndpoint:
         ep_cls = MagicMock(return_value=ep_instance)
         db_mock = MagicMock()
         store_mock = _make_store_mock(world_raw)
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store_mock
 
         stack = ExitStack()
         stack.enter_context(
@@ -300,7 +298,7 @@ class TestRelevanceEndpoint:
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
         stack.enter_context(
-            patch("api.query._get_memory_client", return_value=mc_cls)
+            patch("api.query._get_shared_store", return_value=store_mock)
         )
         return stack, ep_instance, store_mock
 
@@ -389,7 +387,7 @@ class TestRelevanceEndpoint:
             with _patch_cookie_auth(), \
                  patch("api.query._get_episodic_service", side_effect=Exception("no db")), \
                  patch("api.query._get_db_service", side_effect=Exception("no db")), \
-                 patch("api.query._get_memory_client", side_effect=Exception("no store")):
+                 patch("api.query._get_shared_store", side_effect=Exception("no store")):
                 resp = client.get("/api/query/relevance?q=test")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -506,8 +504,6 @@ class TestIdentityEndpoint:
         id_cls = MagicMock(return_value=identity_instance)
         db_mock = MagicMock()
         store_mock = _make_store_mock(style_raw)
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store_mock
 
         stack = ExitStack()
         stack.enter_context(
@@ -515,7 +511,7 @@ class TestIdentityEndpoint:
         )
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
         stack.enter_context(
-            patch("api.query._get_memory_client", return_value=mc_cls)
+            patch("api.query._get_shared_store", return_value=store_mock)
         )
         return stack, identity_instance, store_mock
 
@@ -572,7 +568,7 @@ class TestIdentityEndpoint:
             with _patch_cookie_auth(), \
                  patch("api.query._get_identity_service", side_effect=Exception("no db")), \
                  patch("api.query._get_db_service", side_effect=Exception("no db")), \
-                 patch("api.query._get_memory_client", side_effect=Exception("no store")):
+                 patch("api.query._get_shared_store", side_effect=Exception("no store")):
                 resp = client.get("/api/query/identity")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -791,12 +787,10 @@ class TestCompositeEndpoint:
     def test_parameterised_relevance_slice(self, cookie_app):
         ep_stack = self._patch_episodic()
         store = _make_store_mock()
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store
 
         with cookie_app.test_client() as client:
             with _patch_cookie_auth(), ep_stack, \
-                 patch("api.query._get_memory_client", return_value=mc_cls):
+                 patch("api.query._get_shared_store", return_value=store):
                 resp = client.post(
                     "/api/query/composite",
                     json={"slices": ["relevance:auth tests"]},
@@ -1022,12 +1016,10 @@ class TestDispatchSlice:
         ep_instance = _make_episodic_service_mock([])
         ep_cls = MagicMock(return_value=ep_instance)
         store = _make_store_mock()
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store
 
         with patch("api.query._get_episodic_service", return_value=ep_cls), \
              patch("api.query._get_db_service", return_value=MagicMock()), \
-             patch("api.query._get_memory_client", return_value=mc_cls):
+             patch("api.query._get_shared_store", return_value=store):
             result = _dispatch_slice("relevance:unit tests")
 
         assert "relevance" in result
@@ -1048,12 +1040,10 @@ class TestDispatchSlice:
         id_instance = _make_identity_service_mock()
         id_cls = MagicMock(return_value=id_instance)
         store = _make_store_mock()
-        mc_cls = MagicMock()
-        mc_cls.create_connection.return_value = store
 
         with patch("api.query._get_identity_service", return_value=id_cls), \
              patch("api.query._get_db_service", return_value=MagicMock()), \
-             patch("api.query._get_memory_client", return_value=mc_cls):
+             patch("api.query._get_shared_store", return_value=store):
             result = _dispatch_slice("identity")
 
         assert "vectors" in result

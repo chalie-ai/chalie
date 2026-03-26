@@ -256,7 +256,7 @@ def episodic_memory_worker(job_data: dict) -> str:
                 _sem_queue_name = _sem_config.get("memory", {}).get("queues", {}).get(
                     "semantic_consolidation_queue", {}
                 ).get("name", "semantic_consolidation_queue")
-                _sem_store = MemoryClientService.create_connection(decode_responses=False)
+                _sem_store = get_shared_store()  # NOTE: MemoryStore always returns strings; decode_responses was a no-op
                 _sem_queue = Queue(_sem_queue_name, connection=_sem_store)
                 _sem_queue.enqueue(
                     'workers.semantic_consolidation_worker.semantic_consolidation_worker',

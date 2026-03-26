@@ -23,7 +23,7 @@ class WorkingMemoryService:
             max_turns: Maximum number of turns to keep (default 4).
                        Stored as 2x entries (role + content per turn).
         """
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.max_turns = max_turns
         self.max_entries = max_turns * 2  # Each turn has role + content
 

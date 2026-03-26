@@ -50,7 +50,7 @@ class AmbientInferenceService:
                 ``None``, the config-based circadian curve is used instead.
         """
         self._config = _load_config()
-        self._store = MemoryClientService.create_connection()
+        self._store = get_shared_store()
         self._place_learning = place_learning_service
         self._temporal_patterns = temporal_pattern_service
 

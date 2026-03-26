@@ -89,7 +89,7 @@ class ReasoningSignal:
 def emit_reasoning_signal(signal: ReasoningSignal) -> bool:
     """Emit a reasoning signal to the signal queue. Called by other services."""
     try:
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         config = ConfigService.resolve_agent_config("cognitive-drift")
         signal_config = config.get('signal_queue', {})
         queue_key = signal_config.get('key', 'reasoning:signals')
@@ -156,7 +156,7 @@ class ReasoningLoopService:
         """
         # WorldStateService — lazy, initialised on first use
         self._world_state_service = None
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.config = ConfigService.resolve_agent_config("cognitive-drift")
         self.check_interval = check_interval
 

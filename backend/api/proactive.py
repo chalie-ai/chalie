@@ -28,7 +28,7 @@ def recent_events():
         return jsonify({"error": "Unauthorized"}), 401
 
     from services.memory_store import get_shared_store
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
 
     events = []
     while True:

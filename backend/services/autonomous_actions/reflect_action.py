@@ -54,7 +54,7 @@ class ReflectAction(AutonomousAction):
         config = config or {}
         services = services or {}
 
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
         # Injected services (from drift engine — no new connections)
         self._embedding_service = services.get('embedding_service')

@@ -171,7 +171,7 @@ def _cache_key(text: str) -> str:
 def _get_store():
     """Lazy import to avoid circular imports at module load time."""
     from services.memory_store import get_shared_store
-    return MemoryClientService.create_connection()
+    return get_shared_store()
 
 
 # Singleton EmbeddingService instance

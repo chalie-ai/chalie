@@ -664,7 +664,7 @@ class PromptAssemblyService:
             from services.knowledge_service import KnowledgeService
 
             # Read current exchange count from thread hash
-            r = MemoryClientService.create_connection()
+            r = get_shared_store()
             exchange_count = int(r.hget(f"thread:{thread_id}", "exchange_count") or 0)
 
             identity_svc = IdentityStateService()
@@ -781,7 +781,7 @@ class PromptAssemblyService:
                 try:
                     from services.memory_store import get_shared_store
                     import json as _json
-                    _store = MemoryClientService.create_connection()
+                    _store = get_shared_store()
                     _snapshot_raw = _store.get(f"adaptive_signals:{thread_id}")
                     if _snapshot_raw:
                         _snapshot = _json.loads(_snapshot_raw)

@@ -46,7 +46,7 @@ def data_summary():
         from services.memory_store import get_shared_store
 
         db = get_shared_db_service()
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
 
         result = {}
 
@@ -127,7 +127,7 @@ def export_data():
         from services.memory_store import get_shared_store
 
         db = get_shared_db_service()
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
 
         exported_at = datetime.now(timezone.utc).isoformat()
         yield f'{{"exported_at": {json.dumps(exported_at)}, "tables": {{'
@@ -220,7 +220,7 @@ def delete_all():
         from services.database_service import get_shared_db_service
 
         # Clear MemoryStore — all user-data patterns
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         for pattern in [
             # Memory layer
             "working_memory:*", "world_state:*",

@@ -75,7 +75,7 @@ class ExperienceAssimilationService:
                 Overridden by ``check_interval`` from the
                 ``experience-assimilation`` agent config when present.
         """
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.config = ConfigService.resolve_agent_config("experience-assimilation")
         self.check_interval = self.config.get("check_interval", check_interval)
         self.max_sessions = self.config.get("max_sessions_per_day", 20)

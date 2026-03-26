@@ -591,10 +591,9 @@ class TestAppendMode:
         orch._request_id = ''
         # With no request_id the method should short-circuit or return ''
         # (MemoryStore key would be 'steer:' which should be empty)
-        with patch('services.memory_client.MemoryClientService.create_connection') as mock_conn:
-            mock_store = MagicMock()
-            mock_store.lrange.return_value = []
-            mock_conn.return_value = mock_store
+        mock_store = MagicMock()
+        mock_store.lrange.return_value = []
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = orch._get_steering_text()
         assert result == ''
 
@@ -1179,9 +1178,8 @@ class TestEscalateAndWait:
         mock_store.lrange.return_value = ['proceed with the plan']
 
         with patch('services.output_service.OutputService'), \
-             patch('services.memory_client.MemoryClientService') as mock_mem, \
+             patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('time.sleep'):
-            mock_mem.create_connection.return_value = mock_store
             result = orch._escalate_and_wait(
                 mock_loop, 'Please confirm.', 'exchange-1',
                 poll_interval=0.0, max_wait=10.0,
@@ -1202,11 +1200,10 @@ class TestEscalateAndWait:
         mock_store.lrange.return_value = []  # Never responds
 
         with patch('services.output_service.OutputService'), \
-             patch('services.memory_client.MemoryClientService') as mock_mem, \
+             patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('time.sleep'), \
              patch('time.monotonic', side_effect=[0.0, 2.0]):
             # deadline = 0.0 + 1.0 = 1.0; first while check: 2.0 < 1.0 → False
-            mock_mem.create_connection.return_value = mock_store
             result = orch._escalate_and_wait(
                 mock_loop, 'Please confirm.', 'exchange-1',
                 poll_interval=0.0, max_wait=1.0,
@@ -1233,20 +1230,15 @@ class TestMaybeAutoReflect:
         mock_thread.assert_not_called()
 
     def _mock_auto_reflect_store(self):
-        """Return a sys.modules patch dict that clears the cooldown so reflection proceeds.
-
-        Returns:
-            dict: Suitable for ``patch.dict('sys.modules', ...)``.
-        """
+        """Return a mock store with no cooldown so reflection proceeds."""
         mock_store = MagicMock()
         mock_store.get.return_value = None  # Not in cooldown
-        mock_mem_mod = MagicMock()
-        mock_mem_mod.MemoryClientService.create_connection.return_value = mock_store
-        return {'services.memory_client': mock_mem_mod}
+        return mock_store
 
     def test_triggers_on_degraded_exit(self):
         """Fires background reflection when the termination reason is in DEGRADED_EXITS."""
-        with patch.dict('sys.modules', self._mock_auto_reflect_store()), \
+        mock_store = self._mock_auto_reflect_store()
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('threading.Thread') as mock_thread:
             mock_thread.return_value = MagicMock()
             _maybe_auto_reflect(
@@ -1262,7 +1254,8 @@ class TestMaybeAutoReflect:
 
     def test_triggers_on_high_net_value(self):
         """Fires background reflection when total net value exceeds HIGH_VALUE threshold (3.0)."""
-        with patch.dict('sys.modules', self._mock_auto_reflect_store()), \
+        mock_store = self._mock_auto_reflect_store()
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('threading.Thread') as mock_thread:
             mock_thread.return_value = MagicMock()
             _maybe_auto_reflect(

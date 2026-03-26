@@ -80,7 +80,7 @@ _MIME_EXT = {
 
 def _get_store():
     from services.memory_store import get_shared_store
-    return MemoryClientService.create_connection()
+    return get_shared_store()
 
 
 def _get_document_service():

@@ -63,7 +63,7 @@ class SelfModelService:
 
     def __init__(self, db_service=None):
         self._db = db_service
-        self._store = MemoryClientService.create_connection()
+        self._store = get_shared_store()
 
     def _get_db(self):
         if self._db is None:

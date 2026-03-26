@@ -25,7 +25,7 @@ def _mock_identity_and_store(
     user_traits: list = None,
 ):
     """
-    Context manager that patches IdentityStateService, MemoryClientService,
+    Context manager that patches IdentityStateService, get_shared_store,
     and KnowledgeService for onboarding nudge tests.
 
     All are imported locally inside _get_onboarding_nudge, so we patch them
@@ -43,7 +43,6 @@ def _mock_identity_and_store(
     @contextlib.contextmanager
     def _ctx():
         with patch('services.identity_state_service.IdentityStateService') as mock_id_cls, \
-             patch('services.memory_client.MemoryClientService') as mock_store_cls, \
              patch('services.database_service.get_shared_db_service') as mock_db, \
              patch('services.knowledge_service.KnowledgeService') as mock_ks_cls:
 
@@ -54,13 +53,13 @@ def _mock_identity_and_store(
 
             mock_store = MagicMock()
             mock_store.hget.return_value = str(exchange_count)
-            mock_store_cls.create_connection.return_value = mock_store
 
             mock_ks = MagicMock()
             mock_ks.get_by_kind.return_value = user_traits
             mock_ks_cls.return_value = mock_ks
 
-            yield mock_id, mock_store
+            with patch('services.memory_store.get_shared_store', return_value=mock_store):
+                yield mock_id, mock_store
 
     return _ctx()
 
@@ -209,9 +208,8 @@ class TestOnboardingNudge:
         """MemoryStore error -- returns '', does not raise."""
         svc = _make_service_instance()
 
-        with patch('services.memory_client.MemoryClientService') as mock_store_cls, \
+        with patch('services.memory_store.get_shared_store', side_effect=ConnectionError("MemoryStore down")), \
              patch('services.identity_state_service.IdentityStateService'):
-            mock_store_cls.create_connection.side_effect = ConnectionError("MemoryStore down")
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""

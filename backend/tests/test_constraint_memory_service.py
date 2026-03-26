@@ -45,7 +45,7 @@ class TestConstraintSummary:
         db, _ = _make_db_mock()
         store = _make_store_mock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=[]):
             service = ConstraintMemoryService(db)
             summary = service.get_constraint_summary()
@@ -71,7 +71,7 @@ class TestConstraintSummary:
             }),
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             summary = service.get_constraint_summary()
@@ -90,7 +90,7 @@ class TestConstraintSummary:
             _make_rejection_event('triage_override', {'rule': 'act_no_tools_available'}),
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             service.get_constraint_summary()
@@ -112,7 +112,7 @@ class TestConstraintSummary:
         })
         store.get.return_value = cached_summary
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store):
             service = ConstraintMemoryService(db)
             summary = service.get_constraint_summary()
 
@@ -130,7 +130,7 @@ class TestFormatForPrompt:
         db, _ = _make_db_mock()
         store = _make_store_mock()
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=[]):
             service = ConstraintMemoryService(db)
             result = service.format_for_prompt(mode='act')
@@ -150,7 +150,7 @@ class TestFormatForPrompt:
             }),
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             result = service.format_for_prompt(mode='act')
@@ -166,7 +166,7 @@ class TestFormatForPrompt:
             _make_rejection_event('plan_rejected', {'rejection_type': 'step_quality'}),
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             result = service.format_for_prompt(mode='plan')
@@ -184,7 +184,7 @@ class TestFormatForPrompt:
             }),
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             result = service.format_for_prompt(mode='respond')
@@ -204,7 +204,7 @@ class TestFormatForPrompt:
             for i in range(100)
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             result = service.format_for_prompt(mode='act', max_tokens=50)
@@ -233,7 +233,7 @@ class TestBlockedActionPatterns:
             }),
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             patterns = service.get_blocked_action_patterns()
@@ -251,7 +251,7 @@ class TestBlockedActionPatterns:
             for _ in range(5)
         ]
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             patterns = service.get_blocked_action_patterns()
@@ -275,7 +275,7 @@ class TestBlockedActionPatterns:
             }) for _ in range(7)]
         )
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
+        with patch('services.constraint_memory_service.get_shared_store', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService.get_events_by_types', return_value=events):
             service = ConstraintMemoryService(db)
             patterns = service.get_blocked_action_patterns()

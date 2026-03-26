@@ -307,8 +307,7 @@ class TestUpdateContext:
 
     def test_updates_place_field(self, cookie_client):
         store = self._store_mock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             resp = cookie_client.post(
                 "/api/updates/context",
                 json={"place": "office"},
@@ -322,8 +321,7 @@ class TestUpdateContext:
 
     def test_updates_energy_field(self, cookie_client):
         store = self._store_mock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             resp = cookie_client.post(
                 "/api/updates/context",
                 json={"energy": "high"},
@@ -335,8 +333,7 @@ class TestUpdateContext:
 
     def test_updates_custom_signals(self, cookie_client):
         store = self._store_mock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             resp = cookie_client.post(
                 "/api/updates/context",
                 json={"custom": {"meeting_room": "B3", "sprint": "42"}},
@@ -350,8 +347,7 @@ class TestUpdateContext:
     def test_merges_custom_with_existing(self, cookie_client):
         """New custom signals should merge into, not replace, existing ones."""
         store = self._store_mock({"external_signals": {"existing_key": "existing_val"}})
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             cookie_client.post(
                 "/api/updates/context",
                 json={"custom": {"new_key": "new_val"}},
@@ -404,8 +400,7 @@ class TestUpdateContext:
         store = MagicMock()
         store.get.return_value = json.dumps({})
         with patch_session, patch_auth, \
-             patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+             patch("services.memory_store.get_shared_store", return_value=store):
             with app.test_client() as client:
                 resp = client.post(
                     "/api/updates/context",
@@ -419,8 +414,7 @@ class TestUpdateContext:
         """Cookie-authenticated users can always update context."""
         store = MagicMock()
         store.get.return_value = json.dumps({})
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             resp = cookie_client.post(
                 "/api/updates/context",
                 json={"place": "home", "energy": "medium"},
@@ -437,8 +431,7 @@ class TestUpdateContext:
 class TestUpdateFeedback:
     def test_stores_feedback_record(self, cookie_client):
         store = MagicMock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store), \
+        with patch("services.memory_store.get_shared_store", return_value=store), \
              patch("services.time_utils.utc_now") as mock_now:
             from datetime import datetime, timezone
             mock_now.return_value = datetime(2026, 3, 16, 10, 0, 0, tzinfo=timezone.utc)
@@ -493,8 +486,7 @@ class TestUpdateFeedback:
     def test_details_optional(self, cookie_client):
         """details field is optional — omitting it should still succeed."""
         store = MagicMock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             resp = cookie_client.post(
                 "/api/updates/feedback",
                 json={"intent_id": "xyz789", "outcome": "failure"},
@@ -530,8 +522,7 @@ class TestUpdateFeedback:
         )
         store = MagicMock()
         with patch_session, patch_auth, \
-             patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+             patch("services.memory_store.get_shared_store", return_value=store):
             with app.test_client() as client:
                 resp = client.post(
                     "/api/updates/feedback",
@@ -544,8 +535,7 @@ class TestUpdateFeedback:
     def test_feedback_ttl_is_24h(self, cookie_client):
         """Feedback records should be stored with a 24-hour TTL."""
         store = MagicMock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             cookie_client.post(
                 "/api/updates/feedback",
                 json={"intent_id": "ttl_test", "outcome": "success"},
@@ -561,8 +551,7 @@ class TestUpdateFeedback:
     def test_cookie_auth_bypasses_permission_check(self, cookie_client):
         """Cookie-authenticated users can always submit feedback."""
         store = MagicMock()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
+        with patch("services.memory_store.get_shared_store", return_value=store):
             resp = cookie_client.post(
                 "/api/updates/feedback",
                 json={"intent_id": "perm_test", "outcome": "success"},

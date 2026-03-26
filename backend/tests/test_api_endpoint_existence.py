@@ -36,7 +36,7 @@ class TestAPIEndpointExistence:
         mock_store = MagicMock()
 
         with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+             patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('api._init_dashboard_gateway'):
             app = create_app()
             return {rule.rule: rule.methods for rule in app.url_map.iter_rules()}

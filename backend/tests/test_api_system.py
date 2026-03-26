@@ -154,7 +154,7 @@ class TestSystemAPI:
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.return_value = (42,)
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/status')
 
@@ -183,7 +183,7 @@ class TestSystemAPI:
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.return_value = (0,)
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/status')
 
@@ -219,7 +219,7 @@ class TestSystemAPI:
         mock_db = MagicMock()
         mock_db.fetch_all.side_effect = _fetch_all
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
@@ -540,7 +540,7 @@ class TestSystemAPI:
         mock_db = MagicMock()
         mock_db.fetch_all.side_effect = _fetch_all
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_store.get_shared_store', return_value=mock_store), \
              patch('services.database_service.get_shared_db_service', return_value=mock_db):
             resp = client.get('/system/observability/memory')
 
@@ -619,7 +619,7 @@ class TestSystemAPI:
 
         patches = {
             'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
-            'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
+            'services.memory_store.get_shared_store': MagicMock(return_value=mock_store),
             'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
         if not worker_ok:

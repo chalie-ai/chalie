@@ -40,7 +40,7 @@ class EpisodicMemoryObserver:
             scan_interval: Seconds between scan cycles (default: ``SCAN_INTERVAL`` = 60).
         """
         self.scan_interval = scan_interval
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
     def run(self, shared_state=None):
         """Main service loop — 60s scan cycle."""

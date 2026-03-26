@@ -11,7 +11,7 @@ from services.thread_service import ThreadService, ThreadResolution
 @pytest.fixture
 def thread_service(mock_store):
     """ThreadService with fake MemoryStore."""
-    with patch('services.thread_service.MemoryClientService.create_connection', return_value=mock_store):
+    with patch('services.thread_service.get_shared_store', return_value=mock_store):
         svc = ThreadService(soft_expiry_minutes=30, hard_expiry_minutes=240)
         # Patch out SQLite persistence (non-critical)
         with patch.object(svc, '_persist_thread_created'), \

@@ -1149,7 +1149,7 @@ class GoalEcologyService:
         """
         try:
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
 
             # Get all unmatched signal keys
             keys = store.keys(f"{UNMATCHED_SIGNAL_PREFIX}*")
@@ -1695,7 +1695,7 @@ class GoalEcologyService:
 
             # Check cooldown: don't re-detect clusters too frequently
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
 
             results = []
             for cluster_indices in clusters:

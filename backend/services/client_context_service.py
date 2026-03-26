@@ -89,7 +89,7 @@ class ClientContextService:
 
     def __init__(self):
         """Initialize the service and open a MemoryStore connection."""
-        self._store = MemoryClientService.create_connection()
+        self._store = get_shared_store()
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
         """Resolve a human-readable city/country name from coordinates.

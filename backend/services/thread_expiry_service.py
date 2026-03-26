@@ -52,7 +52,7 @@ class ThreadExpiryService:
     def _run_expiry_cycle(self):
         """Scan for and expire stale threads."""
         try:
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
         except Exception as e:
             logger.debug(f"[THREAD EXPIRY] MemoryStore unavailable: {e}")
             return

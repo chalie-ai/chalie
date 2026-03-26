@@ -17,7 +17,7 @@ def mock_store():
     """Isolated MemoryStore mock."""
     from services.memory_store import MemoryStore
     store = MemoryStore()
-    with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
+    with patch('services.experience_assimilation_service.get_shared_store', return_value=store):
         yield store
 
 

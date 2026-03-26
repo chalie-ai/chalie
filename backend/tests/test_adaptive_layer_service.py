@@ -330,8 +330,7 @@ class TestForkDirective:
         mock_store = MagicMock()
         mock_store.exists.return_value = False
 
-        with patch('services.memory_client.MemoryClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_store
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result == ""
@@ -345,8 +344,7 @@ class TestForkDirective:
         mock_store.exists.return_value = False
         mock_store.set = MagicMock()
 
-        with patch('services.memory_client.MemoryClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_store
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result != ""
@@ -360,8 +358,7 @@ class TestForkDirective:
         mock_store = MagicMock()
         mock_store.exists.return_value = True  # cooldown active
 
-        with patch('services.memory_client.MemoryClientService') as mock_cls:
-            mock_cls.create_connection.return_value = mock_store
+        with patch('services.memory_store.get_shared_store', return_value=mock_store):
             result = svc._get_fork_directive(style, 'thread-123')
 
         assert result == ""

@@ -11,7 +11,7 @@ from services.thread_conversation_service import ThreadConversationService
 @pytest.fixture
 def conv_service(mock_store):
     """ThreadConversationService with fake MemoryStore."""
-    with patch('services.thread_conversation_service.MemoryClientService.create_connection', return_value=mock_store):
+    with patch('services.thread_conversation_service.get_shared_store', return_value=mock_store):
         yield ThreadConversationService()
 
 
@@ -19,7 +19,7 @@ def conv_service(mock_store):
 def conv_service_with_db(mock_store):
     """ThreadConversationService with fake MemoryStore and real in-memory SQLite."""
     db = _create_in_memory_db()
-    with patch('services.thread_conversation_service.MemoryClientService.create_connection', return_value=mock_store):
+    with patch('services.thread_conversation_service.get_shared_store', return_value=mock_store):
         svc = ThreadConversationService()
         svc._db_service = db
         yield svc, db, mock_store

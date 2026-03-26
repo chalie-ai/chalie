@@ -66,7 +66,7 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
             return
 
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         payload = json.dumps({
             'topic': topic,
             'user_prompt': user_prompt,

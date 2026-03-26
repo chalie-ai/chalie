@@ -78,7 +78,7 @@ class CronToolWorker:
 
                 try:
                     from services.memory_store import get_shared_store
-                    store = MemoryClientService.create_connection()
+                    store = get_shared_store()
                     queue_depth = store.llen("prompt-queue")
                     if queue_depth > 5:
                         _log.info(
@@ -122,7 +122,7 @@ class CronToolWorker:
                 old_state_key = f"tool_cron_state:{self.tool_name}"
                 try:
                     from services.memory_store import get_shared_store
-                    _state_store = _MCS.create_connection()
+                    _state_store = get_shared_store()
                     # Migration: copy old key to new key on first access
                     if not _state_store.exists(state_key) and _state_store.exists(old_state_key):
                         old_val = _state_store.get(old_state_key)
@@ -160,7 +160,7 @@ class CronToolWorker:
                 if isinstance(result, dict) and "_state" in result:
                     try:
                         from services.memory_store import get_shared_store
-                        _state_store = _MCS.create_connection()
+                        _state_store = get_shared_store()
                         _state_store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
                     except Exception as e:
                         _log.warning(f"[TOOL CRON] {self.tool_name}: failed to persist state: {e}")

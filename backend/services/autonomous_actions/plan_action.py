@@ -70,7 +70,7 @@ class PlanAction(AutonomousAction):
         super().__init__(name='PLAN', enabled=True, priority=7)
 
         config = config or {}
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
         self.min_activation = config.get('min_activation', DEFAULT_MIN_ACTIVATION)
         self.min_signals = config.get('min_signals', DEFAULT_MIN_SIGNALS)

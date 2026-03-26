@@ -354,7 +354,7 @@ def _store_unmatched_signal(
         from services.memory_store import get_shared_store
         from services.goal_ecology_service import UNMATCHED_SIGNAL_PREFIX, UNMATCHED_SIGNAL_TTL
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         signal_id = str(uuid.uuid4())[:12]
         key = f"{UNMATCHED_SIGNAL_PREFIX}{signal_id}"
 

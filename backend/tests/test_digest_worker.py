@@ -122,9 +122,9 @@ class TestResolveImageContexts:
         return store
 
     def _patch_store(self, store):
-        """Context manager: patch MemoryClientService.create_connection to return *store*."""
+        """Context manager: patch get_shared_store to return *store*."""
         return patch(
-            'services.memory_client.MemoryClientService.create_connection',
+            'services.memory_store.get_shared_store',
             return_value=store,
         )
 

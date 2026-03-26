@@ -131,7 +131,7 @@ class WorkerManager:
         try:
             import json
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             alive = [wid for wid, t in self.threads.items() if t.is_alive()]
             dead = [wid for wid, t in self.threads.items() if not t.is_alive()]
             store.setex("self_model:thread_health", 15, json.dumps({

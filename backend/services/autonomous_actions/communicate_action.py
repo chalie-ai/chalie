@@ -88,7 +88,7 @@ class CommunicateAction(AutonomousAction):
         super().__init__(name='COMMUNICATE', enabled=True, priority=10)
 
         config = config or {}
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
         # Quality gate config
         self.type_bonuses = config.get('type_bonuses', {

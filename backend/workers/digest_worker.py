@@ -86,7 +86,7 @@ def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
     if not image_ids:
         return []
     from services.memory_store import get_shared_store
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
     contexts = []
     for img_id in image_ids:
         key = f'chat_image_result:{img_id}'
@@ -602,7 +602,7 @@ def unified_generate(topic, text, classification, thread_conv_service,
             import json as _json
             from uuid import uuid4
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             narration_id = f"narr_{uuid4().hex[:12]}"
             store.set(f"output:{narration_id}", _json.dumps({
                 'type': 'act_narration',
@@ -1275,7 +1275,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         if goal_id:
             try:
                 from services.memory_store import get_shared_store
-                store = MemoryClientService.create_connection()
+                store = get_shared_store()
                 store.setex(f"proactive_response_tag:{topic}", 14400, goal_id)
             except Exception as e:
                 logger.debug(f"[PROACTIVE] Failed to store response tag in MemoryStore: {e}", exc_info=True)
@@ -1561,7 +1561,7 @@ def _try_proactive_engagement_correlation(text: str, topic: str):
     """
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
 
         tag_key = f"proactive_response_tag:{topic}"
         goal_id = store.get(tag_key)
@@ -1613,7 +1613,7 @@ def _detect_fork_response(text: str, thread_id: str):
         from services.database_service import get_shared_db_service
         from services.knowledge_service import KnowledgeService
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         fork_type = store.get(f"adaptive_fork_pending:{thread_id}")
         if not fork_type:
             return
@@ -1650,7 +1650,7 @@ def _store_adaptive_signals(thread_id: str, text: str, signals: dict = None):
         from services.memory_store import get_shared_store
         import re as _re
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         snapshot = {
             'prompt_token_count': len(text.split()) if text else 0,
             'explicit_feedback': signals.get('explicit_feedback') if signals else None,
@@ -1711,7 +1711,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Mark thread as busy — prevents observer from trimming WM mid-response
     from services.memory_store import get_shared_store
-    _busy_store = MemoryClientService.create_connection()
+    _busy_store = get_shared_store()
     _busy_store.setex(f"thread_busy:{thread_id}", 30, "1")
 
     # Step 2a: Initialize services
@@ -1945,7 +1945,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         # Count consecutive exchanges on current topic for auto-inference
         try:
             from services.memory_store import get_shared_store
-            _store = MemoryClientService.create_connection()
+            _store = get_shared_store()
             _streak_key = f"topic_streak:{thread_id}"
             _streak_raw = _store.get(_streak_key)
             _streak_data = json.loads(_streak_raw) if _streak_raw else {}
@@ -2020,7 +2020,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         # Conditional WM reset: full clear if old topic consolidated, else keep 2-turn bridge
         try:
             from services.memory_store import get_shared_store
-            _wm_store = MemoryClientService.create_connection()
+            _wm_store = get_shared_store()
             wm_identifier = thread_id or topic
             consolidation_ts = _wm_store.get(f"last_consolidation:{wm_identifier}")
             if consolidation_ts is not None:
@@ -2038,7 +2038,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 9c: Compute memory_confidence before intent classifier
     # Use FOK + context warmth + working memory depth as density proxy
     from services.memory_store import get_shared_store
-    store = MemoryClientService.create_connection(decode_responses=True)
+    store = get_shared_store()
     raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)

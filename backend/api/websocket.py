@@ -110,7 +110,7 @@ def register_websocket(sock):
 
         # Subscribe to output:events for drift/card/task push
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         pubsub = store.pubsub()
         pubsub.subscribe('output:events')
 

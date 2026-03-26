@@ -113,7 +113,7 @@ class AppUpdateService:
             ``latest_tag``, ``update_available``, ``release_notes``,
             ``release_url``, ``deployment_mode``, ``checked_at``.
         """
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         current = self.get_current_version()
         mode = self.detect_deployment_mode()
 
@@ -311,7 +311,7 @@ class AppUpdateService:
                 ),
             }
 
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
 
         # Block concurrent updates
         if store.get(IN_PROGRESS_KEY):

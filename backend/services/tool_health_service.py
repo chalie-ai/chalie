@@ -35,7 +35,7 @@ TTL_SECONDS = 900       # 15 minutes — self-healing window
 
 def _get_store():
     from services.memory_store import get_shared_store
-    return MemoryClientService.create_connection()
+    return get_shared_store()
 
 
 def get_potential(tool_name: str) -> float:

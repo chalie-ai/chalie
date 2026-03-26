@@ -19,7 +19,7 @@ def _check_webhook_rate_limit(tool_name: str) -> bool:
     """Return True if within rate limit (30 req/min per tool), False if exceeded."""
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         key = f"webhook_rate:{tool_name}"
         count = store.incr(key)
         if count == 1:

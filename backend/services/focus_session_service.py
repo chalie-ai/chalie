@@ -54,7 +54,7 @@ class FocusSessionService:
         try:
             from services.memory_store import get_shared_store
 
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
 
             # Generate embedding for distraction detection
             embedding = self._generate_embedding(description + " " + topic)
@@ -92,7 +92,7 @@ class FocusSessionService:
         try:
             from services.memory_store import get_shared_store
 
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             raw = store.get(f"{_KEY_PREFIX}:{thread_id}")
             if not raw:
                 return None
@@ -115,7 +115,7 @@ class FocusSessionService:
         try:
             from services.memory_store import get_shared_store
 
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             store.delete(f"{_KEY_PREFIX}:{thread_id}")
             logger.info(f"[FOCUS] Cleared focus for thread {thread_id}")
             return True

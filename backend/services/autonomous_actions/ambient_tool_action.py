@@ -73,7 +73,7 @@ class AmbientToolAction(AutonomousAction):
         # signal-driven reasoning provides better context.
         super().__init__(name='AMBIENT_TOOL', enabled=False, priority=6)
         config = config or {}
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
         self.relevance_threshold = config.get('relevance_threshold', 0.35)
         self.min_activation = config.get('min_activation', 0.5)

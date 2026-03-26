@@ -18,7 +18,7 @@ class OutputService:
 
     def __init__(self):
         """Initialize the OutputService with MemoryStore connection and config."""
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         config = ConfigService.connections()
         topics = config.get("memory", {}).get("topics", {})
         self.queue_name = topics.get("output_queue", "output-queue")

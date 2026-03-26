@@ -57,7 +57,7 @@ class ThreadService:
                 fully expired and a new thread is created.  Must be greater than
                 *soft_expiry_minutes*.  Defaults to 240 minutes (4 hours).
         """
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.soft_expiry_seconds = soft_expiry_minutes * 60
         self.hard_expiry_seconds = hard_expiry_minutes * 60
 

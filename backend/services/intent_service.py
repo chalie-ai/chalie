@@ -114,11 +114,11 @@ class IntentService:
 
         Args:
             store: A MemoryStore instance.  When ``None``, the shared
-                singleton is used via ``MemoryClientService.create_connection()``.
+                singleton is used via ``get_shared_store()``.
         """
         if store is None:
             from services.memory_store import get_shared_store
-            self._store = MemoryClientService.create_connection()
+            self._store = get_shared_store()
         else:
             self._store = store
 

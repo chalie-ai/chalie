@@ -13,8 +13,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def event_bus(mock_store):
     """EventBusService wired to MemoryStore."""
-    with patch('services.event_bus_service.MemoryClientService') as mock_cls:
-        mock_cls.create_connection.return_value = mock_store
+    with patch('services.event_bus_service.get_shared_store', return_value=mock_store):
         bus = EventBusService()
     return bus
 

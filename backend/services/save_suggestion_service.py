@@ -383,7 +383,7 @@ class SaveSuggestionService:
 
     def _get_store(self):
         from services.memory_store import get_shared_store
-        return MemoryClientService.create_connection()
+        return get_shared_store()
 
     def _get_conversation_window(self, thread_id: str) -> Optional[str]:
         """Get recent conversation turns formatted for LLM synthesis."""

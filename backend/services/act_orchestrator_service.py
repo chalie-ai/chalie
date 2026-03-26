@@ -700,7 +700,7 @@ class ACTOrchestrator:
         """
         try:
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             steer_key = f"steer:{self._request_id}"
             steers = store.lrange(steer_key, 0, -1)
             if steers:
@@ -943,7 +943,7 @@ class ACTOrchestrator:
             return None
 
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         steer_key = f"steer:{self._request_id}"
         deadline = _time.monotonic() + max_wait
         logger.info(f"{LOG_PREFIX} Waiting up to {max_wait}s for user response on {steer_key}")
@@ -1053,7 +1053,7 @@ def _maybe_auto_reflect(
     # Check cooldown
     try:
         from services.memory_store import get_shared_store
-        store = MemoryClientService.create_connection()
+        store = get_shared_store()
         cooldown_key = f"auto_reflect_cooldown:{topic}"
         if store.get(cooldown_key):
             logger.debug(f"{LOG_PREFIX} Auto-reflect cooldown active for {topic}")

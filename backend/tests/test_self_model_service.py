@@ -14,9 +14,21 @@ import pytest
 
 
 def _make_service(db=None):
-    """Create SelfModelService with optional DB override."""
+    """Create SelfModelService with optional DB override.
+
+    Patches ``services.self_model_service.get_shared_store`` to whatever
+    ``services.memory_store.get_shared_store`` currently returns (i.e. the
+    mock_store fixture value when called within a test that uses mock_store).
+    This ensures the service's self._store points to the fixture store even
+    though self_model_service.py uses a top-level import binding.
+    """
+    from unittest.mock import patch
+    import services.memory_store as _ms
     from services.self_model_service import SelfModelService
-    return SelfModelService(db_service=db)
+    # get_shared_store may be mocked by the fixture; capture current return value
+    current_store = _ms.get_shared_store()
+    with patch('services.self_model_service.get_shared_store', return_value=current_store):
+        return SelfModelService(db_service=db)
 
 
 def _populate_healthy_state(store):

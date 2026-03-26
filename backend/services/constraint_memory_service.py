@@ -43,7 +43,7 @@ class ConstraintMemoryService:
             from services.database_service import get_shared_db_service
             db_service = get_shared_db_service()
         self.db_service = db_service
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
 
     def get_recent_rejections(self, hours: int = 24, limit: int = 50) -> List[Dict[str, Any]]:
         """Fetch raw rejection events from interaction_log, newest first."""

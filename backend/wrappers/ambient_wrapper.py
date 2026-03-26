@@ -141,7 +141,7 @@ class AmbientWrapper(threading.Thread):
     def run(self):
         """Main thread loop: register once, then poll on schedule."""
         logger.info("[AmbientWrapper] Starting")
-        self._store = MemoryClientService.create_connection()
+        self._store = get_shared_store()
         self._register()
         while not self._stop_event.is_set():
             try:

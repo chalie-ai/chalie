@@ -27,8 +27,8 @@ from services.app_update_service import AppUpdateService
 @pytest.mark.unit
 class TestAppUpdateService:
 
-    @patch('services.app_update_service.MemoryClientService')
-    def test_check_for_update_cached(self, mock_mem):
+    @patch('services.app_update_service.get_shared_store')
+    def test_check_for_update_cached(self, mock_get_store):
         """Returns cached result when available in MemoryStore."""
         cached = json.dumps({
             "current_version": "0.2.0",
@@ -42,20 +42,20 @@ class TestAppUpdateService:
         })
         mock_store = MagicMock()
         mock_store.get.return_value = cached
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         svc = AppUpdateService()
         result = svc.check_for_update()
         assert result["update_available"] is True
         assert result["latest_tag"] == "v1.0.0"
 
-    @patch('services.app_update_service.MemoryClientService')
+    @patch('services.app_update_service.get_shared_store')
     @patch('services.app_update_service.urlopen')
-    def test_check_for_update_new_version(self, mock_urlopen, mock_mem):
+    def test_check_for_update_new_version(self, mock_urlopen, mock_get_store):
         """Detects when a newer version is available (cache miss)."""
         mock_store = MagicMock()
         mock_store.get.return_value = None  # no cache
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         release_data = json.dumps({
             "tag_name": "v1.0.0",
@@ -74,13 +74,13 @@ class TestAppUpdateService:
         assert result["update_available"] is True
         assert result["latest_tag"] == "v1.0.0"
 
-    @patch('services.app_update_service.MemoryClientService')
+    @patch('services.app_update_service.get_shared_store')
     @patch('services.app_update_service.urlopen')
-    def test_check_for_update_same_version(self, mock_urlopen, mock_mem):
+    def test_check_for_update_same_version(self, mock_urlopen, mock_get_store):
         """No update when versions match (cache miss)."""
         mock_store = MagicMock()
         mock_store.get.return_value = None  # no cache
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         release_data = json.dumps({
             "tag_name": "v0.2.0",
@@ -98,9 +98,9 @@ class TestAppUpdateService:
             result = svc.check_for_update()
         assert result["update_available"] is False
 
-    @patch('services.app_update_service.MemoryClientService')
+    @patch('services.app_update_service.get_shared_store')
     @patch('services.app_update_service.urlopen')
-    def test_check_for_update_network_failure_uses_cache(self, mock_urlopen, mock_mem):
+    def test_check_for_update_network_failure_uses_cache(self, mock_urlopen, mock_get_store):
         """Falls back to cached result on network failure (cache expired, re-fetch fails)."""
         from urllib.error import URLError
 
@@ -114,7 +114,7 @@ class TestAppUpdateService:
         # First call (cache-first check): None → triggers API call
         # Second call (error fallback): returns stale cached result
         mock_store.get.side_effect = [None, cached]
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         mock_urlopen.side_effect = URLError("Network down")
 
@@ -124,11 +124,11 @@ class TestAppUpdateService:
         assert result["update_available"] is False
         assert result["current_version"] == "0.2.0"
 
-    @patch('services.app_update_service.MemoryClientService')
-    def test_apply_update_rejected_docker(self, mock_mem):
+    @patch('services.app_update_service.get_shared_store')
+    def test_apply_update_rejected_docker(self, mock_get_store):
         """Docker mode rejects in-place updates."""
         mock_store = MagicMock()
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='docker'):
@@ -136,11 +136,11 @@ class TestAppUpdateService:
         assert result["ok"] is False
         assert result["deployment_mode"] == "docker"
 
-    @patch('services.app_update_service.MemoryClientService')
-    def test_apply_update_rejected_dev(self, mock_mem):
+    @patch('services.app_update_service.get_shared_store')
+    def test_apply_update_rejected_dev(self, mock_get_store):
         """Dev mode rejects in-place updates."""
         mock_store = MagicMock()
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='dev'):
@@ -148,12 +148,12 @@ class TestAppUpdateService:
         assert result["ok"] is False
         assert result["deployment_mode"] == "dev"
 
-    @patch('services.app_update_service.MemoryClientService')
-    def test_concurrent_update_blocked(self, mock_mem):
+    @patch('services.app_update_service.get_shared_store')
+    def test_concurrent_update_blocked(self, mock_get_store):
         """Second update call blocked while first is in progress."""
         mock_store = MagicMock()
         mock_store.get.return_value = "1"  # in_progress flag set
-        mock_mem.create_connection.return_value = mock_store
+        mock_get_store.return_value = mock_store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='installed'):

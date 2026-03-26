@@ -96,7 +96,7 @@ class PersistentTaskService:
         # Wake the persistent task worker so it picks up the new task
         try:
             from services.memory_store import get_shared_store
-            store = MemoryClientService.create_connection()
+            store = get_shared_store()
             store.rpush(
                 'persistent_task:execute',
                 json.dumps({'task_id': task_id, 'reason': 'created'}),
@@ -205,7 +205,7 @@ class PersistentTaskService:
         if new_status in ('accepted', 'in_progress'):
             try:
                 from services.memory_store import get_shared_store
-                store = MemoryClientService.create_connection()
+                store = get_shared_store()
                 store.rpush(
                     'persistent_task:execute',
                     json.dumps({'task_id': task_id, 'reason': new_status}),

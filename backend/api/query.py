@@ -203,8 +203,7 @@ def _slice_relevance(query: str) -> dict:
 
     # Goal matching via world model cache
     try:
-        MemoryClientService = _get_memory_client()
-        store = MemoryClientService.create_connection()
+        store = _get_shared_store()
         raw = store.get("world_model:items")
         if raw:
             payload = json.loads(raw)
@@ -297,8 +296,7 @@ def _slice_identity() -> dict:
 
     # Style metrics — read last measured value from MemoryStore
     try:
-        MemoryClientService = _get_memory_client()
-        store = MemoryClientService.create_connection()
+        store = _get_shared_store()
         raw = store.get("style_metrics:last")
         if raw:
             style = json.loads(raw)

@@ -93,7 +93,7 @@ def background_llm_worker(shared_state=None):
 
     Runs indefinitely, consuming from bg_llm:queue one job at a time.
     """
-    store = MemoryClientService.create_connection()
+    store = get_shared_store()
 
     # Cache of agent_name → RefreshableLLMService
     # Each service auto-refreshes on provider config change.

@@ -21,7 +21,7 @@ class RecentTopicService:
             ttl_minutes: Time-to-live for recent topic cache (default 30 minutes)
             channel_id: Optional channel ID for per-channel scoping
         """
-        self.store = MemoryClientService.create_connection()
+        self.store = get_shared_store()
         self.ttl_seconds = ttl_minutes * 60
         self.key = f"recent_topic:{channel_id}" if channel_id else "recent_topic"
 
