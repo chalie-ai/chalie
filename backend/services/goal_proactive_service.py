@@ -231,8 +231,8 @@ def _learn_quiet_hours() -> Optional[List[int]]:
         List of quiet hour integers (0-23) or None if insufficient data.
     """
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
 
         # Determine the user's UTC offset so we can shift SQLite timestamps.
         offset_minutes = 0
@@ -466,8 +466,8 @@ def _mark_acted(goal_id: str) -> None:
     try:
         now = utc_now().isoformat()
 
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
