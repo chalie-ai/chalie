@@ -43,7 +43,7 @@ class TestGoalsSkillView:
 
     def test_view_shows_detail(self, mock_store):
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service') as MockDb:
+             patch('services.database_service.get_shared_db_service') as MockDb:
             svc = MockEcology.return_value
             svc.get_goal.return_value = {
                 'id': 'g1', 'description': 'Plan dinner for 20', 'type': 'stated',
@@ -289,7 +289,7 @@ class TestGoalsSkillViewLineage:
         svc, mock_db = self._make_view_mocks(child_goal, parent_data=parent_goal)
 
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service', return_value=mock_db):
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             MockEcology.return_value = svc
             from services.innate_skills.goals_skill import handle_goals
             result = handle_goals('test-topic', {'action': 'view', 'goal_id': 'g1'})
@@ -318,7 +318,7 @@ class TestGoalsSkillViewLineage:
         svc, mock_db = self._make_view_mocks(goal_data, children=children)
 
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service', return_value=mock_db):
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             MockEcology.return_value = svc
             from services.innate_skills.goals_skill import handle_goals
             result = handle_goals('test-topic', {'action': 'view', 'goal_id': 'g1'})
@@ -341,7 +341,7 @@ class TestGoalsSkillViewLineage:
         svc, mock_db = self._make_view_mocks(goal_data)
 
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service', return_value=mock_db):
+             patch('services.database_service.get_shared_db_service', return_value=mock_db):
             MockEcology.return_value = svc
             from services.innate_skills.goals_skill import handle_goals
             result = handle_goals('test-topic', {'action': 'view', 'goal_id': 'g1'})
@@ -366,7 +366,7 @@ class TestGoalsSkillNarrate:
 
     def test_narrate_calls_llm_with_goal_context(self, mock_store):
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.database_service.get_shared_db_service') as MockDb, \
              patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = [
@@ -403,7 +403,7 @@ class TestGoalsSkillNarrate:
 
     def test_narrate_with_hierarchy(self, mock_store):
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.database_service.get_shared_db_service') as MockDb, \
              patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = [
@@ -444,7 +444,7 @@ class TestGoalsSkillNarrate:
 
     def test_narrate_llm_failure_returns_fallback(self, mock_store):
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.database_service.get_shared_db_service') as MockDb, \
              patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = [
@@ -473,7 +473,7 @@ class TestGoalsSkillNarrate:
 
     def test_narrate_truncates_long_response(self, mock_store):
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.database_service.get_shared_db_service') as MockDb, \
              patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = [
@@ -506,7 +506,7 @@ class TestGoalsSkillNarrate:
 
     def test_narrate_with_feedback_history(self, mock_store):
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology, \
-             patch('services.database_service.get_lightweight_db_service') as MockDb, \
+             patch('services.database_service.get_shared_db_service') as MockDb, \
              patch('services.background_llm_queue.create_background_llm_proxy') as MockProxy:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = [
