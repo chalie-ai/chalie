@@ -105,8 +105,8 @@ def _handle_view(ecology, goal_id: str) -> str:
 
     # Evidence timeline
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -277,8 +277,8 @@ def _handle_narrate(ecology, params: dict) -> str:
 def _get_evidence_for_goal(goal_id: str, limit: int = 10) -> list:
     """Fetch recent evidence for a goal."""
     try:
-        from services.database_service import get_lightweight_db_service
-        db = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
