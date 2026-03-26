@@ -269,7 +269,7 @@ def _analyze_act_strategies(topic: str) -> Optional[Dict]:
                     t_end = parse_utc(loop['loop_end'])
                     seconds = (t_end - t_start).total_seconds()
                 except Exception:
-                    pass
+                    logger.debug(f"{LOG_PREFIX} Failed to parse loop timing", exc_info=True)
 
             complexity = 'simple' if iterations <= 2 else ('moderate' if iterations <= 4 else 'complex')
             strategy_outcomes.setdefault(tools, []).append({

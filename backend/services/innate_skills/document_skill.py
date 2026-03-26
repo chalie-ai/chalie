@@ -64,7 +64,7 @@ def _parse_extracted_metadata(raw) -> dict:
             if isinstance(parsed, dict):
                 return parsed
         except Exception:
-            pass
+            logger.debug("[DOCUMENT SKILL] Failed to parse extracted metadata JSON", exc_info=True)
     return {}
 
 
@@ -185,7 +185,7 @@ def _handle_search(service, params: dict, topic: str) -> str:
                 try:
                     date_str = f", uploaded {created.strftime('%b %d')}"
                 except Exception:
-                    pass
+                    logger.debug("[DOCUMENT SKILL] Failed to format document date in search results", exc_info=True)
 
             lines.append(
                 f"  · id={doc_id}: \"{doc['original_name']}\"{type_str}"
@@ -226,7 +226,7 @@ def _handle_list(service, topic: str) -> str:
             try:
                 date_str = f", uploaded {created.strftime('%b %d')}"
             except Exception:
-                pass
+                logger.debug("[DOCUMENT SKILL] Failed to format document date in list", exc_info=True)
 
         lines.append(
             f"  · {doc['original_name']}{type_str}"
