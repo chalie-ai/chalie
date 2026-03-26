@@ -30,9 +30,9 @@ from services.innate_skills.find_tools_skill import handle_find_tools
 from services.innate_skills.goals_skill import handle_goals
 from services.innate_skills.rich_render_skill import handle_rich_render
 
-# Backward-compat: import old handlers so existing code referencing them doesn't break
-from services.innate_skills.recall_skill import handle_recall
-from services.innate_skills.memorize_skill import handle_memorize
+# Backward-compat aliases: old names point to unified memory handler
+handle_recall = handle_memory
+handle_memorize = handle_memory
 
 
 _SKILL_HANDLERS = {

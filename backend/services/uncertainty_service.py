@@ -2,8 +2,8 @@
 Uncertainty Service — epistemic confidence tracking across memory systems.
 
 Detects contradictions and ambiguities between memories, tracks their state,
-and drives reliability tagging on the source tables (user_traits, episodes,
-semantic_concepts). This is the single authority for epistemic confidence.
+and drives reliability tagging on the source tables (knowledge, episodes).
+This is the single authority for epistemic confidence.
 """
 
 import logging
@@ -43,8 +43,8 @@ class UncertaintyService:
     """
     Manages epistemic uncertainty records and reliability tagging.
 
-    Constructor follows the UserTraitService pattern: takes a database_service
-    instance, uses self.db.connection() context manager throughout.
+    Takes a database_service instance, uses self.db.connection() context manager
+    throughout.
     """
 
     def __init__(self, database_service):

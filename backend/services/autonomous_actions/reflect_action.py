@@ -483,8 +483,8 @@ class ReflectAction(AutonomousAction):
                     if not concept_id:
                         continue
                     cursor.execute("""
-                        UPDATE semantic_concepts
-                        SET access_count = access_count + 1,
+                        UPDATE knowledge
+                        SET evidence_count = evidence_count + 1,
                             last_accessed_at = datetime('now')
                         WHERE id = ? AND deleted_at IS NULL
                     """, (concept_id,))

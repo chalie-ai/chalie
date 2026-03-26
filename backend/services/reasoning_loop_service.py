@@ -1194,16 +1194,16 @@ class ReasoningLoopService:
                 weights = [float(row[1]) for row in recurring]
                 chosen_topic = random.choices(topics, weights=weights, k=1)[0]
 
-                # Find a concept associated with the recurring topic
+                # Find a concept associated with the recurring topic (knowledge table)
                 cursor.execute("""
-                    SELECT id, concept_name, definition, domain
-                    FROM semantic_concepts
-                    WHERE deleted_at IS NULL
+                    SELECT id, key, value
+                    FROM knowledge
+                    WHERE kind = 'concept'
                       AND confidence >= 0.4
-                      AND (domain = ? OR concept_name LIKE ?)
-                    ORDER BY strength DESC
+                      AND (key LIKE ? OR value LIKE ?)
+                    ORDER BY confidence DESC
                     LIMIT 5
-                """, (chosen_topic, f'%{chosen_topic}%'))
+                """, (f'%{chosen_topic}%', f'%{chosen_topic}%'))
                 rows = cursor.fetchall()
                 cursor.close()
 
@@ -1239,8 +1239,8 @@ class ReasoningLoopService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    UPDATE semantic_concepts
-                    SET strength = MIN(10.0, strength + ?),
+                    UPDATE knowledge
+                    SET confidence = MIN(1.0, confidence + ?),
                         updated_at = datetime('now')
                     WHERE id = ? AND deleted_at IS NULL
                 """, (self.decaying_reinforce_bump, seed['concept_id']))

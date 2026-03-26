@@ -2,7 +2,7 @@
 Unit tests for FailureAnalysisService.
 
 All tests use mocked LLM and embedding services so no real network calls are made.
-SQLite I/O tests use a real temp-file database created with the ``procedural_memory``
+SQLite I/O tests use a real temp-file database created with the ``knowledge``
 schema so the full read-modify-write path is exercised without touching production data.
 
 Pytest markers: @pytest.mark.unit (all tests).
@@ -32,19 +32,24 @@ pytestmark = pytest.mark.unit
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
-_PROCEDURAL_MEMORY_DDL = """
-CREATE TABLE IF NOT EXISTS procedural_memory (
-    id TEXT PRIMARY KEY,
-    action_name TEXT NOT NULL UNIQUE,
-    total_attempts INTEGER DEFAULT 0,
-    total_successes INTEGER DEFAULT 0,
-    success_rate REAL DEFAULT 0.0,
-    avg_reward REAL DEFAULT 0.0,
-    weight REAL DEFAULT 1.0,
-    reward_history TEXT DEFAULT '[]',
-    context_stats TEXT DEFAULT '{}',
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+_KNOWLEDGE_DDL = """
+CREATE TABLE IF NOT EXISTS knowledge (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,
+    entity      TEXT NOT NULL DEFAULT 'user',
+    key         TEXT NOT NULL,
+    value       TEXT,
+    data        TEXT DEFAULT '{}',
+    decay_class TEXT NOT NULL DEFAULT 'standard',
+    confidence  REAL NOT NULL DEFAULT 0.5,
+    reliability TEXT NOT NULL DEFAULT 'reliable',
+    source      TEXT,
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_accessed_at TEXT,
+    deleted_at  TEXT,
+    UNIQUE(entity, key)
 )
 """
 
@@ -52,14 +57,14 @@ CREATE TABLE IF NOT EXISTS procedural_memory (
 @pytest.fixture
 def tmp_db(tmp_path):
     """
-    Real SQLite database (temp file) with the ``procedural_memory`` schema.
+    Real SQLite database (temp file) with the ``knowledge`` schema.
 
     Yields a :class:`DatabaseService` pointed at the temp file.  Each test gets
     its own isolated database.
     """
     db_path = str(tmp_path / "test_failure.db")
     conn = sqlite3.connect(db_path)
-    conn.execute(_PROCEDURAL_MEMORY_DDL)
+    conn.execute(_KNOWLEDGE_DDL)
     conn.commit()
     conn.close()
 
@@ -163,7 +168,7 @@ def _good_analysis(**overrides) -> dict:
 
 def _seed_lesson(fas: FailureAnalysisService, action_name: str, lesson: dict):
     """
-    Directly write a lesson dict into the ``procedural_memory`` context_stats column.
+    Directly write a lesson dict into the ``knowledge`` data column.
 
     Bypasses embedding dedup so precise lesson counts can be set up for tests.
 
@@ -176,22 +181,22 @@ def _seed_lesson(fas: FailureAnalysisService, action_name: str, lesson: dict):
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO procedural_memory (id, action_name, total_attempts, total_successes, weight)
-            VALUES (?, ?, 0, 0, 1.0)
-            ON CONFLICT (action_name) DO NOTHING
+            INSERT INTO knowledge (kind, entity, key, value, data, decay_class, confidence, source)
+            VALUES ('procedure', 'system', ?, ?, '{}', 'permanent', 0.5, 'failure_analysis')
+            ON CONFLICT (entity, key) DO NOTHING
             """,
-            (str(uuid.uuid4()), action_name),
+            (action_name, action_name),
         )
         cursor.execute(
-            "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+            "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
             (action_name,),
         )
         row = cursor.fetchone()
-        raw = row[0] if not isinstance(row, dict) else row["context_stats"]
+        raw = row[0] if not isinstance(row, dict) else row.get("data", "{}")
         cs = json.loads(raw) if raw else {}
         cs.setdefault("__failure_lessons", []).append(lesson)
         cursor.execute(
-            "UPDATE procedural_memory SET context_stats = ? WHERE action_name = ?",
+            "UPDATE knowledge SET data = ? WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
             (json.dumps(cs), action_name),
         )
         cursor.close()
@@ -431,14 +436,14 @@ class TestStoreLesson:
         with fas.db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                 ("web_search",),
             )
             row = cursor.fetchone()
             cursor.close()
 
         assert row is not None
-        cs = json.loads(row[0] if not isinstance(row, dict) else row["context_stats"])
+        cs = json.loads(row[0] if not isinstance(row, dict) else row.get("data", "{}"))
         lessons = cs.get("__failure_lessons", [])
         assert len(lessons) == 1
         assert lessons[0]["blame"] == "tool_choice"
@@ -469,13 +474,13 @@ class TestStoreLesson:
         with fas.db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                 ("web_search",),
             )
             row = cursor.fetchone()
             cursor.close()
 
-        cs = json.loads(row[0] if not isinstance(row, dict) else row["context_stats"])
+        cs = json.loads(row[0] if not isinstance(row, dict) else row.get("data", "{}"))
         lessons = cs["__failure_lessons"]
         assert len(lessons) == 1, "Duplicate lesson should be merged, not appended"
         assert lessons[0]["times_seen"] == 2
@@ -505,13 +510,13 @@ class TestStoreLesson:
         with fas.db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                 ("combined_action",),
             )
             row = cursor.fetchone()
             cursor.close()
 
-        cs = json.loads(row[0] if not isinstance(row, dict) else row["context_stats"])
+        cs = json.loads(row[0] if not isinstance(row, dict) else row.get("data", "{}"))
         lessons = cs["__failure_lessons"]
         assert len(lessons) == 2, "Dissimilar lessons should be stored as separate entries"
         blames = {l["blame"] for l in lessons}
@@ -543,12 +548,12 @@ class TestStoreLesson:
         with fas.db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                 ("recall",),
             )
             row = cursor.fetchone()
             cursor.close()
-        cs = json.loads(row[0] if not isinstance(row, dict) else row["context_stats"])
+        cs = json.loads(row[0] if not isinstance(row, dict) else row.get("data", "{}"))
         assert len(cs["__failure_lessons"]) == MAX_LESSONS_PER_ACTION
 
         # Store one more lesson — should evict the one with times_seen=1 (index 0).
@@ -570,12 +575,12 @@ class TestStoreLesson:
         with fas.db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                 ("recall",),
             )
             row = cursor.fetchone()
             cursor.close()
-        cs = json.loads(row[0] if not isinstance(row, dict) else row["context_stats"])
+        cs = json.loads(row[0] if not isinstance(row, dict) else row.get("data", "{}"))
         lessons = cs["__failure_lessons"]
 
         assert len(lessons) == MAX_LESSONS_PER_ACTION, "Cap must be enforced after eviction"
@@ -595,7 +600,7 @@ class TestGetRelevantLessons:
     def _make_lesson(self, lesson_text: str, severity: str, times_seen: int,
                      updated_at: str = "2026-01-10T00:00:00") -> dict:
         """
-        Build a minimal lesson dict for seeding into ``procedural_memory``.
+        Build a minimal lesson dict for seeding into ``knowledge``.
 
         Args:
             lesson_text: The lesson string.
@@ -690,7 +695,7 @@ class TestGetRelevantLessons:
 
     def test_get_relevant_lessons_unknown_action_returns_empty(self, fas):
         """
-        Querying an ``action_name`` that has no ``procedural_memory`` row returns ``[]``.
+        Querying an ``action_name`` that has no ``knowledge`` row returns ``[]``.
         """
         result = fas.get_relevant_lessons("nonexistent_action")
 
@@ -741,7 +746,7 @@ class TestGetStats:
 
     def test_get_stats_empty_db(self, fas):
         """
-        Empty ``procedural_memory`` table → stats dict returned with zero totals.
+        Empty ``knowledge`` table → stats dict returned with zero totals.
         """
         stats = fas.get_stats()
 

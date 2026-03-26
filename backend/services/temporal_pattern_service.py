@@ -10,7 +10,7 @@ Two data sources:
 Design principles:
 - Generalization over specificity: all time references use broad labels ("evenings"),
   never specific hours ("10-11pm"). Even correct patterns can feel invasive if too precise.
-- Deduplication via store_trait(): UserTraitService.store_trait() handles conflict
+- Deduplication via KnowledgeService.store(): handles conflict resolution
   resolution (reinforce same value, overwrite if confidence > 2x). Repeated mining
   cycles won't create duplicates.
 - Slugified trait keys: topic names are slugified and capped at 40 chars.
@@ -230,7 +230,7 @@ class TemporalPatternService:
         Runs five passes in order: peak hours, peak days, topic-time associations,
         ambient rhythm patterns (weekday + weekend per observation type), and
         hour-to-hour transition patterns. All discovered patterns are persisted
-        via ``UserTraitService.store_trait()``, which handles conflict resolution
+        via ``KnowledgeService.store()``, which handles conflict resolution
         internally.
 
         Args:
@@ -556,11 +556,12 @@ class TemporalPatternService:
                     if row and row[0] and row[0] >= MIN_OBSERVATIONS_PER_BUCKET:
                         stats['predictions_available'].append(obs_type)
 
-                # Behavioral pattern traits count
+                # Behavioral pattern traits count (knowledge table)
                 cursor.execute(
                     """
-                    SELECT COUNT(*) FROM user_traits
-                    WHERE category = 'behavioral'
+                    SELECT COUNT(*) FROM knowledge
+                    WHERE kind = 'trait'
+                      AND json_extract(data, '$.category') = 'behavioral'
                     """
                 )
                 row = cursor.fetchone()

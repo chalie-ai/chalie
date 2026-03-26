@@ -195,7 +195,7 @@ class TestUpdateBelief:
 @pytest.mark.unit
 class TestUpdateMemory:
     def test_cookie_auth_stores_memory(self, cookie_client):
-        with patch("services.innate_skills.memorize_skill.handle_memorize",
+        with patch("services.innate_skills.memory_skill.handle_memory",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'work'.") as mock_mem:
             resp = cookie_client.post(
                 "/api/updates/memory",
@@ -224,7 +224,7 @@ class TestUpdateMemory:
         assert resp.status_code == 400
 
     def test_memorize_error_returns_422(self, cookie_client):
-        with patch("services.innate_skills.memorize_skill.handle_memorize",
+        with patch("services.innate_skills.memory_skill.handle_memory",
                    return_value="[MEMORIZE] Error: no traits specified."):
             resp = cookie_client.post(
                 "/api/updates/memory",
@@ -234,7 +234,7 @@ class TestUpdateMemory:
         assert resp.status_code == 422
 
     def test_default_topic_is_general(self, cookie_client):
-        with patch("services.innate_skills.memorize_skill.handle_memorize",
+        with patch("services.innate_skills.memory_skill.handle_memory",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'.") as mock_mem:
             cookie_client.post(
                 "/api/updates/memory",
@@ -246,7 +246,7 @@ class TestUpdateMemory:
 
     def test_salience_clamped(self, cookie_client):
         """Salience values outside 1–10 should be clamped silently."""
-        with patch("services.innate_skills.memorize_skill.handle_memorize",
+        with patch("services.innate_skills.memory_skill.handle_memory",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'test'."):
             resp = cookie_client.post(
                 "/api/updates/memory",
@@ -280,7 +280,7 @@ class TestUpdateMemory:
             permissions={"update": ["memory"]}
         )
         with patch_session, patch_auth, \
-             patch("services.innate_skills.memorize_skill.handle_memorize",
+             patch("services.innate_skills.memory_skill.handle_memory",
                    return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'."):
             with app.test_client() as client:
                 resp = client.post(

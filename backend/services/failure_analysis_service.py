@@ -2,9 +2,9 @@
 Failure Analysis Service — Root-cause attribution and lesson extraction for the ACT loop.
 
 Analyses failed or critic-rejected actions to extract generalisable lessons.
-Lessons are stored in ``procedural_memory.context_stats["__failure_lessons"]`` with
-embedding-based deduplication so semantically identical lessons are merged rather than
-duplicated.
+Lessons are stored in ``knowledge.data["__failure_lessons"]`` (kind='procedure',
+entity='system') with embedding-based deduplication so semantically identical lessons
+are merged rather than duplicated.
 
 Embedding vectors are NOT stored in the JSON blob — they are recomputed on-the-fly
 during dedup (the embedding service caches results internally, so this is cheap).
@@ -70,10 +70,9 @@ _MEMORY_ACTION_FRAGMENTS = frozenset({
 
 class FailureAnalysisService:
     """
-    Analyses ACT-loop failures and stores generalisable lessons in procedural memory.
+    Analyses ACT-loop failures and stores generalisable lessons in the knowledge table.
 
-    Follows the same dependency-injection pattern as :class:`ProceduralMemoryService`
-    (receives a ``DatabaseService`` instance in the constructor).  The LLM is lazily
+    Receives a ``DatabaseService`` instance in the constructor.  The LLM is lazily
     instantiated on first use via :meth:`_get_llm`.
     """
 
@@ -152,7 +151,7 @@ class FailureAnalysisService:
 
         Args:
             analysis: Structured dict returned by :meth:`analyze`.
-            action_name: The ``action_name`` key used in the ``procedural_memory`` row.
+            action_name: The ``action_name`` key used in the ``knowledge`` row.
 
         Returns:
             ``True`` if the lesson was stored or merged successfully, ``False`` on error.
@@ -168,25 +167,25 @@ class FailureAnalysisService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
-                # Ensure the action_name row exists.
+                # Ensure the knowledge row for this action exists.
                 cursor.execute(
                     """
-                    INSERT INTO procedural_memory (id, action_name, total_attempts, total_successes, weight)
-                    VALUES (?, ?, 0, 0, 1.0)
-                    ON CONFLICT (action_name) DO NOTHING
+                    INSERT INTO knowledge (kind, entity, key, value, data, decay_class, confidence, source)
+                    VALUES ('procedure', 'system', ?, ?, '{}', 'permanent', 0.5, 'failure_analysis')
+                    ON CONFLICT (entity, key) DO NOTHING
                     """,
-                    (str(uuid.uuid4()), action_name),
+                    (action_name, action_name),
                 )
 
-                # Read existing context_stats.
+                # Read existing data JSON.
                 cursor.execute(
-                    "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                    "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                     (action_name,),
                 )
                 row = cursor.fetchone()
                 context_stats = {}
                 if row:
-                    raw = row[0] if not isinstance(row, dict) else row["context_stats"]
+                    raw = row[0] if not isinstance(row, dict) else row.get("data", "{}")
                     if raw:
                         if isinstance(raw, str):
                             context_stats = json.loads(raw)
@@ -256,8 +255,8 @@ class FailureAnalysisService:
 
                 context_stats["__failure_lessons"] = lessons
                 cursor.execute(
-                    "UPDATE procedural_memory SET context_stats = ?, updated_at = datetime('now') "
-                    "WHERE action_name = ?",
+                    "UPDATE knowledge SET data = ?, updated_at = datetime('now') "
+                    "WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                     (json.dumps(context_stats), action_name),
                 )
                 cursor.close()
@@ -278,7 +277,7 @@ class FailureAnalysisService:
         are stripped from output.
 
         Args:
-            action_name: The ``action_name`` key to look up in ``procedural_memory``.
+            action_name: The ``action_name`` key to look up in ``knowledge``.
             action_context: Optional contextual string (reserved for future semantic
                 matching — not currently used for filtering).
 
@@ -291,7 +290,7 @@ class FailureAnalysisService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT context_stats FROM procedural_memory WHERE action_name = ?",
+                    "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
                     (action_name,),
                 )
                 row = cursor.fetchone()
@@ -300,7 +299,7 @@ class FailureAnalysisService:
             if not row:
                 return []
 
-            raw = row[0] if not isinstance(row, dict) else row["context_stats"]
+            raw = row[0] if not isinstance(row, dict) else row.get("data", "{}")
             if not raw:
                 return []
             if isinstance(raw, str):
@@ -335,7 +334,7 @@ class FailureAnalysisService:
 
     def get_stats(self) -> dict:
         """
-        Aggregate failure-lesson statistics across all ``procedural_memory`` rows.
+        Aggregate failure-lesson statistics across all procedure knowledge rows.
 
         Returns:
             Dict with keys:
@@ -349,7 +348,7 @@ class FailureAnalysisService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT action_name, context_stats FROM procedural_memory"
+                    "SELECT key, data FROM knowledge WHERE kind = 'procedure' AND entity = 'system'"
                 )
                 rows = cursor.fetchall()
                 cursor.close()
@@ -360,8 +359,8 @@ class FailureAnalysisService:
 
             for row in rows:
                 if isinstance(row, dict):
-                    action_name = row["action_name"]
-                    raw_stats = row["context_stats"]
+                    action_name = row["key"]
+                    raw_stats = row["data"]
                 else:
                     action_name = row[0]
                     raw_stats = row[1]

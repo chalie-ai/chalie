@@ -73,7 +73,7 @@ def _get_db():
 def update_belief():
     """Set or correct a user trait (belief update).
 
-    Delegates directly to :meth:`UserTraitService.store_trait`.  The ``key``
+    Delegates directly to :meth:`KnowledgeService.store`.  The ``key``
     and ``value`` fields are required; ``category`` and ``confidence`` are
     optional with sensible defaults.
 
@@ -177,17 +177,19 @@ def update_memory():
         salience = 5
 
     try:
-        from services.innate_skills.memorize_skill import handle_memorize
+        from services.innate_skills.memory_skill import handle_memory
         confidence = 0.5 + (salience / 20.0)  # 0.55 – 1.0 range
-        result = handle_memorize(
+        result = handle_memory(
             topic=topic,
             params={
-                "traits": [
+                "action": "store",
+                "entries": [
                     {
                         "key": f"memory_{uuid.uuid4().hex[:8]}",
                         "value": content,
-                        "confidence": confidence,
-                        "category": "behavioral",
+                        "kind": "fact",
+                        "decay_class": "standard",
+                        "data": {"confidence": confidence, "category": "behavioral"},
                     }
                 ]
             },

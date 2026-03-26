@@ -26,13 +26,13 @@ def _mock_identity_and_store(
 ):
     """
     Context manager that patches IdentityStateService, MemoryClientService,
-    and UserTraitService for onboarding nudge tests.
+    and KnowledgeService for onboarding nudge tests.
 
     All are imported locally inside _get_onboarding_nudge, so we patch them
     at their source modules.
 
     Args:
-        user_traits: list of trait dicts from UserTraitService.get_all_traits().
+        user_traits: list of knowledge dicts from KnowledgeService.get_by_kind().
                      Defaults to [] (no traits in permanent storage).
     """
     import contextlib
@@ -45,7 +45,7 @@ def _mock_identity_and_store(
         with patch('services.identity_state_service.IdentityStateService') as mock_id_cls, \
              patch('services.memory_client.MemoryClientService') as mock_store_cls, \
              patch('services.database_service.get_shared_db_service') as mock_db, \
-             patch('services.user_trait_service.UserTraitService') as mock_trait_cls:
+             patch('services.knowledge_service.KnowledgeService') as mock_ks_cls:
 
             mock_id = MagicMock()
             mock_id.get_all.return_value = identity_blob
@@ -56,9 +56,9 @@ def _mock_identity_and_store(
             mock_store.hget.return_value = str(exchange_count)
             mock_store_cls.create_connection.return_value = mock_store
 
-            mock_trait = MagicMock()
-            mock_trait.get_all_traits.return_value = user_traits
-            mock_trait_cls.return_value = mock_trait
+            mock_ks = MagicMock()
+            mock_ks.get_by_kind.return_value = user_traits
+            mock_ks_cls.return_value = mock_ks
 
             yield mock_id, mock_store
 
@@ -167,14 +167,14 @@ class TestOnboardingNudge:
         assert result == ""
 
     def test_no_nudge_when_trait_in_permanent_storage(self):
-        """No name nudge when IdentityStateService expired but user_traits has the name."""
+        """No name nudge when IdentityStateService expired but knowledge table has the name."""
         svc = _make_service_instance()
-        # IdentityStateService has no name (TTL expired), but user_traits does
+        # IdentityStateService has no name (TTL expired), but knowledge table does
         user_traits = [
-            {'trait_key': 'name', 'trait_value': 'Dylan', 'confidence': 0.95, 'category': 'core'},
+            {'key': 'name', 'value': 'Dylan', 'confidence': 0.95, 'kind': 'trait'},
         ]
 
-        # exchange_count=4: name (min_turn=3) eligible but in user_traits → skipped
+        # exchange_count=4: name (min_turn=3) eligible but in knowledge → skipped
         # age_range (min_turn=5) not yet eligible → no nudge at all
         with _mock_identity_and_store({}, exchange_count=4, user_traits=user_traits):
             result = svc._get_onboarding_nudge("t1")

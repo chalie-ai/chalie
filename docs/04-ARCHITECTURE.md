@@ -82,15 +82,13 @@ frontend/
 - **`voice_mapper_service.py`** — Translates identity vectors to tone instructions
 
 #### Memory System
-- **`context_assembly_service.py`** — Unified retrieval from multiple memory layers (transcript + compaction, moments, episodes, procedural, concepts) with weighted budget allocation; working memory now reads from compaction summary + budget-constrained recent transcript entries instead of fixed-size MemoryStore FIFO
+- **`context_assembly_service.py`** — Unified retrieval from multiple memory layers (transcript + compaction, moments, episodes, knowledge) with weighted budget allocation; working memory now reads from compaction summary + budget-constrained recent transcript entries instead of fixed-size MemoryStore FIFO
 - **`transcript_service.py`** — Persistent, topic-scoped, append-only conversation record (SQLite + sqlite-vec); semantic search, keyword fallback, selective embedding (>50 tokens), 90-day TTL pruning
 - **`compaction_service.py`** — Incremental LLM-powered summarization; fires when total context exceeds 85% of provider budget; stores compacted text with transcript watermark in `topic_compactions`
 - **`episodic_retrieval_service.py`** — Hybrid vector + FTS search for episodes
-- **`semantic_retrieval_service.py`** — Vector similarity + spreading activation for concepts
-- **`user_trait_service.py`** — Per-user trait management with category-specific decay (core, relationship, physical, preference, communication_style, micro_preference, behavioral_pattern)
-- **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as `behavioral_pattern` user traits with generalized labels; 24h background worker cycle
+- **`knowledge_service.py`** — Unified knowledge store (traits, concepts, procedures, relationships) with RRF hybrid search (exact + FTS5 + vector KNN), decay management, and prompt injection
+- **`temporal_pattern_service.py`** — Mines hour-of-day and day-of-week distributions from `interaction_log` for behavioral pattern detection; stores discoveries as behavioral traits in knowledge table with generalized labels; 24h background worker cycle
 - **`episodic_storage_service.py`** — SQLite CRUD for episodic memories
-- **`semantic_storage_service.py`** — SQLite CRUD for semantic concepts
 - **`list_service.py`** — Deterministic list management (shopping, to-do, chores); perfect recall with full history via `lists`, `list_items`, `list_events` tables
 - **`moment_service.py`** — Pinned message bookmarks with LLM-enriched context, sqlite-vec semantic search, and salience boosting; moments stored as documents with `source_type='moment'`
 - **`moment_enrichment_service.py`** — Background worker (5min poll): collects gists from ±4hr interaction window, generates LLM summaries, seals moments after 4hrs
@@ -131,7 +129,6 @@ frontend/
 #### Identity & Learning
 - **`identity_service.py`** — 6-dimensional identity vector system with coherence constraints
 - **`identity_state_service.py`** — Tracks identity state changes and evolution
-- **`user_trait_service.py`** — User trait management with category-specific decay
 
 #### Infrastructure
 - **`database_service.py`** — SQLite connection management (WAL mode) and migrations

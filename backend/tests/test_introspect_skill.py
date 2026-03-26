@@ -14,11 +14,10 @@ from unittest.mock import MagicMock, patch
 
 _SELF_MODEL  = 'services.self_model_service.SelfModelService'
 _DB          = 'services.database_service.get_shared_db_service'
-_PROCEDURAL  = 'services.procedural_memory_service.ProceduralMemoryService'
+_KNOWLEDGE   = 'services.knowledge_service.KnowledgeService'
 _FOCUS_SVC   = 'services.focus_session_service.FocusSessionService'
 _MEMORY_CLI  = 'services.memory_client.MemoryClientService'
 _IDENTITY    = 'services.identity_service.IdentityService'
-_TRAIT_SVC   = 'services.user_trait_service.UserTraitService'
 _AUTO_SVC    = 'services.autobiography_service.AutobiographyService'
 _UTC_NOW     = 'services.innate_skills.introspect_skill.utc_now'
 
@@ -230,19 +229,25 @@ class TestMemoryHealthScope:
 @pytest.mark.unit
 class TestSkillUsageScope:
 
-    def _skill_stats(self, attempts=5, successes=4, updated_at='2026-03-18 08:00:00'):
+    def _knowledge_entry(self, skill_name='memory', attempts=5, successes=4, updated_at='2026-03-18 08:00:00'):
+        """Build a knowledge entry dict mimicking KnowledgeService.get() return."""
         return {
-            'total_attempts': attempts,
-            'total_successes': successes,
-            'updated_at': updated_at,
+            'kind': 'procedure',
+            'entity': 'chalie',
+            'key': skill_name,
+            'value': skill_name,
+            'data': {
+                'total_attempts': attempts,
+                'total_successes': successes,
+                'updated_at': updated_at,
+            },
         }
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_table_has_name_header(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_table_has_name_header(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
-        svc = mock_proc_cls.return_value
-        svc.get_action_stats.return_value = self._skill_stats()
+        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -250,11 +255,10 @@ class TestSkillUsageScope:
         assert '| Name' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_table_has_uses_header(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_table_has_uses_header(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
-        svc = mock_proc_cls.return_value
-        svc.get_action_stats.return_value = self._skill_stats()
+        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -262,11 +266,10 @@ class TestSkillUsageScope:
         assert '| Uses' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_table_has_last_used_header(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_table_has_last_used_header(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
-        svc = mock_proc_cls.return_value
-        svc.get_action_stats.return_value = self._skill_stats()
+        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -274,11 +277,10 @@ class TestSkillUsageScope:
         assert '| Last Used' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_table_has_last_result_header(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_table_has_last_result_header(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
-        svc = mock_proc_cls.return_value
-        svc.get_action_stats.return_value = self._skill_stats()
+        mock_ks_cls.return_value.get.return_value = self._knowledge_entry()
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -286,32 +288,34 @@ class TestSkillUsageScope:
         assert '| Last Result' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_table_includes_skill_row(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_table_includes_skill_row(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
-        svc = mock_proc_cls.return_value
 
-        # Only 'recall' returns stats; all others return None
-        def _stats(name):
-            return self._skill_stats() if name == 'recall' else None
+        # Only 'memory' returns stats; all others return None
+        def _get(entity, name):
+            if name == 'memory':
+                return self._knowledge_entry(skill_name='memory')
+            return None
 
-        svc.get_action_stats.side_effect = _stats
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
 
-        assert 'recall' in result
+        assert 'memory' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_shows_attempt_count(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_shows_attempt_count(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
-        svc = mock_proc_cls.return_value
 
-        def _stats(name):
-            return self._skill_stats(attempts=7) if name == 'recall' else None
+        def _get(entity, name):
+            if name == 'memory':
+                return self._knowledge_entry(skill_name='memory', attempts=7)
+            return None
 
-        svc.get_action_stats.side_effect = _stats
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -319,11 +323,11 @@ class TestSkillUsageScope:
         assert '7' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_empty_when_no_data(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_empty_when_no_data(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
         # All skills return no stats
-        mock_proc_cls.return_value.get_action_stats.return_value = None
+        mock_ks_cls.return_value.get.return_value = None
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -331,14 +335,16 @@ class TestSkillUsageScope:
         assert 'No usage data' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_success_label(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_success_label(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
 
-        def _stats(name):
-            return self._skill_stats(attempts=4, successes=4) if name == 'recall' else None
+        def _get(entity, name):
+            if name == 'memory':
+                return self._knowledge_entry(skill_name='memory', attempts=4, successes=4)
+            return None
 
-        mock_proc_cls.return_value.get_action_stats.side_effect = _stats
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -346,14 +352,16 @@ class TestSkillUsageScope:
         assert 'success' in result
 
     @patch(_DB)
-    @patch(_PROCEDURAL)
-    def test_skill_usage_failed_label_when_mostly_failed(self, mock_proc_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_skill_usage_failed_label_when_mostly_failed(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db({'user_tool_preferences': []})
 
-        def _stats(name):
-            return self._skill_stats(attempts=4, successes=1) if name == 'recall' else None
+        def _get(entity, name):
+            if name == 'memory':
+                return self._knowledge_entry(skill_name='memory', attempts=4, successes=1)
+            return None
 
-        mock_proc_cls.return_value.get_action_stats.side_effect = _stats
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _scope_skill_tool_usage
         result = _scope_skill_tool_usage()
@@ -539,12 +547,20 @@ class TestIdentityScope:
         assert '342' in result
 
     @patch(_DB)
-    @patch(_TRAIT_SVC)
-    def test_identity_communication_style_verbosity(self, mock_trait_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_identity_communication_style_verbosity(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db()
-        mock_trait_cls.return_value.get_communication_style.return_value = {
-            'verbosity': 9, 'directness': 5, 'formality': 5,
-        }
+
+        def _get(entity, key):
+            if key == 'communication_style_verbosity':
+                return {'value': '9'}
+            if key == 'communication_style_directness':
+                return {'value': '5'}
+            if key == 'communication_style_formality':
+                return {'value': '5'}
+            return None
+
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _identity_communication_style
         result = _identity_communication_style()
@@ -552,12 +568,20 @@ class TestIdentityScope:
         assert 'very verbose' in result
 
     @patch(_DB)
-    @patch(_TRAIT_SVC)
-    def test_identity_communication_style_directness(self, mock_trait_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_identity_communication_style_directness(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db()
-        mock_trait_cls.return_value.get_communication_style.return_value = {
-            'verbosity': 5, 'directness': 9, 'formality': 5,
-        }
+
+        def _get(entity, key):
+            if key == 'communication_style_verbosity':
+                return {'value': '5'}
+            if key == 'communication_style_directness':
+                return {'value': '9'}
+            if key == 'communication_style_formality':
+                return {'value': '5'}
+            return None
+
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _identity_communication_style
         result = _identity_communication_style()
@@ -565,12 +589,20 @@ class TestIdentityScope:
         assert 'very direct' in result
 
     @patch(_DB)
-    @patch(_TRAIT_SVC)
-    def test_identity_communication_style_formality(self, mock_trait_cls, mock_db_fn):
+    @patch(_KNOWLEDGE)
+    def test_identity_communication_style_formality(self, mock_ks_cls, mock_db_fn):
         mock_db_fn.return_value = _mock_db()
-        mock_trait_cls.return_value.get_communication_style.return_value = {
-            'verbosity': 5, 'directness': 5, 'formality': 9,
-        }
+
+        def _get(entity, key):
+            if key == 'communication_style_verbosity':
+                return {'value': '5'}
+            if key == 'communication_style_directness':
+                return {'value': '5'}
+            if key == 'communication_style_formality':
+                return {'value': '9'}
+            return None
+
+        mock_ks_cls.return_value.get.side_effect = _get
 
         from services.innate_skills.introspect_skill import _identity_communication_style
         result = _identity_communication_style()
@@ -618,10 +650,10 @@ class TestIdentityScope:
 
     @patch(_AUTO_SVC)
     @patch(_IDENTITY)
-    @patch(_TRAIT_SVC)
+    @patch(_KNOWLEDGE)
     @patch(_DB)
     def test_identity_graceful_degradation(
-        self, mock_db_fn, mock_trait_cls, mock_id_cls, mock_auto_cls
+        self, mock_db_fn, mock_ks_cls, mock_id_cls, mock_auto_cls
     ):
         """When every identity sub-service fails the scope returns the fallback string."""
         mock_db_fn.return_value = MagicMock(
@@ -629,7 +661,7 @@ class TestIdentityScope:
                 side_effect=RuntimeError('connection refused')
             )
         )
-        mock_trait_cls.return_value.get_communication_style.side_effect = RuntimeError
+        mock_ks_cls.return_value.get.side_effect = RuntimeError
         mock_id_cls.return_value.get_vectors.side_effect = RuntimeError
         mock_auto_cls.return_value.get_current_narrative.side_effect = RuntimeError
 

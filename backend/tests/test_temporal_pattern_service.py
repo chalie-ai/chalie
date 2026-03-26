@@ -66,16 +66,23 @@ class InMemoryDB:
                 created_at TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS user_traits (
+            CREATE TABLE IF NOT EXISTS knowledge (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                trait_key TEXT,
-                trait_value TEXT,
-                confidence REAL DEFAULT 0.5,
-                category TEXT,
-                source TEXT DEFAULT 'inferred',
-                is_literal INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
+                kind TEXT NOT NULL DEFAULT 'trait',
+                entity TEXT NOT NULL DEFAULT 'user',
+                key TEXT NOT NULL,
+                value TEXT,
+                data TEXT,
+                decay_class TEXT NOT NULL DEFAULT 'standard',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                reliability TEXT NOT NULL DEFAULT 'reliable',
+                source TEXT,
+                evidence_count INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_accessed_at TEXT,
+                deleted_at TEXT,
+                UNIQUE(entity, key)
             );
         """)
 
@@ -370,12 +377,12 @@ class TestRhythmSummary:
     def test_returns_summary_lines(self, memdb, svc):
         with memdb.connection() as conn:
             conn.execute(
-                """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                   VALUES ('weekday_energy_rhythm', 'Typically high in the morning', 0.8, 'behavioral')"""
+                """INSERT INTO knowledge (kind, entity, key, value, confidence, data)
+                   VALUES ('trait', 'user', 'weekday_energy_rhythm', 'Typically high in the morning', 0.8, '{"category": "behavioral"}')"""
             )
             conn.execute(
-                """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                   VALUES ('weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, 'behavioral')"""
+                """INSERT INTO knowledge (kind, entity, key, value, confidence, data)
+                   VALUES ('trait', 'user', 'weekday_attention_rhythm', 'Typically deep_focus in the morning', 0.7, '{"category": "behavioral"}')"""
             )
             conn.commit()
 
@@ -387,8 +394,8 @@ class TestRhythmSummary:
         with memdb.connection() as conn:
             for i in range(5):
                 conn.execute(
-                    """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                       VALUES (?, ?, 0.8, 'behavioral')""",
+                    """INSERT INTO knowledge (kind, entity, key, value, confidence, data)
+                       VALUES ('trait', 'user', ?, ?, 0.8, '{"category": "behavioral"}')""",
                     (f'pattern_{i}', f'Pattern line {i}')
                 )
             conn.commit()
@@ -401,8 +408,8 @@ class TestRhythmSummary:
         with memdb.connection() as conn:
             for key in ['weekday_energy_rhythm', 'weekday_attention_rhythm']:
                 conn.execute(
-                    """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                       VALUES (?, ?, 0.8, 'behavioral')""",
+                    """INSERT INTO knowledge (kind, entity, key, value, confidence, data)
+                       VALUES ('trait', 'user', ?, ?, 0.8, '{"category": "behavioral"}')""",
                     (key, 'A' * 150)
                 )
             conn.commit()
@@ -412,8 +419,8 @@ class TestRhythmSummary:
     def test_sanitizes_non_printable(self, memdb, svc):
         with memdb.connection() as conn:
             conn.execute(
-                """INSERT INTO user_traits (trait_key, trait_value, confidence, category)
-                   VALUES ('weekday_energy_rhythm', ?, 0.8, 'behavioral')""",
+                """INSERT INTO knowledge (kind, entity, key, value, confidence, data)
+                   VALUES ('trait', 'user', 'weekday_energy_rhythm', ?, 0.8, '{"category": "behavioral"}')""",
                 ('High energy \x00\x01\x02 mornings',)
             )
             conn.commit()
@@ -729,55 +736,51 @@ class TestStorePatternsAsTraits:
         mock_db = MagicMock()
         service = TemporalPatternService(mock_db)
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.store_trait.return_value = True
+        mock_ks = MagicMock()
+        mock_ks.store.return_value = True
 
         patterns = [
             {'key': 'active_hours', 'value': 'Most active in the evenings', 'confidence': 0.7},
             {'key': 'active_days', 'value': 'Most active on Monday', 'confidence': 0.7},
         ]
 
-        # UserTraitService is a lazy import inside _store_patterns_as_traits,
+        # KnowledgeService is a lazy import inside _store_patterns_as_traits,
         # so patch the source module, not the temporal_pattern_service module.
-        with patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             service._store_patterns_as_traits(patterns)
 
-        assert mock_trait_svc.store_trait.call_count == 2
+        assert mock_ks.store.call_count == 2
 
-    def test_passes_correct_arguments_to_store_trait(self):
-        """store_trait() should be called with category='behavioral'.
-
-        behavioral → behavioral after Stream 1 3-tier CATEGORY_DECAY simplification.
-        source removed from store_trait in migration 006.
-        """
+    def test_passes_correct_arguments_to_store(self):
+        """store() should be called with kind='trait' and data containing category='behavioral'."""
         from services.temporal_pattern_service import TemporalPatternService
         mock_db = MagicMock()
         service = TemporalPatternService(mock_db)
 
-        mock_trait_svc = MagicMock()
-        mock_trait_svc.store_trait.return_value = True
+        mock_ks = MagicMock()
+        mock_ks.store.return_value = True
 
         patterns = [{'key': 'active_hours', 'value': 'Most active in the mornings', 'confidence': 0.7}]
 
-        with patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             service._store_patterns_as_traits(patterns)
 
-        call_kwargs = mock_trait_svc.store_trait.call_args.kwargs
-        assert call_kwargs['category'] == 'behavioral'
-        assert call_kwargs['trait_key'] == 'active_hours'
+        call_kwargs = mock_ks.store.call_args[1]
+        assert call_kwargs['data'] == {'category': 'behavioral'}
+        assert call_kwargs['key'] == 'active_hours'
 
     def test_empty_patterns_does_not_call_store(self):
-        """No patterns → store_trait should never be called."""
+        """No patterns → store should never be called."""
         from services.temporal_pattern_service import TemporalPatternService
         mock_db = MagicMock()
         service = TemporalPatternService(mock_db)
 
-        mock_trait_svc = MagicMock()
+        mock_ks = MagicMock()
 
-        with patch('services.user_trait_service.UserTraitService', return_value=mock_trait_svc):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             service._store_patterns_as_traits([])
 
-        mock_trait_svc.store_trait.assert_not_called()
+        mock_ks.store.assert_not_called()
 
     def test_error_does_not_raise(self):
         """Storage failure should be swallowed (logged, not raised)."""
@@ -785,7 +788,7 @@ class TestStorePatternsAsTraits:
         mock_db = MagicMock()
         service = TemporalPatternService(mock_db)
 
-        with patch('services.user_trait_service.UserTraitService', side_effect=Exception("db error")):
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception("db error")):
             # Should not raise
             service._store_patterns_as_traits(
                 [{'key': 'k', 'value': 'v', 'confidence': 0.5}]
@@ -794,19 +797,24 @@ class TestStorePatternsAsTraits:
 
 @pytest.mark.unit
 class TestBehavioralPatternDecay:
-    """behavioral renamed to behavioral in Stream 1 3-tier CATEGORY_DECAY simplification."""
+    """Behavioral traits use 'slow' decay_class in the unified knowledge table."""
 
-    def test_behavioral_in_category_decay(self):
-        """behavioral should be a registered decay category."""
-        from services.user_trait_service import CATEGORY_DECAY
-        assert 'behavioral' in CATEGORY_DECAY
+    def test_slow_is_valid_decay_class(self):
+        """'slow' should be a valid decay class in KnowledgeService."""
+        from services.knowledge_service import KnowledgeService
+        assert 'slow' in KnowledgeService.VALID_DECAY_CLASSES
 
-    def test_behavioral_has_slow_decay(self):
-        """Activity time patterns are stable — base_decay should be low."""
-        from services.user_trait_service import CATEGORY_DECAY
-        assert CATEGORY_DECAY['behavioral']['base_decay'] <= 0.01
+    def test_behavioral_patterns_stored_with_slow_decay(self):
+        """Temporal patterns should be stored with decay_class='slow'."""
+        from services.temporal_pattern_service import TemporalPatternService
+        mock_db = MagicMock()
+        service = TemporalPatternService(mock_db)
 
-    def test_behavioral_has_floor(self):
-        """Behavioral patterns should have a floor to prevent total erasure."""
-        from services.user_trait_service import CATEGORY_DECAY
-        assert CATEGORY_DECAY['behavioral']['floor'] > 0
+        mock_ks = MagicMock()
+        mock_ks.store.return_value = True
+
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
+            service._store_patterns_as_traits([{'key': 'k', 'value': 'v', 'confidence': 0.7}])
+
+        call_kwargs = mock_ks.store.call_args[1]
+        assert call_kwargs['decay_class'] == 'slow'

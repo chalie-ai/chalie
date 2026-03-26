@@ -93,66 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_cortex_iterations_loop ON cortex_iterations(loop_
 CREATE INDEX IF NOT EXISTS idx_cortex_iterations_topic ON cortex_iterations(topic, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cortex_iterations_exchange ON cortex_iterations(exchange_id);
 
--- ────────────────────────────────────────────────────────────────
--- SEMANTIC CONCEPTS — knowledge nodes
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS semantic_concepts (
-    id TEXT PRIMARY KEY,
-    concept_name TEXT NOT NULL,
-    concept_type TEXT NOT NULL,
-    definition TEXT NOT NULL,
-    abstraction_level INTEGER DEFAULT 3,
-    domain TEXT,
-    strength REAL DEFAULT 1.0,
-    activation_score REAL DEFAULT 1.0,
-    access_count INTEGER DEFAULT 0,
-    consolidation_count INTEGER DEFAULT 0,
-    confidence REAL DEFAULT 0.5,
-    source_episodes TEXT DEFAULT '[]',        -- JSONB
-    verification_status TEXT DEFAULT 'unverified',
-    context_constraints TEXT DEFAULT '{}',    -- JSONB
-    examples TEXT DEFAULT '[]',              -- JSONB
-    first_learned_at TEXT DEFAULT (datetime('now')),
-    last_accessed_at TEXT DEFAULT (datetime('now')),
-    last_reinforced_at TEXT DEFAULT (datetime('now')),
-    utility_score REAL DEFAULT 0.5,
-    decay_resistance REAL DEFAULT 0.5,
-    deleted_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    reliability TEXT DEFAULT 'reliable'       -- epistemic confidence: reliable|uncertain|contradicted|superseded
-);
-
-CREATE INDEX IF NOT EXISTS idx_concepts_name ON semantic_concepts(concept_name);
-CREATE INDEX IF NOT EXISTS idx_concepts_type ON semantic_concepts(concept_type);
-CREATE INDEX IF NOT EXISTS idx_concepts_domain ON semantic_concepts(domain);
-CREATE INDEX IF NOT EXISTS idx_concepts_strength ON semantic_concepts(strength DESC);
-CREATE INDEX IF NOT EXISTS idx_concepts_activation ON semantic_concepts(activation_score DESC);
-CREATE INDEX IF NOT EXISTS idx_concepts_deleted ON semantic_concepts(deleted_at) WHERE deleted_at IS NULL;
-
--- ────────────────────────────────────────────────────────────────
--- SEMANTIC RELATIONSHIPS
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS semantic_relationships (
-    id TEXT PRIMARY KEY,
-    source_concept_id TEXT NOT NULL REFERENCES semantic_concepts(id),
-    target_concept_id TEXT NOT NULL REFERENCES semantic_concepts(id),
-    relationship_type TEXT NOT NULL,
-    strength REAL DEFAULT 0.5,
-    bidirectional INTEGER DEFAULT 0,         -- BOOLEAN
-    source_episodes TEXT DEFAULT '[]',       -- JSONB
-    confidence REAL DEFAULT 0.5,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    deleted_at TEXT,
-    UNIQUE(source_concept_id, target_concept_id, relationship_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_relationships_source ON semantic_relationships(source_concept_id);
-CREATE INDEX IF NOT EXISTS idx_relationships_target ON semantic_relationships(target_concept_id);
-CREATE INDEX IF NOT EXISTS idx_relationships_type ON semantic_relationships(relationship_type);
-CREATE INDEX IF NOT EXISTS idx_relationships_strength ON semantic_relationships(strength DESC);
-
+-- semantic_concepts, semantic_relationships removed — replaced by unified knowledge table.
 -- semantic_schemas table removed — never used by any service.
 
 -- ────────────────────────────────────────────────────────────────
@@ -176,25 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_interaction_log_event_type_created ON interaction
 CREATE INDEX IF NOT EXISTS idx_interaction_log_session_created ON interaction_log(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_interaction_log_exchange ON interaction_log(exchange_id);
 
--- ────────────────────────────────────────────────────────────────
--- PROCEDURAL MEMORY — policy weights
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS procedural_memory (
-    id TEXT PRIMARY KEY,
-    action_name TEXT NOT NULL UNIQUE,
-    total_attempts INTEGER DEFAULT 0,
-    total_successes INTEGER DEFAULT 0,
-    success_rate REAL DEFAULT 0.0,
-    avg_reward REAL DEFAULT 0.0,
-    weight REAL DEFAULT 1.0,
-    reward_history TEXT DEFAULT '[]',        -- JSONB
-    context_stats TEXT DEFAULT '{}',         -- JSONB
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_procedural_action_name ON procedural_memory(action_name);
-CREATE INDEX IF NOT EXISTS idx_procedural_weight ON procedural_memory(weight DESC);
+-- procedural_memory removed — replaced by unified knowledge table.
 
 -- ────────────────────────────────────────────────────────────────
 -- KNOWLEDGE — unified knowledge store (traits, procedures, concepts, relationships)
@@ -294,26 +217,7 @@ CREATE TABLE IF NOT EXISTS identity_events (
 CREATE INDEX IF NOT EXISTS idx_identity_events_time ON identity_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_identity_events_vector ON identity_events(vector_name, created_at);
 
--- ────────────────────────────────────────────────────────────────
--- USER TRAITS — per-user trait memory
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS user_traits (
-    id TEXT PRIMARY KEY,
-    trait_key TEXT NOT NULL,
-    trait_value TEXT NOT NULL,
-    category TEXT DEFAULT 'preference',
-    confidence REAL DEFAULT 0.5,
-    reinforcement_count INTEGER DEFAULT 1,
-    last_reinforced_at TEXT DEFAULT (datetime('now')),
-    last_conflict_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    reliability TEXT DEFAULT 'reliable',      -- epistemic confidence: reliable|uncertain|contradicted|superseded
-    UNIQUE(trait_key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_traits_category ON user_traits(category);
-CREATE INDEX IF NOT EXISTS idx_user_traits_confidence ON user_traits(confidence);
+-- user_traits removed — replaced by unified knowledge table.
 
 -- ────────────────────────────────────────────────────────────────
 -- THREADS — conversation threads

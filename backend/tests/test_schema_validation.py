@@ -248,22 +248,22 @@ class TestSchemaValidation:
     def test_reliability_default_values(self, schema_db):
         """Absorbs scenario 201: reliability columns default to 'reliable'.
 
-        Inserts a minimal row into user_traits, episodes, and semantic_concepts
+        Inserts a minimal row into knowledge and episodes
         without specifying reliability and confirms the column defaults correctly.
         """
         import uuid
 
-        # user_traits
+        # knowledge (replaces user_traits and semantic_concepts)
         schema_db.execute(
-            "INSERT INTO user_traits (id, trait_key, trait_value) VALUES (?, ?, ?)",
-            (str(uuid.uuid4()), 'test_key', 'test_value')
+            "INSERT INTO knowledge (kind, entity, key, value) VALUES ('trait', 'user', ?, ?)",
+            ('test_key', 'test_value')
         )
         row = schema_db.execute(
-            "SELECT reliability FROM user_traits WHERE trait_key = 'test_key'"
+            "SELECT reliability FROM knowledge WHERE key = 'test_key'"
         ).fetchone()
-        assert row is not None, "user_traits INSERT failed"
+        assert row is not None, "knowledge INSERT failed"
         assert row[0] == 'reliable', (
-            f"user_traits.reliability default is {row[0]!r}, expected 'reliable'"
+            f"knowledge.reliability default is {row[0]!r}, expected 'reliable'"
         )
 
         # episodes
@@ -280,22 +280,6 @@ class TestSchemaValidation:
         assert row is not None, "episodes INSERT failed"
         assert row[0] == 'reliable', (
             f"episodes.reliability default is {row[0]!r}, expected 'reliable'"
-        )
-
-        # semantic_concepts
-        sc_id = str(uuid.uuid4())
-        schema_db.execute(
-            "INSERT INTO semantic_concepts "
-            "(id, concept_name, concept_type, definition) "
-            "VALUES (?, ?, ?, ?)",
-            (sc_id, 'test concept', 'fact', 'a test definition')
-        )
-        row = schema_db.execute(
-            "SELECT reliability FROM semantic_concepts WHERE id = ?", (sc_id,)
-        ).fetchone()
-        assert row is not None, "semantic_concepts INSERT failed"
-        assert row[0] == 'reliable', (
-            f"semantic_concepts.reliability default is {row[0]!r}, expected 'reliable'"
         )
 
         schema_db.rollback()

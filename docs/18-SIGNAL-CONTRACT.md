@@ -94,7 +94,7 @@ class ReasoningSignal:
 | `ambient_context` | Environment changed (place, attention, energy) | event_bridge | From confidence |
 | `idle_discovery` | Nothing happened, engine self-seeds | reasoning_loop (internal) | 0.4–0.5 |
 | `episode_created` | New narrative episode consolidated | episodic_memory_worker | 0.5 |
-| `trait_changed` | User trait created, updated, or corrected | user_trait_service | 0.3–0.7 |
+| `trait_changed` | User trait created, updated, or corrected | knowledge_service | 0.3–0.7 |
 | `task_state_changed` | Persistent task state transition | persistent_task_service | 0.5–0.6 |
 | `schedule_fired` | Scheduled reminder/task fired | scheduler_service | 0.5 |
 | `thread_expired` | Conversation thread expired | thread_expiry_service | 0.3 |
@@ -222,7 +222,7 @@ def run_signal_loop(self):
 | **ExperienceAssimilationService** | `novel_observation` | 60s poll | — |
 | **EventBridgeService** | `ambient_context` | Event-driven | 968 |
 | **EpisodicMemoryWorker** | `episode_created` | Queue-driven | 971 |
-| **UserTraitService** | `trait_changed` | Request-driven | 972 |
+| **KnowledgeService** | `trait_changed` | Request-driven | 972 |
 | **PersistentTaskService** | `task_state_changed` | Request/timer | 973 |
 | **SchedulerService** | `schedule_fired` | 60s timer | 974 |
 | **ThreadExpiryService** | `thread_expired` | 5min timer | 975 |
