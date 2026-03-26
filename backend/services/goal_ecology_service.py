@@ -26,7 +26,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-from services.database_service import get_lightweight_db_service
+from services.database_service import get_shared_db_service
 from services.time_utils import utc_now, parse_utc
 from services.write_queue_service import get_write_queue
 
@@ -131,10 +131,10 @@ def _trigger_strategy_generation(goal_id: str, goal_type: str) -> None:
     def _run():
         try:
             from services.goal_strategy_service import generate_strategy
-            from services.database_service import get_lightweight_db_service
+            from services.database_service import get_shared_db_service
 
             # Fetch description so the LLM prompt is meaningful
-            db = get_lightweight_db_service()
+            db = get_shared_db_service()
             description = ''
             try:
                 with db.connection() as conn:
@@ -175,9 +175,9 @@ class GoalEcologyService:
         Args:
             db_service: Optional pre-constructed
                 :class:`~services.database_service.DatabaseService` instance;
-                when ``None`` the lightweight singleton is used.
+                when ``None`` the shared singleton is used.
         """
-        self.db = db_service or get_lightweight_db_service()
+        self.db = db_service or get_shared_db_service()
         self._write_queue = get_write_queue()
 
     # ── CRUD ────────────────────────────────────────────────────────────────
