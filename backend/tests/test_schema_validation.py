@@ -223,8 +223,8 @@ class TestSchemaValidation:
             f"uncertainties table missing columns: {missing_cols}"
         )
 
-        # reliability must be on all three memory tables
-        for table in ('user_traits', 'episodes', 'semantic_concepts'):
+        # reliability must be on memory tables (knowledge replaced user_traits + semantic_concepts)
+        for table in ('knowledge', 'episodes'):
             cols = _get_columns(schema_db, table)
             assert 'reliability' in cols, (
                 f"reliability column missing from {table}"
@@ -344,21 +344,21 @@ class TestSchemaValidation:
 
     # ── Scenario 231 ─────────────────────────────────────────────────────────
 
-    def test_procedural_memory_reward_columns(self, schema_db):
-        """Absorbs scenario 231: procedural_memory has reward_history, weight, success_rate.
+    def test_knowledge_table_supports_procedures(self, schema_db):
+        """Absorbs scenario 231: knowledge table supports procedure entries.
 
-        These three columns form the reinforcement-learning feedback loop:
-        reward_history (JSONB) stores per-invocation rewards, weight drives
-        action selection probability, and success_rate is a rolling average.
+        Procedures (formerly procedural_memory) are stored in the unified
+        knowledge table with kind='procedure'. Reward data (weight, success_rate)
+        lives in the JSON `data` column.
         """
         tables = _get_tables(schema_db)
-        assert 'procedural_memory' in tables, (
-            "procedural_memory table missing from schema"
+        assert 'knowledge' in tables, (
+            "knowledge table missing from schema"
         )
 
-        columns = _get_columns(schema_db, 'procedural_memory')
-        required = {'reward_history', 'weight', 'success_rate'}
+        columns = _get_columns(schema_db, 'knowledge')
+        required = {'kind', 'entity', 'key', 'value', 'data', 'confidence', 'decay_class'}
         missing = required - columns
         assert not missing, (
-            f"procedural_memory missing columns: {missing}"
+            f"knowledge missing columns for procedure support: {missing}"
         )

@@ -360,6 +360,5 @@ class TestCapabilityCategories:
         cap = svc.get_snapshot()["capability"]
 
         assert len(cap["innate_skills"]) > 0
-        assert "recall" in cap["innate_skills"]
-        assert "memorize" in cap["innate_skills"]
+        assert "memory" in cap["innate_skills"]
         assert cap["innate_skills"] == sorted(cap["innate_skills"])

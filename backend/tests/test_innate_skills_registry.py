@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 from services.innate_skills.registry import (
     ALL_SKILL_NAMES,
+    SKILL_ALIASES,
     PLANNING_SKILLS,
     REFLECTION_FILTER_SKILLS,
     COGNITIVE_PRIMITIVES,
@@ -13,6 +14,9 @@ from services.innate_skills.registry import (
     SKILL_DESCRIPTIONS,
     COGNITIVE_PRIMITIVES_ORDERED,
 )
+
+# Canonical skills + backward-compat aliases — action category sets may include aliases
+ALL_SKILL_NAMES_WITH_ALIASES = ALL_SKILL_NAMES | frozenset(SKILL_ALIASES.keys())
 from services.act_action_categories import (
     READ_ACTIONS,
     DETERMINISTIC_ACTIONS,
@@ -40,7 +44,7 @@ class TestSkillRegistry:
             register_innate_skills(mock_dispatcher)
 
         # Exclude backward-compatibility aliases
-        aliases = {'memory_query', 'memory_write', 'world_state_read', 'internal_reasoning', 'semantic_query', 'notes'}
+        aliases = {'memory_query', 'memory_write', 'world_state_read', 'internal_reasoning', 'semantic_query', 'notes', 'recall', 'memorize'}
         registered = set(mock_dispatcher.handlers.keys()) - aliases
         assert registered == ALL_SKILL_NAMES
 
@@ -51,19 +55,19 @@ class TestSkillRegistry:
         assert CONTEXTUAL_SKILLS | COGNITIVE_PRIMITIVES == PLANNING_SKILLS
 
     def test_safe_actions_subset_of_all(self):
-        assert SAFE_ACTIONS <= ALL_SKILL_NAMES
+        assert SAFE_ACTIONS <= ALL_SKILL_NAMES_WITH_ALIASES
 
     def test_read_actions_subset_of_all(self):
-        assert READ_ACTIONS <= ALL_SKILL_NAMES
+        assert READ_ACTIONS <= ALL_SKILL_NAMES_WITH_ALIASES
 
     def test_critic_skip_reads_subset_of_read_actions(self):
         assert CRITIC_SKIP_READS <= READ_ACTIONS
 
     def test_deterministic_actions_subset_of_all(self):
-        assert DETERMINISTIC_ACTIONS <= ALL_SKILL_NAMES
+        assert DETERMINISTIC_ACTIONS <= ALL_SKILL_NAMES_WITH_ALIASES
 
     def test_skill_descriptions_covers_all_skills(self):
-        assert set(SKILL_DESCRIPTIONS.keys()) == ALL_SKILL_NAMES
+        assert set(SKILL_DESCRIPTIONS.keys()) >= ALL_SKILL_NAMES
 
     def test_ordered_primitives_matches_frozenset(self):
         assert set(COGNITIVE_PRIMITIVES_ORDERED) == COGNITIVE_PRIMITIVES
@@ -88,7 +92,7 @@ class TestSkillRegistry:
 class TestActionFatigueCosts:
 
     def test_all_keys_in_all_skills(self):
-        assert set(ACTION_FATIGUE_COSTS.keys()) <= ALL_SKILL_NAMES
+        assert set(ACTION_FATIGUE_COSTS.keys()) <= ALL_SKILL_NAMES_WITH_ALIASES
 
     def test_is_immutable(self):
         with pytest.raises(TypeError):

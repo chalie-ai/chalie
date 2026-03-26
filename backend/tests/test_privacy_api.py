@@ -102,11 +102,10 @@ class TestDeleteAll:
         src = inspect.getsource(delete_all)
 
         required_tables = [
-            'episodes', 'semantic_concepts', 'semantic_relationships',
-            'user_traits', 'threads', 'autobiography', 'scheduled_items',
+            'episodes', 'knowledge',
+            'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'identity_vectors', 'place_fingerprints',
             'interaction_log', 'cortex_iterations',
-            'procedural_memory',
         ]
         for table in required_tables:
             assert table in src, f"Expected table '{table}' in delete_all truncation list"
@@ -134,7 +133,7 @@ class TestDataSummary:
         src = inspect.getsource(data_summary)
 
         required_tables = [
-            'episodes', 'semantic_concepts', 'user_traits', 'threads',
+            'episodes', 'knowledge', 'threads',
             'autobiography', 'scheduled_items', 'persistent_tasks',
             'lists', 'place_fingerprints',
             'interaction_log',
@@ -153,8 +152,8 @@ class TestExportData:
         src = inspect.getsource(export_data)
 
         required_tables = [
-            'episodes', 'semantic_concepts', 'semantic_relationships',
-            'user_traits', 'threads', 'autobiography', 'scheduled_items',
+            'episodes', 'knowledge',
+            'threads', 'autobiography', 'scheduled_items',
             'persistent_tasks', 'lists', 'list_items', 'place_fingerprints',
         ]
         for table in required_tables:

@@ -106,9 +106,11 @@ def _fetch_uncertainty(db_service, uncertainty_id):
 
 
 def _get_reliability(db_service, table, record_id):
+    # Map memory-type names to actual table names (matches _RELIABILITY_TABLE)
+    actual_table = {'user_traits': 'knowledge', 'semantic_concepts': 'knowledge'}.get(table, table)
     with db_service.connection() as conn:
         row = conn.execute(
-            f"SELECT reliability FROM {table} WHERE id = ?", (record_id,)
+            f"SELECT reliability FROM {actual_table} WHERE id = ?", (record_id,)
         ).fetchone()
     return row['reliability'] if row else None
 
