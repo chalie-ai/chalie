@@ -479,6 +479,15 @@ class GoalEcologyService:
             source: Optional origin identifier (conversation ID, URL, etc.).
             strength: Numeric weight in the range 0–1 (default ``1.0``).
         """
+        # Sanitize — callers may pass None via dict.get() when key exists with None value
+        goal_id = str(goal_id) if goal_id is not None else ''
+        signal_type = str(signal_type) if signal_type is not None else 'unknown'
+        content = str(content) if content is not None else ''
+        strength = float(strength) if strength is not None else 1.0
+        if not goal_id:
+            logger.warning(f"{LOG_PREFIX} Skipping evidence with empty goal_id")
+            return
+
         now = utc_now().isoformat()
 
         def _write_evidence(

@@ -522,7 +522,7 @@ class AutobiographyService:
             for concept in inputs["concepts"]:
                 lines.append(
                     f"- {concept['name']}: {concept['definition']} "
-                    f"(strength: {concept['strength']:.2f}, domain: {concept.get('domain') or 'general'})"
+                    f"(strength: {concept['strength'] or 0:.2f}, domain: {concept.get('domain') or 'general'})"
                 )
 
         constraint_episodes = inputs.get("constraint_episodes", [])
