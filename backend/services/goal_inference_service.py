@@ -30,7 +30,7 @@ import json
 import logging
 from typing import Optional, List, Dict
 
-from services.database_service import get_lightweight_db_service
+from services.database_service import get_shared_db_service
 from services.config_service import ConfigService
 from services.background_llm_queue import create_background_llm_proxy
 
@@ -71,7 +71,7 @@ class GoalInferenceService:
     """
 
     def __init__(self, db_service=None):
-        self.db = db_service or get_lightweight_db_service()
+        self.db = db_service or get_shared_db_service()
         config = ConfigService.resolve_agent_config("cognitive-drift")
         goal_config = config.get('goal_inference', {})
 
