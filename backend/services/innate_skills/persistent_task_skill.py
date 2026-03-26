@@ -137,6 +137,7 @@ def _get_account_id() -> int:
             row = cursor.fetchone()
             return row[0] if row else 1
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to fetch account id, defaulting to 1", exc_info=True)
         return 1
 
 

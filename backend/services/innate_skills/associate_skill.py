@@ -116,6 +116,7 @@ def _load_config() -> dict:
             "max_depth": 2,
         })
     except Exception:
+        logger.debug("[ASSOCIATE] Failed to load associate config, using defaults", exc_info=True)
         return {
             "random_activation_ratio": 0.15,
             "activation_decay": 0.7,

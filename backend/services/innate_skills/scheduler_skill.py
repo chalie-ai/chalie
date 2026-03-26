@@ -318,6 +318,7 @@ def _resolve_time_range(time_range: str):
         tz = ZoneInfo(tz_name)
         client_now = now_utc.astimezone(tz)
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to load client timezone, defaulting to UTC", exc_info=True)
         tz = timezone.utc
         client_now = now_utc
 
@@ -441,4 +442,5 @@ def _normalize_hhmm(time_str: str) -> str:
 
         return f"{hour:02d}:{minute:02d}"
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to parse time string", exc_info=True)
         return None

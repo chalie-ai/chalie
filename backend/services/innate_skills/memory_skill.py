@@ -456,6 +456,7 @@ def _count_episode_candidates(db_service, topic: str) -> int:
             cursor.close()
         return count
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to count topic episodes", exc_info=True)
         return 0
 
 
