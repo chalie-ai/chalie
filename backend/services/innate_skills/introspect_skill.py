@@ -135,6 +135,7 @@ def _query_last_consolidation(db) -> str:
             return f', last consolidation {rel}'
         return ''
     except Exception:
+        logger.debug("[INTROSPECT] Failed to query last consolidation time", exc_info=True)
         return ''
 
 
@@ -308,7 +309,7 @@ def _tool_summary(tool_name: str) -> str:
         if row and row[0]:
             return row[0]
     except Exception:
-        pass
+        logger.debug("[INTROSPECT] Failed to query last tool result", exc_info=True)
     return ''
 
 
@@ -654,4 +655,5 @@ def _relative_time(dt_value) -> str:
         unit = 'day' if days == 1 else 'days'
         return f'{days} {unit} ago'
     except Exception:
+        logger.debug("[INTROSPECT] Failed to compute relative time", exc_info=True)
         return 'unknown'

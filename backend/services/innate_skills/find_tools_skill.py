@@ -150,6 +150,7 @@ def _filter_available(rows: list) -> List[Dict]:
         from services.tool_registry_service import ToolRegistryService
         registry = ToolRegistryService()
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to load ToolRegistryService, filtering disabled", exc_info=True)
         registry = None
 
     results = []
@@ -226,6 +227,7 @@ def _get_param_summary(tool_name: str) -> str:
             parts.append(pname if required else f"{pname}?")
         return f"({', '.join(parts)})"
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to format parameter signature", exc_info=True)
         return ""
 
 
