@@ -8,10 +8,14 @@
 PRAGMA foreign_keys = OFF;
 
 -- ── user_traits ─────────────────────────────────────────────────────────────
--- Note: source and is_literal columns were removed (migration 006 / schema.sql update).
--- This migration must match schema.sql's current column set so it works on both
--- fresh installs (where schema.sql already created the table) and upgrades
--- (where the old table had source/is_literal — migration 006 strips them).
+-- On fresh installs schema.sql no longer creates user_traits (dropped by 019).
+-- Create a stub so the INSERT copies zero rows and the migration is a no-op.
+CREATE TABLE IF NOT EXISTS user_traits (
+    id TEXT PRIMARY KEY, trait_key TEXT, trait_value TEXT, category TEXT,
+    confidence REAL, reinforcement_count INTEGER, last_reinforced_at TEXT,
+    last_conflict_at TEXT, created_at TEXT, updated_at TEXT, reliability TEXT
+);
+
 CREATE TABLE IF NOT EXISTS user_traits_new (
     id TEXT PRIMARY KEY,
     trait_key TEXT NOT NULL,
@@ -27,8 +31,6 @@ CREATE TABLE IF NOT EXISTS user_traits_new (
     UNIQUE(trait_key)
 );
 
--- Use a temp trigger to detect whether 'reliability' column exists.
--- If it does, copy it; if not, default to 'reliable'.
 INSERT INTO user_traits_new
     (id, trait_key, trait_value, category, confidence,
      reinforcement_count, last_reinforced_at, last_conflict_at, created_at, updated_at, reliability)

@@ -36,6 +36,35 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- Fresh-install stubs: these tables no longer exist in schema.sql
+-- (dropped by 019). Create empty stubs so the INSERTs are no-ops.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_traits (
+    id TEXT PRIMARY KEY, trait_key TEXT, trait_value TEXT, category TEXT,
+    confidence REAL, reinforcement_count INTEGER, last_reinforced_at TEXT,
+    last_conflict_at TEXT, created_at TEXT, updated_at TEXT, reliability TEXT
+);
+CREATE TABLE IF NOT EXISTS procedural_memory (
+    id TEXT PRIMARY KEY, action_name TEXT, success_rate REAL, total_attempts INTEGER,
+    weight REAL, avg_reward REAL, reward_history TEXT, context_stats TEXT,
+    created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS semantic_concepts (
+    id TEXT PRIMARY KEY, concept_name TEXT, definition TEXT, domain TEXT,
+    concept_type TEXT, strength REAL, decay_resistance REAL, abstraction_level REAL,
+    source_episodes TEXT, examples TEXT, verification_status TEXT,
+    activation_score REAL, utility_score REAL, context_constraints TEXT,
+    confidence REAL, reliability TEXT, consolidation_count INTEGER,
+    created_at TEXT, updated_at TEXT, last_accessed_at TEXT, deleted_at TEXT
+);
+CREATE TABLE IF NOT EXISTS semantic_relationships (
+    id TEXT PRIMARY KEY, source_concept_id TEXT, target_concept_id TEXT,
+    relationship_type TEXT, bidirectional INTEGER, strength REAL,
+    source_episodes TEXT, confidence REAL,
+    created_at TEXT, updated_at TEXT, deleted_at TEXT
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- 2. Migrate user_traits → knowledge (kind=trait)
 -- ────────────────────────────────────────────────────────────────
 INSERT OR IGNORE INTO knowledge (kind, entity, key, value, data, decay_class, confidence, reliability, source, evidence_count, created_at, updated_at)
