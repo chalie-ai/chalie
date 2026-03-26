@@ -124,7 +124,7 @@ def _handle_view(ecology, goal_id: str) -> str:
             for e in evidence:
                 lines.append(f"    - [{e[0]}] {e[1][:100]} ({e[3]})")
     except Exception:
-        pass
+        logger.debug(f"{LOG_PREFIX} Failed to fetch goal evidence", exc_info=True)
 
     # Show parent goal
     if goal.get('lineage_parent_id'):
@@ -134,7 +134,7 @@ def _handle_view(ecology, goal_id: str) -> str:
                 lines.append(f"\nParent Goal: [{parent['type']}] {parent['description']}")
                 lines.append(f"  Salience: {parent['salience']:.0%}, Confidence: {parent['confidence']:.0%}")
         except Exception:
-            pass
+            logger.debug(f"{LOG_PREFIX} Failed to fetch parent goal", exc_info=True)
 
     # Show child goals
     try:
@@ -144,7 +144,7 @@ def _handle_view(ecology, goal_id: str) -> str:
             for child in children:
                 lines.append(f"  - [{child['type']}] {child['description'][:80]} ({child['status']})")
     except Exception:
-        pass
+        logger.debug(f"{LOG_PREFIX} Failed to fetch child goals", exc_info=True)
 
     # Outcome feedback
     feedback = goal.get('outcome_feedback', [])
@@ -152,6 +152,7 @@ def _handle_view(ecology, goal_id: str) -> str:
         try:
             feedback = json.loads(feedback)
         except Exception:
+            logger.debug(f"{LOG_PREFIX} Failed to parse outcome feedback JSON", exc_info=True)
             feedback = []
     if feedback:
         lines.append(f"\n  Feedback history ({len(feedback)} entries):")
@@ -253,7 +254,7 @@ def _handle_narrate(ecology, params: dict) -> str:
         try:
             children = ecology.get_children(g['id'])
         except Exception:
-            pass
+            logger.debug(f"{LOG_PREFIX} Failed to fetch goal children for narrative", exc_info=True)
 
         narratives_data.append({
             'description': g['description'],
@@ -292,6 +293,7 @@ def _get_evidence_for_goal(goal_id: str, limit: int = 10) -> list:
             cursor.close()
         return [{'signal_type': r[0], 'content': r[1], 'source': r[2], 'timestamp': r[3]} for r in rows]
     except Exception:
+        logger.debug(f"{LOG_PREFIX} Failed to fetch goal signals", exc_info=True)
         return []
 
 
@@ -338,6 +340,7 @@ def _synthesize_narrative(goals_data: list) -> str:
                     import json as _json
                     feedback = _json.loads(feedback)
                 except Exception:
+                    logger.debug(f"{LOG_PREFIX} Failed to parse outcome feedback JSON in synthesis", exc_info=True)
                     feedback = []
             if feedback:
                 engaged = sum(1 for f in feedback if f.get('response') == 'engaged')
