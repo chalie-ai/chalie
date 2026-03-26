@@ -526,28 +526,6 @@ class MemoryStore:
             d = self._get_hash(key)
             return dict(d) if d else {}
 
-    def hdel(self, key: str, *fields) -> int:
-        """Delete one or more ``fields`` from the hash at ``key``.
-
-        Args:
-            key: Hash key.
-            *fields: Field names to remove.
-
-        Returns:
-            The number of fields that were actually removed (fields that did not
-            exist are not counted).
-        """
-        with self._hash_lock:
-            d = self._get_hash(key)
-            if d is None:
-                return 0
-            count = 0
-            for f in fields:
-                if str(f) in d:
-                    del d[str(f)]
-                    count += 1
-            return count
-
     def hincrby(self, key: str, field: str, amount: int = 1) -> int:
         """Increment the integer value of ``field`` in the hash at ``key`` by ``amount``.
 
@@ -570,20 +548,6 @@ class MemoryStore:
             new_val = current + amount
             d[str(field)] = str(new_val)
             return new_val
-
-    def hexists(self, key: str, field: str) -> bool:
-        """Return ``True`` if ``field`` exists in the hash at ``key``.
-
-        Args:
-            key: Hash key.
-            field: Field name to check.
-
-        Returns:
-            ``True`` if the field is present, ``False`` otherwise.
-        """
-        with self._hash_lock:
-            d = self._get_hash(key)
-            return str(field) in d if d else False
 
     # ── SORTED SET operations ──────────────────────────────────
 
@@ -854,33 +818,6 @@ class MemoryStore:
             s = self._get_set(key)
             return set(s) if s is not None else set()
 
-    def sismember(self, key: str, value: str) -> bool:
-        """Return ``True`` if ``value`` is a member of the set at ``key``.
-
-        Args:
-            key: Set key.
-            value: Value to check (coerced to ``str``).
-
-        Returns:
-            ``True`` if the value is present, ``False`` otherwise.
-        """
-        with self._set_lock:
-            s = self._get_set(key)
-            return str(value) in s if s else False
-
-    def scard(self, key: str) -> int:
-        """Return the number of members in the set at ``key``.
-
-        Args:
-            key: Set key.
-
-        Returns:
-            Cardinality of the set, or ``0`` if the key does not exist.
-        """
-        with self._set_lock:
-            s = self._get_set(key)
-            return len(s) if s is not None else 0
-
     # ── KEY operations ─────────────────────────────────────────
 
     def delete(self, *keys) -> int:
@@ -1021,10 +958,6 @@ class MemoryStore:
         """Simplified scan — returns all matching keys at once (cursor always 0)."""
         matched = self.keys(match)
         return (0, matched)
-
-    def scan_iter(self, match: str = "*", count: int = 100):
-        """Iterate over keys matching pattern."""
-        return iter(self.keys(match))
 
     # ── PUB/SUB ────────────────────────────────────────────────
 

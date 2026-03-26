@@ -329,12 +329,11 @@ def _handle_history(service, params: dict) -> str:
 
     since = None
     if since_str:
-        try:
-            from datetime import datetime, timezone
-            since = datetime.fromisoformat(since_str)
-            if not since.tzinfo:
-                since = since.replace(tzinfo=timezone.utc)
-        except ValueError:
+        from datetime import datetime, timezone
+        from services.time_utils import parse_utc
+        _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+        since = parse_utc(since_str)
+        if since == _SENTINEL:
             return f"[LIST] Invalid 'since' format. Use ISO 8601 (e.g. '2026-01-01T00:00:00Z')."
 
     events = service.get_history(name, since=since, limit=30)

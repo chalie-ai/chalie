@@ -142,14 +142,11 @@ def _create(topic: str, params: dict) -> str:
             return "Error: due_at (ISO 8601 with timezone) is required"
 
         # Parse due_at
-        try:
-            due_at = datetime.fromisoformat(due_at_str)
-        except Exception as e:
-            return f"Error: invalid ISO 8601 due_at: {e}"
-
-        # Ensure due_at has timezone info (convert naive to UTC if needed)
-        if due_at.tzinfo is None:
-            due_at = due_at.replace(tzinfo=timezone.utc)
+        from services.time_utils import parse_utc
+        _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+        due_at = parse_utc(due_at_str)
+        if due_at == _SENTINEL:
+            return f"Error: invalid ISO 8601 due_at: '{due_at_str}'"
 
         # Validate in future
         now = datetime.now(timezone.utc)
