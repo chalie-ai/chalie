@@ -33,7 +33,7 @@ class ProviderCacheService:
         """
         # Check if MemoryStore version has changed (cross-process invalidation)
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             current_version = store.get("providers:cache_version")
             current_version = int(current_version) if current_version else 0
@@ -201,7 +201,7 @@ class ProviderCacheService:
         - Other processes detect version mismatch on next get_providers()
         """
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             new_version = store.incr("providers:cache_version")
             logger.debug(f"[ProviderCache] Invalidated cache (new version: {new_version})")

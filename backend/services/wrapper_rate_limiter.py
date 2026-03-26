@@ -16,7 +16,7 @@ import time
 import logging
 import uuid
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ import json
 import time
 import logging
 from typing import Callable, Dict, Any, List, Optional
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 # Event type constants
 ENCODE_EVENT = 'encode_event'

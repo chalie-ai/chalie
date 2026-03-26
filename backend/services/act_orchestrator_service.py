@@ -699,7 +699,7 @@ class ACTOrchestrator:
             when there is no pending steering input or the store is unavailable.
         """
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             steer_key = f"steer:{self._request_id}"
             steers = store.lrange(steer_key, 0, -1)
@@ -942,7 +942,7 @@ class ACTOrchestrator:
             logger.warning(f"{LOG_PREFIX} No request_id — cannot wait for user response")
             return None
 
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         steer_key = f"steer:{self._request_id}"
         deadline = _time.monotonic() + max_wait
@@ -1052,7 +1052,7 @@ def _maybe_auto_reflect(
 
     # Check cooldown
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         cooldown_key = f"auto_reflect_cooldown:{topic}"
         if store.get(cooldown_key):

@@ -27,7 +27,7 @@ import logging
 import concurrent.futures
 from typing import Optional
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.llm_service import create_refreshable_llm_service, RateLimitError
 
 logger = logging.getLogger(__name__)

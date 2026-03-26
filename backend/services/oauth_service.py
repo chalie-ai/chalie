@@ -410,7 +410,7 @@ class OAuthService:
     def _store_oauth_state(self, state: str, data: dict):
         """Store OAuth state data in MemoryStore with TTL."""
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             key = f"{self._STORE_STATE_PREFIX}{state}"
             payload = json.dumps(data)
@@ -432,7 +432,7 @@ class OAuthService:
     def _pop_oauth_state(self, state: str) -> dict | None:
         """Retrieve and delete OAuth state data from MemoryStore."""
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             key = f"{self._STORE_STATE_PREFIX}{state}"
             ttl = store.ttl(key)

@@ -30,7 +30,7 @@ import logging
 import time
 from typing import Optional
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.config_service import ConfigService
 
 logger = logging.getLogger(__name__)

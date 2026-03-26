@@ -10,7 +10,7 @@ import time
 import logging
 from typing import Optional
 
-from .memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from .config_service import ConfigService
 from .semantic_consolidation_tracker import SemanticConsolidationTracker
 

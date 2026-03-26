@@ -25,7 +25,7 @@ import logging
 import time
 from typing import Dict, Any, Optional, Tuple
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from .base import AutonomousAction, ActionResult, ThoughtContext
 
 logger = logging.getLogger(__name__)

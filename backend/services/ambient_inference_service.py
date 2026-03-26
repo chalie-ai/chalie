@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[AMBIENT INFERENCE]"

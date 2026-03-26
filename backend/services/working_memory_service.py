@@ -9,7 +9,7 @@ import json
 import time
 import logging
 from typing import List, Dict
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 
 class WorkingMemoryService:

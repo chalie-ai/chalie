@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Optional, List
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)

@@ -10,7 +10,7 @@ import json
 import uuid
 import logging
 from typing import Dict, Any, Optional
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 
 class MetricsService:

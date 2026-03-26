@@ -140,7 +140,7 @@ def _calculate_social_cost() -> float:
 
     # Recent ignored attempts
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         recent_ignored = store.get('goal:recent_ignored_count')
         if recent_ignored and int(recent_ignored) >= 2:
@@ -150,7 +150,7 @@ def _calculate_social_cost() -> float:
 
     # Message momentum: active conversation = higher cost
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         last_msg_ts = store.get('last_user_message_ts')
         if last_msg_ts:
@@ -176,7 +176,7 @@ def _calculate_social_cost() -> float:
 
     # Rapid conversation pace: multiple messages in quick succession
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         recent_count = store.get('recent_message_count_5min')
         if recent_count and int(recent_count) >= 3:
@@ -197,7 +197,7 @@ def _get_quiet_hours_cost() -> float:
     Returns:
         0.4 if current hour is a quiet hour, 0.0 otherwise.
     """
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
 
     store = MemoryClientService.create_connection()
 
@@ -434,7 +434,7 @@ def _execute_via_proactive_push(goal: Dict[str, Any], style: str) -> Dict[str, A
         )
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         import json
 
         store = MemoryClientService.create_connection()

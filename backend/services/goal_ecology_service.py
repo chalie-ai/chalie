@@ -1148,7 +1148,7 @@ class GoalEcologyService:
         and creates a new emergent goal from the cluster.
         """
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
 
             # Get all unmatched signal keys
@@ -1694,7 +1694,7 @@ class GoalEcologyService:
                 return []
 
             # Check cooldown: don't re-detect clusters too frequently
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
 
             results = []

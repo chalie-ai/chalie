@@ -37,7 +37,7 @@ import logging
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.config_service import ConfigService
 from services.knowledge_service import KnowledgeService
 from services.episodic_service import EpisodicService

@@ -430,7 +430,7 @@ def _handle_cluster_dismiss(ecology, params: dict) -> str:
         return "[GOALS] cluster_dismiss requires goal_ids (list of 2+ IDs)"
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
 
         cluster_ids = sorted(goal_ids[:5])

@@ -20,7 +20,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 
 STORE_KEY = "client_context:primary"

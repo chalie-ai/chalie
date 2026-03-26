@@ -7,7 +7,7 @@ This simulates working memory / topic activation in the neurological model.
 Supports per-channel scoping via constructor parameters.
 """
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 
 class RecentTopicService:

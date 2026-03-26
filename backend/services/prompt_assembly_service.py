@@ -659,7 +659,7 @@ class PromptAssemblyService:
                     return ""
 
             from services.identity_state_service import IdentityStateService
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             from services.database_service import get_shared_db_service
             from services.knowledge_service import KnowledgeService
 
@@ -779,7 +779,7 @@ class PromptAssemblyService:
             }
             if thread_id:
                 try:
-                    from services.memory_client import MemoryClientService
+                    from services.memory_store import get_shared_store
                     import json as _json
                     _store = MemoryClientService.create_connection()
                     _snapshot_raw = _store.get(f"adaptive_signals:{thread_id}")

@@ -1077,7 +1077,7 @@ def temporal_pattern_worker(shared_state):
     """
     import random
     from services.database_service import get_shared_db_service
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
 
     _time.sleep(300)  # 5min warmup — avoid startup load
 

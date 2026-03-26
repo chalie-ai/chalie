@@ -43,7 +43,7 @@ def data_summary():
     """Overview of all stored data — counts by type."""
     try:
         from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         db = get_shared_db_service()
         store = MemoryClientService.create_connection()
@@ -124,7 +124,7 @@ def export_data():
             ``"memory_store"`` top-level keys.
         """
         from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         db = get_shared_db_service()
         store = MemoryClientService.create_connection()
@@ -216,7 +216,7 @@ def delete_all():
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         from services.database_service import get_shared_db_service
 
         # Clear MemoryStore — all user-data patterns

@@ -345,7 +345,7 @@ class EpisodicService:
 
         store = None
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
         except Exception:
             pass

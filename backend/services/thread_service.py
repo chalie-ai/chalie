@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, List
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.config_service import ConfigService
 
 

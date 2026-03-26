@@ -57,7 +57,7 @@ def readiness_check():
 
     # MemoryStore
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         store.ping()
         components['memory_store'] = {'status': 'ok'}
@@ -123,7 +123,7 @@ def metrics_endpoint():
 def system_status():
     """Comprehensive system health and diagnostics."""
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         from services.database_service import get_shared_db_service
 
         store = MemoryClientService.create_connection()
@@ -204,7 +204,7 @@ def observability_memory():
     """
     try:
         from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         db = get_shared_db_service()
 
@@ -414,7 +414,7 @@ def observability_tasks():
 
         # Goal ecology stats
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             result['goal_ecology_stats'] = {
                 'last_run': store.get('goal_ecology:last_run'),
@@ -588,7 +588,7 @@ def observability_temporal():
     try:
         from services.temporal_pattern_service import TemporalPatternService
         from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         db = get_shared_db_service()
         service = TemporalPatternService(db)

@@ -196,7 +196,7 @@ class AutonomousExecutionGate:
             if self._confidence_service is None:
                 from services.domain_confidence_service import DomainConfidenceService
                 from services.database_service import get_shared_db_service
-                from services.memory_client import MemoryClientService
+                from services.memory_store import get_shared_store
                 self._confidence_service = DomainConfidenceService(
                     get_shared_db_service(),
                     MemoryClientService.create_connection(),

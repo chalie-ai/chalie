@@ -3,7 +3,7 @@ import logging
 import uuid
 from typing import Dict, Any, Optional, List
 
-from .memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from .config_service import ConfigService
 from .time_utils import utc_now
 from .blocks_render_service import BlocksRenderService

@@ -65,7 +65,7 @@ def enqueue_tool_reflection(act_history: list, topic: str, user_prompt: str):
         if not tool_outputs:
             return
 
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         payload = json.dumps({
             'topic': topic,

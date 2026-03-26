@@ -31,7 +31,7 @@ def _get_vapid_keys():
     if pub and priv:
         return {'public': pub, 'private': priv}
 
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
     store = MemoryClientService.create_connection()
 
     cached = store.get(VAPID_KEYS_KEY)
@@ -87,7 +87,7 @@ def push_subscribe():
         return jsonify({'error': 'Invalid subscription'}), 400
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         store.sadd(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         logger.info(f"[Push] Stored subscription: {subscription['endpoint'][:60]}...")
@@ -106,7 +106,7 @@ def push_unsubscribe():
         return jsonify({'error': 'Invalid subscription'}), 400
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         store.srem(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         return jsonify({'ok': True}), 200
@@ -119,7 +119,7 @@ def send_push_to_all(title, body, tag='chalie-message'):
     """Send a web push notification to all stored subscriptions."""
     try:
         from pywebpush import webpush, WebPushException
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         keys = _get_vapid_keys()
         store = MemoryClientService.create_connection()

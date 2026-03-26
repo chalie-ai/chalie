@@ -21,7 +21,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[EVENT BRIDGE]"

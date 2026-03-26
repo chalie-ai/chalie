@@ -117,7 +117,7 @@ class IntentService:
                 singleton is used via ``MemoryClientService.create_connection()``.
         """
         if store is None:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             self._store = MemoryClientService.create_connection()
         else:
             self._store = store

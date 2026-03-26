@@ -27,7 +27,7 @@ def recent_events():
     if not validate_session(request):
         return jsonify({"error": "Unauthorized"}), 401
 
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
     store = MemoryClientService.create_connection()
 
     events = []

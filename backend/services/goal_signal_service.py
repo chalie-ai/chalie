@@ -351,7 +351,7 @@ def _store_unmatched_signal(
 ) -> None:
     """Store an unmatched signal in MemoryStore for later pattern detection."""
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         from services.goal_ecology_service import UNMATCHED_SIGNAL_PREFIX, UNMATCHED_SIGNAL_TTL
 
         store = MemoryClientService.create_connection()

@@ -46,7 +46,7 @@ def app_update_worker(shared_state=None):
 def _push_update_event(info):
     """Publish update notification to output:events for WebSocket delivery."""
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         event = {
             "type": "app_update",

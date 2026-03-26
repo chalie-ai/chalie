@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)

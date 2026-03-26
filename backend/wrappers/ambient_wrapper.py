@@ -29,7 +29,7 @@ from typing import Optional, Tuple
 
 from services.config_service import ConfigService
 from services.database_service import get_shared_db_service
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.reasoning_loop_service import ReasoningSignal, emit_reasoning_signal
 from services.time_utils import utc_now
 

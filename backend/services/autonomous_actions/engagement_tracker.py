@@ -12,7 +12,7 @@ import time
 import logging
 from typing import Optional, Dict, Any
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)

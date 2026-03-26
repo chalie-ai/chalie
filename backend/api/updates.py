@@ -245,7 +245,7 @@ def update_context():
         return jsonify({"error": "custom must be a JSON object"}), 400
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         store = MemoryClientService.create_connection()
         STORE_KEY = "client_context:primary"
@@ -313,7 +313,7 @@ def update_feedback():
     details = (body.get("details") or "").strip()
 
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         from services.time_utils import utc_now
 
         store = MemoryClientService.create_connection()

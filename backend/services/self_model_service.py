@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SELF MODEL]"

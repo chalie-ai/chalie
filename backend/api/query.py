@@ -60,10 +60,14 @@ def _get_identity_service():
     return IdentityService
 
 
-def _get_memory_client():
-    """Return MemoryClientService class (lazy, fail-open)."""
-    from services.memory_client import MemoryClientService
-    return MemoryClientService
+def _get_shared_store():
+    """Return the shared MemoryStore singleton (lazy, fail-open).
+
+    Returns:
+        MemoryStore: The application-wide shared memory store instance.
+    """
+    from services.memory_store import get_shared_store
+    return get_shared_store()
 
 
 def _get_db_service():

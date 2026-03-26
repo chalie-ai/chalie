@@ -39,7 +39,7 @@ def persistent_task_worker(shared_state):
     """
     logger.info(f"{LOG_PREFIX} Starting persistent task worker (event-driven)")
 
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
     store = MemoryClientService.create_connection()
 
     while True:

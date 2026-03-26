@@ -91,7 +91,7 @@ class _CronToolWorker:
                 time.sleep(interval)
 
                 try:
-                    from services.memory_client import MemoryClientService
+                    from services.memory_store import get_shared_store
                     store = MemoryClientService.create_connection()
                     queue_depth = store.llen("prompt-queue")
                     if queue_depth > 5:
@@ -150,7 +150,7 @@ class _CronToolWorker:
                 state_key = f"tool_state:{self.tool_name}"
                 old_state_key = f"tool_cron_state:{self.tool_name}"
                 try:
-                    from services.memory_client import MemoryClientService as _MCS
+                    from services.memory_store import get_shared_store
                     _store = _MCS.create_connection()
                     # Migration: copy old key to new key on first access
                     if not _store.exists(state_key) and _store.exists(old_state_key):
@@ -192,7 +192,7 @@ class _CronToolWorker:
                 # Persist returned state back to MemoryStore (7-day TTL)
                 if isinstance(result, dict) and "_state" in result:
                     try:
-                        from services.memory_client import MemoryClientService as _MCS
+                        from services.memory_store import get_shared_store
                         _store = _MCS.create_connection()
                         _store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
                     except Exception as e:
@@ -1059,7 +1059,7 @@ class ToolRegistryService:
         tool_state = {}
         state_key = f"tool_state:{tool_name}"
         try:
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             state_json = store.get(state_key)
             if state_json:
@@ -1084,7 +1084,7 @@ class ToolRegistryService:
         # Persist returned state
         if isinstance(result, dict) and "_state" in result:
             try:
-                from services.memory_client import MemoryClientService
+                from services.memory_store import get_shared_store
                 store = MemoryClientService.create_connection()
                 store.setex(state_key, 7 * 24 * 3600, json.dumps(result.pop("_state")))
             except Exception as e:

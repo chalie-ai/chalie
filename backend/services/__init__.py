@@ -1,6 +1,6 @@
 from .config_service import ConfigService
 from .ollama_service import OllamaService
-from .memory_client import MemoryClientService
+from .memory_store import get_shared_store
 from .prompt_queue import PromptQueue
 from .worker_base import WorkerBase
 from .frontal_cortex_service import FrontalCortexService
@@ -15,7 +15,7 @@ from .session_service import SessionService
 
 __all__ = [
     'ConfigService', 'OllamaService',
-    'MemoryClientService', 'PromptQueue',
+    'get_shared_store', 'PromptQueue',
     'WorkerBase',
     'FrontalCortexService', 'OrchestratorService',
     'WorldStateService', 'DatabaseService',

@@ -109,7 +109,7 @@ def register_websocket(sock):
         logger.debug(f"[WS] Connection established", extra={"connection_id": request_id})
 
         # Subscribe to output:events for drift/card/task push
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         store = MemoryClientService.create_connection()
         pubsub = store.pubsub()
         pubsub.subscribe('output:events')

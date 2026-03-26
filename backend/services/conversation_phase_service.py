@@ -186,7 +186,7 @@ class ConversationPhaseService:
     # ── MemoryStore I/O ────────────────────────────────────────────────────
 
     def _store(self):
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
         return MemoryClientService.create_connection()
 
     def _key(self, thread_id: str) -> str:

@@ -372,7 +372,7 @@ def voice_synthesize():
         import base64
         import json
         import numpy as np
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         store = MemoryClientService.create_connection()
         silence = np.zeros(int(24000 * 0.3), dtype=np.float32)

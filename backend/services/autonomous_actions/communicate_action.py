@@ -19,7 +19,7 @@ import math
 from services.time_utils import utc_now
 from typing import Optional, Dict, Any, List, Tuple
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.embedding_service import EmbeddingService
 from services.working_memory_service import WorkingMemoryService
 

@@ -130,7 +130,7 @@ class WorkerManager:
         # Publish thread health summary to MemoryStore for self-model consumption
         try:
             import json
-            from services.memory_client import MemoryClientService
+            from services.memory_store import get_shared_store
             store = MemoryClientService.create_connection()
             alive = [wid for wid, t in self.threads.items() if t.is_alive()]
             dead = [wid for wid, t in self.threads.items() if not t.is_alive()]

@@ -582,7 +582,7 @@ def _format_empty(
 def _store_fok_signal(topic: str, partial_match_count: int) -> None:
     """Store partial match count in MemoryStore for introspect's FOK signal."""
     try:
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         store = MemoryClientService.create_connection()
         store.setex(f"fok:{topic}", 300, str(partial_match_count))

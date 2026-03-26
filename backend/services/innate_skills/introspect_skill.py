@@ -346,7 +346,7 @@ def _scope_reasoning_state() -> str:
 def _reasoning_focus() -> str:
     try:
         from services.focus_session_service import FocusSessionService
-        from services.memory_client import MemoryClientService
+        from services.memory_store import get_shared_store
 
         # Try to find the most recent active focus session by scanning known threads
         store = MemoryClientService.create_connection()

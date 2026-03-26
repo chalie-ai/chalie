@@ -18,7 +18,7 @@ import uuid
 import logging
 from typing import Optional
 
-from services.memory_client import MemoryClientService
+from services.memory_store import get_shared_store
 from services.llm_service import LLMResponse
 
 logger = logging.getLogger(__name__)

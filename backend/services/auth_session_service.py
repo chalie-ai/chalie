@@ -28,7 +28,7 @@ def create_session(response) -> str:
     Returns:
         The newly created session token string.
     """
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
 
     token = secrets.token_urlsafe(32)
     store = MemoryClientService.create_connection()
@@ -60,7 +60,7 @@ def validate_session(request) -> bool:
     Returns:
         True if the session token is present and valid, False otherwise.
     """
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
@@ -86,7 +86,7 @@ def destroy_session(request, response):
         response: Flask (or compatible) response object on which the cookie
             deletion will be applied.
     """
-    from services.memory_client import MemoryClientService
+    from services.memory_store import get_shared_store
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if token:
