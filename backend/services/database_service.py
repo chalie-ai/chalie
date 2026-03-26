@@ -88,10 +88,6 @@ def get_shared_db_service() -> 'DatabaseService':
     return _shared_db_service
 
 
-# Kept for compatibility — SQLite needs no lightweight variant
-get_lightweight_db_service = get_shared_db_service
-
-
 class SessionProxy:
     """
     Lightweight shim that mimics SQLAlchemy session.execute(text("SQL"), params).
