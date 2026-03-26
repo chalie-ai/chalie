@@ -87,13 +87,14 @@ class CronToolWorker:
                         )
                         continue
                 except Exception:
-                    pass
+                    _log.debug("[TOOL CRON] Failed to read prompt-queue depth", exc_info=True)
 
                 try:
                     from services.tool_config_service import ToolConfigService
                     from services.database_service import get_shared_db_service
                     settings = ToolConfigService(get_shared_db_service()).get_tool_config(self.tool_name)
                 except Exception:
+                    _log.debug(f"[TOOL CRON] Failed to load tool config for '{self.tool_name}', using empty settings", exc_info=True)
                     settings = {}
 
                 # OAuth token refresh for cron tools
@@ -112,7 +113,7 @@ class CronToolWorker:
                     from services.client_context_service import ClientContextService
                     raw_telemetry = ClientContextService().get()
                 except Exception:
-                    pass
+                    _log.debug("[TOOL CRON] Failed to load telemetry context", exc_info=True)
 
                 flattened_telemetry = build_tool_telemetry(raw_telemetry)
 
@@ -132,7 +133,7 @@ class CronToolWorker:
                     if state_json:
                         tool_state = json.loads(state_json)
                 except Exception:
-                    pass
+                    _log.debug(f"[TOOL CRON] Failed to load persisted tool state for '{self.tool_name}'", exc_info=True)
 
                 payload = {"params": {"_state": tool_state}, "settings": settings, "telemetry": flattened_telemetry}
 
