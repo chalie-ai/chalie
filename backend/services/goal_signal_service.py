@@ -240,7 +240,6 @@ def _try_graduate_candidate(ecology, goal_id: str) -> None:
 
         evidence_count = goal.get('evidence_count', 0)
         if evidence_count >= CANDIDATE_GRADUATION_EVIDENCE:
-            from services.database_service import get_lightweight_db_service
             from services.time_utils import utc_now as _utc_now
             db = ecology.db
             now = _utc_now().isoformat()
