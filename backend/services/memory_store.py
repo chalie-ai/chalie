@@ -12,6 +12,17 @@ Data structures:
 
 Thread safety: one RLock per keyspace.
 TTL management: lazy eviction on read + background reaper every 60s.
+
+Removed dead code (commit 88e8371):
+    The following five public methods were intentionally removed because
+    they had zero callers anywhere in the codebase and were therefore
+    unreachable dead code:
+        - hdel       (hash field deletion)
+        - hexists    (hash field existence check)
+        - scard      (set cardinality)
+        - sismember  (set membership test)
+        - scan_iter  (key-pattern iterator)
+    Use ``git show 88e8371`` to view the exact lines that were removed.
 """
 
 import json
