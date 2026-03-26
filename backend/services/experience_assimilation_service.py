@@ -402,7 +402,7 @@ class ExperienceAssimilationService:
             user_prompt: Original user prompt that triggered the ACT loop.
             tool_outputs: List of tool output dicts used to produce the observation.
         """
-        from services.database_service import get_lightweight_db_service
+        from services.database_service import get_shared_db_service
         from services.episodic_service import EpisodicService
         from services.embedding_service import get_embedding_service
 
@@ -436,7 +436,7 @@ class ExperienceAssimilationService:
             },
         }
 
-        db_service = get_lightweight_db_service()
+        db_service = get_shared_db_service()
         try:
             storage = EpisodicService(db_service)
             episode_id = storage.store_episode(episode_data)

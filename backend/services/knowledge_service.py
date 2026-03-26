@@ -25,7 +25,7 @@ import re
 import time
 from typing import Dict, List, Optional, Any
 
-from services.database_service import get_lightweight_db_service
+from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ class KnowledgeService:
     _REWARD_HISTORY_MAX = 100
 
     def __init__(self, db_service=None):
-        self.db = db_service or get_lightweight_db_service()
+        self.db = db_service or get_shared_db_service()
 
     # ── Helpers ────────────────────────────────────────────────────────
 

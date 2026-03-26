@@ -16,11 +16,11 @@ class SemanticConsolidationWorker:
 
     def __init__(self):
         """Initialize worker with required services."""
-        from services.database_service import get_lightweight_db_service
+        from services.database_service import get_shared_db_service
         from services.knowledge_service import KnowledgeService
 
         # Initialize services
-        self.db_service = get_lightweight_db_service()
+        self.db_service = get_shared_db_service()
         self.llm_service = create_background_llm_proxy("semantic-memory")
         self.storage_service = KnowledgeService(self.db_service)
         self.consolidation_service = SemanticConsolidationService(

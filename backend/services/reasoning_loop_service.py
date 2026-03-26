@@ -43,7 +43,6 @@ from services.knowledge_service import KnowledgeService
 from services.episodic_service import EpisodicService
 from services.embedding_service import EmbeddingService
 from services.background_llm_queue import create_background_llm_proxy
-from services.database_service import get_lightweight_db_service
 from utils.logger import Logger
 
 logger = logging.getLogger(__name__)
@@ -170,7 +169,8 @@ class ReasoningLoopService:
         ).get("name", "semantic_consolidation_queue")
 
         # Database + services
-        self.db_service = get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        self.db_service = get_shared_db_service()
         self.embedding_service = EmbeddingService()
         self.knowledge_service = KnowledgeService(self.db_service)
 
@@ -840,8 +840,8 @@ class ReasoningLoopService:
     def _spreading_activation_knowledge(self, concept_name: str, max_depth: int = 2) -> list:
         """BFS spreading activation over knowledge relationships."""
         try:
-            from services.database_service import get_lightweight_db_service
-            db = get_lightweight_db_service()
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
             try:
                 with db.connection() as conn:
                     cursor = conn.cursor()
@@ -1516,7 +1516,8 @@ class ReasoningLoopService:
              what it considered but couldn't do.
         """
         try:
-            db_service = get_lightweight_db_service()
+            from services.database_service import get_shared_db_service
+            db_service = get_shared_db_service()
             try:
                 from services.interaction_log_service import InteractionLogService
                 log_service = InteractionLogService(db_service)

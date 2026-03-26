@@ -180,9 +180,9 @@ class DecayEngineService:
             Number of episodes updated
         """
         try:
-            from .database_service import get_lightweight_db_service
+            from .database_service import get_shared_db_service
 
-            db_service = get_lightweight_db_service()
+            db_service = get_shared_db_service()
 
             try:
                 with db_service.connection() as conn:
@@ -279,10 +279,10 @@ class DecayEngineService:
             Number of knowledge entries updated, or 0 on any error.
         """
         try:
-            from .database_service import get_lightweight_db_service
+            from .database_service import get_shared_db_service
             from .knowledge_service import KnowledgeService
 
-            db = get_lightweight_db_service()
+            db = get_shared_db_service()
             try:
                 svc = KnowledgeService(db)
                 return svc.decay_cycle()
@@ -364,8 +364,8 @@ class DecayEngineService:
             Number of identity vectors whose activation was adjusted.
         """
         try:
-            from .database_service import get_lightweight_db_service
-            db_service = get_lightweight_db_service()
+            from .database_service import get_shared_db_service
+            db_service = get_shared_db_service()
             try:
                 from .identity_service import IdentityService
                 identity = IdentityService(db_service)

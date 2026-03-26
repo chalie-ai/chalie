@@ -36,8 +36,8 @@ class ProfileEnrichmentService:
     def _get_db(self):
         if self._db:
             return self._db
-        from services.database_service import get_lightweight_db_service
-        return get_lightweight_db_service()
+        from services.database_service import get_shared_db_service
+        return get_shared_db_service()
 
     def run(self, shared_state=None):
         """Background loop. Runs enrichment cycle every 6 hours."""

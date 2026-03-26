@@ -83,7 +83,7 @@ class TestDecayEngineService:
             svc = DecayEngineService()
 
         with patch(
-            'services.database_service.get_lightweight_db_service',
+            'services.database_service.get_shared_db_service',
             side_effect=Exception('DB unavailable'),
         ):
             result = svc._decay_episodic()
@@ -99,7 +99,7 @@ class TestDecayEngineService:
             svc = DecayEngineService()
 
         with patch(
-            'services.database_service.get_lightweight_db_service',
+            'services.database_service.get_shared_db_service',
             side_effect=Exception('DB unavailable'),
         ):
             result = svc._decay_knowledge()
@@ -116,7 +116,7 @@ class TestDecayEngineService:
             svc = DecayEngineService()
 
         with patch(
-            'services.database_service.get_lightweight_db_service',
+            'services.database_service.get_shared_db_service',
             side_effect=Exception('DB down'),
         ):
             result = svc._apply_identity_inertia()
