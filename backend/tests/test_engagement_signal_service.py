@@ -3,7 +3,13 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from services.memory_store import MemoryStore
+
 pytestmark = pytest.mark.unit
+
+# MemoryStore key consumed by EngagementSignalService (mirrors the constant in
+# the service module so tests are self-documenting).
+_ENGAGEMENT_SCORE_KEY = "proactive:engagement_score"
 
 
 class TestEngagementSignalServiceDefaults:
@@ -13,12 +19,12 @@ class TestEngagementSignalServiceDefaults:
         """Score of 0.7 (inside unremarkable band) should return an empty list."""
         from services.engagement_signal_service import EngagementSignalService
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = "0.7"
+        store = MemoryStore()
+        store.set(_ENGAGEMENT_SCORE_KEY, "0.7")
 
         with patch(
             "services.memory_client.MemoryClientService.create_connection",
-            return_value=mock_store,
+            return_value=store,
         ):
             svc = EngagementSignalService()
             result = svc.get_engagement_items()
@@ -29,12 +35,12 @@ class TestEngagementSignalServiceDefaults:
         """Score of 0.6 (inside unremarkable band) should return an empty list."""
         from services.engagement_signal_service import EngagementSignalService
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = "0.6"
+        store = MemoryStore()
+        store.set(_ENGAGEMENT_SCORE_KEY, "0.6")
 
         with patch(
             "services.memory_client.MemoryClientService.create_connection",
-            return_value=mock_store,
+            return_value=store,
         ):
             svc = EngagementSignalService()
             result = svc.get_engagement_items()
@@ -49,12 +55,12 @@ class TestEngagementSignalServiceLowScore:
         """Score of 0.2 (below 0.35 threshold) should return a single advisory item."""
         from services.engagement_signal_service import EngagementSignalService
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = "0.2"
+        store = MemoryStore()
+        store.set(_ENGAGEMENT_SCORE_KEY, "0.2")
 
         with patch(
             "services.memory_client.MemoryClientService.create_connection",
-            return_value=mock_store,
+            return_value=store,
         ):
             svc = EngagementSignalService()
             result = svc.get_engagement_items()
@@ -77,12 +83,12 @@ class TestEngagementSignalServiceHighScore:
         """Score of 0.95 (above 0.88 threshold) should return a non-empty list."""
         from services.engagement_signal_service import EngagementSignalService
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = "0.95"
+        store = MemoryStore()
+        store.set(_ENGAGEMENT_SCORE_KEY, "0.95")
 
         with patch(
             "services.memory_client.MemoryClientService.create_connection",
-            return_value=mock_store,
+            return_value=store,
         ):
             svc = EngagementSignalService()
             result = svc.get_engagement_items()
@@ -99,15 +105,21 @@ class TestEngagementSignalServiceErrorHandling:
     """Tests for graceful degradation when the store is unavailable or returns nothing."""
 
     def test_returns_empty_on_store_exception(self):
-        """A store.get exception should be caught and return an empty list (fail-open)."""
+        """A store.get exception should be caught and return an empty list (fail-open).
+
+        Category C error-path test: intentionally keeps a MagicMock so that a
+        ``side_effect`` can simulate a broken connection — something a real
+        MemoryStore cannot do without extra infrastructure.
+        """
         from services.engagement_signal_service import EngagementSignalService
 
-        mock_store = MagicMock()
-        mock_store.get.side_effect = Exception("Connection refused")
+        # broken_store intentionally uses MagicMock to simulate an unreachable store.
+        broken_store = MagicMock()
+        broken_store.get.side_effect = Exception("Connection refused")
 
         with patch(
             "services.memory_client.MemoryClientService.create_connection",
-            return_value=mock_store,
+            return_value=broken_store,
         ):
             svc = EngagementSignalService()
             result = svc.get_engagement_items()
@@ -118,12 +130,12 @@ class TestEngagementSignalServiceErrorHandling:
         """store.get returning None (key absent) should return an empty list."""
         from services.engagement_signal_service import EngagementSignalService
 
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
+        # Fresh MemoryStore with no keys — get() returns None for any absent key.
+        store = MemoryStore()
 
         with patch(
             "services.memory_client.MemoryClientService.create_connection",
-            return_value=mock_store,
+            return_value=store,
         ):
             svc = EngagementSignalService()
             result = svc.get_engagement_items()
