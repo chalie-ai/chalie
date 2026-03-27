@@ -434,33 +434,36 @@ class EpisodicService:
                 cursor.execute(vector_query, vector_params)
                 vector_results = cursor.fetchall()
 
-                fts_query = """
-                    SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
-                           e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
-                           e.last_accessed_at, e.salience_factors, e.open_loops,
-                           COALESCE(e.reliability, 'reliable') AS reliability,
-                           episodes_fts.rank AS text_rank
-                    FROM episodes_fts
-                    JOIN episodes e ON e.rowid = episodes_fts.rowid
-                    WHERE episodes_fts MATCH ?
-                      AND e.deleted_at IS NULL
-                """
                 import re as _re
                 fts_safe = _re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text)
                 fts_safe = _re.sub(r'\s+', ' ', fts_safe).strip()
                 # Quote each token to prevent FTS5 interpreting words as column names or operators
                 fts_terms = ' '.join(f'"{w}"' for w in fts_safe.split() if w)
-                fts_params = [fts_terms or '*']
 
-                if topic:
-                    fts_query += " AND e.topic = ?"
-                    fts_params.append(topic)
+                fts_results = []
+                if fts_terms:
+                    fts_query = """
+                        SELECT e.id, e.intent, e.context, e.action, e.emotion, e.outcome, e.gist,
+                               e.salience, e.freshness, e.topic, e.created_at, e.activation_score,
+                               e.last_accessed_at, e.salience_factors, e.open_loops,
+                               COALESCE(e.reliability, 'reliable') AS reliability,
+                               episodes_fts.rank AS text_rank
+                        FROM episodes_fts
+                        JOIN episodes e ON e.rowid = episodes_fts.rowid
+                        WHERE episodes_fts MATCH ?
+                          AND e.deleted_at IS NULL
+                    """
+                    fts_params = [fts_terms]
 
-                fts_query += " ORDER BY episodes_fts.rank LIMIT ?"
-                fts_params.append(limit)
+                    if topic:
+                        fts_query += " AND e.topic = ?"
+                        fts_params.append(topic)
 
-                cursor.execute(fts_query, fts_params)
-                fts_results = cursor.fetchall()
+                    fts_query += " ORDER BY episodes_fts.rank LIMIT ?"
+                    fts_params.append(limit)
+
+                    cursor.execute(fts_query, fts_params)
+                    fts_results = cursor.fetchall()
 
                 candidates = self._merge_with_rrf(vector_results, fts_results)
 

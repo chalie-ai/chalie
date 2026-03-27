@@ -884,14 +884,29 @@ class KnowledgeService:
                         except (json.JSONDecodeError, TypeError):
                             data_obj = {}
                 else:
-                    # Create new procedure entry
+                    # Create new procedure entry (ON CONFLICT handles race conditions
+                    # where multiple threads try to create the same procedure)
                     cursor.execute("""
                         INSERT INTO knowledge (kind, entity, key, value, data, decay_class,
                                                confidence, reliability, source, evidence_count)
                         VALUES ('procedure', ?, ?, ?, '{}', 'slow', 0.5, 'reliable', 'act_loop', 1)
+                        ON CONFLICT(entity, key) DO UPDATE SET
+                            updated_at = datetime('now')
                     """, (entity, key, action_name))
-                    row_id = cursor.lastrowid
+                    # Re-fetch to get rowid and current data (may have been created by another thread)
+                    cursor.execute("""
+                        SELECT rowid, data FROM knowledge
+                        WHERE entity = ? AND key = ? AND deleted_at IS NULL
+                    """, (entity, key))
+                    row = cursor.fetchone()
+                    row_id = row[0]
+                    raw_data = row[1]
                     data_obj = {}
+                    if raw_data and isinstance(raw_data, str):
+                        try:
+                            data_obj = json.loads(raw_data)
+                        except (json.JSONDecodeError, TypeError):
+                            data_obj = {}
 
                     # Sync FTS
                     self._sync_fts(conn, row_id, key, action_name, 'procedure', entity)
