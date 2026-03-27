@@ -304,7 +304,7 @@ class CaldavCapability(AbstractCapability):
                 f"for user '{username}'.  Check credentials and try again."
             )
 
-    def _resolve_caldav_url(self, provider_config: dict) -> str:
+    def _resolve_caldav_url(self, provider_config: dict, username: str = "") -> str:
         """Build an absolute CalDAV URL from provider config and stored server_url.
 
         For hosted providers (Google, Apple, Fastmail) the URL is already absolute.
@@ -313,11 +313,14 @@ class CaldavCapability(AbstractCapability):
 
         Args:
             provider_config: Provider dict from :data:`PROVIDERS`.
+            username: Username for ``{username}`` substitution in URL templates.
 
         Returns:
             str: Absolute URL suitable for :class:`caldav.DAVClient`.
         """
         url: str = provider_config["url"]
+        if "{username}" in url:
+            url = url.replace("{username}", username)
         if url.startswith("http"):
             return url
         # Self-hosted: combine with stored server_url
@@ -367,13 +370,9 @@ class CaldavCapability(AbstractCapability):
             )
             return False
 
-        url: str = self._resolve_caldav_url(provider_config)
+        url: str = self._resolve_caldav_url(provider_config, username)
 
         # --- Attempt connection ---
-        logger.info(
-            "[caldav] Connecting: url=%s, username=%s, password_len=%d",
-            url, username, len(password),
-        )
         try:
             client = _caldav_lib.DAVClient(
                 url=url,
@@ -487,7 +486,7 @@ class CaldavCapability(AbstractCapability):
             logger.error("[caldav] ingest(): unknown provider '%s'.", provider_name)
             return []
 
-        url: str = self._resolve_caldav_url(provider_config)
+        url: str = self._resolve_caldav_url(provider_config, username)
 
         # --- Open connection and enumerate calendars ---
         try:
@@ -1023,7 +1022,7 @@ class CaldavCapability(AbstractCapability):
             provider_config = resolve_provider(provider_name)
             if provider_config is None:
                 raise ValueError(f"Unknown CalDAV provider: '{provider_name}'.")
-            url = capability._resolve_caldav_url(provider_config)
+            url = capability._resolve_caldav_url(provider_config, username)
             return _caldav_lib.DAVClient(
                 url=url,
                 username=username,

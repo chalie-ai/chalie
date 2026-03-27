@@ -30,8 +30,8 @@ from __future__ import annotations
 
 PROVIDERS: dict[str, dict] = {
     "google": {
-        "url": "https://apidata.googleusercontent.com/caldav/v2/",
-        "principal_path_template": "/caldav/v2/{username}/user",
+        "url": "https://www.google.com/calendar/dav/{username}/user",
+        "principal_path_template": "/calendar/dav/{username}/user",
         "requires_app_password": True,
     },
     "apple": {
