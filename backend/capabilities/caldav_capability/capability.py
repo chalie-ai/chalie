@@ -370,6 +370,10 @@ class CaldavCapability(AbstractCapability):
         url: str = self._resolve_caldav_url(provider_config)
 
         # --- Attempt connection ---
+        logger.info(
+            "[caldav] Connecting: url=%s, username=%s, password_len=%d",
+            url, username, len(password),
+        )
         try:
             client = _caldav_lib.DAVClient(
                 url=url,
