@@ -135,6 +135,23 @@ def main():
     logger.info("Checking for pending database migrations...")
     database_service.run_pending_migrations()
 
+    # --- Capability framework ---
+    # Load all discovered capability plugins and register tools for any that are
+    # already connected (e.g. credentials persisted from a previous session).
+    # Zero capability-specific references here — all plugin logic lives inside
+    # the capability packages themselves.
+    try:
+        from capabilities import load_capabilities
+        from services.tool_library_service import register_tool
+        _capabilities = load_capabilities()
+        for cap in _capabilities.values():
+            if cap.is_connected():
+                for t in cap.get_tools():
+                    register_tool(t['name'], t['handler'], {k: v for k, v in t.items() if k != 'handler'})
+        logger.info(f"[Startup] Capability framework loaded: {len(_capabilities)} capabilities")
+    except Exception as e:
+        logger.warning(f"[Startup] Capability framework load failed: {e}")
+
     # Ensure encryption key — must run AFTER database init so the key can be
     # stored in the DB itself (co-located with encrypted data, never lost).
     # Migrates from legacy .key file on first run after upgrade.
@@ -218,6 +235,10 @@ def main():
     # Background LLM worker
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
+
+    # Capability scheduler — drives periodic ingestion for connected capability plugins
+    from services.capability_scheduler_service import capability_scheduler_worker
+    manager.register_service("capability-scheduler-service", capability_scheduler_worker)
 
     # Optional services (fail gracefully)
     _try_register(manager, "growth-pattern-service",

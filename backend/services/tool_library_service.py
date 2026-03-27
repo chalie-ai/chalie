@@ -6,7 +6,19 @@ tools in Python code. No manifest.json, no runner.py, no per-tool directories.
 
 Tools are simple callable Python modules in backend/tools/. Each exposes an
 execute(topic, params, config, telemetry) -> dict function.
+
+Dynamic registration
+--------------------
+Capability plugins (and tests) may register and unregister tools at runtime via
+:func:`register_tool` and :func:`unregister_tool`.  All mutations and reads of
+:data:`TOOL_HANDLERS` / :data:`TOOL_METADATA` are protected by the
+module-level :data:`_registry_lock` so concurrent calls across threads are safe.
+
+Use :func:`get_all_tool_names` rather than the :data:`ALL_TOOL_NAMES` constant
+whenever the set of registered tools may have changed since import time.
 """
+
+import threading
 
 from tools.weather import execute as _weather_execute
 from tools.web_search import execute as _web_search_execute
@@ -37,12 +49,29 @@ TOOL_HANDLERS = {
 if _BROWSER_AVAILABLE:
     TOOL_HANDLERS["browser"] = _browser_execute
 
+#: Snapshot of built-in tool names taken at import time.  This constant is
+#: preserved for backward compatibility but reflects only the tools registered
+#: before any dynamic ``register_tool()`` calls.  Prefer
+#: :func:`get_all_tool_names` for code that runs after capability loading.
 ALL_TOOL_NAMES: frozenset = frozenset(TOOL_HANDLERS.keys())
+
+#: Module-level lock that serialises all reads and writes to
+#: :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA`.
+_registry_lock: threading.Lock = threading.Lock()
 
 
 def get_handler(name: str):
-    """Return the execute() callable for a tool, or None."""
-    return TOOL_HANDLERS.get(name)
+    """Return the execute() callable for a named tool, or ``None``.
+
+    Args:
+        name: The registered tool name (e.g. ``"weather"``).
+
+    Returns:
+        The ``execute`` callable for the tool, or ``None`` if the tool is not
+        registered.
+    """
+    with _registry_lock:
+        return TOOL_HANDLERS.get(name)
 
 
 # -- Metadata (replaces manifest.json) ----------------------------------------
@@ -624,5 +653,79 @@ if _BROWSER_AVAILABLE:
 
 
 def get_metadata(name: str) -> dict | None:
-    """Return metadata dict for a tool, or None."""
-    return TOOL_METADATA.get(name)
+    """Return the metadata dict for a named tool, or ``None``.
+
+    Args:
+        name: The registered tool name (e.g. ``"weather"``).
+
+    Returns:
+        The metadata ``dict`` for the tool, or ``None`` if the tool is not
+        registered or has no metadata entry.
+    """
+    with _registry_lock:
+        return TOOL_METADATA.get(name)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic registration API
+# ---------------------------------------------------------------------------
+
+def register_tool(name: str, handler, metadata: dict) -> None:
+    """Register a tool handler and its metadata at runtime.
+
+    Both :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA` are updated
+    atomically under :data:`_registry_lock`, making this function safe to call
+    from any thread (e.g. capability workers, test fixtures).
+
+    If *name* is already registered the existing entries are **replaced**
+    without raising an error, so callers can safely re-register after a
+    reconnect.
+
+    Args:
+        name:     Unique tool identifier (must match ``metadata["name"]``).
+        handler:  Callable with signature
+                  ``execute(topic, params, config=None, telemetry=None) -> dict``.
+        metadata: Tool metadata dict following the schema used in
+                  :data:`TOOL_METADATA` (must include at least ``"name"`` and
+                  ``"description"``).
+
+    Returns:
+        None
+    """
+    with _registry_lock:
+        TOOL_HANDLERS[name] = handler
+        TOOL_METADATA[name] = metadata
+
+
+def unregister_tool(name: str) -> None:
+    """Remove a tool handler and its metadata from the registry.
+
+    Both :data:`TOOL_HANDLERS` and :data:`TOOL_METADATA` are updated
+    atomically under :data:`_registry_lock`.  If *name* is not currently
+    registered the call is a no-op (no exception is raised).
+
+    Args:
+        name: The tool name to remove.
+
+    Returns:
+        None
+    """
+    with _registry_lock:
+        TOOL_HANDLERS.pop(name, None)
+        TOOL_METADATA.pop(name, None)
+
+
+def get_all_tool_names() -> set:
+    """Return the current set of registered tool names.
+
+    Unlike the module-level :data:`ALL_TOOL_NAMES` constant (which is a
+    snapshot taken at import time), this function acquires :data:`_registry_lock`
+    and computes the set from the live :data:`TOOL_HANDLERS` dict, so it
+    reflects any tools added or removed via :func:`register_tool` /
+    :func:`unregister_tool` after module load.
+
+    Returns:
+        A new ``set`` of registered tool name strings.
+    """
+    with _registry_lock:
+        return set(TOOL_HANDLERS.keys())
