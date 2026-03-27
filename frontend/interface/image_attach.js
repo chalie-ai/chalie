@@ -160,21 +160,6 @@ export class ImageAttach {
     return this._attachedImages.length;
   }
 
-  /**
-   * Check if the backend supports vision; hide the attach image button if not.
-   */
-  async checkVisionCapability() {
-    try {
-      const res = await fetch('/chat/vision-capable', { credentials: 'same-origin' });
-      if (res.ok) {
-        const data = await res.json();
-        if (!data?.available) {
-          document.getElementById('attachImageBtn')?.classList.add('hidden');
-        }
-      }
-    } catch { /* silently hide on any error */ }
-  }
-
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------

@@ -75,7 +75,6 @@ class ChalieApp {
     // Image attach module
     this._imageAttach = new ImageAttach({ getHost: () => this._backendHost });
     this._imageAttach.init();
-    this._imageAttach.checkVisionCapability();
 
     // Voice I/O + Voice Mode
     this._voice = new VoiceIO(() => this._backendHost);

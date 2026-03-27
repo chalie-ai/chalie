@@ -5,7 +5,32 @@ on:
     tags: ['v*.*.*']
 
 jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      installer_changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - name: Checkout Chalie
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if installer changed since last tag
+        id: diff
+        run: |
+          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$PREV_TAG" HEAD -- installer/install.sh | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "installer/install.sh unchanged since $PREV_TAG — skipping publish"
+          fi
+
   publish:
+    needs: check-changes
+    if: needs.check-changes.outputs.installer_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Chalie
@@ -27,5 +52,9 @@ jobs:
           git config user.email "bot@chalie.ai"
           git config user.name "Chalie Release Bot"
           git add public/install
-          git commit -m "chore: installer updated for ${{ github.ref_name }}"
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: installer updated for ${{ github.ref_name }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi

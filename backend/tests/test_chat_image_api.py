@@ -360,7 +360,6 @@ def test_analysis_updates_document_to_ready(mock_doc_service):
     image_bytes = b'\x89PNG fake'
     mime_type = 'image/png'
     fake_result = {
-        'description': 'A cat sitting on a mat.',
         'ocr_text': 'HELLO',
         'has_text': True,
         'analysis_time_ms': 42,
@@ -388,10 +387,9 @@ def test_analysis_updates_document_to_ready(mock_doc_service):
     assert mock_doc_service.update_extracted_metadata.call_count == 1
     kwargs = mock_doc_service.update_extracted_metadata.call_args.kwargs
     assert kwargs['doc_id'] == image_id
-    assert kwargs['metadata']['description'] == 'A cat sitting on a mat.'
     assert kwargs['metadata']['ocr_text'] == 'HELLO'
     assert kwargs['metadata']['has_text'] is True
-    assert kwargs['summary'] == 'A cat sitting on a mat.'[:500]
+    assert kwargs['summary'] == 'HELLO'[:500]
 
 
 @pytest.mark.unit
@@ -520,34 +518,3 @@ def test_image_file_returns_404_for_unknown_id(client, mock_doc_service):
     assert res.status_code == 404
 
 
-# ─── GET /chat/vision-capable ─────────────────────────────────────────────────
-
-@pytest.mark.unit
-def test_vision_capable_true_when_provider_exists(client):
-    """GET /chat/vision-capable returns {available: true} when provider configured."""
-    with patch('services.image_context_service.has_vision_provider', return_value=True):
-        res = client.get('/chat/vision-capable')
-
-    assert res.status_code == 200
-    assert res.get_json() == {'available': True}
-
-
-@pytest.mark.unit
-def test_vision_capable_false_when_no_provider(client):
-    """GET /chat/vision-capable returns {available: false} when no provider."""
-    with patch('services.image_context_service.has_vision_provider', return_value=False):
-        res = client.get('/chat/vision-capable')
-
-    assert res.status_code == 200
-    assert res.get_json() == {'available': False}
-
-
-@pytest.mark.unit
-def test_vision_capable_false_on_import_error(client):
-    """GET /chat/vision-capable returns {available: false} if the service raises."""
-    with patch('services.image_context_service.has_vision_provider', side_effect=RuntimeError('PIL not found')):
-        res = client.get('/chat/vision-capable')
-
-    # Even on error, endpoint should not 500
-    assert res.status_code == 200
-    assert res.get_json() == {'available': False}
