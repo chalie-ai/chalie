@@ -1297,8 +1297,6 @@ class ReasoningLoopService:
                 f"Outcome: {episode.get('outcome', 'N/A')}"
             )
 
-        rhythm_text = ""
-
         # Inject constraint context so drift thoughts can factor in blocked paths
         constraint_context = ''
         try:
@@ -1330,7 +1328,6 @@ class ReasoningLoopService:
             .replace("{{seed_concept}}", seed_text) \
             .replace("{{activated_concepts}}", activated_text) \
             .replace("{{grounding_episode}}", episode_text) \
-            .replace("{{temporal_rhythm}}", rhythm_text) \
             .replace("{{constraint_context}}", constraint_context) \
             .replace("{{user_context}}", user_context)
 

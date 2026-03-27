@@ -18,8 +18,6 @@ Use this for ALL date/time computations. Your training cutoff is in the past; th
 
 {{client_context}}
 
-{{temporal_rhythm}}
-
 {{self_awareness}}
 
 ────────────────────────────────
