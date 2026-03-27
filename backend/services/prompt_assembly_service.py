@@ -427,10 +427,6 @@ class PromptAssemblyService:
             focus_context = ''
         result = result.replace('{{focus}}', focus_context)
 
-        # temporal_rhythm — removed from unified prompt; behavioral traits surface
-        # via salient traits selector instead. Keep no-op for old templates.
-        result = result.replace('{{temporal_rhythm}}', '')
-
         # Self-awareness (interoception — only injected when noteworthy)
         if _include('self_awareness'):
             self_awareness = self._get_self_awareness()
@@ -798,27 +794,6 @@ class PromptAssemblyService:
         except Exception as e:
             logging.debug(f"Adaptive directives not available: {e}")
             return ""
-
-    def _get_temporal_rhythm(self) -> str:
-        """Get rhythm context from temporal pattern mining.
-
-        Returns max 3 most salient lines, sanitized, total < 200 chars.
-
-        Returns:
-            str: Rhythm summary string, or empty string when no patterns
-            are available.
-        """
-        try:
-            from services.temporal_pattern_service import TemporalPatternService
-            from services.database_service import get_shared_db_service
-
-            db = get_shared_db_service()
-            service = TemporalPatternService(db)
-            summary = service.get_rhythm_summary()
-            return summary if summary else ''
-        except Exception as e:
-            logging.debug(f"Temporal rhythm not available: {e}")
-            return ''
 
     def _get_self_awareness(self) -> str:
         """Get self-awareness context from self-model (only when noteworthy).
