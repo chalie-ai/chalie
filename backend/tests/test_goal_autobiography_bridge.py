@@ -10,10 +10,9 @@ from unittest.mock import patch, MagicMock
 class TestComputeGoalAlignment:
     """Test compute_goal_alignment() embedding similarity."""
 
-    def test_returns_empty_when_no_narrative(self, mock_store):
+    def test_returns_empty_when_no_narrative(self, mock_store, db):
         """Missing autobiography returns empty alignment."""
-        with patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.autobiography_service.AutobiographyService') as MockAuto:
             MockAuto.return_value.get_current_narrative.return_value = None
 
             from services.goal_autobiography_bridge import compute_goal_alignment
@@ -21,7 +20,7 @@ class TestComputeGoalAlignment:
 
         assert result == {'parent_motives': [], 'identity_links': []}
 
-    def test_matches_motives_by_embedding(self, mock_store):
+    def test_matches_motives_by_embedding(self, mock_store, db):
         """Goals matching CORE_MOTIVES keywords populate parent_motives."""
         # Mock embedding service to return predictable embeddings
         mock_emb_service = MagicMock()
@@ -41,8 +40,7 @@ class TestComputeGoalAlignment:
         mock_emb_service.generate_embedding_np.side_effect = fake_embedding
 
         with patch('services.embedding_service.get_embedding_service', return_value=mock_emb_service), \
-             patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'):
+             patch('services.autobiography_service.AutobiographyService') as MockAuto:
             MockAuto.return_value.get_current_narrative.return_value = {
                 'narrative': '## Values And Goals\nLearning and growth\n## Long Term Themes\nTech mastery'
             }
@@ -56,15 +54,14 @@ class TestComputeGoalAlignment:
         assert len(result['parent_motives']) <= 3
         assert len(result['identity_links']) <= 3
 
-    def test_caps_at_three_each(self, mock_store):
+    def test_caps_at_three_each(self, mock_store, db):
         """parent_motives and identity_links capped at 3."""
         mock_emb_service = MagicMock()
         # Return very high similarity for everything
         mock_emb_service.generate_embedding_np.return_value = np.array([1.0, 0.0, 0.0, 0.0])
 
         with patch('services.embedding_service.get_embedding_service', return_value=mock_emb_service), \
-             patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'):
+             patch('services.autobiography_service.AutobiographyService') as MockAuto:
             MockAuto.return_value.get_current_narrative.return_value = {
                 'narrative': '## Values And Goals\nEverything aligns\n## Long Term Themes\nAll things'
             }
@@ -75,11 +72,10 @@ class TestComputeGoalAlignment:
         assert len(result['parent_motives']) <= 3
         assert len(result['identity_links']) <= 3
 
-    def test_fault_tolerance(self, mock_store):
+    def test_fault_tolerance(self, mock_store, db):
         """Embedding failure returns empty alignment."""
         with patch('services.embedding_service.get_embedding_service') as MockEmb, \
-             patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'):
+             patch('services.autobiography_service.AutobiographyService') as MockAuto:
             MockEmb.side_effect = Exception("Embedding service unavailable")
             MockAuto.return_value.get_current_narrative.return_value = {
                 'narrative': '## Values And Goals\nTest'
@@ -95,10 +91,9 @@ class TestComputeGoalAlignment:
 class TestRefreshAllGoals:
     """Test refresh_all_goals() batch update."""
 
-    def test_returns_zero_when_no_narrative(self, mock_store):
+    def test_returns_zero_when_no_narrative(self, mock_store, db):
         """No autobiography narrative returns 0 updates."""
         with patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'), \
              patch('services.goal_ecology_service.GoalEcologyService'):
             MockAuto.return_value.get_current_narrative.return_value = None
 
@@ -107,10 +102,9 @@ class TestRefreshAllGoals:
 
         assert result == 0
 
-    def test_returns_zero_when_no_goals(self, mock_store):
+    def test_returns_zero_when_no_goals(self, mock_store, db):
         """No active goals returns 0 updates."""
         with patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'), \
              patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
             MockAuto.return_value.get_current_narrative.return_value = {
                 'narrative': '## Values And Goals\nTest values'
@@ -122,10 +116,9 @@ class TestRefreshAllGoals:
 
         assert result == 0
 
-    def test_fault_tolerance_on_exception(self, mock_store):
+    def test_fault_tolerance_on_exception(self, mock_store, db):
         """Service failure returns 0 (doesn't propagate)."""
-        with patch('services.autobiography_service.AutobiographyService') as MockAuto, \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.autobiography_service.AutobiographyService') as MockAuto:
             MockAuto.side_effect = Exception("DB down")
 
             from services.goal_autobiography_bridge import refresh_all_goals
@@ -138,8 +131,10 @@ class TestRefreshAllGoals:
 class TestDirectionA:
     """Test autobiography synthesis receives goal data."""
 
-    def test_gather_inputs_includes_goals(self, mock_store):
+    def test_gather_inputs_includes_goals(self, mock_store, db):
         """gather_synthesis_inputs includes active_goals key."""
+        from services.database_service import get_shared_db_service
+
         with patch('services.goal_ecology_service.GoalEcologyService') as MockEcology:
             svc = MockEcology.return_value
             svc.get_active_stack.return_value = [
@@ -147,33 +142,19 @@ class TestDirectionA:
                  'confidence': 0.9, 'evidence_count': 5, 'timescale': 'short_term'},
             ]
 
-            # We need a real-ish autobiography service with mocked DB
             from services.autobiography_service import AutobiographyService
-            mock_db = MagicMock()
-            mock_session = MagicMock()
-            mock_session.__enter__ = MagicMock(return_value=mock_session)
-            mock_session.__exit__ = MagicMock(return_value=False)
-
-            # Mock all SQL queries to return empty results
-            mock_result = MagicMock()
-            mock_result.fetchall.return_value = []
-            mock_result.fetchone.return_value = None
-            mock_session.execute.return_value = mock_result
-
-            mock_db.get_session.return_value = mock_session
-
-            auto = AutobiographyService(mock_db)
+            auto = AutobiographyService(get_shared_db_service())
             inputs = auto.gather_synthesis_inputs()
 
         assert 'active_goals' in inputs
         assert len(inputs['active_goals']) == 1
         assert inputs['active_goals'][0]['description'] == 'Test goal'
 
-    def test_build_prompt_includes_goals(self, mock_store):
+    def test_build_prompt_includes_goals(self, mock_store, db):
         """_build_synthesis_prompt renders tracked goals section."""
         from services.autobiography_service import AutobiographyService
-        mock_db = MagicMock()
-        auto = AutobiographyService(mock_db)
+        from services.database_service import get_shared_db_service
+        auto = AutobiographyService(get_shared_db_service())
 
         inputs = {
             'episodes': [{'gist': 'Test episode', 'emotion': 'neutral', 'topic': 'test'}],

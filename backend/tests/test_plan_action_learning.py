@@ -293,14 +293,11 @@ class TestPlanActionProceduralMemory:
 
         mock_record.assert_called_once_with(success=False, reward=0.0, task_id=42)
 
-    def test_record_procedural_outcome_calls_service(self, action):
+    def test_record_procedural_outcome_calls_service(self, action, db):
         """_record_procedural_outcome should call KnowledgeService."""
         mock_ks = MagicMock()
-        mock_db = MagicMock()
 
         with patch(
-            'services.database_service.get_shared_db_service', return_value=mock_db
-        ), patch(
             'services.knowledge_service.KnowledgeService',
             return_value=mock_ks,
         ):

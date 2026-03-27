@@ -1,5 +1,8 @@
 """Tests for TopicClassifierService — classification, switch scoring."""
 
+import struct
+import uuid
+
 import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
@@ -8,46 +11,53 @@ from datetime import datetime, timezone, timedelta
 
 pytestmark = pytest.mark.unit
 
-
-def _make_db_mock(fetchall_return=None, fetchone_return=None):
-    """Create a mock DB with proper connection -> cursor chain."""
-    mock_db = MagicMock()
-    cursor = MagicMock()
-    cursor.fetchall.return_value = fetchall_return or []
-    cursor.fetchone.return_value = fetchone_return
-
-    conn = MagicMock()
-    conn.cursor.return_value = cursor
-
-    ctx = MagicMock()
-    ctx.__enter__ = MagicMock(return_value=conn)
-    ctx.__exit__ = MagicMock(return_value=False)
-    mock_db.connection.return_value = ctx
-
-    return mock_db, cursor
+# The test DB template uses 256-dim vec tables (see conftest._db_template).
+_TEST_EMBED_DIM = 256
 
 
-def _make_classifier(mock_db):
-    """Create a TopicClassifierService with mocked DB."""
-    with patch('services.topic_classifier_service.get_shared_db_service', return_value=mock_db), \
-         patch('services.topic_classifier_service.EmbeddingService'):
+def _random_unit_vector(dim=_TEST_EMBED_DIM):
+    v = np.random.randn(dim)
+    return v / np.linalg.norm(v)
 
+
+def _pack_embedding(embedding):
+    """Pack a numpy or list embedding into a binary blob for topics_vec."""
+    if hasattr(embedding, 'tolist'):
+        data = embedding.tolist()
+    else:
+        data = list(embedding)
+    return struct.pack(f'{len(data)}f', *data)
+
+
+def _seed_topic(db, name, embedding, avg_salience, last_updated, message_count):
+    """Insert a topic row and its companion topics_vec embedding."""
+    topic_id = str(uuid.uuid4())
+    db.execute(
+        "INSERT INTO topics (topic_id, name, avg_salience, last_updated, message_count) VALUES (?, ?, ?, ?, ?)",
+        (topic_id, name, avg_salience, last_updated.isoformat() if hasattr(last_updated, 'isoformat') else last_updated, message_count),
+    )
+    db.commit()
+    # Retrieve the rowid for the companion vec table
+    row = db.execute("SELECT rowid FROM topics WHERE name = ?", (name,)).fetchone()
+    rowid = row[0]
+    blob = _pack_embedding(embedding)
+    db.execute("INSERT INTO topics_vec(rowid, embedding) VALUES (?, ?)", (rowid, blob))
+    db.commit()
+
+
+def _make_classifier(db):
+    """Create a TopicClassifierService with the real test DB already patched."""
+    with patch('services.topic_classifier_service.EmbeddingService'):
         from services.topic_classifier_service import TopicClassifierService
         svc = TopicClassifierService()
         return svc
 
 
-def _random_unit_vector(dim=768):
-    v = np.random.randn(dim)
-    return v / np.linalg.norm(v)
-
-
 class TestTopicClassifier:
 
-    def test_new_topic_created_when_no_match(self):
-        """No topics in DB → creates new topic."""
-        mock_db, cursor = _make_db_mock(fetchall_return=[])
-        svc = _make_classifier(mock_db)
+    def test_new_topic_created_when_no_match(self, db):
+        """No topics in DB -> creates new topic."""
+        svc = _make_classifier(db)
 
         with patch('services.topic_classifier_service.generate_embedding') as mock_embed:
             mock_embed.return_value = _random_unit_vector()
@@ -57,18 +67,22 @@ class TestTopicClassifier:
         assert 'topic' in result
         assert result['confidence'] == 1.0
 
-    def test_existing_topic_matched(self):
-        """High cosine similarity → returns existing topic."""
+    def test_existing_topic_matched(self, db):
+        """High cosine similarity -> returns existing topic."""
         topic_embedding = _random_unit_vector()
 
-        mock_db, cursor = _make_db_mock(fetchall_return=[
-            ('python-programming', topic_embedding.tolist(), 0.6,
-             datetime.now(timezone.utc) - timedelta(minutes=5), 10),
-        ])
-        svc = _make_classifier(mock_db)
+        _seed_topic(
+            db,
+            name='python-programming',
+            embedding=topic_embedding,
+            avg_salience=0.6,
+            last_updated=datetime.now(timezone.utc) - timedelta(minutes=5),
+            message_count=10,
+        )
+        svc = _make_classifier(db)
 
         with patch('services.topic_classifier_service.generate_embedding') as mock_embed:
-            near_identical = topic_embedding + np.random.randn(768) * 0.01
+            near_identical = topic_embedding + np.random.randn(_TEST_EMBED_DIM) * 0.01
             mock_embed.return_value = near_identical / np.linalg.norm(near_identical)
 
             result = svc.classify("Python programming basics")
@@ -77,30 +91,27 @@ class TestTopicClassifier:
         assert result['topic'] == 'python-programming'
         assert result['confidence'] > 0.9
 
-    def test_switch_score_ranking(self):
+    def test_switch_score_ranking(self, db):
         """Multiple candidates ranked correctly by switch_score."""
         emb1 = _random_unit_vector()
         emb2 = _random_unit_vector()
         now = datetime.now(timezone.utc)
 
-        mock_db, cursor = _make_db_mock(fetchall_return=[
-            ('topic-fresh', emb1.tolist(), 0.5, now - timedelta(minutes=1), 5),
-            ('topic-stale', emb2.tolist(), 0.5, now - timedelta(hours=2), 20),
-        ])
-        svc = _make_classifier(mock_db)
+        _seed_topic(db, 'topic-fresh', emb1, 0.5, now - timedelta(minutes=1), 5)
+        _seed_topic(db, 'topic-stale', emb2, 0.5, now - timedelta(hours=2), 20)
+        svc = _make_classifier(db)
 
         with patch('services.topic_classifier_service.generate_embedding') as mock_embed:
-            near_emb1 = emb1 + np.random.randn(768) * 0.01
+            near_emb1 = emb1 + np.random.randn(_TEST_EMBED_DIM) * 0.01
             mock_embed.return_value = near_emb1 / np.linalg.norm(near_emb1)
 
             result = svc.classify("related to topic fresh")
 
         assert result['topic'] == 'topic-fresh'
 
-    def test_classification_returns_expected_keys(self):
+    def test_classification_returns_expected_keys(self, db):
         """Result dict has required keys."""
-        mock_db, cursor = _make_db_mock(fetchall_return=[])
-        svc = _make_classifier(mock_db)
+        svc = _make_classifier(db)
 
         with patch('services.topic_classifier_service.generate_embedding') as mock_embed:
             mock_embed.return_value = _random_unit_vector()
@@ -111,14 +122,19 @@ class TestTopicClassifier:
                          'just_reset_from_silence', 'message_embedding'}
         assert expected_keys == set(result.keys())
 
-    def test_two_signal_boundary_service_used_with_thread_id(self):
+    def test_two_signal_boundary_service_used_with_thread_id(self, db):
         """With thread_id, TwoSignalBoundaryService is consulted for boundary detection."""
         topic_embedding = _random_unit_vector()
-        mock_db, cursor = _make_db_mock(fetchall_return=[
-            ('existing-topic', topic_embedding.tolist(), 0.5,
-             datetime.now(timezone.utc) - timedelta(minutes=2), 5),
-        ])
-        svc = _make_classifier(mock_db)
+
+        _seed_topic(
+            db,
+            name='existing-topic',
+            embedding=topic_embedding,
+            avg_salience=0.5,
+            last_updated=datetime.now(timezone.utc) - timedelta(minutes=2),
+            message_count=5,
+        )
+        svc = _make_classifier(db)
 
         mock_result = MagicMock()
         mock_result.is_boundary = True
@@ -142,20 +158,25 @@ class TestTopicClassifier:
         mock_detector.update.assert_called_once()
         mock_detector.save_state.assert_called_once()
 
-        # Boundary fired → new topic created
+        # Boundary fired -> new topic created
         assert result['is_new_topic'] is True
         assert result['just_reset_from_silence'] is False
         assert result['boundary_diagnostics']['trigger'] == 'marker'
         assert result['boundary_diagnostics']['marker_found'] == 'by the way'
 
-    def test_two_signal_boundary_service_no_boundary(self):
+    def test_two_signal_boundary_service_no_boundary(self, db):
         """With thread_id and no boundary fired, existing topic is matched."""
         topic_embedding = _random_unit_vector()
-        mock_db, cursor = _make_db_mock(fetchall_return=[
-            ('existing-topic', topic_embedding.tolist(), 0.5,
-             datetime.now(timezone.utc) - timedelta(minutes=2), 5),
-        ])
-        svc = _make_classifier(mock_db)
+
+        _seed_topic(
+            db,
+            name='existing-topic',
+            embedding=topic_embedding,
+            avg_salience=0.5,
+            last_updated=datetime.now(timezone.utc) - timedelta(minutes=2),
+            message_count=5,
+        )
+        svc = _make_classifier(db)
 
         mock_result = MagicMock()
         mock_result.is_boundary = False
@@ -172,8 +193,8 @@ class TestTopicClassifier:
         with patch('services.topic_classifier_service.generate_embedding') as mock_embed, \
              patch('services.two_signal_boundary_service.TwoSignalBoundaryService',
                    return_value=mock_detector):
-            # Near-identical embedding → high similarity → same topic
-            near_identical = topic_embedding + np.random.randn(768) * 0.01
+            # Near-identical embedding -> high similarity -> same topic
+            near_identical = topic_embedding + np.random.randn(_TEST_EMBED_DIM) * 0.01
             mock_embed.return_value = near_identical / np.linalg.norm(near_identical)
             result = svc.classify("More about existing topic", thread_id='thread-abc')
 

@@ -4,15 +4,89 @@ Shared test fixtures — full sandbox isolation.
 No real external connections. MemoryStore IS the production implementation.
 """
 
+import shutil
 import sys
 import sqlite3
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, MagicMock
-from io import BytesIO
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+# ── Real-SQLite fixtures ──────────────────────────────────────────
+# Session-scoped template: full schema + migrations applied once.
+# Function-scoped `db`: fresh copy per test, patched as the singleton.
+
+@pytest.fixture(scope='session')
+def _db_template(tmp_path_factory):
+    """Build a fully-migrated SQLite database file (once per session).
+
+    Runs the real production boot sequence — SchemaService.initialize_schema()
+    + DatabaseService.run_pending_migrations() — against a temp file.  The
+    result is a "golden" database that function-scoped fixtures copy cheaply.
+    """
+    from services.database_service import DatabaseService
+    from services.schema_service import SchemaService
+
+    template_dir = tmp_path_factory.mktemp('db_template')
+    template_path = str(template_dir / 'template.db')
+
+    db = DatabaseService(template_path)
+    schema = SchemaService(db, embedding_dimensions=256)
+    schema.initialize_schema()
+    db.run_pending_migrations()
+
+    # Flush WAL into main file so shutil.copy2 gets a self-contained copy
+    with db.connection() as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    db.close_pool()
+    return template_path
+
+
+@pytest.fixture
+def db(_db_template, tmp_path):
+    """Fresh, fully-migrated SQLite database — one per test.
+
+    Copies the session-scoped template, creates a real DatabaseService, and
+    patches ``get_shared_db_service`` so every service in the call chain sees
+    this database.  Yields the raw ``sqlite3.Connection`` for seeding data.
+
+    Usage::
+
+        def test_something(self, db):
+            db.execute("INSERT INTO lists (id, name) VALUES ('l1', 'Groceries')")
+            db.commit()
+            result = my_service.get_list('Groceries')
+            assert result['name'] == 'Groceries'
+    """
+    import services.database_service as _db_mod
+    from services.database_service import DatabaseService
+
+    test_db_path = str(tmp_path / 'test.db')
+    shutil.copy2(_db_template, test_db_path)
+
+    db_service = DatabaseService(test_db_path)
+
+    # Clear thread-local cache so _get_connection() opens the new file
+    _db_mod._local.conn = None
+    _db_mod._local.db_path = None
+
+    # Inject as the process-wide singleton
+    original = _db_mod._shared_db_service
+    _db_mod._shared_db_service = db_service
+
+    conn = db_service._get_connection()
+    try:
+        yield conn
+    finally:
+        db_service.close_pool()
+        _db_mod._shared_db_service = original
+        _db_mod._local.conn = None
+        _db_mod._local.db_path = None
+
+
+# ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture
 def mock_store():
@@ -91,65 +165,6 @@ def mock_ollama():
         yield mock
 
 
-@pytest.fixture
-def mock_db():
-    """Mock DatabaseService — no real SQLite touched."""
-    mock = MagicMock()
-    ctx = MagicMock()
-    cursor = MagicMock()
-    cursor.fetchone.return_value = None
-    cursor.fetchall.return_value = []
-    ctx.__enter__ = MagicMock(return_value=cursor)
-    ctx.__exit__ = MagicMock(return_value=False)
-    mock.connection.return_value = ctx
-    yield mock
-
-
-@pytest.fixture
-def mock_db_rows():
-    """Extended DB mock with programmable cursor returns.
-
-    Supports both patterns used across services:
-      1. with db.connection() as conn: cursor = conn.cursor()
-      2. with db.get_session() as session: session.execute(...)
-
-    Usage:
-        def test_something(self, mock_db_rows):
-            db, cursor = mock_db_rows
-            cursor.fetchone.return_value = make_task_row(status='active')
-            cursor.fetchall.return_value = [make_task_row(), make_task_row(task_id=2)]
-    """
-    db = MagicMock()
-    cursor = MagicMock()
-    cursor.fetchone.return_value = None
-    cursor.fetchall.return_value = []
-    cursor.rowcount = 0
-
-    # Pattern 1: db.connection() → conn → conn.cursor() → cursor
-    conn = MagicMock()
-    conn.cursor.return_value = cursor
-    conn.execute.return_value = cursor  # some services do conn.execute() directly
-    conn_ctx = MagicMock()
-    conn_ctx.__enter__ = MagicMock(return_value=conn)
-    conn_ctx.__exit__ = MagicMock(return_value=False)
-    db.connection.return_value = conn_ctx
-
-    # Pattern 2: db.get_session() → session → session.execute() → result
-    session = MagicMock()
-    session_result = MagicMock()
-    session_result.fetchone.return_value = None
-    session_result.fetchall.return_value = []
-    session.execute.return_value = session_result
-    session_ctx = MagicMock()
-    session_ctx.__enter__ = MagicMock(return_value=session)
-    session_ctx.__exit__ = MagicMock(return_value=False)
-    db.get_session.return_value = session_ctx
-
-    # Expose session_result for tests that need session-style control
-    db._test_session = session
-    db._test_session_result = session_result
-
-    yield (db, cursor)
 
 
 @pytest.fixture
@@ -182,59 +197,32 @@ def mock_llm():
 
 
 @pytest.fixture
-def authed_client():
+def authed_client(db):
     """Flask test client with real blueprints registered, auth bypassed.
 
-    Usage:
+    Uses the real ``db`` fixture (which patches ``get_shared_db_service``),
+    so Flask route handlers hit a real SQLite database.
+
+    Usage::
+
         def test_endpoint(self, authed_client):
-            client, mock_db, mock_store = authed_client
-            mock_db._test_session_result.fetchall.return_value = [...]
+            client, db_conn, mock_store = authed_client
+            db_conn.execute("INSERT INTO ...")
+            db_conn.commit()
             response = client.get('/system/health')
     """
     from api import create_app
 
-    mock_db = MagicMock()
     mock_store = MagicMock()
 
-    # Wire up db.connection() context manager
-    cursor = MagicMock()
-    cursor.fetchone.return_value = None
-    cursor.fetchall.return_value = []
-    cursor.rowcount = 0
-    conn = MagicMock()
-    conn.cursor.return_value = cursor
-    conn.execute.return_value = cursor
-    conn_ctx = MagicMock()
-    conn_ctx.__enter__ = MagicMock(return_value=conn)
-    conn_ctx.__exit__ = MagicMock(return_value=False)
-    mock_db.connection.return_value = conn_ctx
-
-    # Wire up db.get_session() context manager
-    session = MagicMock()
-    session_result = MagicMock()
-    session_result.fetchone.return_value = None
-    session_result.fetchall.return_value = []
-    session.execute.return_value = session_result
-    session_ctx = MagicMock()
-    session_ctx.__enter__ = MagicMock(return_value=session)
-    session_ctx.__exit__ = MagicMock(return_value=False)
-    mock_db.get_session.return_value = session_ctx
-
-    # Expose internals for test control
-    mock_db._test_cursor = cursor
-    mock_db._test_conn = conn
-    mock_db._test_session = session
-    mock_db._test_session_result = session_result
-
     with patch('services.auth_session_service.validate_session', return_value=True), \
-         patch('services.database_service.get_shared_db_service', return_value=mock_db), \
          patch('services.memory_store.get_shared_store', return_value=mock_store), \
          patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
          patch('api._init_dashboard_gateway'):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as client:
-            yield (client, mock_db, mock_store)
+            yield (client, db, mock_store)
 
 
 @pytest.fixture

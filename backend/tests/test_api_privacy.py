@@ -5,7 +5,7 @@ Covers /privacy/data-summary and /privacy/delete-all endpoints.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 from flask import Flask
 
 from api.privacy import privacy_bp
@@ -16,8 +16,12 @@ class TestPrivacyAPI:
     """Test privacy API endpoints."""
 
     @pytest.fixture
-    def client(self):
-        """Create Flask test client with privacy blueprint."""
+    def client(self, db):
+        """Create Flask test client with privacy blueprint.
+
+        Requires the ``db`` fixture so that get_shared_db_service() returns
+        the test database (patched at module level by conftest).
+        """
         app = Flask(__name__)
         app.register_blueprint(privacy_bp)
         app.config['TESTING'] = True
@@ -33,37 +37,26 @@ class TestPrivacyAPI:
     # GET /privacy/data-summary
     # ------------------------------------------------------------------
 
-    def test_data_summary_returns_counts(self, client):
+    def test_data_summary_returns_counts(self, client, db):
         """GET /privacy/data-summary returns table counts."""
-        mock_conn = MagicMock()
-
-        # cursor.fetchone() returns a tuple — (count,) for COUNT(*) queries
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (5,)
-        mock_conn.cursor.return_value = mock_cursor
-
-        mock_conn_ctx = MagicMock()
-        mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn_ctx.__exit__ = MagicMock(return_value=False)
-
-        mock_db = MagicMock()
-        mock_db.connection.return_value = mock_conn_ctx
-
         mock_store = MagicMock()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             response = client.get('/privacy/data-summary')
 
             assert response.status_code == 200
             data = response.get_json()
-            # Table counts should be present (new expanded list)
+            # Table counts should be present (all 0 from empty test DB)
             assert "episodes" in data
             assert "knowledge" in data
             assert "threads" in data
             assert "autobiography" in data
             assert "persistent_tasks" in data
             assert "place_fingerprints" in data
+
+            # Verify counts are 0 for an empty database
+            assert data["episodes"] == 0
+            assert data["knowledge"] == 0
 
     # ------------------------------------------------------------------
     # DELETE /privacy/delete-all
@@ -78,21 +71,24 @@ class TestPrivacyAPI:
         assert "error" in data
         assert "X-Confirm-Delete" in data["error"]
 
-    def test_delete_all_with_header_clears_data(self, client):
+    def test_delete_all_with_header_clears_data(self, client, db):
         """DELETE /privacy/delete-all with header clears data and returns 200."""
         mock_store = MagicMock()
         mock_store.keys.return_value = ["key1", "key2"]
 
-        mock_conn = MagicMock()
-        mock_conn_ctx = MagicMock()
-        mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn_ctx.__exit__ = MagicMock(return_value=False)
+        # Seed some data to verify it gets deleted
+        db.execute(
+            "INSERT INTO episodes (id, intent, context, action, emotion, outcome, gist, salience, freshness, topic) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("ep1", '{}', '{}', 'test', '{}', 'ok', 'test gist', 5, 5, 'test'),
+        )
+        db.commit()
 
-        mock_db = MagicMock()
-        mock_db.connection.return_value = mock_conn_ctx
+        # Verify data is seeded
+        row = db.execute("SELECT COUNT(*) FROM episodes").fetchone()
+        assert row[0] == 1
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()
             mock_log_cls.return_value = mock_log
@@ -111,25 +107,16 @@ class TestPrivacyAPI:
             assert mock_store.keys.call_count > 0
             assert mock_store.delete.call_count > 0
 
-            # Database tables were truncated via cursor pattern
-            cursor = mock_conn.cursor.return_value
-            assert cursor.execute.call_count > 0
+            # Verify episodes table was actually cleared
+            row = db.execute("SELECT COUNT(*) FROM episodes").fetchone()
+            assert row[0] == 0
 
-    def test_delete_all_logs_audit_event(self, client):
+    def test_delete_all_logs_audit_event(self, client, db):
         """DELETE /privacy/delete-all logs a privacy_delete_all audit event."""
         mock_store = MagicMock()
         mock_store.keys.return_value = []
 
-        mock_conn = MagicMock()
-        mock_conn_ctx = MagicMock()
-        mock_conn_ctx.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn_ctx.__exit__ = MagicMock(return_value=False)
-
-        mock_db = MagicMock()
-        mock_db.connection.return_value = mock_conn_ctx
-
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()
             mock_log_cls.return_value = mock_log

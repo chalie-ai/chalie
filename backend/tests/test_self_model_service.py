@@ -1,7 +1,7 @@
 """
 Tests for SelfModelService — foundational interoception.
 
-Uses real MemoryStore (via mock_store fixture) and mock DB (via mock_db_rows).
+Uses real MemoryStore (via mock_store fixture) and real DB (via db fixture).
 SelfModelService aggregates signals from many sources — we test the aggregation
 logic, noteworthy detection, caching/TTL, memory richness, and prompt formatting.
 """
@@ -106,17 +106,40 @@ class TestGetSnapshot:
         snap2 = svc.get_snapshot()
         assert snap2["refreshed_at"] != ts1
 
-    def test_memory_pressure_from_db(self, mock_store, mock_db_rows):
+    def test_memory_pressure_from_db(self, mock_store, db):
         """_get_memory_pressure reads episode/concept/trait counts from DB."""
-        db, cursor = mock_db_rows
-        cursor.fetchone.side_effect = [
-            (42,),   # episodes count
-            (15,),   # concepts count
-            (8,),    # traits count
-            (0.65,), # avg activation
-        ]
+        import json
 
-        svc = _make_service(db=db)
+        # Seed episodes (42 total, all with activation_score = 0.65)
+        for i in range(42):
+            db.execute(
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome,"
+                " gist, salience, freshness, topic, activation_score)"
+                " VALUES (?, '{}', '{}', 'observed', 'neutral', 'ok',"
+                " ?, ?, ?, 'test', ?)",
+                (f"ep-{i}", f"gist {i}", 5, 1, 0.65),
+            )
+
+        # Seed 15 concepts in knowledge table
+        for i in range(15):
+            db.execute(
+                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
+                " VALUES (?, ?, ?, 'concept', 0.8, 'standard')",
+                ("system", f"concept_{i}", f"value_{i}"),
+            )
+
+        # Seed 8 user traits/preferences in knowledge table
+        for i in range(8):
+            kind = 'trait' if i < 5 else 'preference'
+            db.execute(
+                "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class)"
+                " VALUES (?, ?, ?, ?, 0.8, 'permanent')",
+                ("user", f"trait_{i}", f"value_{i}", kind),
+            )
+
+        db.commit()
+
+        svc = _make_service()
         pressure = svc._get_memory_pressure()
 
         assert pressure["episode_count"] == 42

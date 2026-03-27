@@ -139,19 +139,17 @@ class TestProcessItem:
 
 class TestStoreEpisode:
 
-    def test_stores_episode_with_correct_fields(self, service):
+    def test_stores_episode_with_correct_fields(self, service, db):
         """_store_episode builds episode_data with required fields and calls storage."""
         observation = {'text': 'Python 3.12 adds pattern matching', 'durability': 'stable'}
 
-        mock_db = MagicMock()
         mock_emb = MagicMock()
         mock_emb.generate_embedding.return_value = [0.1] * 256
         mock_storage = MagicMock()
         mock_storage.store_episode.return_value = 'ep-123'
 
         # Patch the lazy imports at the exact module path _store_episode uses
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.embedding_service.get_embedding_service', return_value=mock_emb), \
+        with patch('services.embedding_service.get_embedding_service', return_value=mock_emb), \
              patch('services.episodic_service.EpisodicService', return_value=mock_storage):
             service._store_episode(
                 observation, 'python', 'what is new',
@@ -164,16 +162,14 @@ class TestStoreEpisode:
         assert call_args['freshness'] == 1.0
         assert 'embedding' in call_args
 
-    def test_store_episode_missing_text_raises(self, service):
+    def test_store_episode_missing_text_raises(self, service, db):
         """Observation without text raises KeyError."""
         observation = {'durability': 'transient'}
 
-        mock_db = MagicMock()
         mock_emb = MagicMock()
         mock_emb.generate_embedding.side_effect = KeyError('text')
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.embedding_service.get_embedding_service', return_value=mock_emb):
+        with patch('services.embedding_service.get_embedding_service', return_value=mock_emb):
             with pytest.raises(KeyError):
                 service._store_episode(
                     observation, 'test', 'prompt',

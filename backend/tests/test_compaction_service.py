@@ -8,47 +8,7 @@ Tests cover:
 """
 
 import pytest
-import sqlite3
 from unittest.mock import patch, MagicMock
-
-
-@pytest.fixture
-def compaction_db():
-    """Create an in-memory SQLite database with transcript + compaction schemas."""
-    conn = sqlite3.connect(':memory:')
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE topic_transcript (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            topic TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            tool_call_id TEXT,
-            tool_name TEXT,
-            internal INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE topic_compactions (
-            topic TEXT PRIMARY KEY,
-            compacted_text TEXT NOT NULL,
-            compacted_up_to_id INTEGER NOT NULL,
-            token_count INTEGER DEFAULT 0,
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (compacted_up_to_id) REFERENCES topic_transcript(id)
-        )
-    """)
-    conn.commit()
-
-    mock_db = MagicMock()
-    mock_db.connection.return_value.__enter__ = lambda s: conn
-    mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
-
-    with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-        yield conn
-
-    conn.close()
 
 
 def _insert_entries(conn, topic, count, content_template='Message {}'):
@@ -66,33 +26,37 @@ def _insert_entries(conn, topic, count, content_template='Message {}'):
 
 
 class TestGetCompaction:
-    def test_returns_none_when_no_compaction(self, compaction_db):
+    def test_returns_none_when_no_compaction(self, db):
         from services.compaction_service import get_compaction
         assert get_compaction('nonexistent-topic') is None
 
-    def test_returns_stored_compaction(self, compaction_db):
+    def test_returns_stored_compaction(self, db):
         from services.compaction_service import get_compaction
 
-        compaction_db.execute(
+        # Seed transcript entries so FK constraint is satisfied
+        ids = _insert_entries(db, 'test-topic', 10)
+        watermark = ids[-1]
+
+        db.execute(
             "INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            ('test-topic', 'Summary of conversation', 10, 50, '2026-03-20T10:00:00+00:00'),
+            ('test-topic', 'Summary of conversation', watermark, 50, '2026-03-20T10:00:00+00:00'),
         )
-        compaction_db.commit()
+        db.commit()
 
         result = get_compaction('test-topic')
         assert result is not None
         assert result['compacted_text'] == 'Summary of conversation'
-        assert result['compacted_up_to_id'] == 10
+        assert result['compacted_up_to_id'] == watermark
         assert result['token_count'] == 50
 
 
 class TestCheckAndCompact:
-    def test_returns_false_for_empty_topic(self, compaction_db):
+    def test_returns_false_for_empty_topic(self, db):
         from services.compaction_service import check_and_compact
         assert check_and_compact('', 32000) is False
 
-    def test_returns_false_when_too_few_entries(self, compaction_db):
+    def test_returns_false_when_too_few_entries(self, db):
         from services.compaction_service import check_and_compact
 
         # Only 2 entries — below _MIN_ENTRIES_TO_COMPACT (4)
@@ -102,7 +66,7 @@ class TestCheckAndCompact:
         ]):
             assert check_and_compact('test', 32000) is False
 
-    def test_returns_false_when_below_threshold(self, compaction_db):
+    def test_returns_false_when_below_threshold(self, db):
         from services.compaction_service import check_and_compact
 
         entries = [{'id': i, 'content': f'Short msg {i}'} for i in range(5)]
@@ -112,7 +76,7 @@ class TestCheckAndCompact:
             # 5 short entries, well below 85% of 32000
             assert check_and_compact('test', 32000) is False
 
-    def test_absolute_threshold_fires_on_large_context_budget(self, compaction_db):
+    def test_absolute_threshold_fires_on_large_context_budget(self, db):
         """Large model context budget should still trigger compaction at absolute ceiling."""
         from services.compaction_service import check_and_compact
 
@@ -129,7 +93,7 @@ class TestCheckAndCompact:
         assert result is True
         mock_run.assert_called_once()
 
-    def test_small_budget_uses_fraction_threshold(self, compaction_db):
+    def test_small_budget_uses_fraction_threshold(self, db):
         """Small context budget should use fraction-based threshold (below absolute ceiling)."""
         from services.compaction_service import check_and_compact
 
@@ -147,14 +111,16 @@ class TestCheckAndCompact:
         mock_run.assert_called_once()
 
 class TestRunCompaction:
-    def test_stores_compaction_result(self, compaction_db):
+    def test_stores_compaction_result(self, db):
         from services.compaction_service import _run_compaction
 
+        # Seed transcript entries so FK constraint is satisfied
+        ids = _insert_entries(db, 'test-topic', 4, 'Weather msg {}')
         entries = [
-            {'id': 10, 'role': 'user', 'content': 'What is the weather?'},
-            {'id': 11, 'role': 'assistant', 'content': 'It is sunny in Malta today.'},
-            {'id': 12, 'role': 'user', 'content': 'Thanks!'},
-            {'id': 13, 'role': 'assistant', 'content': 'You are welcome.'},
+            {'id': ids[0], 'role': 'user', 'content': 'What is the weather?'},
+            {'id': ids[1], 'role': 'assistant', 'content': 'It is sunny in Malta today.'},
+            {'id': ids[2], 'role': 'user', 'content': 'Thanks!'},
+            {'id': ids[3], 'role': 'assistant', 'content': 'You are welcome.'},
         ]
 
         mock_llm = MagicMock()
@@ -166,28 +132,32 @@ class TestRunCompaction:
         assert result is True
 
         # Verify stored in database
-        cursor = compaction_db.cursor()
+        cursor = db.cursor()
         cursor.execute("SELECT compacted_text, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
                         ('test-topic',))
         row = cursor.fetchone()
         assert row is not None
         assert row[0] == '- Weather in Malta: sunny'
-        assert row[1] == 13  # highest entry id
+        assert row[1] == ids[3]  # highest entry id
 
-    def test_updates_existing_compaction(self, compaction_db):
+    def test_updates_existing_compaction(self, db):
         from services.compaction_service import _run_compaction
 
-        # Insert initial compaction
-        compaction_db.execute(
+        # Seed transcript entries — old batch + new batch
+        old_ids = _insert_entries(db, 'test-topic', 5, 'Old msg {}')
+        new_ids = _insert_entries(db, 'test-topic', 2, 'New msg {}')
+
+        # Insert initial compaction covering old entries
+        db.execute(
             "INSERT INTO topic_compactions (topic, compacted_text, compacted_up_to_id, token_count, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            ('test-topic', 'Old summary', 5, 20, '2026-03-20T09:00:00'),
+            ('test-topic', 'Old summary', old_ids[-1], 20, '2026-03-20T09:00:00'),
         )
-        compaction_db.commit()
+        db.commit()
 
         entries = [
-            {'id': 14, 'role': 'user', 'content': 'New information here'},
-            {'id': 15, 'role': 'assistant', 'content': 'Noted and processed'},
+            {'id': new_ids[0], 'role': 'user', 'content': 'New information here'},
+            {'id': new_ids[1], 'role': 'assistant', 'content': 'Noted and processed'},
         ]
 
         mock_llm = MagicMock()
@@ -198,17 +168,18 @@ class TestRunCompaction:
 
         assert result is True
 
-        cursor = compaction_db.cursor()
+        cursor = db.cursor()
         cursor.execute("SELECT compacted_text, compacted_up_to_id FROM topic_compactions WHERE topic = ?",
                         ('test-topic',))
         row = cursor.fetchone()
         assert row[0] == 'Updated summary with new info'
-        assert row[1] == 15
+        assert row[1] == new_ids[1]
 
-    def test_includes_previous_text_in_prompt(self, compaction_db):
+    def test_includes_previous_text_in_prompt(self, db):
         from services.compaction_service import _run_compaction
 
-        entries = [{'id': 1, 'role': 'user', 'content': 'Hello'}]
+        ids = _insert_entries(db, 'test', 1)
+        entries = [{'id': ids[0], 'role': 'user', 'content': 'Hello'}]
 
         mock_llm = MagicMock()
         mock_llm.send_message.return_value = MagicMock(text='Compacted')
@@ -223,11 +194,12 @@ class TestRunCompaction:
         assert 'Previous context here' in user_message
         assert '## New Conversation Turns' in user_message
 
-    def test_includes_tool_name_in_formatted_entries(self, compaction_db):
+    def test_includes_tool_name_in_formatted_entries(self, db):
         from services.compaction_service import _run_compaction
 
+        ids = _insert_entries(db, 'test', 1)
         entries = [
-            {'id': 1, 'role': 'tool', 'content': 'Search results', 'tool_name': 'web_search'},
+            {'id': ids[0], 'role': 'tool', 'content': 'Search results', 'tool_name': 'web_search'},
         ]
 
         mock_llm = MagicMock()
@@ -239,10 +211,11 @@ class TestRunCompaction:
         user_message = mock_llm.send_message.call_args[0][1]
         assert '[tool — web_search]' in user_message
 
-    def test_returns_false_on_empty_llm_response(self, compaction_db):
+    def test_returns_false_on_empty_llm_response(self, db):
         from services.compaction_service import _run_compaction
 
-        entries = [{'id': 1, 'role': 'user', 'content': 'Hello'}]
+        ids = _insert_entries(db, 'test', 1)
+        entries = [{'id': ids[0], 'role': 'user', 'content': 'Hello'}]
 
         mock_llm = MagicMock()
         mock_llm.send_message.return_value = MagicMock(text='   ')
@@ -252,10 +225,11 @@ class TestRunCompaction:
 
         assert result is False
 
-    def test_returns_false_on_llm_error(self, compaction_db):
+    def test_returns_false_on_llm_error(self, db):
         from services.compaction_service import _run_compaction
 
-        entries = [{'id': 1, 'role': 'user', 'content': 'Hello'}]
+        ids = _insert_entries(db, 'test', 1)
+        entries = [{'id': ids[0], 'role': 'user', 'content': 'Hello'}]
 
         with patch('services.llm_service.create_refreshable_llm_service', side_effect=Exception('LLM down')):
             result = _run_compaction('test', '', entries)
@@ -264,7 +238,7 @@ class TestRunCompaction:
 
 
 class TestCompactionTopicContext:
-    def test_get_compaction_accepts_topic_context(self, compaction_db):
+    def test_get_compaction_accepts_topic_context(self, db):
         """get_compaction works when a TopicContext is passed."""
         from services.compaction_service import get_compaction
         from services.topic_context import TopicContext
@@ -288,7 +262,7 @@ class TestCompactionTopicContext:
         assert ctx.failed_sections[0][0] == 'compaction_read'
         assert 'db locked' in ctx.failed_sections[0][1]
 
-    def test_backward_compat_without_context(self, compaction_db):
+    def test_backward_compat_without_context(self, db):
         """get_compaction still works without _context (backward compat)."""
         from services.compaction_service import get_compaction
         result = get_compaction('nonexistent')

@@ -6,6 +6,7 @@ from datetime import timedelta
 from unittest.mock import patch, MagicMock
 
 from services.episodic_service import EpisodicService
+from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
 
 
@@ -17,21 +18,18 @@ class TestEpisodicRetrievalService:
 
     # ── Constructor / Configuration ───────────────────────────────────
 
-    def test_default_embedding_dimensions(self, mock_db_rows):
+    def test_default_embedding_dimensions(self, db):
         """Default embedding dimensions should be 256 when config is empty."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         assert svc.embedding_dimensions == 256
 
-    def test_custom_embedding_dimensions(self, mock_db_rows):
+    def test_custom_embedding_dimensions(self, db):
         """Config-provided embedding_dimensions should override the default."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={'embedding_dimensions': 512})
+        svc = EpisodicService(get_shared_db_service(), config={'embedding_dimensions': 512})
         assert svc.embedding_dimensions == 512
 
-    def test_custom_weights_override_defaults(self, mock_db_rows):
+    def test_custom_weights_override_defaults(self, db):
         """Config-provided inference_weights should override DEFAULT weights."""
-        db, _ = mock_db_rows
         custom_weights = {
             'vector_similarity': 10,
             'topic_overlap': 1,
@@ -39,22 +37,20 @@ class TestEpisodicRetrievalService:
             'activation_score': 1,
             'outcome_relevance': 1,
         }
-        svc = EpisodicService(db, config={'inference_weights': custom_weights})
+        svc = EpisodicService(get_shared_db_service(), config={'inference_weights': custom_weights})
         assert svc.weights == custom_weights
 
-    def test_default_weights_used_when_config_empty(self, mock_db_rows):
+    def test_default_weights_used_when_config_empty(self, db):
         """Default weights should be used when config has no inference_weights."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         assert svc.weights['vector_similarity'] == 4
         assert svc.weights['topic_overlap'] == 2
 
     # ── Empty candidates ──────────────────────────────────────────────
 
-    def test_empty_candidates_returns_empty_list(self, mock_db_rows):
+    def test_empty_candidates_returns_empty_list(self, db):
         """When no candidates are found, retrieve_episodes should return []."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
 
         with patch.object(svc, '_generate_embedding', return_value=[0.0] * 256), \
              patch.object(svc, '_hybrid_retrieve', return_value=[]):
@@ -64,10 +60,9 @@ class TestEpisodicRetrievalService:
 
     # ── Limit respected ───────────────────────────────────────────────
 
-    def test_limit_is_respected(self, mock_db_rows):
+    def test_limit_is_respected(self, db):
         """retrieve_episodes should return at most `limit` results."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
 
         candidates = [
             {
@@ -102,64 +97,56 @@ class TestEpisodicRetrievalService:
 
     # ── Scoring functions ─────────────────────────────────────────────
 
-    def test_vector_similarity_identical_distance_zero(self, mock_db_rows):
+    def test_vector_similarity_identical_distance_zero(self, db):
         """Distance 0 (identical vectors) should produce score 10."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         score = svc._calculate_vector_similarity([0.1], 0.0)
         assert score == 10.0
 
-    def test_vector_similarity_neutral_when_no_data(self, mock_db_rows):
+    def test_vector_similarity_neutral_when_no_data(self, db):
         """Missing distance or embedding should produce neutral score 5.0."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         assert svc._calculate_vector_similarity(None, 0.5) == 5.0
         assert svc._calculate_vector_similarity([0.1], None) == 5.0
 
-    def test_topic_overlap_exact_match(self, mock_db_rows):
+    def test_topic_overlap_exact_match(self, db):
         """Exact topic match should produce score 10.0."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         score = svc._calculate_topic_overlap('python', 'python')
         assert score == 10.0
 
-    def test_topic_overlap_partial_match(self, mock_db_rows):
+    def test_topic_overlap_partial_match(self, db):
         """Partial topic match (substring) should produce score 7.0."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         score = svc._calculate_topic_overlap('python', 'python programming')
         assert score == 7.0
 
-    def test_topic_overlap_no_match(self, mock_db_rows):
+    def test_topic_overlap_no_match(self, db):
         """No topic overlap should produce score 2.0."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         score = svc._calculate_topic_overlap('python', 'cooking')
         assert score == 2.0
 
-    def test_topic_overlap_neutral_when_no_query_topic(self, mock_db_rows):
+    def test_topic_overlap_neutral_when_no_query_topic(self, db):
         """Neutral score 5.0 when query topic is None."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         score = svc._calculate_topic_overlap(None, 'anything')
         assert score == 5.0
 
     # ── Effective freshness ───────────────────────────────────────────
 
-    def test_effective_freshness_recent_episode_is_fresh(self, mock_db_rows):
+    def test_effective_freshness_recent_episode_is_fresh(self, db):
         """An episode created moments ago should have high freshness."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         freshness = svc._calculate_effective_freshness(
             salience=0.5,
             created_at=utc_now(),
         )
         assert freshness > 0.9
 
-    def test_effective_freshness_high_salience_slows_decay(self, mock_db_rows):
+    def test_effective_freshness_high_salience_slows_decay(self, db):
         """High salience should slow decay, resulting in higher freshness."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         created = utc_now() - timedelta(hours=48)
 
         fresh_high = svc._calculate_effective_freshness(salience=0.9, created_at=created)
@@ -169,38 +156,34 @@ class TestEpisodicRetrievalService:
 
     # ── Semantic boost ────────────────────────────────────────────────
 
-    def test_semantic_boost_with_matching_concepts(self, mock_db_rows):
+    def test_semantic_boost_with_matching_concepts(self, db):
         """Concept names appearing in episode text should produce a boost."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         episode = {'gist': 'Learned about python decorators', 'outcome': 'understood decorators'}
         concepts = [{'name': 'decorators'}, {'name': 'metaclasses'}]
         boost = svc._calculate_semantic_boost(episode, concepts)
         assert boost > 0.0
 
-    def test_semantic_boost_no_match_returns_zero(self, mock_db_rows):
+    def test_semantic_boost_no_match_returns_zero(self, db):
         """No matching concepts should return 0.0 boost."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         episode = {'gist': 'Went to the gym', 'outcome': 'felt good'}
         concepts = [{'name': 'quantum mechanics'}]
         boost = svc._calculate_semantic_boost(episode, concepts)
         assert boost == 0.0
 
-    def test_semantic_boost_empty_concepts_returns_zero(self, mock_db_rows):
+    def test_semantic_boost_empty_concepts_returns_zero(self, db):
         """Empty concept list should return 0.0 boost."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         episode = {'gist': 'test', 'outcome': 'test'}
         assert svc._calculate_semantic_boost(episode, []) == 0.0
         assert svc._calculate_semantic_boost(episode, None) == 0.0
 
     # ── Exception handling ────────────────────────────────────────────
 
-    def test_retrieve_episodes_exception_returns_empty(self, mock_db_rows):
+    def test_retrieve_episodes_exception_returns_empty(self, db):
         """Any unhandled exception in retrieve_episodes should return []."""
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
 
         with patch.object(svc, '_generate_embedding', side_effect=Exception('embed fail')):
             result = svc.retrieve_episodes(query_text='test')
@@ -209,12 +192,11 @@ class TestEpisodicRetrievalService:
 
     # ── TopicContext integration ──────────────────────────────────────
 
-    def test_retrieve_accepts_topic_context(self, mock_db_rows):
+    def test_retrieve_accepts_topic_context(self, db):
         """retrieve_episodes works when a TopicContext is passed."""
         from services.topic_context import TopicContext
 
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         ctx = TopicContext(topic='test')
 
         with patch.object(svc, '_generate_embedding', return_value=[0.0] * 256), \
@@ -224,12 +206,11 @@ class TestEpisodicRetrievalService:
         assert result == []
         assert ctx.failed_sections == []
 
-    def test_retrieve_records_failure_to_context(self, mock_db_rows):
+    def test_retrieve_records_failure_to_context(self, db):
         """When retrieval fails, failure is recorded on TopicContext."""
         from services.topic_context import TopicContext
 
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         ctx = TopicContext(topic='test')
 
         with patch.object(svc, '_generate_embedding', side_effect=Exception('embed boom')):
@@ -240,12 +221,11 @@ class TestEpisodicRetrievalService:
         assert ctx.failed_sections[0][0] == 'episodic_retrieval'
         assert 'embed boom' in ctx.failed_sections[0][1]
 
-    def test_retrieve_uses_context_embedding(self, mock_db_rows):
+    def test_retrieve_uses_context_embedding(self, db):
         """When TopicContext has message_embedding, it can be passed as query_embedding."""
         from services.topic_context import TopicContext
 
-        db, _ = mock_db_rows
-        svc = EpisodicService(db, config={})
+        svc = EpisodicService(get_shared_db_service(), config={})
         embedding = [0.5] * 256
         ctx = TopicContext(topic='test', message_embedding=embedding)
 
@@ -316,4 +296,3 @@ class TestFts5AliasRegression:
         """
         with pytest.raises(sqlite3.OperationalError, match="no such column"):
             conn.execute(bad_query, ("watering",)).fetchall()
-

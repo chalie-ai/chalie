@@ -44,7 +44,6 @@ def _mock_identity_and_store(
     def _ctx():
         with patch('services.identity_state_service.IdentityStateService') as mock_id_cls, \
              patch('services.memory_client.MemoryClientService') as mock_store_cls, \
-             patch('services.database_service.get_shared_db_service') as mock_db, \
              patch('services.knowledge_service.KnowledgeService') as mock_ks_cls:
 
             mock_id = MagicMock()
@@ -71,7 +70,7 @@ def _mock_identity_and_store(
 
 class TestOnboardingNudge:
 
-    def test_no_nudge_below_min_turn(self):
+    def test_no_nudge_below_min_turn(self, db):
         """No nudge when exchange_count < min_turn (3)."""
         svc = _make_service_instance()
 
@@ -80,7 +79,7 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_no_nudge_when_name_already_set(self):
+    def test_no_nudge_when_name_already_set(self, db):
         """No nudge when IdentityStateService already has a name value."""
         svc = _make_service_instance()
         identity = {
@@ -95,7 +94,7 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_first_nudge_at_min_turn(self):
+    def test_first_nudge_at_min_turn(self, db):
         """Nudge emitted at exchange_count == min_turn (3) with no name set."""
         svc = _make_service_instance()
 
@@ -109,7 +108,7 @@ class TestOnboardingNudge:
         call_arg = mock_id.set_onboarding_state.call_args[0][0]
         assert call_arg['name']['attempts'] == 1
 
-    def test_no_nudge_during_cooldown(self):
+    def test_no_nudge_during_cooldown(self, db):
         """No nudge at exchange_count=4 when last nudge was at turn 3 (cooldown=6, age_range min_turn=5 not yet eligible)."""
         svc = _make_service_instance()
         # name nudged at turn 3; cooldown=6 so next eligible at turn 9.
@@ -123,7 +122,7 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_second_nudge_after_cooldown(self):
+    def test_second_nudge_after_cooldown(self, db):
         """Second nudge fires when cooldown (6 turns) has elapsed."""
         svc = _make_service_instance()
         # name nudged at turn 3, cooldown=6, so turn 9 is the earliest eligible.
@@ -143,7 +142,7 @@ class TestOnboardingNudge:
         call_arg = mock_id.set_onboarding_state.call_args[0][0]
         assert call_arg['name']['attempts'] == 2
 
-    def test_no_nudge_after_max_attempts(self):
+    def test_no_nudge_after_max_attempts(self, db):
         """No nudge after max_attempts reached for all scheduled traits."""
         svc = _make_service_instance()
         # All 9 traits in _ONBOARDING_SCHEDULE must be exhausted (attempts >= max_attempts).
@@ -166,7 +165,7 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_no_nudge_when_trait_in_permanent_storage(self):
+    def test_no_nudge_when_trait_in_permanent_storage(self, db):
         """No name nudge when IdentityStateService expired but knowledge table has the name."""
         svc = _make_service_instance()
         # IdentityStateService has no name (TTL expired), but knowledge table does
@@ -181,13 +180,13 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_no_nudge_with_none_thread_id(self):
+    def test_no_nudge_with_none_thread_id(self, db):
         """Returns '' when thread_id is None."""
         svc = _make_service_instance()
         result = svc._get_onboarding_nudge(None)
         assert result == ""
 
-    def test_no_nudge_when_needs_tools(self):
+    def test_no_nudge_when_needs_tools(self, db):
         """Returns '' when classification signals tool use (needs_tools=True)."""
         svc = _make_service_instance()
 
@@ -196,7 +195,7 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_no_nudge_when_urgency_high(self):
+    def test_no_nudge_when_urgency_high(self, db):
         """Returns '' when classification urgency is 'high'."""
         svc = _make_service_instance()
 
@@ -205,7 +204,7 @@ class TestOnboardingNudge:
 
         assert result == ""
 
-    def test_returns_empty_on_store_error(self):
+    def test_returns_empty_on_store_error(self, db):
         """MemoryStore error -- returns '', does not raise."""
         svc = _make_service_instance()
 

@@ -6,7 +6,7 @@ These tests do NOT bypass auth — they test the auth system itself.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from flask import Flask
 from werkzeug.security import generate_password_hash
 
@@ -18,46 +18,32 @@ class TestAuthAPI:
     """Test user authentication API endpoints."""
 
     @pytest.fixture
-    def client(self):
-        """Create Flask test client with user_auth blueprint."""
+    def client(self, db):
+        """Create Flask test client with user_auth blueprint.
+
+        Requires the ``db`` fixture so that get_shared_db_service() returns
+        the test database (patched at module level by conftest).
+        """
         app = Flask(__name__)
         app.secret_key = 'test-secret-key'
         app.register_blueprint(user_auth_bp)
         app.config['TESTING'] = True
         return app.test_client()
 
-    def _make_db_mock(self):
-        """Build a mock DatabaseService with get_session() context manager wired up.
-
-        Returns (mock_db, mock_session, mock_result) so tests can program
-        session.execute().fetchone() etc.
-        """
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_session.execute.return_value = mock_result
-
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__ = MagicMock(return_value=mock_session)
-        mock_ctx.__exit__ = MagicMock(return_value=False)
-
-        mock_db = MagicMock()
-        mock_db.get_session.return_value = mock_ctx
-
-        return mock_db, mock_session, mock_result
-
     # ------------------------------------------------------------------
     # GET /auth/status
     # ------------------------------------------------------------------
 
-    def test_status_returns_expected_keys(self, client):
+    def test_status_returns_expected_keys(self, client, db):
         """GET /auth/status returns has_master_account, has_providers, has_session."""
-        mock_db, mock_session, mock_result = self._make_db_mock()
+        # Seed one master account, no providers
+        db.execute(
+            "INSERT INTO master_account (username, password_hash) VALUES (?, ?)",
+            ("admin", generate_password_hash("testpassword")),
+        )
+        db.commit()
 
-        # First call: account count = 1, second call: provider count = 0
-        mock_result.fetchone.side_effect = [(1,), (0,)]
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.auth_session_service.validate_session', return_value=False):
+        with patch('services.auth_session_service.validate_session', return_value=False):
             response = client.get('/auth/status')
 
             assert response.status_code == 200
@@ -66,13 +52,20 @@ class TestAuthAPI:
             assert data["has_providers"] is False
             assert data["has_session"] is False
 
-    def test_status_with_valid_session(self, client):
+    def test_status_with_valid_session(self, client, db):
         """GET /auth/status with valid session returns has_session true."""
-        mock_db, mock_session, mock_result = self._make_db_mock()
-        mock_result.fetchone.side_effect = [(1,), (1,)]
+        # Seed one master account and one active provider
+        db.execute(
+            "INSERT INTO master_account (username, password_hash) VALUES (?, ?)",
+            ("admin", generate_password_hash("testpassword")),
+        )
+        db.execute(
+            "INSERT INTO providers (name, platform, model, is_active) VALUES (?, ?, ?, ?)",
+            ("test-provider", "openai", "gpt-4", 1),
+        )
+        db.commit()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.auth_session_service.validate_session', return_value=True):
+        with patch('services.auth_session_service.validate_session', return_value=True):
             response = client.get('/auth/status')
 
             assert response.status_code == 200
@@ -111,15 +104,10 @@ class TestAuthAPI:
         assert "error" in data
         assert "username" in data["error"].lower()
 
-    def test_register_success_returns_201(self, client):
+    def test_register_success_returns_201(self, client, db):
         """POST /auth/register with valid data creates account and returns 201."""
-        mock_db, mock_session, mock_result = self._make_db_mock()
-
-        # Existing count = 0 (no master account yet)
-        mock_result.fetchone.return_value = (0,)
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.auth_session_service.create_session') as mock_create_session:
+        # Ensure no master account exists (clean DB from fixture)
+        with patch('services.auth_session_service.create_session') as mock_create_session:
             response = client.post(
                 '/auth/register',
                 json={"username": "admin", "password": "securepassword123"},
@@ -130,29 +118,31 @@ class TestAuthAPI:
             data = response.get_json()
             assert data["ok"] is True
 
-            # Account was inserted via session.execute
-            assert mock_session.execute.call_count >= 2  # SELECT COUNT + INSERT
-            mock_session.commit.assert_called_once()
+            # Verify the account was actually inserted
+            row = db.execute("SELECT COUNT(*) FROM master_account").fetchone()
+            assert row[0] == 1
+
             mock_create_session.assert_called_once()
 
-    def test_register_duplicate_returns_409(self, client):
+    def test_register_duplicate_returns_409(self, client, db):
         """POST /auth/register when account already exists returns 409."""
-        mock_db, mock_session, mock_result = self._make_db_mock()
+        # Pre-seed a master account
+        db.execute(
+            "INSERT INTO master_account (username, password_hash) VALUES (?, ?)",
+            ("admin", generate_password_hash("existingpassword")),
+        )
+        db.commit()
 
-        # Existing count = 1 (account already exists)
-        mock_result.fetchone.return_value = (1,)
+        response = client.post(
+            '/auth/register',
+            json={"username": "admin", "password": "securepassword123"},
+            content_type='application/json',
+        )
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            response = client.post(
-                '/auth/register',
-                json={"username": "admin", "password": "securepassword123"},
-                content_type='application/json',
-            )
-
-            assert response.status_code == 409
-            data = response.get_json()
-            assert "error" in data
-            assert "already exists" in data["error"].lower()
+        assert response.status_code == 409
+        data = response.get_json()
+        assert "error" in data
+        assert "already exists" in data["error"].lower()
 
     # ------------------------------------------------------------------
     # POST /auth/login
@@ -170,36 +160,32 @@ class TestAuthAPI:
         data = response.get_json()
         assert "error" in data
 
-    def test_login_invalid_credentials_returns_401(self, client):
+    def test_login_invalid_credentials_returns_401(self, client, db):
         """POST /auth/login with invalid credentials returns 401."""
-        mock_db, mock_session, mock_result = self._make_db_mock()
+        # No user in the database — login should fail
+        response = client.post(
+            '/auth/login',
+            json={"username": "admin", "password": "wrongpassword"},
+            content_type='application/json',
+        )
 
-        # No matching user found
-        mock_result.fetchone.return_value = None
+        assert response.status_code == 401
+        data = response.get_json()
+        assert "error" in data
+        assert "invalid" in data["error"].lower()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            response = client.post(
-                '/auth/login',
-                json={"username": "admin", "password": "wrongpassword"},
-                content_type='application/json',
-            )
-
-            assert response.status_code == 401
-            data = response.get_json()
-            assert "error" in data
-            assert "invalid" in data["error"].lower()
-
-    def test_login_success_returns_200(self, client):
+    def test_login_success_returns_200(self, client, db):
         """POST /auth/login with valid credentials returns 200 and sets session."""
-        mock_db, mock_session, mock_result = self._make_db_mock()
-
-        # Return a matching password hash
         test_password = "securepassword123"
         stored_hash = generate_password_hash(test_password)
-        mock_result.fetchone.return_value = (stored_hash,)
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.auth_session_service.create_session') as mock_create_session:
+        db.execute(
+            "INSERT INTO master_account (username, password_hash) VALUES (?, ?)",
+            ("admin", stored_hash),
+        )
+        db.commit()
+
+        with patch('services.auth_session_service.create_session') as mock_create_session:
             response = client.post(
                 '/auth/login',
                 json={"username": "admin", "password": test_password},

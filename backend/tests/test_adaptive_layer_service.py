@@ -377,24 +377,28 @@ class TestMicroPreferences:
         for key, label in PREF_LABELS.items():
             assert isinstance(label, str) and len(label) > 0
 
-    def test_get_micro_preferences_maps_correctly(self):
+    def test_get_micro_preferences_maps_correctly(self, db):
         svc = _service()
 
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [
-            ('prefers_bullet_format', 0.85),
-            ('prefers_concise', 0.70),
-            ('unknown_pref_key', 0.90),  # not in PREF_LABELS → excluded
-        ]
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value = mock_conn
+        # Seed knowledge table with micro-preference rows
+        db.execute(
+            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
+            " VALUES ('user', 'prefers_bullet_format', 'true', 'preference', 0.85, 'slow', ?)",
+            ('{"category": "micro_preference"}',),
+        )
+        db.execute(
+            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
+            " VALUES ('user', 'prefers_concise', 'true', 'preference', 0.70, 'slow', ?)",
+            ('{"category": "micro_preference"}',),
+        )
+        db.execute(
+            "INSERT INTO knowledge (entity, key, value, kind, confidence, decay_class, data)"
+            " VALUES ('user', 'unknown_pref_key', 'true', 'preference', 0.90, 'slow', ?)",
+            ('{"category": "micro_preference"}',),
+        )
+        db.commit()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            result = svc._get_micro_preferences()
+        result = svc._get_micro_preferences()
 
         assert PREF_LABELS['prefers_bullet_format'] in result
         assert PREF_LABELS['prefers_concise'] in result

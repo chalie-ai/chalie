@@ -3,6 +3,9 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch, call
 
+from services.tool_profile_service import ToolProfileService, _compute_manifest_hash, MAX_SCENARIOS
+from services.database_service import get_shared_db_service
+
 pytestmark = pytest.mark.unit
 
 
@@ -22,85 +25,110 @@ def _make_manifest(name="test_tool", has_documentation=True):
     return m
 
 
+def _seed_profile(db, tool_name="test_tool", **overrides):
+    """Insert a tool_capability_profiles row for tests that need one."""
+    defaults = {
+        'tool_type': 'tool',
+        'short_summary': f'A {tool_name} tool',
+        'full_profile': f'This is the full profile for {tool_name}',
+        'usage_scenarios': '["scenario1", "scenario2"]',
+        'anti_scenarios': '[]',
+        'complementary_skills': '["recall"]',
+        'manifest_hash': 'test_hash',
+        'domain': 'Other',
+        'triage_triggers': '[]',
+        'effort': 'moderate',
+        'descriptor': tool_name,
+        'enrichment_episode_ids': '[]',
+        'enrichment_count': 0,
+    }
+    defaults.update(overrides)
+    db.execute("""
+        INSERT OR REPLACE INTO tool_capability_profiles
+            (tool_name, tool_type, short_summary, full_profile, usage_scenarios,
+             anti_scenarios, complementary_skills, manifest_hash, domain,
+             triage_triggers, effort, descriptor, enrichment_episode_ids,
+             enrichment_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    """, (
+        tool_name,
+        defaults['tool_type'],
+        defaults['short_summary'],
+        defaults['full_profile'],
+        defaults['usage_scenarios'],
+        defaults['anti_scenarios'],
+        defaults['complementary_skills'],
+        defaults['manifest_hash'],
+        defaults['domain'],
+        defaults['triage_triggers'],
+        defaults['effort'],
+        defaults['descriptor'],
+        defaults['enrichment_episode_ids'],
+        defaults['enrichment_count'],
+    ))
+    db.commit()
+
+
 class TestManifestHash:
     def test_hash_is_deterministic(self):
-        from services.tool_profile_service import _compute_manifest_hash
         m = _make_manifest()
         assert _compute_manifest_hash(m) == _compute_manifest_hash(m)
 
     def test_hash_changes_with_content(self):
-        from services.tool_profile_service import _compute_manifest_hash
         m1 = _make_manifest("tool_a")
         m2 = _make_manifest("tool_b")
         assert _compute_manifest_hash(m1) != _compute_manifest_hash(m2)
 
     def test_hash_is_string(self):
-        from services.tool_profile_service import _compute_manifest_hash
         h = _compute_manifest_hash(_make_manifest())
         assert isinstance(h, str)
         assert len(h) == 32  # MD5 hex
 
 
 class TestCheckStaleness:
-    def test_no_profile_returns_stale(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = []  # No rows
-        svc._db = mock_db
+    def test_no_profile_returns_stale(self, db):
+        svc = ToolProfileService(get_shared_db_service())
         assert svc.check_staleness("unknown_tool") is True
 
-    def test_matching_hash_returns_not_stale(self):
-        from services.tool_profile_service import ToolProfileService, _compute_manifest_hash
-        svc = ToolProfileService()
+    def test_matching_hash_returns_not_stale(self, db):
         manifest = _make_manifest("test_tool")
         current_hash = _compute_manifest_hash(manifest)
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [{'manifest_hash': current_hash}]
-        svc._db = mock_db
+        _seed_profile(db, "test_tool", manifest_hash=current_hash)
+
+        svc = ToolProfileService(get_shared_db_service())
         assert svc.check_staleness("test_tool", current_hash) is False
 
-    def test_changed_hash_returns_stale(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [{'manifest_hash': 'old_hash'}]
-        svc._db = mock_db
+    def test_changed_hash_returns_stale(self, db):
+        _seed_profile(db, "test_tool", manifest_hash='old_hash')
+
+        svc = ToolProfileService(get_shared_db_service())
         assert svc.check_staleness("test_tool", "new_hash") is True
 
-    def test_db_error_returns_stale(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = Exception("DB error")
-        svc._db = mock_db
-        assert svc.check_staleness("test_tool") is True
+    def test_db_error_returns_stale(self, db):
+        svc = ToolProfileService(get_shared_db_service())
+        with patch.object(svc, '_get_db') as patched_get_db:
+            broken_db = MagicMock()
+            broken_db.fetch_all.side_effect = Exception("DB error")
+            patched_get_db.return_value = broken_db
+            assert svc.check_staleness("test_tool") is True
 
 
 class TestGetFullProfile:
-    def test_returns_none_for_missing_tool(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = []
-        svc._db = mock_db
+    def test_returns_none_for_missing_tool(self, db):
+        svc = ToolProfileService(get_shared_db_service())
         assert svc.get_full_profile("nonexistent") is None
 
-    def test_returns_dict_for_existing_tool(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [{
-            'tool_name': 'test_tool',
-            'short_summary': 'A test tool',
-            'full_profile': 'This is the full profile',
-            'usage_scenarios': '["scenario1", "scenario2"]',
-            'anti_scenarios': '[]',
-            'complementary_skills': '["recall"]',
-            'enrichment_episode_ids': '[]',
-            'enrichment_count': 0,
-        }]
-        svc._db = mock_db
+    def test_returns_dict_for_existing_tool(self, db):
+        _seed_profile(db, "test_tool",
+                      short_summary='A test tool',
+                      full_profile='This is the full profile',
+                      usage_scenarios='["scenario1", "scenario2"]',
+                      anti_scenarios='[]',
+                      complementary_skills='["recall"]',
+                      enrichment_episode_ids='[]',
+                      enrichment_count=0)
+
+        svc = ToolProfileService(get_shared_db_service())
         profile = svc.get_full_profile("test_tool")
         assert profile is not None
         assert profile['tool_name'] == 'test_tool'
@@ -110,51 +138,53 @@ class TestGetFullProfile:
 
 class TestGetTriageSummaries:
     @patch('services.tool_profile_service.ToolProfileService._get_store')
-    def test_returns_cached_value(self, mock_get_store):
-        from services.tool_profile_service import ToolProfileService
+    def test_returns_cached_value(self, mock_get_store, db):
         mock_store = MagicMock()
         mock_store.get.return_value = "## Cached Summaries\n- tool: does stuff"
         mock_get_store.return_value = mock_store
 
-        svc = ToolProfileService()
+        svc = ToolProfileService(get_shared_db_service())
         result = svc.get_triage_summaries()
         assert result == "## Cached Summaries\n- tool: does stuff"
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
-    def test_builds_from_db_when_cache_miss(self, mock_get_store):
-        from services.tool_profile_service import ToolProfileService
+    def test_builds_from_db_when_cache_miss(self, mock_get_store, db):
         mock_store = MagicMock()
         mock_store.get.return_value = None  # Cache miss
         mock_get_store.return_value = mock_store
 
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [
-            {'tool_name': 'duckduckgo_search', 'tool_type': 'tool', 'short_summary': 'Search the web', 'domain': 'Information Retrieval', 'triage_triggers': []},
-            {'tool_name': 'weather', 'tool_type': 'tool', 'short_summary': 'Check weather', 'domain': 'Environment', 'triage_triggers': []},
-        ]
-        svc._db = mock_db
+        _seed_profile(db, 'duckduckgo_search',
+                      tool_type='tool',
+                      short_summary='Search the web',
+                      domain='Information Retrieval',
+                      triage_triggers='[]',
+                      effort='moderate')
+        _seed_profile(db, 'weather',
+                      tool_type='tool',
+                      short_summary='Check weather',
+                      domain='Environment',
+                      triage_triggers='[]',
+                      effort='moderate')
 
+        svc = ToolProfileService(get_shared_db_service())
         result = svc.get_triage_summaries()
         assert 'duckduckgo_search' in result
         assert 'weather' in result
         assert '## Information Retrieval' in result or '## Environment' in result
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
-    def test_skills_not_in_triage_summaries(self, mock_get_store):
-        """Skills should not appear in triage summaries — they're always available."""
-        from services.tool_profile_service import ToolProfileService
+    def test_skills_not_in_triage_summaries(self, mock_get_store, db):
+        """Skills should not appear in triage summaries -- they're always available."""
         mock_store = MagicMock()
         mock_store.get.return_value = None
         mock_get_store.return_value = mock_store
 
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [
-            {'tool_name': 'recall', 'tool_type': 'skill', 'short_summary': 'Search memory'},
-            {'tool_name': 'duckduckgo_search', 'tool_type': 'tool', 'short_summary': 'Search web'},
-        ]
-        svc._db = mock_db
+        _seed_profile(db, 'recall', tool_type='skill',
+                      short_summary='Search memory', domain='Innate Skill')
+        _seed_profile(db, 'duckduckgo_search', tool_type='tool',
+                      short_summary='Search web', domain='Information Retrieval')
+
+        svc = ToolProfileService(get_shared_db_service())
         result = svc.get_triage_summaries()
         assert 'recall' not in result  # Skills excluded from triage prompt
 
@@ -163,17 +193,13 @@ class TestManifestFallback:
     """Test manifest-based triage fallback when DB has no tool profiles."""
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
-    def test_empty_db_falls_back_to_manifest(self, mock_get_store):
+    def test_empty_db_falls_back_to_manifest(self, mock_get_store, db):
         """When DB has no tool rows, triage summaries come from manifests."""
-        from services.tool_profile_service import ToolProfileService
         mock_store = MagicMock()
         mock_store.get.return_value = None  # Cache miss
         mock_get_store.return_value = mock_store
 
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = []  # Empty DB
-        svc._db = mock_db
+        svc = ToolProfileService(get_shared_db_service())
 
         # Mock registry with one on-demand tool
         mock_registry = MagicMock()
@@ -197,17 +223,17 @@ class TestManifestFallback:
         assert '## Research' in result
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
-    def test_db_exception_falls_back_to_manifest(self, mock_get_store):
+    def test_db_exception_falls_back_to_manifest(self, mock_get_store, db):
         """When DB fetch raises, triage summaries come from manifests."""
-        from services.tool_profile_service import ToolProfileService
         mock_store = MagicMock()
         mock_store.get.return_value = None
         mock_get_store.return_value = mock_store
 
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = Exception("connection refused")
-        svc._db = mock_db
+        svc = ToolProfileService(get_shared_db_service())
+
+        # Patch _get_db to return a broken service that raises on fetch_all
+        broken_db = MagicMock()
+        broken_db.fetch_all.side_effect = Exception("connection refused")
 
         mock_registry = MagicMock()
         mock_registry.get_on_demand_tools.return_value = ['web_search']
@@ -223,26 +249,24 @@ class TestManifestFallback:
             }
         }
 
-        with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
+        with patch.object(svc, '_get_db', return_value=broken_db), \
+             patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
             result = svc.get_triage_summaries()
 
         assert 'web_search' in result
         assert '## Information Retrieval' in result
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
-    def test_only_skills_in_db_falls_back_to_manifest(self, mock_get_store):
+    def test_only_skills_in_db_falls_back_to_manifest(self, mock_get_store, db):
         """When DB only has skill rows (no tools), manifest fallback triggers."""
-        from services.tool_profile_service import ToolProfileService
         mock_store = MagicMock()
         mock_store.get.return_value = None
         mock_get_store.return_value = mock_store
 
-        svc = ToolProfileService()
-        mock_db = MagicMock()
-        mock_db.fetch_all.return_value = [
-            {'tool_name': 'recall', 'tool_type': 'skill', 'short_summary': 'Search memory', 'domain': 'Innate Skill', 'triage_triggers': []},
-        ]
-        svc._db = mock_db
+        _seed_profile(db, 'recall', tool_type='skill',
+                      short_summary='Search memory', domain='Innate Skill')
+
+        svc = ToolProfileService(get_shared_db_service())
 
         mock_registry = MagicMock()
         mock_registry.get_on_demand_tools.return_value = ['news_tool']
@@ -261,14 +285,12 @@ class TestManifestFallback:
         with patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
             result = svc.get_triage_summaries()
 
-        # Skills filtered out → by_domain empty → manifest fallback fires
+        # Skills filtered out -> by_domain empty -> manifest fallback fires
         assert 'news_tool' in result
 
-    def test_manifest_fallback_includes_triggers(self):
+    def test_manifest_fallback_includes_triggers(self, db):
         """Manifest fallback should include trigger phrases in summaries."""
-        from services.tool_profile_service import ToolProfileService
-
-        svc = ToolProfileService()
+        svc = ToolProfileService(get_shared_db_service())
 
         mock_registry = MagicMock()
         mock_registry.get_on_demand_tools.return_value = ['news_tool']
@@ -294,9 +316,8 @@ class TestManifestFallback:
 class TestFallbackProfile:
     """Test deterministic fallback profile generation from manifests."""
 
-    def test_extracts_triggers_from_documentation_quotes(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
+    def test_extracts_triggers_from_documentation_quotes(self, db):
+        svc = ToolProfileService(get_shared_db_service())
         manifest = {
             'name': 'news_tool',
             'documentation': "Use for 'latest news on...', 'any updates about...', 'catch me up on...'",
@@ -309,9 +330,8 @@ class TestFallbackProfile:
         assert 'any updates about' in triggers
         assert 'catch me up on' in triggers
 
-    def test_sets_domain_from_category(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
+    def test_sets_domain_from_category(self, db):
+        svc = ToolProfileService(get_shared_db_service())
         manifest = {
             'name': 'news_tool',
             'documentation': 'Search news articles',
@@ -320,9 +340,8 @@ class TestFallbackProfile:
         profile = svc._fallback_profile('news_tool', manifest)
         assert profile['domain'] == 'Research'
 
-    def test_domain_normalizes_underscores(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
+    def test_domain_normalizes_underscores(self, db):
+        svc = ToolProfileService(get_shared_db_service())
         manifest = {
             'name': 'web_search',
             'documentation': 'Search the web',
@@ -331,9 +350,8 @@ class TestFallbackProfile:
         profile = svc._fallback_profile('web_search', manifest)
         assert profile['domain'] == 'Information Retrieval'
 
-    def test_no_documentation_yields_empty_triggers(self):
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
+    def test_no_documentation_yields_empty_triggers(self, db):
+        svc = ToolProfileService(get_shared_db_service())
         manifest = {
             'name': 'simple_tool',
             'description': 'A simple tool with no quotes',
@@ -342,10 +360,9 @@ class TestFallbackProfile:
         assert profile['triage_triggers'] == []
         assert profile['domain'] == 'Other'
 
-    def test_short_quoted_phrases_ignored(self):
+    def test_short_quoted_phrases_ignored(self, db):
         """Phrases shorter than 4 chars should not be extracted as triggers."""
-        from services.tool_profile_service import ToolProfileService
-        svc = ToolProfileService()
+        svc = ToolProfileService(get_shared_db_service())
         manifest = {
             'name': 'test_tool',
             'documentation': "Triggers: 'hello there', 'yo'. For greetings.",
@@ -360,26 +377,17 @@ class TestFallbackProfile:
 class TestScenarioCap:
     """Test that scenario count is capped at MAX_SCENARIOS."""
 
-    def test_scenarios_capped_at_50_in_build_profile(self):
-        from services.tool_profile_service import ToolProfileService, MAX_SCENARIOS
-        svc = ToolProfileService()
+    def test_scenarios_capped_at_50_in_build_profile(self, db):
+        svc = ToolProfileService(get_shared_db_service())
 
-        # Mock everything needed
-        mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = [
-            [],   # check_staleness → no rows (stale)
-            [],   # _get_related_episodes → no episodes
-        ]
-        svc._db = mock_db
-
-        # LLM returns 60 scenarios — should be capped to 50
+        # LLM returns 60 scenarios -- should be capped to 50
         with patch.object(svc, '_get_llm') as mock_get_llm, \
              patch.object(svc, '_get_embedding_service') as mock_get_emb, \
              patch.object(svc, '_get_related_episodes', return_value="No episodes"), \
-             patch.object(svc, 'check_staleness', return_value=True):
+             patch.object(svc, 'check_staleness', return_value=True), \
+             patch.object(svc, '_invalidate_cache'):
 
             mock_llm = MagicMock()
-            import json
             mock_llm.send_message.return_value = MagicMock(text=json.dumps({
                 'short_summary': 'Test tool',
                 'full_profile': 'A test tool profile',
@@ -390,18 +398,16 @@ class TestScenarioCap:
             mock_get_llm.return_value = mock_llm
 
             mock_emb = MagicMock()
-            mock_emb.generate_embedding.return_value = [0.1] * 768
+            mock_emb.generate_embedding.return_value = [0.1] * 256
             mock_get_emb.return_value = mock_emb
 
             svc.build_profile("test_tool", _make_manifest())
 
-            # Check what was inserted
-            call_args = mock_db.execute.call_args
-            if call_args:
-                args = call_args[0]
-                # Find the usage_scenarios argument
-                for arg in args:
-                    if isinstance(arg, str) and arg.startswith('[') and 'scenario' in arg:
-                        scenarios = json.loads(arg)
-                        assert len(scenarios) <= MAX_SCENARIOS
-                        break
+            # Verify the stored scenarios are capped
+            row = db.execute(
+                "SELECT usage_scenarios FROM tool_capability_profiles WHERE tool_name = ?",
+                ("test_tool",)
+            ).fetchone()
+            assert row is not None
+            scenarios = json.loads(row['usage_scenarios'])
+            assert len(scenarios) <= MAX_SCENARIOS

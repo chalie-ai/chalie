@@ -5,87 +5,14 @@ compaction tables, and controlled service stubs. Verifies topic isolation,
 failure tracking, and budget constraints.
 """
 
-import contextlib
-import sqlite3
 import pytest
 from unittest.mock import patch, MagicMock
 
 from services.context_assembly_service import ContextAssemblyService
 from services.topic_context import TopicContext
-from services.database_service import DatabaseService
 
 
 pytestmark = pytest.mark.unit
-
-
-# ── Schema for transcript + compaction ───────────────────────────────
-
-_TRANSCRIPT_DDL = """
-CREATE TABLE topic_transcript (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    topic TEXT NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tool_call_id TEXT,
-    tool_name TEXT,
-    internal INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-)
-"""
-
-_COMPACTION_DDL = """
-CREATE TABLE topic_compactions (
-    topic TEXT PRIMARY KEY,
-    compacted_text TEXT NOT NULL,
-    compacted_up_to_id INTEGER NOT NULL,
-    token_count INTEGER DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-)
-"""
-
-
-# ── Fixtures ─────────────────────────────────────────────────────────
-
-@pytest.fixture
-def integration_db():
-    """Real SQLite with transcript + compaction schemas.
-
-    Patches get_shared_db_service globally so all services in the
-    context assembly chain see the same database.
-    """
-    shared_conn = sqlite3.connect(':memory:')
-    shared_conn.execute("PRAGMA journal_mode=WAL")
-    shared_conn.execute(_TRANSCRIPT_DDL)
-    shared_conn.execute(_COMPACTION_DDL)
-    shared_conn.commit()
-
-    db = DatabaseService.__new__(DatabaseService)
-    db._db_path = ':memory:'
-    db._init_complete = True
-    db.db_path = ':memory:'
-
-    _depth = [0]
-
-    @contextlib.contextmanager
-    def _connection():
-        _depth[0] += 1
-        try:
-            yield shared_conn
-            if _depth[0] == 1:
-                shared_conn.commit()
-        except Exception:
-            if _depth[0] == 1:
-                shared_conn.rollback()
-            raise
-        finally:
-            _depth[0] -= 1
-
-    db.connection = _connection
-
-    with patch('services.database_service.get_shared_db_service', return_value=db):
-        yield shared_conn
-
-    shared_conn.close()
 
 
 def _seed_transcript(conn, topic, messages):
@@ -117,9 +44,9 @@ def _make_svc(budget=100_000):
 
 class TestFullAssembly:
 
-    def test_full_assembly_returns_all_sections(self, integration_db):
+    def test_full_assembly_returns_all_sections(self, db):
         """Seeded transcript data flows through to the working_memory section."""
-        _seed_transcript(integration_db, 'cooking', [
+        _seed_transcript(db, 'cooking', [
             ('user', 'How do I make pasta?'),
             ('assistant', 'Boil water, add pasta, cook for 10 minutes.'),
         ])
@@ -137,24 +64,24 @@ class TestFullAssembly:
         assert 'pasta' in result['working_memory'].lower()
         assert ctx.failed_sections == []
 
-    def test_compaction_plus_recent_transcript(self, integration_db):
+    def test_compaction_plus_recent_transcript(self, db):
         """Both compaction summary and recent entries appear in working memory."""
         # Seed 3 old entries (will be "compacted")
-        _seed_transcript(integration_db, 'travel', [
+        _seed_transcript(db, 'travel', [
             ('user', 'Old message 1'),
             ('assistant', 'Old reply 1'),
             ('user', 'Old message 2'),
         ])
 
         # Get the watermark (highest id so far)
-        cursor = integration_db.execute("SELECT MAX(id) FROM topic_transcript")
+        cursor = db.execute("SELECT MAX(id) FROM topic_transcript")
         watermark = cursor.fetchone()[0]
 
         # Store compaction covering those old entries
-        _seed_compaction(integration_db, 'travel', 'User discussed travel to Japan.', watermark)
+        _seed_compaction(db, 'travel', 'User discussed travel to Japan.', watermark)
 
         # Seed 2 new entries after the watermark
-        _seed_transcript(integration_db, 'travel', [
+        _seed_transcript(db, 'travel', [
             ('user', 'What about hotels in Tokyo?'),
             ('assistant', 'I recommend Shinjuku area.'),
         ])
@@ -177,13 +104,13 @@ class TestFullAssembly:
 
 class TestTopicIsolation:
 
-    def test_topic_switch_does_not_bleed_old_context(self, integration_db):
+    def test_topic_switch_does_not_bleed_old_context(self, db):
         """Assembling for topic-B should NOT include topic-A transcript data."""
-        _seed_transcript(integration_db, 'topic-A', [
+        _seed_transcript(db, 'topic-A', [
             ('user', 'My secret password is hunter2'),
             ('assistant', 'Got it, stored securely.'),
         ])
-        _seed_transcript(integration_db, 'topic-B', [
+        _seed_transcript(db, 'topic-B', [
             ('user', 'What is the weather?'),
             ('assistant', 'Sunny and warm.'),
         ])
@@ -203,7 +130,7 @@ class TestTopicIsolation:
         assert 'password' not in wm
         assert 'weather' in wm.lower() or 'Sunny' in wm
 
-    def test_new_topic_gets_empty_working_memory(self, integration_db):
+    def test_new_topic_gets_empty_working_memory(self, db):
         """A brand new topic with no data should have empty working memory."""
         svc = _make_svc()
         ctx = TopicContext(topic='never-discussed', is_new_topic=True)
@@ -220,9 +147,9 @@ class TestTopicIsolation:
 
 class TestFailureTracking:
 
-    def test_failed_sections_tracked(self, integration_db):
+    def test_failed_sections_tracked(self, db):
         """When one section fails, failure is recorded and other sections still work."""
-        _seed_transcript(integration_db, 'test', [
+        _seed_transcript(db, 'test', [
             ('user', 'Hello there'),
             ('assistant', 'Hi!'),
         ])
@@ -256,7 +183,7 @@ class TestFailureTracking:
         section_names = [s[0] for s in ctx.failed_sections]
         assert 'episodes' in section_names
 
-    def test_multiple_failures_do_not_crash(self, integration_db):
+    def test_multiple_failures_do_not_crash(self, db):
         """Even if all sections fail, assemble returns a valid dict with failures tracked."""
         svc = _make_svc()
         ctx = TopicContext(topic='broken-topic')
@@ -281,14 +208,14 @@ class TestFailureTracking:
 
 class TestBudgetConstraint:
 
-    def test_budget_constraint_with_real_data(self, integration_db):
+    def test_budget_constraint_with_real_data(self, db):
         """Large transcript data with small budget triggers trimming."""
         # Seed lots of transcript data
         messages = [(
             'user' if i % 2 == 0 else 'assistant',
             f'This is a long message number {i} with lots of extra content to fill the budget. ' * 10,
         ) for i in range(20)]
-        _seed_transcript(integration_db, 'verbose', messages)
+        _seed_transcript(db, 'verbose', messages)
 
         svc = _make_svc(budget=200)  # Very small budget
         ctx = TopicContext(topic='verbose')
@@ -308,10 +235,10 @@ class TestBudgetConstraint:
 
 class TestTopicContextIdentifier:
 
-    def test_thread_id_takes_precedence(self, integration_db):
+    def test_thread_id_takes_precedence(self, db):
         """When TopicContext has thread_id, it's used for working memory lookup."""
         # Seed data under the thread_id as topic (legacy fallback path)
-        _seed_transcript(integration_db, 'thread-99', [
+        _seed_transcript(db, 'thread-99', [
             ('user', 'Thread-specific message'),
             ('assistant', 'Thread-specific reply'),
         ])

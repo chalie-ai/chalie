@@ -274,7 +274,7 @@ class TestCapabilitiesAPI:
     # 7 — GET /api/capabilities/<id>/status → 200 with connected + last_sync_at
     # ------------------------------------------------------------------
 
-    def test_status_returns_connection_state(self, client):
+    def test_status_returns_connection_state(self, client, db):
         """GET status for a known capability returns 200 with required keys.
 
         The response body must contain ``id``, ``connected``, ``last_sync_at``,
@@ -282,11 +282,11 @@ class TestCapabilitiesAPI:
 
         Args:
             client: Pytest fixture — isolated Flask test client.
+            db: Pytest fixture — real SQLite database (patches get_shared_db_service singleton).
         """
         mock_cap = _make_mock_cap(connected=True)
         last_sync = "2026-03-27T12:00:00Z"
 
-        mock_db = MagicMock()
         mock_tool_config_svc = MagicMock()
         mock_tool_config_svc.get_tool_config.return_value = {
             "caldav:last_sync_at": last_sync,
@@ -295,7 +295,6 @@ class TestCapabilitiesAPI:
 
         with patch("api.capabilities._load_caps", return_value={"caldav": mock_cap}), \
              patch("api.capabilities._get_last_sync_at", return_value=last_sync), \
-             patch("services.database_service.get_shared_db_service", return_value=mock_db), \
              patch("services.tool_config_service.ToolConfigService", return_value=mock_tool_config_svc):
             resp = client.get("/api/capabilities/caldav/status")
 

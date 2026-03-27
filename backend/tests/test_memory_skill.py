@@ -56,13 +56,12 @@ class TestAutoClassify:
 
 class TestHandleMemoryStore:
 
-    def test_handle_memory_store_basic(self):
+    def test_handle_memory_store_basic(self, db):
         """Stores entries via the skill."""
         mock_ks = MagicMock()
         mock_ks.store.return_value = {'key': 'color', 'value': 'blue'}
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'store',
                 'entries': [
@@ -74,7 +73,7 @@ class TestHandleMemoryStore:
         assert 'color' in result
         mock_ks.store.assert_called_once()
 
-    def test_handle_memory_store_auto_classify(self):
+    def test_handle_memory_store_auto_classify(self, db):
         """Verifies kind/decay_class auto-classification when omitted."""
         mock_ks = MagicMock()
         mock_ks.store.return_value = {'key': 'user_name', 'value': 'Dylan'}
@@ -86,8 +85,7 @@ class TestHandleMemoryStore:
 
         mock_ks.store.side_effect = _capture_store
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'store',
                 'entries': [
@@ -105,13 +103,12 @@ class TestHandleMemoryStore:
         result = handle_memory('topic', {'action': 'store', 'entries': []})
         assert 'Error' in result
 
-    def test_handle_memory_store_skips_invalid(self):
+    def test_handle_memory_store_skips_invalid(self, db):
         """Entries missing key or value are skipped."""
         mock_ks = MagicMock()
         mock_ks.store.return_value = None  # Skipped entries return None
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'store',
                 'entries': [
@@ -128,7 +125,7 @@ class TestHandleMemoryStore:
 
 class TestHandleMemoryRecall:
 
-    def test_handle_memory_recall(self):
+    def test_handle_memory_recall(self, db):
         """Basic recall returns results."""
         mock_ks = MagicMock()
         mock_ks.recall.return_value = [
@@ -143,7 +140,6 @@ class TestHandleMemoryRecall:
         mock_episodic.retrieve_episodes.return_value = []
 
         with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()), \
              patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {
@@ -159,7 +155,7 @@ class TestHandleMemoryRecall:
         result = handle_memory('topic', {'action': 'recall', 'query': ''})
         assert 'Error' in result
 
-    def test_handle_memory_recall_empty_results(self):
+    def test_handle_memory_recall_empty_results(self, db):
         """Empty results produce structured empty response."""
         mock_ks = MagicMock()
         mock_ks.recall.return_value = []
@@ -167,16 +163,7 @@ class TestHandleMemoryRecall:
         mock_episodic = MagicMock()
         mock_episodic.retrieve_episodes.return_value = []
 
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = (0,)
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
-        mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
-
         with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db), \
              patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
              patch('services.innate_skills.memory_skill._store_fok_signal'):
             result = handle_memory('topic', {
@@ -191,13 +178,12 @@ class TestHandleMemoryRecall:
 
 class TestHandleMemoryUpdate:
 
-    def test_handle_memory_update(self):
+    def test_handle_memory_update(self, db):
         """Updates an entry via the skill."""
         mock_ks = MagicMock()
         mock_ks.update.return_value = {'key': 'color', 'value': 'red'}
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'update',
                 'key': 'color',
@@ -217,13 +203,12 @@ class TestHandleMemoryUpdate:
         result = handle_memory('topic', {'action': 'update', 'key': 'color'})
         assert 'Error' in result
 
-    def test_handle_memory_update_not_found(self):
+    def test_handle_memory_update_not_found(self, db):
         """Update on nonexistent entry reports not found."""
         mock_ks = MagicMock()
         mock_ks.update.return_value = None
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'update',
                 'key': 'ghost',
@@ -237,13 +222,12 @@ class TestHandleMemoryUpdate:
 
 class TestHandleMemoryForget:
 
-    def test_handle_memory_forget(self):
+    def test_handle_memory_forget(self, db):
         """Soft-deletes an entry via the skill."""
         mock_ks = MagicMock()
         mock_ks.forget.return_value = True
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'forget',
                 'key': 'old_fact',
@@ -257,13 +241,12 @@ class TestHandleMemoryForget:
         result = handle_memory('topic', {'action': 'forget'})
         assert 'Error' in result
 
-    def test_handle_memory_forget_not_found(self):
+    def test_handle_memory_forget_not_found(self, db):
         """Forget on nonexistent entry reports not found."""
         mock_ks = MagicMock()
         mock_ks.forget.return_value = False
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = handle_memory('topic', {
                 'action': 'forget',
                 'key': 'ghost',

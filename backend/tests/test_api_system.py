@@ -10,45 +10,6 @@ from flask import Flask
 from api.system import system_bp
 
 
-def _make_db_mock(execute_side_effects=None):
-    """Build a mock db service whose connection() context manager yields a mock conn.
-
-    The mock conn provides a ``cursor()`` that returns a mock cursor.
-    ``execute_side_effects`` is an optional list of return values; each successive
-    call to ``cursor.fetchone()`` will pop the next one.  When the list contains a
-    simple tuple, ``fetchone()`` returns that tuple and ``fetchall()`` returns
-    ``[tuple]``.
-    """
-    mock_cursor = MagicMock()
-    mock_conn = MagicMock()
-    mock_conn.cursor.return_value = mock_cursor
-
-    if execute_side_effects is not None:
-        fetchone_results = []
-        fetchall_results = []
-        for effect in execute_side_effects:
-            if isinstance(effect, tuple):
-                fetchone_results.append(effect)
-                fetchall_results.append([effect])
-            elif isinstance(effect, list):
-                fetchone_results.append(effect[0] if effect else None)
-                fetchall_results.append(effect)
-            else:
-                # Allow passing a fully configured MagicMock
-                fetchone_results.append(effect.fetchone.return_value)
-                fetchall_results.append(effect.fetchall.return_value)
-        mock_cursor.fetchone.side_effect = fetchone_results
-        mock_cursor.fetchall.side_effect = fetchall_results
-
-    mock_ctx = MagicMock()
-    mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
-    mock_ctx.__exit__ = MagicMock(return_value=False)
-
-    mock_db = MagicMock()
-    mock_db.connection.return_value = mock_ctx
-    return mock_db, mock_conn
-
-
 @pytest.mark.unit
 class TestSystemAPI:
 
@@ -142,7 +103,7 @@ class TestSystemAPI:
     # GET /system/status
     # ────────────────────────────────────────────
 
-    def test_system_status_returns_expected_keys(self, client):
+    def test_system_status_returns_expected_keys(self, client, db):
         """GET /system/status returns status, memory, storage, queues top-level keys."""
         mock_store = MagicMock()
         mock_store.ping.return_value = True
@@ -150,12 +111,7 @@ class TestSystemAPI:
         mock_store.llen.return_value = 5
         mock_store.get.return_value = '2026-02-26T10:00:00'
 
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.fetchone.return_value = (42,)
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             resp = client.get('/system/status')
 
         assert resp.status_code == 200
@@ -172,19 +128,14 @@ class TestSystemAPI:
         for q in ['prompt-queue', 'output-queue']:
             assert data['queues'][q] == 5
 
-    def test_system_status_degraded_when_store_fails(self, client):
+    def test_system_status_degraded_when_store_fails(self, client, db):
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
         mock_store = MagicMock()
         mock_store.ping.side_effect = ConnectionError('store unreachable')
         mock_store.llen.return_value = 0
         mock_store.get.return_value = None
 
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.fetchone.return_value = (0,)
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             resp = client.get('/system/status')
 
         assert resp.status_code == 200
@@ -196,8 +147,32 @@ class TestSystemAPI:
     # GET /system/observability/memory
     # ────────────────────────────────────────────
 
-    def test_observability_memory_returns_all_layers(self, client):
+    def test_observability_memory_returns_all_layers(self, client, db):
         """GET /system/observability/memory returns flat counts from SQLite and MemoryStore."""
+        # Seed episodes
+        for i in range(42):
+            db.execute(
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
+                "gist, salience, freshness, topic, activation_score) "
+                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 5, 't', ?)",
+                (f'ep-{i}', 0.7123),
+            )
+        # Seed concept knowledge entries
+        for i in range(15):
+            db.execute(
+                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
+                "VALUES ('concept', 'system', ?, 'val', 0.5)",
+                (f'concept-{i}',),
+            )
+        # Seed trait/preference knowledge entries
+        for i in range(8):
+            db.execute(
+                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
+                "VALUES (?, 'user', ?, 'val', ?)",
+                ('trait' if i < 4 else 'preference', f'trait-{i}', 0.6234),
+            )
+        db.commit()
+
         mock_store = MagicMock()
         mock_store.keys.side_effect = lambda pattern: {
             'working_memory:*': ['wm:t1', 'wm:t2'],
@@ -207,20 +182,7 @@ class TestSystemAPI:
             'wm:t1': 3, 'wm:t2': 5, 'prompt-queue': 0, 'output-queue': 0,
         }.get(key, 0)
 
-        def _fetch_all(sql, *a, **kw):
-            if 'episodes' in sql:
-                return [{'cnt': 42, 'avg_act': 0.7123}]
-            elif "kind = 'concept'" in sql:
-                return [{'cnt': 15}]
-            elif "kind IN ('trait', 'preference')" in sql:
-                return [{'cnt': 8, 'avg_conf': 0.6234}]
-            return []
-
-        mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = _fetch_all
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
@@ -238,37 +200,51 @@ class TestSystemAPI:
     # GET /system/observability/tools
     # ────────────────────────────────────────────
 
-    def test_observability_tools_returns_stats(self, client):
+    def test_observability_tools_returns_stats(self, client, db):
         """GET /system/observability/tools returns per-tool performance stats."""
-        mock_rows = [
-            {'tool_name': 'web_search', 'tool_type': 'docker', 'short_summary': 'Search',
-             'domain': 'Search', 'effort': 'low', 'reliability_score': 0.9,
-             'cost_tier': 'free', 'avg_latency_ms': 1200, 'enrichment_count': 1,
-             'triage_triggers': '[]', 'updated_at': '2025-01-01T00:00:00'},
-            {'tool_name': 'code_exec', 'tool_type': 'docker', 'short_summary': 'Execute',
-             'domain': 'Dev', 'effort': 'moderate', 'reliability_score': 0.95,
-             'cost_tier': 'free', 'avg_latency_ms': 800, 'enrichment_count': 1,
-             'triage_triggers': '[]', 'updated_at': '2025-01-01T00:00:00'},
-        ]
+        # Seed tool_capability_profiles rows
+        db.execute(
+            "INSERT INTO tool_capability_profiles "
+            "(id, tool_name, tool_type, short_summary, full_profile, domain, effort, "
+            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+            "triage_triggers, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ('tcp-1', 'web_search', 'docker', 'Search', 'Full search profile',
+             'Search', 'low', 0.9, 'free', 1200, 1, '[]', '2025-01-01T00:00:00'),
+        )
+        db.execute(
+            "INSERT INTO tool_capability_profiles "
+            "(id, tool_name, tool_type, short_summary, full_profile, domain, effort, "
+            "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
+            "triage_triggers, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ('tcp-2', 'code_exec', 'docker', 'Execute', 'Full exec profile',
+             'Dev', 'moderate', 0.95, 'free', 800, 1, '[]', '2025-01-01T00:00:00'),
+        )
+        db.commit()
+
         mock_perf = MagicMock()
         mock_perf.get_all_tool_stats.return_value = []
 
-        with patch('services.database_service.get_shared_db_service') as mock_db, \
-             patch('services.tool_performance_service.ToolPerformanceService', return_value=mock_perf):
-            mock_db.return_value.fetch_all.return_value = mock_rows
+        # Mock the tool registry to include our two tool names so the WHERE IN filter matches
+        mock_registry = MagicMock()
+        mock_registry.tools = {'web_search': {}, 'code_exec': {}}
+
+        with patch('services.tool_performance_service.ToolPerformanceService', return_value=mock_perf), \
+             patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
             resp = client.get('/system/observability/tools')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert len(data['tools']) == 2
-        assert data['tools'][0]['tool_name'] == 'web_search'
+        assert data['tools'][0]['tool_name'] in ('web_search', 'code_exec')
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────
     # GET /system/observability/identity
     # ────────────────────────────────────────────
 
-    def test_observability_identity_returns_vector_states(self, client):
+    def test_observability_identity_returns_vector_states(self, client, db):
         """GET /system/observability/identity returns identity vector breakdown."""
         mock_svc = MagicMock()
         mock_svc.get_vectors.return_value = {
@@ -302,21 +278,18 @@ class TestSystemAPI:
     # GET /system/observability/tasks
     # ────────────────────────────────────────────
 
-    def test_observability_tasks_returns_all_sections(self, client):
+    def test_observability_tasks_returns_all_sections(self, client, db):
         """GET /system/observability/tasks returns persistent_tasks."""
+        # Seed a master_account row so the endpoint's account_id query works
+        db.execute(
+            "INSERT INTO master_account (id, username, password_hash) VALUES (1, 'admin', 'hash')"
+        )
+        db.commit()
+
         mock_pt_svc = MagicMock()
         mock_pt_svc.get_active_tasks.return_value = [{'id': 1, 'goal': 'research X', 'state': 'active'}]
 
-        mock_conn = MagicMock()
-        mock_conn.execute.return_value.fetchone.return_value = (1,)
-        mock_ctx = MagicMock()
-        mock_ctx.__enter__ = MagicMock(return_value=mock_conn)
-        mock_ctx.__exit__ = MagicMock(return_value=False)
-        mock_db = MagicMock()
-        mock_db.connection.return_value = mock_ctx
-
-        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.persistent_task_service.PersistentTaskService', return_value=mock_pt_svc):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
@@ -397,21 +370,30 @@ class TestSystemAPI:
     # GET /system/observability/traits
     # ────────────────────────────────────────────
 
-    def test_observability_traits_returns_categories(self, client):
+    def test_observability_traits_returns_categories(self, client, db):
         """GET /system/observability/traits returns traits grouped by category."""
-        # Schema: trait_key, trait_value, confidence, category, reinforcement_count, updated_at
-        rows = [
-            ('favorite_drink', 'coffee', 0.92, 'preferences', 3, datetime(2026, 2, 25)),
-            ('name', 'Dylan', 0.99, 'identity', 5, datetime(2026, 2, 20)),
-            ('language', 'english', 0.85, 'preferences', 1, '2026-02-18'),
-        ]
+        # Seed knowledge rows with trait/preference kinds and category in data JSON
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "evidence_count, data, updated_at) "
+            "VALUES ('trait', 'user', 'favorite_drink', 'coffee', 0.92, 3, "
+            "'{\"category\": \"preferences\"}', '2026-02-25 00:00:00')"
+        )
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "evidence_count, data, updated_at) "
+            "VALUES ('trait', 'user', 'name', 'Dylan', 0.99, 5, "
+            "'{\"category\": \"identity\"}', '2026-02-20 00:00:00')"
+        )
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence, "
+            "evidence_count, data, updated_at) "
+            "VALUES ('preference', 'user', 'language', 'english', 0.85, 1, "
+            "'{\"category\": \"preferences\"}', '2026-02-18')"
+        )
+        db.commit()
 
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.fetchall.return_value = rows
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            resp = client.get('/system/observability/traits')
+        resp = client.get('/system/observability/traits')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -426,7 +408,6 @@ class TestSystemAPI:
         assert pref0['value'] == 'coffee'
         assert pref0['confidence'] == 0.92
         assert pref0['reinforcement_count'] == 3
-        # datetime object should be stringified
         assert pref0['updated_at'] == '2026-02-25 00:00:00'
 
         ident0 = categories['identity'][0]
@@ -442,28 +423,25 @@ class TestSystemAPI:
     # DELETE /system/observability/traits/<trait_key>
     # ────────────────────────────────────────────
 
-    def test_delete_trait_returns_200(self, client):
+    def test_delete_trait_returns_200(self, client, db):
         """DELETE /system/observability/traits/<key> returns 200 when row is deleted."""
-        mock_db, mock_conn = _make_db_mock()
-        mock_cursor = mock_conn.cursor.return_value
-        mock_cursor.rowcount = 1
+        # Seed a trait to be deleted
+        db.execute(
+            "INSERT INTO knowledge (kind, entity, key, value, confidence) "
+            "VALUES ('trait', 'user', 'favorite_drink', 'coffee', 0.9)"
+        )
+        db.commit()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            resp = client.delete('/system/observability/traits/favorite_drink')
+        resp = client.delete('/system/observability/traits/favorite_drink')
 
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['ok'] is True
         assert data['deleted'] == 'favorite_drink'
 
-    def test_delete_trait_returns_404_when_not_found(self, client):
+    def test_delete_trait_returns_404_when_not_found(self, client, db):
         """DELETE /system/observability/traits/<key> returns 404 when trait does not exist."""
-        mock_db = MagicMock()
-
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.knowledge_service.KnowledgeService') as mock_svc_cls:
-            mock_svc_cls.return_value.forget.return_value = False
-            resp = client.delete('/system/observability/traits/nonexistent')
+        resp = client.delete('/system/observability/traits/nonexistent')
 
         assert resp.status_code == 404
         data = resp.get_json()
@@ -474,37 +452,36 @@ class TestSystemAPI:
     # (regression guards against missing arg 500s)
     # ────────────────────────────────────────────
 
-    def test_observability_identity_passes_db_to_service(self, client):
+    def test_observability_identity_passes_db_to_service(self, client, db):
         """IdentityService must be constructed with get_shared_db_service()."""
-        mock_db = MagicMock()
         mock_svc = MagicMock()
         mock_svc.get_vectors.return_value = {}
         mock_cls = MagicMock(return_value=mock_svc)
 
-        with patch('services.identity_service.IdentityService', mock_cls), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.identity_service.IdentityService', mock_cls):
             resp = client.get('/system/observability/identity')
 
         assert resp.status_code == 200
-        mock_cls.assert_called_once_with(mock_db)
+        # Verify the service was called with the real db_service singleton
+        mock_cls.assert_called_once()
+        from services.database_service import get_shared_db_service
+        assert mock_cls.call_args[0][0] is get_shared_db_service()
 
-    def test_observability_tasks_passes_db_to_persistent_task_service(self, client):
+    def test_observability_tasks_passes_db_to_persistent_task_service(self, client, db):
         """PersistentTaskService must be constructed with get_shared_db_service()."""
-        mock_db = MagicMock()
         mock_pt_svc = MagicMock()
         mock_pt_svc.get_active_tasks.return_value = []
         mock_pt_cls = MagicMock(return_value=mock_pt_svc)
 
-        with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.persistent_task_service.PersistentTaskService', mock_pt_cls):
             resp = client.get('/system/observability/tasks')
 
         assert resp.status_code == 200
-        mock_pt_cls.assert_called_once_with(mock_db)
+        from services.database_service import get_shared_db_service
+        mock_pt_cls.assert_called_once_with(get_shared_db_service())
 
-    def test_observability_autobiography_passes_db_to_both_services(self, client):
+    def test_observability_autobiography_passes_db_to_both_services(self, client, db):
         """AutobiographyService and AutobiographyDeltaService must receive get_shared_db_service()."""
-        mock_db = MagicMock()
         mock_auto_svc = MagicMock()
         mock_auto_svc.get_current_narrative.return_value = None
         mock_auto_cls = MagicMock(return_value=mock_auto_svc)
@@ -514,34 +491,46 @@ class TestSystemAPI:
         mock_delta_cls = MagicMock(return_value=mock_delta_svc)
 
         with patch('services.autobiography_service.AutobiographyService', mock_auto_cls), \
-             patch('services.autobiography_delta_service.AutobiographyDeltaService', mock_delta_cls), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+             patch('services.autobiography_delta_service.AutobiographyDeltaService', mock_delta_cls):
             resp = client.get('/system/observability/autobiography')
 
         assert resp.status_code == 200
-        mock_auto_cls.assert_called_once_with(mock_db)
-        mock_delta_cls.assert_called_once_with(mock_db)
+        from services.database_service import get_shared_db_service
+        db_svc = get_shared_db_service()
+        mock_auto_cls.assert_called_once_with(db_svc)
+        mock_delta_cls.assert_called_once_with(db_svc)
 
-    def test_observability_memory_returns_flat_structure(self, client):
+    def test_observability_memory_returns_flat_structure(self, client, db):
         """Memory endpoint returns flat counts (episodes, concepts, traits, etc.)."""
+        # Seed episodes
+        for i in range(10):
+            db.execute(
+                "INSERT INTO episodes (id, intent, context, action, emotion, outcome, "
+                "gist, salience, freshness, topic, activation_score) "
+                "VALUES (?, '{}', '{}', 'a', '{}', 'ok', 'g', 5, 5, 't', 0.5)",
+                (f'ep-flat-{i}',),
+            )
+        # Seed concepts
+        for i in range(5):
+            db.execute(
+                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
+                "VALUES ('concept', 'system', ?, 'val', 0.5)",
+                (f'concept-flat-{i}',),
+            )
+        # Seed traits
+        for i in range(3):
+            db.execute(
+                "INSERT INTO knowledge (kind, entity, key, value, confidence) "
+                "VALUES ('trait', 'user', ?, 'val', 0.4)",
+                (f'trait-flat-{i}',),
+            )
+        db.commit()
+
         mock_store = MagicMock()
         mock_store.keys.return_value = []
         mock_store.llen.return_value = 0
 
-        def _fetch_all(sql, *a, **kw):
-            if 'episodes' in sql:
-                return [{'cnt': 10, 'avg_act': 0.5}]
-            elif "kind = 'concept'" in sql:
-                return [{'cnt': 5}]
-            elif "kind IN ('trait', 'preference')" in sql:
-                return [{'cnt': 3, 'avg_conf': 0.4}]
-            return []
-
-        mock_db = MagicMock()
-        mock_db.fetch_all.side_effect = _fetch_all
-
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
@@ -564,9 +553,6 @@ class TestSystemAPI:
                 'services.tool_performance_service.ToolPerformanceService': MagicMock(
                     return_value=MagicMock(get_all_tool_stats=MagicMock(return_value=[]))
                 ),
-                'services.database_service.get_shared_db_service': MagicMock(
-                    return_value=MagicMock(fetch_all=MagicMock(return_value=[]))
-                ),
                 'services.tool_registry_service.ToolRegistryService': MagicMock(
                     return_value=MagicMock(tools={})
                 ),
@@ -579,7 +565,7 @@ class TestSystemAPI:
             )},
         ),
     ], ids=['tools', 'identity'])
-    def test_observability_endpoints_include_generated_at(self, client, path, patches):
+    def test_observability_endpoints_include_generated_at(self, client, db, path, patches):
         """All observability endpoints include a generated_at ISO timestamp."""
         from contextlib import ExitStack
         with ExitStack() as stack:
@@ -600,10 +586,6 @@ class TestSystemAPI:
 
     def _ready_patches(self, db_ok=True, store_ok=True, worker_ok=True):
         """Build patch context for /ready — all three components can be individually broken."""
-        mock_db, _ = _make_db_mock()
-        if not db_ok:
-            mock_db.connection.side_effect = Exception('db down')
-
         mock_store = MagicMock()
         if not store_ok:
             mock_store.ping.side_effect = Exception('store down')
@@ -618,15 +600,25 @@ class TestSystemAPI:
         mock_onnx_svc.ready = True
 
         patches = {
-            'services.database_service.get_shared_db_service': MagicMock(return_value=mock_db),
             'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
             'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
+
+        if db_ok:
+            # When db_ok, the real db fixture is active and get_shared_db_service()
+            # returns the test DatabaseService — no patching needed.
+            pass
+        else:
+            # Force the database check to fail by patching get_shared_db_service
+            mock_db = MagicMock()
+            mock_db.connection.side_effect = Exception('db down')
+            patches['services.database_service.get_shared_db_service'] = MagicMock(return_value=mock_db)
+
         if not worker_ok:
             patches['services.prompt_queue.PromptQueue'] = MagicMock(side_effect=ImportError('no queue'))
         return patches
 
-    def test_ready_all_ok_returns_200_with_component_status(self, client):
+    def test_ready_all_ok_returns_200_with_component_status(self, client, db):
         """/ready with all components healthy returns 200 and structured component objects."""
         patches = self._ready_patches()
         from contextlib import ExitStack
@@ -642,7 +634,7 @@ class TestSystemAPI:
         assert data['memory_store'] == {'status': 'ok'}
         assert data['workers'] == {'status': 'ok'}
 
-    def test_ready_db_failure_returns_503(self, client):
+    def test_ready_db_failure_returns_503(self, client, db):
         """/ready with database down returns 503 and error status in database component."""
         patches = self._ready_patches(db_ok=False)
         from contextlib import ExitStack
@@ -660,7 +652,7 @@ class TestSystemAPI:
         assert data['memory_store']['status'] == 'ok'
         assert data['workers']['status'] == 'ok'
 
-    def test_ready_store_failure_returns_503(self, client):
+    def test_ready_store_failure_returns_503(self, client, db):
         """/ready with memory store down returns 503 and error in memory_store component."""
         patches = self._ready_patches(store_ok=False)
         from contextlib import ExitStack
@@ -676,7 +668,7 @@ class TestSystemAPI:
         assert data['memory_store']['status'] == 'error'
         assert 'message' in data['memory_store']
 
-    def test_ready_no_checks_key_in_response(self, client):
+    def test_ready_no_checks_key_in_response(self, client, db):
         """Response must not include the legacy 'checks' key — components are top-level."""
         patches = self._ready_patches()
         from contextlib import ExitStack

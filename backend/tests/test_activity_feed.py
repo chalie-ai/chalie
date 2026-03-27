@@ -71,12 +71,11 @@ class TestInteractionLogServiceConstructor:
         svc = InteractionLogService(db)
         assert svc.db_service is db
 
-    def test_uses_shared_db_when_no_arg(self):
+    def test_uses_shared_db_when_no_arg(self, db):
         from services.interaction_log_service import InteractionLogService
-        mock_db = MagicMock()
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db):
-            svc = InteractionLogService()
-        assert svc.db_service is mock_db
+        from services.database_service import get_shared_db_service
+        svc = InteractionLogService()
+        assert svc.db_service is get_shared_db_service()
 
 
 # ── get_activity_feed ─────────────────────────────────────────────────────────

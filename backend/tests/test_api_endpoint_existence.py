@@ -1,7 +1,7 @@
 """
 API endpoint existence tests.
 
-Absorbs nightly scenarios 070, 074, 075, 100, 105 — those scenarios validated
+Absorbs nightly scenarios 070, 074, 075 — those scenarios validated
 endpoint availability against a live running server.  Route-registration tests
 catch the same regressions on every commit without requiring a running instance.
 """
@@ -21,20 +21,18 @@ class TestAPIEndpointExistence:
     """
 
     @pytest.fixture
-    def registered_routes(self):
-        """Build the Flask app and return a mapping of route → allowed methods.
+    def registered_routes(self, db):
+        """Build the Flask app and return a mapping of route -> allowed methods.
 
-        No real DB or MemoryStore connections are made — both are stubbed out
-        so that blueprint registration (the only thing under test here) runs
-        without infrastructure dependencies.
+        The ``db`` fixture patches ``get_shared_db_service`` at the module level,
+        so blueprint registration runs without infrastructure dependencies.  Only
+        MemoryStore and the dashboard gateway still need stubs.
         """
         from api import create_app
 
-        mock_db = MagicMock()
         mock_store = MagicMock()
 
-        with patch('services.database_service.get_shared_db_service', return_value=mock_db), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
              patch('api._init_dashboard_gateway'):
             app = create_app()
             return {rule.rule: rule.methods for rule in app.url_map.iter_rules()}
@@ -54,13 +52,9 @@ class TestAPIEndpointExistence:
 
     def test_system_status_response_structure(self, authed_client):
         """Absorbs scenario 070 (response-structure half): endpoint returns JSON with a 'status' key."""
-        client, mock_db, mock_store = authed_client
+        client, _db, mock_store = authed_client
 
-        # The endpoint may call DB and MemoryStore; return safe defaults.
-        mock_db._test_cursor.fetchone.return_value = None
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_session_result.fetchone.return_value = None
-        mock_db._test_session_result.fetchall.return_value = []
+        # MemoryStore calls still need safe defaults
         mock_store.llen.return_value = 0
         mock_store.get.return_value = None
 
@@ -91,10 +85,7 @@ class TestAPIEndpointExistence:
 
     def test_observability_tasks_endpoint_reachable(self, authed_client):
         """Absorbs scenario 074 (reachability): endpoint must not 404."""
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_session_result.fetchall.return_value = []
+        client, _db, _mock_store = authed_client
 
         response = client.get('/system/observability/tasks')
 
@@ -117,14 +108,10 @@ class TestAPIEndpointExistence:
 
     def test_observability_autobiography_endpoint_reachable(self, authed_client):
         """Absorbs scenario 075 (reachability): endpoint must not 404."""
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchone.return_value = None
-        mock_db._test_session_result.fetchone.return_value = None
+        client, _db, _mock_store = authed_client
 
         response = client.get('/system/observability/autobiography')
 
         assert response.status_code != 404, (
             "/system/observability/autobiography returned 404 — blueprint not registered"
         )
-

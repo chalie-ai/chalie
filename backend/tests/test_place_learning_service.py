@@ -1,23 +1,16 @@
 """Unit tests for PlaceLearningService."""
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def mock_db():
-    """Create a mock DatabaseService."""
-    db = MagicMock()
-    db.execute = MagicMock()
-    db.fetch_all = MagicMock(return_value=[])
-    return db
-
-
-@pytest.fixture
-def place_service(mock_db):
+def place_service(db):
+    """PlaceLearningService backed by the real test database."""
+    from services.database_service import get_shared_db_service
     from services.place_learning_service import PlaceLearningService
-    return PlaceLearningService(mock_db)
+    return PlaceLearningService(get_shared_db_service())
 
 
 def _make_ctx(device_class="desktop", hour="10", lat=35.90, lon=14.50, connection="4g"):
@@ -34,19 +27,18 @@ def _make_ctx(device_class="desktop", hour="10", lat=35.90, lon=14.50, connectio
 # ── Cold Start ───────────────────────────────────────────────────
 
 class TestColdStart:
-    def test_lookup_below_threshold_returns_none(self, place_service, mock_db):
-        """<20 observations → returns None (falls back to heuristics)."""
-        mock_db.fetch_all.return_value = []
+    def test_lookup_below_threshold_returns_none(self, place_service, db):
+        """<20 observations -> returns None (falls back to heuristics)."""
         ctx = _make_ctx()
         assert place_service.lookup(ctx) is None
 
     def test_lookup_no_device_returns_none(self, place_service):
-        """Missing device info → can't build fingerprint → None."""
+        """Missing device info -> can't build fingerprint -> None."""
         ctx = {"local_time": "2026-02-25T10:00:00.000Z"}
         assert place_service.lookup(ctx) is None
 
     def test_lookup_no_time_returns_none(self, place_service):
-        """Missing time → can't build fingerprint → None."""
+        """Missing time -> can't build fingerprint -> None."""
         ctx = {"device": {"class": "desktop"}}
         assert place_service.lookup(ctx) is None
 
@@ -54,22 +46,49 @@ class TestColdStart:
 # ── Learned Patterns ─────────────────────────────────────────────
 
 class TestLearnedPatterns:
-    def test_lookup_above_threshold_returns_label(self, place_service, mock_db):
-        """>=20 observations → returns majority label."""
-        mock_db.fetch_all.return_value = [{"place_label": "work", "count": 25}]
+    def test_lookup_above_threshold_returns_label(self, place_service, db):
+        """>=20 observations -> returns majority label."""
+        # Build the fingerprint to know what hash to seed
         ctx = _make_ctx()
+        fp_hash = place_service._build_fingerprint(ctx)
+        # Seed a fingerprint row with count >= 20
+        db.execute(
+            "INSERT INTO place_fingerprints "
+            "(fingerprint_hash, device_class, hour_bucket, place_label, count) "
+            "VALUES (?, 'desktop', 3, 'work', 25)",
+            (fp_hash,),
+        )
+        db.commit()
+
         result = place_service.lookup(ctx)
         assert result == "work"
 
-    def test_record_calls_execute(self, place_service, mock_db):
-        """Record should call db.execute with upsert SQL."""
+    def test_record_inserts_fingerprint(self, place_service, db):
+        """Record should insert a fingerprint row into the database."""
         ctx = _make_ctx()
         place_service.record(ctx, "work")
-        mock_db.execute.assert_called_once()
-        call_args = mock_db.execute.call_args
-        sql = call_args[0][0]
-        assert "INSERT INTO place_fingerprints" in sql
-        assert "ON CONFLICT" in sql
+
+        fp_hash = place_service._build_fingerprint(ctx)
+        row = db.execute(
+            "SELECT place_label, count FROM place_fingerprints WHERE fingerprint_hash = ?",
+            (fp_hash,),
+        ).fetchone()
+        assert row is not None
+        assert row["place_label"] == "work"
+        assert row["count"] == 1
+
+    def test_record_upserts_on_conflict(self, place_service, db):
+        """Second record for the same fingerprint should increment count."""
+        ctx = _make_ctx()
+        place_service.record(ctx, "work")
+        place_service.record(ctx, "work")
+
+        fp_hash = place_service._build_fingerprint(ctx)
+        row = db.execute(
+            "SELECT count FROM place_fingerprints WHERE fingerprint_hash = ?",
+            (fp_hash,),
+        ).fetchone()
+        assert row["count"] == 2
 
 
 # ── Geohash Privacy ──────────────────────────────────────────────
@@ -86,7 +105,7 @@ class TestGeohashPrivacy:
         assert len(gh) == 8
 
     def test_no_location_returns_none(self, place_service):
-        """No location → geohash returns None."""
+        """No location -> geohash returns None."""
         ctx = {"device": {"class": "desktop"}, "local_time": "2026-02-25T10:00:00.000Z"}
         assert place_service._geohash(ctx) is None
 
@@ -107,7 +126,7 @@ class TestGeohashPrivacy:
 
 class TestFingerprintConsistency:
     def test_same_context_same_fingerprint(self, place_service):
-        """Same context → same fingerprint hash."""
+        """Same context -> same fingerprint hash."""
         ctx = _make_ctx()
         fp1 = place_service._build_fingerprint(ctx)
         fp2 = place_service._build_fingerprint(ctx)
@@ -115,13 +134,13 @@ class TestFingerprintConsistency:
         assert fp1 is not None
 
     def test_different_device_different_fingerprint(self, place_service):
-        """Different device → different fingerprint."""
+        """Different device -> different fingerprint."""
         ctx1 = _make_ctx(device_class="desktop")
         ctx2 = _make_ctx(device_class="phone")
         assert place_service._build_fingerprint(ctx1) != place_service._build_fingerprint(ctx2)
 
     def test_different_hour_bucket_different_fingerprint(self, place_service):
-        """Different 3-hour bucket → different fingerprint."""
+        """Different 3-hour bucket -> different fingerprint."""
         ctx1 = _make_ctx(hour="09")  # bucket 3
         ctx2 = _make_ctx(hour="15")  # bucket 5
         assert place_service._build_fingerprint(ctx1) != place_service._build_fingerprint(ctx2)
@@ -137,20 +156,28 @@ class TestFingerprintConsistency:
 # ── Graceful Degradation ─────────────────────────────────────────
 
 class TestGracefulDegradation:
-    def test_record_no_device_noop(self, place_service, mock_db):
-        """Missing device → record does nothing."""
+    def test_record_no_device_noop(self, place_service, db):
+        """Missing device -> record does nothing."""
         ctx = {"local_time": "2026-02-25T10:00:00.000Z"}
         place_service.record(ctx, "work")
-        mock_db.execute.assert_not_called()
+        row = db.execute("SELECT count(*) as cnt FROM place_fingerprints").fetchone()
+        assert row["cnt"] == 0
 
-    def test_record_db_failure_no_crash(self, place_service, mock_db):
-        """DB error → logged, no crash."""
-        mock_db.execute.side_effect = Exception("DB down")
-        ctx = _make_ctx()
-        place_service.record(ctx, "work")  # Should not raise
+    def test_record_db_failure_no_crash(self, db):
+        """DB error -> logged, no crash."""
+        from services.place_learning_service import PlaceLearningService
+        from services.database_service import get_shared_db_service
+        svc = PlaceLearningService(get_shared_db_service())
+        # Break the execute method to simulate DB failure
+        with patch.object(svc.db, 'execute', side_effect=Exception("DB down")):
+            ctx = _make_ctx()
+            svc.record(ctx, "work")  # Should not raise
 
-    def test_lookup_db_failure_returns_none(self, place_service, mock_db):
-        """DB error → returns None."""
-        mock_db.fetch_all.side_effect = Exception("DB down")
-        ctx = _make_ctx()
-        assert place_service.lookup(ctx) is None
+    def test_lookup_db_failure_returns_none(self, db):
+        """DB error -> returns None."""
+        from services.place_learning_service import PlaceLearningService
+        from services.database_service import get_shared_db_service
+        svc = PlaceLearningService(get_shared_db_service())
+        with patch.object(svc.db, 'fetch_all', side_effect=Exception("DB down")):
+            ctx = _make_ctx()
+            assert svc.lookup(ctx) is None

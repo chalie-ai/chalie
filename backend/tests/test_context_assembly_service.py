@@ -149,7 +149,7 @@ class TestContextAssemblyService:
 
     # ── _get_concepts ─────────────────────────────────────────────────
 
-    def test_get_concepts_returns_formatted_string_when_concepts_exist(self):
+    def test_get_concepts_returns_formatted_string_when_concepts_exist(self, db):
         """_get_concepts() returns '## Relevant Concepts' section when concepts are available."""
         svc = ContextAssemblyService({})
         mock_concepts = [
@@ -160,8 +160,7 @@ class TestContextAssemblyService:
         mock_ks = MagicMock()
         mock_ks.recall.return_value = mock_concepts
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_concepts('What is Python?', 'programming')
 
         assert '## Relevant Concepts' in result
@@ -172,19 +171,18 @@ class TestContextAssemblyService:
         # Concept without definition should be excluded
         assert 'NoDef' not in result
 
-    def test_get_concepts_returns_empty_when_no_concepts(self):
+    def test_get_concepts_returns_empty_when_no_concepts(self, db):
         """_get_concepts() returns '' when retrieval returns empty list."""
         svc = ContextAssemblyService({})
         mock_ks = MagicMock()
         mock_ks.recall.return_value = []
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
-    def test_get_concepts_returns_empty_when_all_filtered(self):
+    def test_get_concepts_returns_empty_when_all_filtered(self, db):
         """_get_concepts() returns '' when all concepts fail the confidence/definition gate."""
         svc = ContextAssemblyService({})
         mock_concepts = [
@@ -194,18 +192,16 @@ class TestContextAssemblyService:
         mock_ks = MagicMock()
         mock_ks.recall.return_value = mock_concepts
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
 
-    def test_get_concepts_returns_empty_on_service_failure(self):
+    def test_get_concepts_returns_empty_on_service_failure(self, db):
         """_get_concepts() gracefully returns '' when KnowledgeService fails."""
         svc = ContextAssemblyService({})
 
-        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('DB down')), \
-             patch('services.database_service.get_shared_db_service', return_value=MagicMock()):
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('DB down')):
             result = svc._get_concepts('hello', 'general')
 
         assert result == ''
@@ -244,7 +240,7 @@ class TestContextAssemblyService:
 
         assert 'working_memory' in result
 
-    def test_failed_sections_populated_on_error(self):
+    def test_failed_sections_populated_on_error(self, db):
         """When a section fails, TopicContext records the failure."""
         from services.topic_context import TopicContext
 
@@ -263,7 +259,6 @@ class TestContextAssemblyService:
 
         # Test the private method directly to verify record_failure
         with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep fail')), \
-             patch('services.database_service.get_shared_db_service'), \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
             svc._get_episodes('prompt', 'topic', context=ctx)
 
@@ -271,7 +266,7 @@ class TestContextAssemblyService:
         assert ctx.failed_sections[0][0] == 'episodes'
         assert 'ep fail' in ctx.failed_sections[0][1]
 
-    def test_multiple_failures_tracked(self):
+    def test_multiple_failures_tracked(self, db):
         """Multiple section failures all appear in TopicContext."""
         from services.topic_context import TopicContext
 
@@ -281,12 +276,10 @@ class TestContextAssemblyService:
 
         # Force two different sections to fail
         with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep boom')), \
-             patch('services.database_service.get_shared_db_service'), \
              patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
             svc._get_episodes('p', 't', context=ctx)
 
-        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('ks boom')), \
-             patch('services.database_service.get_shared_db_service'):
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('ks boom')):
             svc._get_concepts('p', 't', context=ctx)
 
         assert len(ctx.failed_sections) == 2
@@ -357,104 +350,88 @@ class TestGetProceduralHints:
     def _make_skill(self, name, success_rate, attempts):
         return {'name': name, 'success_rate': success_rate, 'attempts': attempts}
 
-    def test_returns_empty_when_no_ranked_skills(self):
+    def test_returns_empty_when_no_ranked_skills(self, db):
         svc = self._make_service()
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = []
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('research')
 
         assert result == ""
 
-    def test_excludes_skills_below_8_attempts(self):
+    def test_excludes_skills_below_8_attempts(self, db):
         svc = self._make_service()
         skills = [self._make_skill('web_search', 0.90, 5)]  # < 8 attempts
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = skills
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('research')
 
         assert result == ""
 
-    def test_includes_skills_with_exactly_8_attempts(self):
+    def test_includes_skills_with_exactly_8_attempts(self, db):
         svc = self._make_service()
         skills = [self._make_skill('web_search', 0.90, 8)]
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = skills
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('research')
 
         assert 'web_search' in result
 
-    def test_reliable_label_above_85_percent(self):
+    def test_reliable_label_above_85_percent(self, db):
         svc = self._make_service()
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = [self._make_skill('recall', 0.92, 20)]
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')
 
         assert 'reliable' in result
 
-    def test_moderate_label_between_70_and_85_percent(self):
+    def test_moderate_label_between_70_and_85_percent(self, db):
         svc = self._make_service()
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = [self._make_skill('calendar_check', 0.75, 15)]
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')
 
         assert 'moderate' in result
 
-    def test_less_consistent_label_below_70_percent(self):
+    def test_less_consistent_label_below_70_percent(self, db):
         """Soft language avoids discouraging use of borderline skills."""
         svc = self._make_service()
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = [self._make_skill('email_search', 0.55, 12)]
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')
 
         assert 'less consistent' in result
         assert 'unreliable' not in result
 
-    def test_limits_to_top_3_skills(self):
+    def test_limits_to_top_3_skills(self, db):
         svc = self._make_service()
         skills = [self._make_skill(f'skill_{i}', 0.90, 10) for i in range(6)]
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = skills
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')
 
         skill_lines = [l for l in result.split('\n') if l.startswith('- ')]
         assert len(skill_lines) == 3
 
-    def test_includes_percentage_and_attempt_count(self):
+    def test_includes_percentage_and_attempt_count(self, db):
         svc = self._make_service()
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = [self._make_skill('web_search', 0.88, 25)]
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')
 
         assert '88%' in result
@@ -467,14 +444,12 @@ class TestGetProceduralHints:
 
         assert result == ""
 
-    def test_header_present_when_skills_surfaced(self):
+    def test_header_present_when_skills_surfaced(self, db):
         svc = self._make_service()
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = [self._make_skill('recall', 0.90, 10)]
-        mock_db = MagicMock()
 
-        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks), \
-             patch('services.database_service.get_shared_db_service', return_value=mock_db):
+        with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')
 
         assert '## Learned Action Reliability' in result

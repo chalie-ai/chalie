@@ -125,6 +125,19 @@ DROP TABLE IF EXISTS user_tool_preferences;
 ALTER TABLE user_tool_preferences_new RENAME TO user_tool_preferences;
 
 -- ── temporal_aggregate ───────────────────────────────────────────────────────
+-- On fresh installs schema.sql no longer creates temporal_aggregate (dropped by 020).
+-- Create a stub so the INSERT copies zero rows and the migration is a no-op.
+CREATE TABLE IF NOT EXISTS temporal_aggregate (
+    observation_type TEXT NOT NULL,
+    observed_value TEXT NOT NULL,
+    day_of_week INTEGER NOT NULL,
+    hour_bucket INTEGER NOT NULL,
+    device_class TEXT NOT NULL DEFAULT '',
+    count INTEGER DEFAULT 0,
+    last_seen TEXT,
+    PRIMARY KEY(observation_type, observed_value, day_of_week, hour_bucket, device_class)
+);
+
 CREATE TABLE IF NOT EXISTS temporal_aggregate_new (
     observation_type TEXT NOT NULL,
     observed_value TEXT NOT NULL,
