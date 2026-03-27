@@ -29,7 +29,6 @@ import datetime as _dt_module
 import logging
 import pathlib
 from datetime import timedelta
-from typing import Any
 
 import yaml
 
