@@ -3259,6 +3259,7 @@ async function loadCapabilities() {
     el.innerHTML = '<div class="loading">Loading capabilities...</div>';
     try {
         const res = await apiFetch('/api/capabilities');
+        if (res.status === 401) { window.location.replace('/login/?next=/brain/'); return; }
         if (!res.ok) throw new Error('Failed to load');
         const data = await res.json();
         capabilitiesData = data.capabilities || [];
@@ -3391,6 +3392,7 @@ document.getElementById('capSetupForm').addEventListener('submit', async (e) => 
             method: 'POST',
             body: JSON.stringify(body),
         });
+        if (res.status === 401) { window.location.replace('/login/?next=/brain/'); return; }
         const data = await res.json();
         if (res.ok) {
             document.getElementById('capSetupOverlay').classList.add('hidden');
