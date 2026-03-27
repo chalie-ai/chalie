@@ -300,10 +300,11 @@ class TestAmbientWrapper:
 
     def test_holiday_emits_signal_when_approaching(self):
         """A holiday within 3 days emits a holiday_approaching signal."""
-        from datetime import date, timedelta
+        from datetime import timedelta
+        from services.time_utils import utc_now
         wrapper = self._make_wrapper()
 
-        today = date.today()
+        today = utc_now().date()
         tomorrow = today + timedelta(days=1)
 
         holidays_response = [
@@ -333,10 +334,11 @@ class TestAmbientWrapper:
 
     def test_holiday_no_signal_when_far_away(self):
         """A holiday more than 3 days away should not trigger a signal."""
-        from datetime import date, timedelta
+        from datetime import timedelta
+        from services.time_utils import utc_now
         wrapper = self._make_wrapper()
 
-        far_date = date.today() + timedelta(days=10)
+        far_date = utc_now().date() + timedelta(days=10)
         holidays_response = [
             {
                 "date": far_date.isoformat(),
