@@ -1,0 +1,266 @@
+"""
+Capability base — abstract base class for all capability plugins.
+
+Every capability plugin must subclass :class:`AbstractCapability` and implement
+all 7 abstract methods.  The concrete helper methods handle credential
+encryption / storage so individual capabilities don't need to deal with
+cryptographic details.
+
+Credential storage
+------------------
+Credentials are stored in the ``tool_configs`` table via
+:class:`~services.tool_config_service.ToolConfigService`.  Values are encrypted
+with `Fernet <https://cryptography.io/en/latest/fernet/>`_ symmetric encryption
+before being written; the Fernet key is derived from the application-wide
+encryption key returned by
+:func:`~services.encryption_key_service.get_encryption_key`.
+
+Lazy imports
+------------
+All service imports are performed *inside* method bodies rather than at module
+level to prevent circular-import issues during early application boot.
+"""
+
+import base64
+import logging
+from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
+
+
+def _make_fernet():
+    """Build and return a :class:`cryptography.fernet.Fernet` instance.
+
+    The Fernet key is derived by taking the first 32 bytes of the application
+    encryption key (UTF-8 encoded), left-padding with ``b'='`` if shorter than
+    32 bytes, then base64-url-encoding the result to produce the 44-byte key
+    string that Fernet expects.
+
+    Imports are intentionally deferred to avoid circular dependencies during
+    application boot.
+
+    Returns:
+        cryptography.fernet.Fernet: A ready-to-use Fernet cipher instance.
+    """
+    from cryptography.fernet import Fernet
+    from services.encryption_key_service import get_encryption_key
+
+    raw = get_encryption_key().encode()[:32].ljust(32, b"=")
+    fernet_key = base64.urlsafe_b64encode(raw)
+    return Fernet(fernet_key)
+
+
+def _get_tool_config_service():
+    """Return a :class:`~services.tool_config_service.ToolConfigService` instance.
+
+    Uses the shared database service singleton.  Deferred import prevents
+    circular imports during early boot.
+
+    Returns:
+        services.tool_config_service.ToolConfigService: Configured service
+        bound to the shared database connection.
+    """
+    from services.database_service import get_shared_db_service
+    from services.tool_config_service import ToolConfigService
+
+    return ToolConfigService(get_shared_db_service())
+
+
+class AbstractCapability(ABC):
+    """Abstract base class that every capability plugin must subclass.
+
+    Subclasses must implement all 7 abstract methods:
+
+    * :meth:`get_id`
+    * :meth:`get_manifest`
+    * :meth:`configure`
+    * :meth:`connect`
+    * :meth:`disconnect`
+    * :meth:`ingest`
+    * :meth:`get_tools`
+
+    Concrete helper methods for credential management and connection-state
+    tracking are provided by this base class and should not be overridden
+    unless there is a specific need.
+    """
+
+    def __init__(self) -> None:
+        """Initialise base state.
+
+        Sets the internal ``_connected`` flag to ``False``.  Subclasses should
+        call ``super().__init__()`` if they define their own ``__init__``.
+        """
+        self._connected: bool = False
+
+    # ------------------------------------------------------------------
+    # Abstract interface — must be implemented by every subclass
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def get_id(self) -> str:
+        """Return the unique capability identifier (must match ``manifest.yaml``).
+
+        Returns:
+            str: Lowercase, hyphen-separated identifier, e.g. ``"caldav"``.
+        """
+
+    @abstractmethod
+    def get_manifest(self) -> dict:
+        """Return the parsed ``manifest.yaml`` contents as a dict.
+
+        Returns:
+            dict: Full manifest, including at minimum ``id``, ``name``,
+            ``version``, and ``entry_class`` keys.
+        """
+
+    @abstractmethod
+    def configure(self, credentials: dict) -> None:
+        """Accept, validate, and persist credentials for this capability.
+
+        Implementations should call :meth:`store_credential` to persist each
+        field and raise :exc:`ValueError` with a descriptive message if the
+        credentials are rejected (e.g. failed auth test against the remote
+        server).
+
+        Args:
+            credentials: Provider-specific mapping, e.g.
+                ``{"provider": "google", "username": "...", "password": "..."}``.
+
+        Raises:
+            ValueError: If credentials are invalid or the remote server rejects
+                them.
+        """
+
+    @abstractmethod
+    def connect(self) -> bool:
+        """Establish a connection to the capability's data source.
+
+        Should load stored credentials via :meth:`load_credential`, attempt to
+        reach the remote service, update ``self._connected``, and return the
+        result without raising on transient errors.
+
+        Returns:
+            bool: ``True`` if the connection was established successfully,
+            ``False`` otherwise.
+        """
+
+    @abstractmethod
+    def disconnect(self) -> None:
+        """Tear down the active connection and clear any cached state.
+
+        Must set ``self._connected = False``.  Should not raise.
+        """
+
+    @abstractmethod
+    def ingest(self) -> list:
+        """Fetch and return structured data from the capability's data source.
+
+        This method is called periodically by the
+        :class:`~services.capability_scheduler_service.CapabilitySchedulerService`
+        and should be idempotent.
+
+        Returns:
+            list[dict]: A list of structured data dicts whose schema is
+            defined by the concrete capability.
+        """
+
+    @abstractmethod
+    def get_tools(self) -> list:
+        """Return tool definitions for dynamic registration.
+
+        Each entry in the returned list must be a dict with at minimum the
+        keys ``name`` (str), ``handler`` (callable), and ``metadata`` (dict).
+
+        Returns:
+            list[dict]: Tool definitions suitable for passing to
+            :func:`~services.tool_library_service.register_tool`.
+        """
+
+    # ------------------------------------------------------------------
+    # Concrete helpers — credential management & connection state
+    # ------------------------------------------------------------------
+
+    def store_credential(self, key: str, value: str) -> None:
+        """Encrypt *value* with Fernet and persist it in ``tool_configs``.
+
+        The credential is stored under ``tool_name = self.get_id()`` and
+        ``config_key = key``.
+
+        Args:
+            key:   Config key, e.g. ``"caldav:password"``.
+            value: Plaintext credential value to encrypt and store.
+
+        Returns:
+            None
+        """
+        try:
+            fernet = _make_fernet()
+            encrypted = fernet.encrypt(value.encode()).decode()
+            svc = _get_tool_config_service()
+            svc.set_tool_config(self.get_id(), {key: encrypted})
+        except Exception as exc:
+            logger.error(
+                "[%s] store_credential(%r) failed: %s",
+                self.get_id(), key, exc,
+                exc_info=True,
+            )
+            raise
+
+    def load_credential(self, key: str) -> str | None:
+        """Load and decrypt a stored credential.
+
+        Returns ``None`` if the key is absent or decryption fails (e.g. key
+        rotation has invalidated the ciphertext).
+
+        Args:
+            key: Config key, e.g. ``"caldav:password"``.
+
+        Returns:
+            str | None: Decrypted plaintext value, or ``None``.
+        """
+        try:
+            svc = _get_tool_config_service()
+            config = svc.get_tool_config(self.get_id())
+            encrypted = config.get(key)
+            if encrypted is None:
+                return None
+            fernet = _make_fernet()
+            return fernet.decrypt(encrypted.encode()).decode()
+        except Exception as exc:
+            logger.warning(
+                "[%s] load_credential(%r) failed (returning None): %s",
+                self.get_id(), key, exc,
+            )
+            return None
+
+    def delete_credentials(self) -> None:
+        """Remove ALL ``tool_configs`` rows associated with this capability.
+
+        This is equivalent to calling
+        :meth:`~services.tool_config_service.ToolConfigService.delete_tool_config`
+        with ``self.get_id()`` as the tool name.
+
+        Returns:
+            None
+        """
+        try:
+            svc = _get_tool_config_service()
+            svc.delete_tool_config(self.get_id())
+        except Exception as exc:
+            logger.error(
+                "[%s] delete_credentials() failed: %s",
+                self.get_id(), exc,
+                exc_info=True,
+            )
+
+    def is_connected(self) -> bool:
+        """Return the current in-memory connection state.
+
+        This reflects the most recent call to :meth:`connect` or
+        :meth:`disconnect` and is *not* persisted across restarts.
+
+        Returns:
+            bool: ``True`` if the capability currently has an active
+            connection, ``False`` otherwise.
+        """
+        return self._connected
