@@ -2,7 +2,8 @@
 Capability base — abstract base class for all capability plugins.
 
 Every capability plugin must subclass :class:`AbstractCapability` and implement
-all 7 abstract methods.  The concrete helper methods handle credential
+all abstract methods defining the four-phase cognitive pipeline
+(ingest/understand/monitor/act) plus lifecycle methods.  The concrete helper methods handle credential
 encryption / storage so individual capabilities don't need to deal with
 cryptographic details.
 
@@ -22,6 +23,7 @@ level to prevent circular-import issues during early application boot.
 """
 
 import base64
+import hashlib
 import logging
 from abc import ABC, abstractmethod
 
@@ -45,8 +47,8 @@ def _make_fernet():
     from cryptography.fernet import Fernet
     from services.encryption_key_service import get_encryption_key
 
-    raw = get_encryption_key().encode()[:32].ljust(32, b"=")
-    fernet_key = base64.urlsafe_b64encode(raw)
+    key_bytes = hashlib.sha256(get_encryption_key().encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(key_bytes)
     return Fernet(fernet_key)
 
 
@@ -69,15 +71,24 @@ def _get_tool_config_service():
 class AbstractCapability(ABC):
     """Abstract base class that every capability plugin must subclass.
 
-    Subclasses must implement all 7 abstract methods:
+    Subclasses must implement all abstract methods that define the four-phase
+    cognitive pipeline (ingest → understand → monitor → act) plus lifecycle
+    and identity methods:
 
+    **Identity & lifecycle:**
     * :meth:`get_id`
     * :meth:`get_manifest`
     * :meth:`configure`
     * :meth:`connect`
     * :meth:`disconnect`
-    * :meth:`ingest`
-    * :meth:`get_tools`
+    * :meth:`health`
+
+    **Cognitive pipeline:**
+    * :meth:`ingest` — pull raw data from the external source
+    * :meth:`understand` — extract meaning from raw items via LLM or parsing
+    * :meth:`monitor` — detect changes, emit signals (called by scheduler)
+    * :meth:`act` — perform a write action on the external source
+    * :meth:`get_tools` — return tool definitions for dynamic registration
 
     Concrete helper methods for credential management and connection-state
     tracking are provided by this base class and should not be overridden
@@ -163,6 +174,58 @@ class AbstractCapability(ABC):
             list[dict]: A list of structured data dicts whose schema is
             defined by the concrete capability.
         """
+
+    @abstractmethod
+    def understand(self, items: list) -> list:
+        """Extract meaning from raw ingested items.
+
+        Called after :meth:`ingest` with the returned items. Implementations
+        should extract entities, dates, people, commitments, and patterns
+        via LLM prompts or deterministic parsing.
+
+        Args:
+            items: Raw data dicts returned by :meth:`ingest`.
+
+        Returns:
+            list[dict]: Enriched/extracted knowledge dicts ready for storage
+            via KnowledgeService.
+        """
+
+    @abstractmethod
+    def monitor(self) -> None:
+        """Detect changes and emit signals.
+
+        Called periodically by the capability scheduler. Should compare
+        current state with previous state, detect new/changed/deleted items,
+        and emit signals via EventBusService. This is the primary entry point
+        the scheduler calls each cycle.
+        """
+
+    @abstractmethod
+    def act(self, action: str, params: dict) -> dict:
+        """Perform a write action on the external data source.
+
+        Args:
+            action: Action name matching one of the manifest's declared actions,
+                e.g. ``"create_event"``, ``"send_email"``.
+            params: Action-specific parameters.
+
+        Returns:
+            dict: Result of the action, including at minimum a ``success``
+            boolean key.
+        """
+
+    def health(self) -> bool:
+        """Quick connectivity check.
+
+        Default implementation returns the current ``_connected`` state.
+        Subclasses may override to perform an active probe (e.g. a lightweight
+        server request).
+
+        Returns:
+            bool: ``True`` if the capability's data source is reachable.
+        """
+        return self._connected
 
     @abstractmethod
     def get_tools(self) -> list:

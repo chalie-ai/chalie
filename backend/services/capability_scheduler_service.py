@@ -140,11 +140,8 @@ class CapabilitySchedulerService:
             from services.time_utils import utc_now
 
             db = get_shared_db_service()
-            try:
-                svc = ToolConfigService(db)
-                svc.set_tool_config(cap_id, {f"{cap_id}:last_sync_at": utc_now().isoformat()})
-            finally:
-                db.close_pool()
+            svc = ToolConfigService(db)
+            svc.set_tool_config(cap_id, {f"{cap_id}:last_sync_at": utc_now().isoformat()})
         except Exception as exc:
             logger.debug(
                 "[CAPABILITY SCHEDULER] Could not persist last_sync_at for '%s': %s",
@@ -180,6 +177,14 @@ class CapabilitySchedulerService:
             )
             return
 
+        # Try to connect capabilities that have stored credentials
+        for cap_id, cap in all_caps.items():
+            if not cap.is_connected():
+                try:
+                    cap.connect()
+                except Exception:  # noqa: BLE001
+                    pass
+
         connected = {
             cap_id: cap
             for cap_id, cap in all_caps.items()
@@ -207,14 +212,14 @@ class CapabilitySchedulerService:
                 continue
 
             try:
-                logger.debug("[CAPABILITY SCHEDULER] Ingesting '%s' …", cap_id)
-                cap.ingest()
+                logger.debug("[CAPABILITY SCHEDULER] Monitoring '%s' …", cap_id)
+                cap.monitor()
                 self._record_success(cap_id)
                 self._store_last_sync(cap_id)
-                logger.info("[CAPABILITY SCHEDULER] Ingest complete for '%s'", cap_id)
+                logger.info("[CAPABILITY SCHEDULER] Monitor complete for '%s'", cap_id)
             except Exception as exc:
                 logger.error(
-                    "[CAPABILITY SCHEDULER] Ingest failed for '%s': %s",
+                    "[CAPABILITY SCHEDULER] Monitor failed for '%s': %s",
                     cap_id,
                     exc,
                     exc_info=True,

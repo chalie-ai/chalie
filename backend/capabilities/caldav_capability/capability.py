@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import datetime as _dt_module
 import logging
-import os
 import pathlib
 from datetime import timedelta
 from typing import Any
@@ -76,6 +75,7 @@ _MANIFEST_PATH = pathlib.Path(__file__).parent / "manifest.yaml"
 _KEY_PROVIDER = "caldav:provider"
 _KEY_USERNAME = "caldav:username"
 _KEY_PASSWORD = "caldav:password"
+_KEY_SERVER_URL = "caldav:server_url"
 
 # CalDAV connection timeout in seconds
 _CONNECT_TIMEOUT = 10
@@ -122,6 +122,9 @@ def _make_date_utc(d: object) -> "_dt_module.datetime":
         become midnight UTC.
     """
     if isinstance(d, _dt_module.datetime):
+        # If timezone-aware but not UTC, convert to UTC explicitly
+        if d.tzinfo is not None:
+            return d.astimezone(_dt_module.timezone.utc)
         return parse_utc(d)
     if isinstance(d, _dt_module.date):
         return parse_utc(_dt_module.datetime(d.year, d.month, d.day, 0, 0, 0))
@@ -164,6 +167,9 @@ def _humanize_rrule(rrule_str: str, dtstart: "_dt_module.datetime", summary: str
                 parts[k.strip().upper()] = v.strip()
 
         freq = _FREQ_MAP.get(parts.get('FREQ', ''), parts.get('FREQ', 'Recurring'))
+        interval = parts.get('INTERVAL', '1')
+        if interval not in ('', '1'):
+            freq = f"Every {interval} {freq.lower()}s" if freq != 'Recurring' else freq
         # strftime gives zero-padded hours; lstrip removes leading zero
         time_str = dtstart.strftime('%I:%M %p').lstrip('0') or '12:00 AM'
 
@@ -197,6 +203,7 @@ class CaldavCapability(AbstractCapability):
     def __init__(self) -> None:
         """Initialise the capability, setting connection state to ``False``."""
         super().__init__()
+        self._manifest_cache: dict | None = None
 
     # ------------------------------------------------------------------
     # Identity
@@ -211,10 +218,7 @@ class CaldavCapability(AbstractCapability):
         return "caldav"
 
     def get_manifest(self) -> dict:
-        """Load and return the parsed ``manifest.yaml`` for this capability.
-
-        The manifest is read from disk on every call so that changes take effect
-        without requiring a process restart.
+        """Return the parsed ``manifest.yaml`` for this capability (cached).
 
         Returns:
             dict: Parsed YAML contents of ``manifest.yaml``, including at
@@ -225,8 +229,10 @@ class CaldavCapability(AbstractCapability):
                 expected path alongside this module.
             yaml.YAMLError: If the manifest is not valid YAML.
         """
-        with open(_MANIFEST_PATH, "r", encoding="utf-8") as fh:
-            return yaml.safe_load(fh)
+        if self._manifest_cache is None:
+            with open(_MANIFEST_PATH, "r", encoding="utf-8") as fh:
+                self._manifest_cache = yaml.safe_load(fh)
+        return self._manifest_cache
 
     # ------------------------------------------------------------------
     # Credential management & connection lifecycle
@@ -266,18 +272,29 @@ class CaldavCapability(AbstractCapability):
         provider_name: str = credentials["provider"]
         username: str = credentials["username"]
         password: str = credentials["password"]
+        server_url: str = credentials.get("server_url", "")
 
         # --- Validate provider is known before storing anything ---
-        if resolve_provider(provider_name) is None:
+        provider_config = resolve_provider(provider_name)
+        if provider_config is None:
             raise ValueError(
                 f"[caldav] Unknown provider '{provider_name}'.  "
                 f"Supported providers: google, apple, fastmail, nextcloud, synology, radicale."
+            )
+
+        # Self-hosted providers require a server_url
+        if provider_config.get("requires_server_url") and not server_url:
+            raise ValueError(
+                f"[caldav] Provider '{provider_name}' requires a 'server_url' "
+                f"(e.g. 'https://your-server.com')."
             )
 
         # --- Persist credentials (password encrypted at rest) ---
         self.store_credential(_KEY_PROVIDER, provider_name)
         self.store_credential(_KEY_USERNAME, username)
         self.store_credential(_KEY_PASSWORD, password)
+        if server_url:
+            self.store_credential(_KEY_SERVER_URL, server_url)
 
         # --- Test connectivity; roll back on failure ---
         if not self.connect():
@@ -286,6 +303,27 @@ class CaldavCapability(AbstractCapability):
                 f"[caldav] Could not connect to provider '{provider_name}' "
                 f"for user '{username}'.  Check credentials and try again."
             )
+
+    def _resolve_caldav_url(self, provider_config: dict) -> str:
+        """Build an absolute CalDAV URL from provider config and stored server_url.
+
+        For hosted providers (Google, Apple, Fastmail) the URL is already absolute.
+        For self-hosted providers (Nextcloud, Synology, Radicale) the provider URL
+        is a relative path that must be combined with the user's server_url.
+
+        Args:
+            provider_config: Provider dict from :data:`PROVIDERS`.
+
+        Returns:
+            str: Absolute URL suitable for :class:`caldav.DAVClient`.
+        """
+        url: str = provider_config["url"]
+        if url.startswith("http"):
+            return url
+        # Self-hosted: combine with stored server_url
+        server_url = self.load_credential(_KEY_SERVER_URL) or ""
+        server_url = server_url.rstrip("/")
+        return f"{server_url}{url}"
 
     def connect(self) -> bool:
         """Establish a connection to the CalDAV server.
@@ -329,7 +367,7 @@ class CaldavCapability(AbstractCapability):
             )
             return False
 
-        url: str = provider_config["url"]
+        url: str = self._resolve_caldav_url(provider_config)
 
         # --- Attempt connection ---
         try:
@@ -445,7 +483,7 @@ class CaldavCapability(AbstractCapability):
             logger.error("[caldav] ingest(): unknown provider '%s'.", provider_name)
             return []
 
-        url: str = provider_config["url"]
+        url: str = self._resolve_caldav_url(provider_config)
 
         # --- Open connection and enumerate calendars ---
         try:
@@ -489,6 +527,9 @@ class CaldavCapability(AbstractCapability):
         self._store_recurrence_facts(all_events)
         self._store_conflict_facts(all_events, now)
 
+        # --- Emit events to EventBusService ---
+        self._emit_calendar_events(all_events, now)
+
         # --- Inject world-state schedule hint ---
         self._inject_schedule_hint(all_events, now)
 
@@ -496,6 +537,48 @@ class CaldavCapability(AbstractCapability):
             "[caldav] ingest() complete — %d events fetched.", len(all_events)
         )
         return all_events
+
+    def understand(self, items: list) -> list:
+        """Extract structured knowledge from ingested calendar events.
+
+        For CalDAV, the ingest phase already returns structured data (parsed
+        VEVENT fields), so understanding is primarily storing facts and
+        detecting patterns — handled inline by ingest's helpers. This method
+        returns the items unchanged.
+
+        Args:
+            items: Parsed event dicts from :meth:`ingest`.
+
+        Returns:
+            list[dict]: Same items, unchanged.
+        """
+        return items
+
+    def monitor(self) -> None:
+        """Detect calendar changes and emit signals.
+
+        Called by the capability scheduler each cycle. Delegates to
+        :meth:`ingest` which handles the full pipeline: fetch, parse,
+        store facts, detect conflicts, emit events, and inject world state.
+        """
+        self.ingest()
+
+    def act(self, action: str, params: dict) -> dict:
+        """Perform a calendar action by delegating to the corresponding tool handler.
+
+        Args:
+            action: One of ``list_events``, ``get_event``, ``create_event``,
+                ``update_event``, ``delete_event``.
+            params: Action-specific parameters.
+
+        Returns:
+            dict: Result from the tool handler.
+        """
+        action_map = {t['name'].replace('caldav_', ''): t['handler'] for t in self.get_tools()}
+        handler = action_map.get(action)
+        if handler is None:
+            return {"error": f"Unknown action: {action}"}
+        return handler(topic="", params=params)
 
     # ------------------------------------------------------------------
     # Private helpers for ingest()
@@ -602,9 +685,9 @@ class CaldavCapability(AbstractCapability):
             if attendees_raw is None:
                 attendees: list = []
             elif isinstance(attendees_raw, list):
-                attendees = [str(a) for a in attendees_raw]
+                attendees = [str(a).removeprefix('mailto:') for a in attendees_raw]
             else:
-                attendees = [str(attendees_raw)]
+                attendees = [str(attendees_raw).removeprefix('mailto:')]
 
             rrule_prop = component.get('RRULE')
             if rrule_prop is not None:
@@ -655,12 +738,18 @@ class CaldavCapability(AbstractCapability):
                 if not uid:
                     continue
                 decay = 'fast' if event['dtstart'] < now else 'standard'
+                # Serialize datetime fields to ISO strings for JSON storage
+                serializable_data = dict(event)
+                for field in ('dtstart', 'dtend'):
+                    val = serializable_data.get(field)
+                    if val is not None and hasattr(val, 'isoformat'):
+                        serializable_data[field] = val.isoformat()
                 ks.store(
                     kind='fact',
                     entity='calendar',
                     key=f'event:{uid}',
                     value=event.get('summary', 'No title'),
-                    data=event,
+                    data=serializable_data,
                     decay_class=decay,
                     source='caldav',
                 )
@@ -742,7 +831,7 @@ class CaldavCapability(AbstractCapability):
         Returns:
             None
         """
-        upcoming = [e for e in events if e.get('dtstart') and e['dtstart'] >= now]
+        upcoming = [e for e in events if e.get('dtstart') and e['dtstart'] >= now and not e.get('all_day')]
         if len(upcoming) < 2:
             return
 
@@ -781,12 +870,17 @@ class CaldavCapability(AbstractCapability):
                     uid_b = ev_b.get('uid', '')
                     if not uid_a or not uid_b:
                         continue
+                    # Skip expanded recurrence occurrences of the same event
+                    if uid_a == uid_b:
+                        continue
 
+                    # Canonicalize UID pair to avoid order-dependent duplicates
+                    canon_a, canon_b = sorted([uid_a, uid_b])
                     value = f"Overlap: {_fmt_event(ev_a)} \u2229 {_fmt_event(ev_b)}"
                     ks.store(
                         kind='fact',
                         entity='calendar',
-                        key=f'conflict:{uid_a}:{uid_b}',
+                        key=f'conflict:{canon_a}:{canon_b}',
                         value=value,
                         data={'uid_a': uid_a, 'uid_b': uid_b},
                         decay_class='fast',
@@ -796,6 +890,30 @@ class CaldavCapability(AbstractCapability):
             logger.error(
                 "[caldav] _store_conflict_facts() failed: %s", exc, exc_info=True
             )
+
+    def _emit_calendar_events(self, events: list, now: "_dt_module.datetime") -> None:
+        """Emit calendar events to EventBusService for goal ecology and proactive systems.
+
+        Emits a single ``calendar_ingested`` event with summary counts, plus
+        individual ``calendar_conflict_detected`` events for any conflicts found.
+
+        Args:
+            events: Parsed event dicts from :meth:`_parse_caldav_event`.
+            now:    Current UTC datetime.
+        """
+        try:
+            from services.event_bus_service import EventBusService
+
+            bus = EventBusService()
+            upcoming = [e for e in events if e.get('dtstart') and e['dtstart'] >= now]
+            bus.emit('calendar_ingested', {
+                'source': 'caldav',
+                'total_events': len(events),
+                'upcoming_events': len(upcoming),
+                'timestamp': now.isoformat(),
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[caldav] _emit_calendar_events() failed: %s", exc)
 
     def _inject_schedule_hint(self, events: list, now: "_dt_module.datetime") -> None:
         """Build a schedule hint and inject it into world state.
@@ -821,7 +939,7 @@ class CaldavCapability(AbstractCapability):
             if upcoming:
                 parts = []
                 for e in upcoming:
-                    time_str = e['dtstart'].strftime('%H:%M')
+                    time_str = e['dtstart'].strftime('%H:%M UTC')
                     parts.append(f"{time_str} {e.get('summary', 'Event')}")
                 hint = "Next 24h: " + "; ".join(parts)
                 if len(hint) > 280:
@@ -901,8 +1019,9 @@ class CaldavCapability(AbstractCapability):
             provider_config = resolve_provider(provider_name)
             if provider_config is None:
                 raise ValueError(f"Unknown CalDAV provider: '{provider_name}'.")
+            url = capability._resolve_caldav_url(provider_config)
             return _caldav_lib.DAVClient(
-                url=provider_config["url"],
+                url=url,
                 username=username,
                 password=password,
                 timeout=_CONNECT_TIMEOUT,
@@ -963,7 +1082,39 @@ class CaldavCapability(AbstractCapability):
             if not capability.is_connected():
                 return {"error": "Not connected"}
             try:
-                events = capability.ingest()
+                # Read from knowledge store (populated by scheduler-driven ingest)
+                # rather than triggering a full CalDAV sync on every tool call
+                try:
+                    from services.database_service import get_shared_db_service
+                    from services.knowledge_service import KnowledgeService
+                    import json as _json
+
+                    ks = KnowledgeService(get_shared_db_service())
+                    facts = ks.search(entity='calendar', kind='fact', limit=200)
+                    events = []
+                    for fact in facts:
+                        key = fact.get('key', '')
+                        if not key.startswith('event:'):
+                            continue
+                        data = fact.get('data')
+                        if isinstance(data, str):
+                            try:
+                                data = _json.loads(data)
+                            except (ValueError, TypeError):
+                                continue
+                        if isinstance(data, dict):
+                            # Re-parse datetimes for filtering
+                            for field in ('dtstart', 'dtend'):
+                                val = data.get(field)
+                                if isinstance(val, str):
+                                    try:
+                                        data[field] = parse_utc(val)
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                            events.append(data)
+                except Exception:  # noqa: BLE001
+                    # Fallback to live ingest if knowledge store read fails
+                    events = capability.ingest()
 
                 # --- Apply optional filters ---
                 date_from_raw = params.get("date_from")
@@ -1050,11 +1201,17 @@ class CaldavCapability(AbstractCapability):
                     from services.database_service import get_shared_db_service
                     from services.knowledge_service import KnowledgeService
 
+                    import json as _json
+
                     ks = KnowledgeService(get_shared_db_service())
                     fact = ks.get(entity="calendar", key=f"event:{uid}")
                     if fact and fact.get("data"):
+                        data = fact["data"]
+                        # Knowledge store may return raw JSON string
+                        if isinstance(data, str):
+                            data = _json.loads(data)
                         return {
-                            "event": _serialize_event(fact["data"]),
+                            "event": _serialize_event(data),
                             "source": "knowledge_store",
                         }
                 except Exception:  # noqa: BLE001

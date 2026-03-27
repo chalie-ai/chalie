@@ -135,9 +135,16 @@ def main():
     logger.info("Checking for pending database migrations...")
     database_service.run_pending_migrations()
 
+    # Ensure encryption key — must run AFTER database init so the key can be
+    # stored in the DB itself (co-located with encrypted data, never lost).
+    # Migrates from legacy .key file on first run after upgrade.
+    from services.encryption_key_service import get_encryption_key
+    get_encryption_key(database_service)
+
     # --- Capability framework ---
     # Load all discovered capability plugins and register tools for any that are
     # already connected (e.g. credentials persisted from a previous session).
+    # Must run AFTER encryption key init so capabilities can decrypt stored credentials.
     # Zero capability-specific references here — all plugin logic lives inside
     # the capability packages themselves.
     try:
@@ -145,18 +152,13 @@ def main():
         from services.tool_library_service import register_tool
         _capabilities = load_capabilities()
         for cap in _capabilities.values():
-            if cap.is_connected():
+            # Try to reconnect using stored credentials
+            if cap.connect():
                 for t in cap.get_tools():
                     register_tool(t['name'], t['handler'], {k: v for k, v in t.items() if k != 'handler'})
         logger.info(f"[Startup] Capability framework loaded: {len(_capabilities)} capabilities")
     except Exception as e:
         logger.warning(f"[Startup] Capability framework load failed: {e}")
-
-    # Ensure encryption key — must run AFTER database init so the key can be
-    # stored in the DB itself (co-located with encrypted data, never lost).
-    # Migrates from legacy .key file on first run after upgrade.
-    from services.encryption_key_service import get_encryption_key
-    get_encryption_key(database_service)
 
     # Initialize API key
     try:

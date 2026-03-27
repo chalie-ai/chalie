@@ -159,6 +159,17 @@ class _MinimalCapability:
                 """
                 return []
 
+            def understand(self, items: list) -> list:
+                """No-op understand stub that returns items unchanged."""
+                return items
+
+            def monitor(self) -> None:
+                """No-op monitor stub."""
+
+            def act(self, action: str, params: dict) -> dict:
+                """No-op act stub."""
+                return {"success": True}
+
             def get_tools(self) -> list:
                 """No-op get_tools stub that returns an empty list.
 

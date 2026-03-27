@@ -29,24 +29,25 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_cap(*, connected: bool, ingest_side_effect=None) -> MagicMock:
+def _make_mock_cap(*, connected: bool, monitor_side_effect=None) -> MagicMock:
     """Create a mock capability object with a controllable ``is_connected`` return value.
 
     Args:
         connected: Value that ``is_connected()`` should return.
-        ingest_side_effect: Optional side-effect (e.g. an exception class or instance)
-            to assign to the ``ingest`` mock method.  When ``None`` the mock returns
-            an empty list by default.
+        monitor_side_effect: Optional side-effect (e.g. an exception class or instance)
+            to assign to the ``monitor`` mock method.  When ``None`` the mock returns
+            None by default.
 
     Returns:
         MagicMock: A pre-configured mock capability.
     """
     cap = MagicMock()
     cap.is_connected.return_value = connected
-    if ingest_side_effect is not None:
-        cap.ingest.side_effect = ingest_side_effect
+    cap.connect.return_value = connected
+    if monitor_side_effect is not None:
+        cap.monitor.side_effect = monitor_side_effect
     else:
-        cap.ingest.return_value = []
+        cap.monitor.return_value = None
     return cap
 
 
@@ -103,13 +104,13 @@ class TestRunCycleConnectivity:
         with patch.dict("sys.modules", {"capabilities": mock_caps_module}):
             svc._run_cycle()
 
-        cap.ingest.assert_not_called()
+        cap.monitor.assert_not_called()
 
-    def test_calls_ingest_on_connected_capability(self):
-        """``_run_cycle`` must call ``ingest()`` exactly once on a connected capability.
+    def test_calls_monitor_on_connected_capability(self):
+        """``_run_cycle`` must call ``monitor()`` exactly once on a connected capability.
 
         Patches ``load_capabilities`` to return a single connected mock, stubs
-        ``_store_last_sync`` to be a no-op, and verifies ``ingest`` is called.
+        ``_store_last_sync`` to be a no-op, and verifies ``monitor`` is called.
         """
         from services.capability_scheduler_service import CapabilitySchedulerService
 
@@ -123,21 +124,21 @@ class TestRunCycleConnectivity:
              patch.object(svc, "_store_last_sync"):
             svc._run_cycle()
 
-        cap.ingest.assert_called_once()
+        cap.monitor.assert_called_once()
 
 
 class TestRunCycleExceptionIsolation:
     """Tests that exceptions in individual capabilities are contained."""
 
-    def test_exception_in_ingest_does_not_propagate(self):
-        """A ``RuntimeError`` raised by ``ingest()`` must not propagate out of ``_run_cycle``.
+    def test_exception_in_monitor_does_not_propagate(self):
+        """A ``RuntimeError`` raised by ``monitor()`` must not propagate out of ``_run_cycle``.
 
         Verifies that the scheduler is resilient to individual capability
         failures: one bad capability should never crash the worker loop.
         """
         from services.capability_scheduler_service import CapabilitySchedulerService
 
-        cap = _make_mock_cap(connected=True, ingest_side_effect=RuntimeError("boom"))
+        cap = _make_mock_cap(connected=True, monitor_side_effect=RuntimeError("boom"))
         svc = CapabilitySchedulerService()
 
         mock_caps_module = MagicMock()

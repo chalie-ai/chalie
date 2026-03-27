@@ -397,7 +397,7 @@ class ToolRegistryService:
     def _load_tools(self):
         """Load first-party tools from ToolLibraryService."""
         try:
-            from services.tool_library_service import TOOL_METADATA, ALL_TOOL_NAMES
+            from services.tool_library_service import TOOL_METADATA, get_all_tool_names
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Failed to import ToolLibraryService: {e}")
             return
@@ -408,14 +408,16 @@ class ToolRegistryService:
             from services.tool_config_service import ToolConfigService
             from services.database_service import get_shared_db_service
             config_svc = ToolConfigService(get_shared_db_service())
-            for name in ALL_TOOL_NAMES:
+            all_names = get_all_tool_names()
+            for name in all_names:
                 if not config_svc.is_tool_enabled(name):
                     logger.info(f"[TOOL REGISTRY] Skipping disabled tool '{name}'")
                     disabled.add(name)
         except Exception as e:
             logger.warning(f"[TOOL REGISTRY] Could not check disabled status: {e}")
+            all_names = get_all_tool_names()
 
-        for name in ALL_TOOL_NAMES:
+        for name in all_names:
             if name in disabled:
                 continue
             metadata = TOOL_METADATA.get(name, {})

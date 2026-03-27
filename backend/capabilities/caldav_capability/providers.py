@@ -9,8 +9,9 @@ Provider entries
 Each value in :data:`PROVIDERS` is a ``dict`` with the following keys:
 
 ``url`` (str)
-    Base URL of the CalDAV server (absolute for hosted providers, relative
-    path for self-hosted ones such as Nextcloud/Synology/Radicale).
+    Base URL of the CalDAV server (absolute for hosted providers, path
+    suffix for self-hosted ones such as Nextcloud/Synology/Radicale —
+    must be combined with the user-supplied ``server_url``).
 
 ``principal_path_template`` (str)
     URL path template for the user's principal resource.  ``{username}`` is
@@ -47,16 +48,19 @@ PROVIDERS: dict[str, dict] = {
         "url": "/remote.php/dav/",
         "principal_path_template": "/remote.php/dav/principals/users/{username}/",
         "requires_app_password": False,
+        "requires_server_url": True,
     },
     "synology": {
         "url": "/caldav/",
         "principal_path_template": "/caldav/{username}/",
         "requires_app_password": False,
+        "requires_server_url": True,
     },
     "radicale": {
         "url": "/",
         "principal_path_template": "/{username}/",
         "requires_app_password": False,
+        "requires_server_url": True,
     },
 }
 

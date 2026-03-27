@@ -54,7 +54,7 @@ def load_capabilities() -> dict:
     discovered: dict = {}
 
     for subdir in sorted(capabilities_dir.iterdir()):
-        if not subdir.is_dir():
+        if not subdir.is_dir() or subdir.name.startswith('_'):
             continue
 
         manifest_path = subdir / "manifest.yaml"
