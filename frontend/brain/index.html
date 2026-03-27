@@ -34,6 +34,7 @@
                         <button class="nav-link" data-tab="scheduler">Scheduler</button>
                         <button class="nav-link" data-tab="lists">Lists</button>
                         <button class="nav-link" data-tab="documents">Documents</button>
+                        <button class="nav-link" data-tab="capabilities">Capabilities</button>
                     </div>
                 </div>
             </div>
@@ -218,7 +219,67 @@
                 <button class="btn btn-secondary" id="clearHistoryBtn" style="display:none">Clear History</button>
             </div>
         </div>
+
+        <!-- Capabilities Tab -->
+        <div class="tab-panel" id="tab-capabilities">
+            <div class="panel-header">
+                <h2>Capabilities</h2>
+            </div>
+            <div id="capabilitiesList">
+                <div class="loading">Loading capabilities...</div>
+            </div>
+        </div>
     </main>
+
+    <!-- Capability Setup Modal -->
+    <div class="modal-overlay hidden" id="capSetupOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title-row">
+                    <h2 id="capSetupTitle">Connect Calendar</h2>
+                    <button class="btn-close" id="capSetupClose">&times;</button>
+                </div>
+            </div>
+            <form id="capSetupForm">
+                <input type="hidden" id="capSetupId">
+
+                <div class="form-group">
+                    <label>Provider</label>
+                    <select id="capProvider">
+                        <option value="">Select provider...</option>
+                        <option value="google">Google Calendar</option>
+                        <option value="apple">Apple iCloud</option>
+                        <option value="fastmail">Fastmail</option>
+                        <option value="nextcloud">Nextcloud</option>
+                        <option value="synology">Synology</option>
+                        <option value="radicale">Radicale</option>
+                    </select>
+                </div>
+
+                <div class="form-group hidden" id="capServerUrlGroup">
+                    <label>Server URL</label>
+                    <input type="url" id="capServerUrl" placeholder="https://your-server.example.com">
+                    <p class="form-hint">Your server's base URL (self-hosted providers only)</p>
+                </div>
+
+                <div class="form-group">
+                    <label>Username / Email</label>
+                    <input type="text" id="capUsername" placeholder="your.email@example.com" autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label>App Password</label>
+                    <input type="password" id="capPassword" placeholder="App-specific password" autocomplete="current-password">
+                    <p class="form-hint" id="capPasswordHint"></p>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="capSetupCancel">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="capSetupSubmit">Connect</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Create / Edit Schedule Modal -->
     <div class="modal-overlay hidden" id="scheduleModal">

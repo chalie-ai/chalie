@@ -315,6 +315,8 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         loadLists();
     } else if (tabName === 'documents') {
         loadDocuments();
+    } else if (tabName === 'capabilities') {
+        loadCapabilities();
     }
 });
 
@@ -3234,6 +3236,191 @@ async function deleteWatchFolder(id) {
             showToast('Failed to remove folder watch', 'error');
         }
     } catch { showToast('Failed to remove folder watch', 'error'); }
+}
+
+// ==========================================
+// Capabilities Tab
+// ==========================================
+
+const _SELF_HOSTED_PROVIDERS = new Set(['nextcloud', 'synology', 'radicale']);
+const _APP_PASSWORD_HINTS = {
+    google: 'Google Account \u2192 Security \u2192 App Passwords (requires 2FA)',
+    apple: 'Apple ID \u2192 Sign-In and Security \u2192 App-Specific Passwords',
+    fastmail: 'Settings \u2192 Privacy & Security \u2192 App Passwords',
+    nextcloud: 'Settings \u2192 Security \u2192 App Passwords',
+    synology: 'Standard login credentials',
+    radicale: 'Configured auth method',
+};
+
+let capabilitiesData = [];
+
+async function loadCapabilities() {
+    const el = document.getElementById('capabilitiesList');
+    el.innerHTML = '<div class="loading">Loading capabilities...</div>';
+    try {
+        const res = await apiFetch('/api/capabilities');
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+        capabilitiesData = data.capabilities || [];
+        renderCapabilities();
+    } catch (e) {
+        el.innerHTML = '<div class="empty-state"><p>Failed to load capabilities.</p></div>';
+    }
+}
+
+function renderCapabilities() {
+    const el = document.getElementById('capabilitiesList');
+    if (!capabilitiesData.length) {
+        el.innerHTML = '<div class="empty-state"><h3>No capabilities found</h3><p>No capability plugins are installed.</p></div>';
+        return;
+    }
+    el.innerHTML = capabilitiesData.map(cap => {
+        const connected = cap.connected;
+        const statusClass = connected ? 'cap-status-connected' : 'cap-status-disconnected';
+        const statusLabel = connected ? 'Connected' : 'Not connected';
+        const syncInfo = cap.last_sync_at ? `Last sync: ${timeAgo(cap.last_sync_at)}` : 'Never synced';
+        const providerList = (cap.providers || []).map(p => escapeHtml(p)).join(', ');
+
+        return `
+        <div class="cap-card" data-id="${escapeHtml(cap.id)}">
+            <div class="cap-info">
+                <div class="cap-name-row">
+                    <span class="cap-status-dot ${statusClass}"></span>
+                    <span class="cap-name">${escapeHtml(cap.name)}</span>
+                    <span class="cap-version">${escapeHtml(cap.version)}</span>
+                </div>
+                <div class="cap-meta">
+                    <span class="cap-status-label">${statusLabel}</span>
+                    ${connected ? ` &middot; <span class="cap-sync">${syncInfo}</span>` : ''}
+                    ${providerList ? ` &middot; ${providerList}` : ''}
+                </div>
+            </div>
+            <div class="cap-actions">
+                ${connected
+                    ? `<button class="btn btn-danger btn-sm" data-cap-disconnect="${escapeHtml(cap.id)}">Disconnect</button>`
+                    : `<button class="btn btn-primary btn-sm" data-cap-connect="${escapeHtml(cap.id)}">Connect</button>`
+                }
+            </div>
+        </div>`;
+    }).join('');
+
+    el.querySelectorAll('[data-cap-connect]').forEach(btn => {
+        btn.addEventListener('click', () => openCapSetup(btn.dataset.capConnect));
+    });
+    el.querySelectorAll('[data-cap-disconnect]').forEach(btn => {
+        btn.addEventListener('click', () => disconnectCapability(btn.dataset.capDisconnect));
+    });
+}
+
+function openCapSetup(capId) {
+    document.getElementById('capSetupId').value = capId;
+    document.getElementById('capSetupForm').reset();
+    document.getElementById('capSetupId').value = capId; // reset clears hidden too
+    document.getElementById('capServerUrlGroup').classList.add('hidden');
+    document.getElementById('capPasswordHint').textContent = '';
+
+    const cap = capabilitiesData.find(c => c.id === capId);
+    document.getElementById('capSetupTitle').textContent = `Connect ${cap ? cap.name : capId}`;
+
+    // Populate provider options from capability's providers list
+    const select = document.getElementById('capProvider');
+    select.innerHTML = '<option value="">Select provider...</option>';
+    if (cap && cap.providers) {
+        for (const p of cap.providers) {
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+            select.appendChild(opt);
+        }
+    }
+
+    document.getElementById('capSetupOverlay').classList.remove('hidden');
+    select.focus();
+}
+
+// Show/hide server URL based on provider selection
+document.getElementById('capProvider').addEventListener('change', (e) => {
+    const provider = e.target.value;
+    const serverGroup = document.getElementById('capServerUrlGroup');
+    const hint = document.getElementById('capPasswordHint');
+
+    if (_SELF_HOSTED_PROVIDERS.has(provider)) {
+        serverGroup.classList.remove('hidden');
+    } else {
+        serverGroup.classList.add('hidden');
+        document.getElementById('capServerUrl').value = '';
+    }
+
+    hint.textContent = _APP_PASSWORD_HINTS[provider] || '';
+});
+
+// Close modal
+document.getElementById('capSetupClose').addEventListener('click', () => {
+    document.getElementById('capSetupOverlay').classList.add('hidden');
+});
+document.getElementById('capSetupCancel').addEventListener('click', () => {
+    document.getElementById('capSetupOverlay').classList.add('hidden');
+});
+
+// Submit setup form
+document.getElementById('capSetupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const capId = document.getElementById('capSetupId').value;
+    const provider = document.getElementById('capProvider').value;
+    const username = document.getElementById('capUsername').value.trim();
+    const password = document.getElementById('capPassword').value;
+    const serverUrl = document.getElementById('capServerUrl').value.trim();
+
+    if (!provider) { showToast('Select a provider', 'error'); return; }
+    if (!username) { showToast('Username is required', 'error'); return; }
+    if (!password) { showToast('App password is required', 'error'); return; }
+    if (_SELF_HOSTED_PROVIDERS.has(provider) && !serverUrl) {
+        showToast('Server URL is required for self-hosted providers', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('capSetupSubmit');
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+
+    const body = { provider, username, password };
+    if (serverUrl) body.server_url = serverUrl;
+
+    try {
+        const res = await apiFetch(`/api/capabilities/${capId}/setup`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            document.getElementById('capSetupOverlay').classList.add('hidden');
+            showToast('Connected successfully', 'success');
+            await loadCapabilities();
+        } else {
+            showToast(data.error || 'Connection failed', 'error');
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+    }
+});
+
+async function disconnectCapability(capId) {
+    if (!confirm(`Disconnect this capability? Stored credentials will be removed.`)) return;
+    try {
+        const res = await apiFetch(`/api/capabilities/${capId}/disconnect`, { method: 'POST' });
+        if (res.ok) {
+            showToast('Disconnected', 'success');
+            await loadCapabilities();
+        } else {
+            const data = await res.json();
+            showToast(data.error || 'Failed to disconnect', 'error');
+        }
+    } catch (err) {
+        showToast('Network error', 'error');
+    }
 }
 
 // ==========================================
