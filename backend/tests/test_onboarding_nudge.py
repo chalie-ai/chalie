@@ -29,21 +29,35 @@ def _mock_identity_and_store(
     and KnowledgeService for onboarding nudge tests.
 
     All are imported locally inside _get_onboarding_nudge, so we patch them
-    at their source modules.
+    at their source modules.  The store is a real ``MemoryStore`` instance
+    pre-populated with the exchange count hash so the service can read it
+    without any mock side-effects.
 
     Args:
+        identity_blob: dict returned by IdentityStateService.get_all().
+        exchange_count: integer turn count written into the store hash for
+            ``thread:<thread_id>`` / ``exchange_count`` field.
+        thread_id: thread identifier used as the hash key prefix (default "t1").
         user_traits: list of knowledge dicts from KnowledgeService.get_by_kind().
                      Defaults to [] (no traits in permanent storage).
+
+    Yields:
+        tuple[MagicMock, MemoryStore]: the mocked identity service instance
+        and the pre-populated real MemoryStore.
     """
     import contextlib
+    from services.memory_store import MemoryStore
 
     if user_traits is None:
         user_traits = []
 
     @contextlib.contextmanager
     def _ctx():
+        _store = MemoryStore()
+        _store.hset(f"thread:{thread_id}", "exchange_count", str(exchange_count))
+
         with patch('services.identity_state_service.IdentityStateService') as mock_id_cls, \
-             patch('services.memory_client.MemoryClientService') as mock_store_cls, \
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=_store), \
              patch('services.knowledge_service.KnowledgeService') as mock_ks_cls:
 
             mock_id = MagicMock()
@@ -51,15 +65,11 @@ def _mock_identity_and_store(
             mock_id.set_onboarding_state.return_value = True
             mock_id_cls.return_value = mock_id
 
-            mock_store = MagicMock()
-            mock_store.hget.return_value = str(exchange_count)
-            mock_store_cls.create_connection.return_value = mock_store
-
             mock_ks = MagicMock()
             mock_ks.get_by_kind.return_value = user_traits
             mock_ks_cls.return_value = mock_ks
 
-            yield mock_id, mock_store
+            yield mock_id, _store
 
     return _ctx()
 

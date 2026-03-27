@@ -7,7 +7,7 @@ catch the same regressions on every commit without requiring a running instance.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 @pytest.mark.unit
@@ -25,14 +25,20 @@ class TestAPIEndpointExistence:
         """Build the Flask app and return a mapping of route -> allowed methods.
 
         The ``db`` fixture patches ``get_shared_db_service`` at the module level,
-        so blueprint registration runs without infrastructure dependencies.  Only
-        MemoryStore and the dashboard gateway still need stubs.
+        so blueprint registration runs without infrastructure dependencies.  A
+        real ``MemoryStore`` is used so that any store access during app
+        initialisation behaves correctly without artificial stubs.
+
+        Returns:
+            dict[str, frozenset[str]]: mapping of URL rule string to the set of
+            HTTP methods registered for that route.
         """
         from api import create_app
+        from services.memory_store import MemoryStore
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
              patch('api._init_dashboard_gateway'):
             app = create_app()
             return {rule.rule: rule.methods for rule in app.url_map.iter_rules()}
@@ -52,11 +58,7 @@ class TestAPIEndpointExistence:
 
     def test_system_status_response_structure(self, authed_client):
         """Absorbs scenario 070 (response-structure half): endpoint returns JSON with a 'status' key."""
-        client, _db, mock_store = authed_client
-
-        # MemoryStore calls still need safe defaults
-        mock_store.llen.return_value = 0
-        mock_store.get.return_value = None
+        client, _db, _store = authed_client
 
         response = client.get('/system/status')
 
