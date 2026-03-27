@@ -121,6 +121,11 @@ class ActDispatcherService:
         # Get handler
         handler = self.handlers.get(action_type)
         if not handler:
+            # Try tool registry — handles tools discovered via find_tools
+            tool_result = self._try_tool_registry(topic, action_type, action)
+            if tool_result:
+                return tool_result
+
             # Try wrapper intent routing before falling through to error
             wrapper_result = self._try_wrapper_intent(action_type, action)
             if wrapper_result:
@@ -326,6 +331,39 @@ class ActDispatcherService:
             )
         except Exception as e:
             logging.debug(f"[ACT DISPATCH] Tracking failed for {action_type}: {e}")
+
+    def _try_tool_registry(self, topic: str, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
+        """Route action to ToolRegistryService if it's a registered tool.
+
+        Handles tools discovered via find_tools that aren't innate skills.
+        Returns None if the tool isn't in the registry.
+        """
+        try:
+            from services.tool_registry_service import ToolRegistryService
+            registry = ToolRegistryService()
+            if action_type not in registry.tools:
+                return None
+
+            params = action.get('params', {})
+            start_time = time.time()
+
+            logging.info(f"[ACT DISPATCH] Routing '{action_type}' to tool registry")
+            result_text = registry.invoke(action_type, topic, params)
+            elapsed = time.time() - start_time
+
+            # Determine success from result text
+            is_error = 'Error:' in result_text or 'Unknown tool' in result_text
+            return {
+                'action_type': action_type,
+                'status': 'error' if is_error else 'success',
+                'result': result_text,
+                'execution_time': elapsed,
+                'confidence': 0.0 if is_error else 0.8,
+                'notes': f'Executed via tool registry ({elapsed:.2f}s)',
+            }
+        except Exception as e:
+            logging.error(f"[ACT DISPATCH] Tool registry dispatch failed for '{action_type}': {e}")
+            return None
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:
         """Check if a connected wrapper declares the action type as a capability.

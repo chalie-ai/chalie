@@ -891,14 +891,18 @@ class KnowledgeService:
                                                confidence, reliability, source, evidence_count)
                         VALUES ('procedure', ?, ?, ?, '{}', 'slow', 0.5, 'reliable', 'act_loop', 1)
                         ON CONFLICT(entity, key) DO UPDATE SET
-                            updated_at = datetime('now')
+                            updated_at = datetime('now'),
+                            deleted_at = NULL
                     """, (entity, key, action_name))
                     # Re-fetch to get rowid and current data (may have been created by another thread)
                     cursor.execute("""
                         SELECT rowid, data FROM knowledge
-                        WHERE entity = ? AND key = ? AND deleted_at IS NULL
+                        WHERE entity = ? AND key = ?
                     """, (entity, key))
                     row = cursor.fetchone()
+                    if not row:
+                        logger.warning(f"[KNOWLEDGE] Failed to fetch procedure '{action_name}' after upsert")
+                        return None
                     row_id = row[0]
                     raw_data = row[1]
                     data_obj = {}
