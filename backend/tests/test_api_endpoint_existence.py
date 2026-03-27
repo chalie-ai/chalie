@@ -18,8 +18,6 @@ class TestAPIEndpointExistence:
       070 — /system/status endpoint exists and returns 200 with a status field
       074 — /system/observability/tasks endpoint exists and accepts GET
       075 — /system/observability/autobiography endpoint exists and accepts GET
-      100 — /system/observability/temporal endpoint exists and accepts GET
-      105 — /system/observability/temporal returns expected temporal field structure
     """
 
     @pytest.fixture
@@ -130,81 +128,3 @@ class TestAPIEndpointExistence:
             "/system/observability/autobiography returned 404 — blueprint not registered"
         )
 
-    # ------------------------------------------------------------------
-    # scenario 100 — /system/observability/temporal
-    # ------------------------------------------------------------------
-
-    def test_observability_temporal_route_registered(self, registered_routes):
-        """Absorbs scenario 100: /system/observability/temporal must be a registered GET route."""
-        assert '/system/observability/temporal' in registered_routes, (
-            "/system/observability/temporal is not registered in Flask's URL map"
-        )
-        assert 'GET' in registered_routes['/system/observability/temporal'], (
-            "/system/observability/temporal does not accept GET requests"
-        )
-
-    def test_observability_temporal_endpoint_reachable(self, authed_client):
-        """Absorbs scenario 100 (reachability): endpoint must not 404."""
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_session_result.fetchall.return_value = []
-
-        response = client.get('/system/observability/temporal')
-
-        assert response.status_code != 404, (
-            "/system/observability/temporal returned 404 — blueprint not registered"
-        )
-
-    # ------------------------------------------------------------------
-    # scenario 105 — /system/observability/temporal field structure
-    # ------------------------------------------------------------------
-
-    def test_temporal_field_types(self, authed_client):
-        """Absorbs scenario 105: temporal endpoint returns expected field structure.
-
-        The nightly test validated that the response contains temporal metric
-        fields (e.g. observations_count or equivalent).  Here we verify the
-        shape without needing a running server — if the endpoint responds 200,
-        the JSON must contain at least one recognisable temporal metric key.
-        """
-        client, mock_db, mock_store = authed_client
-
-        mock_db._test_cursor.fetchall.return_value = []
-        mock_db._test_cursor.fetchone.return_value = None
-        mock_db._test_session_result.fetchall.return_value = []
-        mock_db._test_session_result.fetchone.return_value = None
-        # TemporalPatternService.get_observation_stats() uses db.fetch_all()
-        mock_db.fetch_all.return_value = []
-        mock_store.get.return_value = None
-
-        response = client.get('/system/observability/temporal')
-
-        assert response.status_code == 200, (
-            f"/system/observability/temporal returned {response.status_code}, expected 200"
-        )
-
-        data = response.get_json()
-        assert data is not None, (
-            "/system/observability/temporal did not return JSON"
-        )
-
-        # Accepted temporal metric keys — at least one must be present.
-        temporal_keys = {
-            'observation_count',
-            'observations_count',
-            'place_observations',
-            'temporal_observations',
-            'total_observations',
-            'circadian_data',
-            'temporal_metrics',
-            'place_fingerprints',
-            'observations',
-            'patterns_discovered',
-            'predictions_available',
-        }
-        present = temporal_keys & set(data.keys())
-        assert present, (
-            f"/system/observability/temporal JSON has no recognised temporal metric key; "
-            f"got keys: {list(data.keys())}"
-        )

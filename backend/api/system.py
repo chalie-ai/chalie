@@ -581,61 +581,6 @@ def observability_world_state():
         return jsonify({"error": "Failed to retrieve world state"}), 500
 
 
-@system_bp.route('/system/observability/temporal', methods=['GET'])
-@require_session
-def observability_temporal():
-    """Temporal pattern mining stats and prediction availability."""
-    try:
-        from services.temporal_pattern_service import TemporalPatternService
-        from services.database_service import get_shared_db_service
-        from services.memory_client import MemoryClientService
-
-        db = get_shared_db_service()
-        service = TemporalPatternService(db)
-        stats = service.get_observation_stats()
-
-        # Add last mining run time from MemoryStore
-        store = MemoryClientService.create_connection()
-        last_run = store.get("temporal:last_mining_run")
-        stats['mining_last_run'] = last_run if last_run else None
-
-        return jsonify({
-            'generated_at': _now_iso(),
-            **stats,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/temporal error: {e}")
-        return jsonify({"error": "Failed to retrieve temporal data"}), 500
-
-
-@system_bp.route('/system/observability/temporal/mine', methods=['POST'])
-@require_session
-def observability_temporal_mine():
-    """Trigger on-demand temporal pattern mining."""
-    try:
-        from services.temporal_pattern_service import TemporalPatternService, observation_buffer
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-
-        # Flush pending observations first
-        observation_buffer.flush(db)
-
-        # Run mining
-        service = TemporalPatternService(db)
-        patterns = service.mine_patterns()
-
-        return jsonify({
-            'patterns_mined': len(patterns),
-            'mining_duration_seconds': round(service._last_mining_duration, 3),
-            'patterns': [{'key': p['key'], 'value': p['value'],
-                          'confidence': p['confidence']} for p in patterns],
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] temporal/mine error: {e}")
-        return jsonify({"error": "Mining failed"}), 500
-
-
 @system_bp.route('/system/observability/self-model', methods=['GET'])
 @require_session
 def observability_self_model():

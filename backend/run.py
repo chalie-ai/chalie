@@ -251,8 +251,6 @@ def main():
                   "services.triage_calibration_service", "triage_calibration_worker")
     _try_register(manager, "profile-enrichment-service",
                   "services.profile_enrichment_service", "profile_enrichment_worker")
-    _try_register(manager, "temporal-pattern-service",
-                  "services.temporal_pattern_service", "temporal_pattern_worker")
     # Register cron-triggered tools
     registry = None
     try:

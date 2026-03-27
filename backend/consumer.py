@@ -287,13 +287,6 @@ if __name__ == "__main__":
     except Exception as e:
         logging.warning(f"[Consumer] Profile enrichment service registration failed: {e}")
 
-    # Temporal pattern service
-    try:
-        from services.temporal_pattern_service import temporal_pattern_worker
-        manager.register_service("temporal-pattern-service", temporal_pattern_worker)
-    except Exception as e:
-        logging.warning(f"[Consumer] Temporal pattern service registration failed: {e}")
-
     # Register cron-triggered tools
     try:
         from services.tool_registry_service import ToolRegistryService

@@ -117,6 +117,9 @@ class WorldStateService:
         # 7. External signals (from paired interfaces — zero LLM)
         items.extend(self._get_external_signals(message_embedding))
 
+        # 8. Engagement signal (low/high engagement from proactive response scoring)
+        items.extend(self._get_engagement_signal())
+
         if not items:
             return ""
 
@@ -862,6 +865,32 @@ class WorldStateService:
             }]
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} _get_reasoning_focus failed (non-fatal): {e}")
+            return []
+
+    def _get_engagement_signal(self) -> list:
+        """
+        Surface the rolling engagement score as a world-state item when it is
+        outside the unremarkable band.
+
+        Delegates to :class:`~services.engagement_signal_service.EngagementSignalService`
+        which reads ``proactive:engagement_score`` from MemoryStore (written by
+        :class:`~services.autonomous_actions.engagement_tracker.EngagementTracker`).
+
+        This method is fail-open: any import error or runtime exception is caught,
+        logged at debug level, and an empty list is returned so that the rest of
+        ``get_world_state()`` is never blocked.
+
+        Returns:
+            list: Zero or one world-state dict with keys ``type`` (str),
+            ``label`` (str), and ``salience`` (float).
+        """
+        try:
+            from services.engagement_signal_service import EngagementSignalService
+            return EngagementSignalService().get_engagement_items()
+        except Exception as e:
+            logger.debug(
+                f"{LOG_PREFIX} _get_engagement_signal failed (non-fatal): {e}"
+            )
             return []
 
     def get_world_model_summary(self) -> dict:
