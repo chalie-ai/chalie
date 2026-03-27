@@ -184,6 +184,18 @@ def setup_capability(cap_id: str):
                     tool_name, cap_id, reg_exc,
                 )
 
+        # Trigger immediate first sync so the user doesn't wait for the scheduler
+        import threading
+
+        def _first_sync():
+            try:
+                cap.monitor()
+                logger.info("[capabilities] initial sync complete for '%s'", cap_id)
+            except Exception as sync_exc:
+                logger.warning("[capabilities] initial sync failed for '%s': %s", cap_id, sync_exc)
+
+        threading.Thread(target=_first_sync, daemon=True, name=f"cap-init-{cap_id}").start()
+
         return jsonify({"status": "connected"}), 200
 
     except ValueError as exc:

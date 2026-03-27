@@ -958,7 +958,7 @@ class CaldavCapability(AbstractCapability):
                 content=hint,
                 activation_energy=0.7,
             )
-            logger.info("[caldav] Injected schedule hint (%d chars): %s", len(hint), hint)
+            logger.info("[caldav] Injected schedule hint (%d chars).", len(hint))
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "[caldav] _inject_schedule_hint() failed: %s", exc, exc_info=True
