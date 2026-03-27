@@ -246,3 +246,32 @@ class TestKeywordSearch:
         # With a future date_from — should exclude everything
         results = _keyword_search('test', 'Python', limit=5, date_from='2099-01-01')
         assert len(results) == 0
+
+
+class TestGetRecentTopicContext:
+    def test_get_recent_accepts_topic_context(self, transcript_db):
+        """get_recent works when a TopicContext is passed."""
+        from services.transcript_service import append, get_recent
+        from services.topic_context import TopicContext
+
+        ctx = TopicContext(topic='test')
+        with patch('services.transcript_service._embed_entry'):
+            append('test', 'user', 'Hello')
+
+        results = get_recent('test', _context=ctx)
+        assert len(results) == 1
+        assert ctx.failed_sections == []
+
+    def test_get_recent_records_failure_to_context(self):
+        """When DB fails, the failure is recorded on TopicContext."""
+        from services.transcript_service import get_recent
+        from services.topic_context import TopicContext
+
+        ctx = TopicContext(topic='test')
+        with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
+            results = get_recent('test', _context=ctx)
+
+        assert results == []
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'transcript_recent'
+        assert 'db locked' in ctx.failed_sections[0][1]

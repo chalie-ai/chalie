@@ -23,7 +23,10 @@ import logging
 import math
 import re
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
@@ -431,6 +434,7 @@ class KnowledgeService:
         entity: str = None,
         limit: int = 10,
         min_confidence: float = 0.0,
+        _context: 'TopicContext' = None,
     ) -> List[dict]:
         """
         Hybrid retrieval with 3 signals fused via Reciprocal Rank Fusion (RRF, k=60).
@@ -563,6 +567,8 @@ class KnowledgeService:
 
         except Exception as e:
             logger.error(f"[KNOWLEDGE] recall failed: {e}")
+            if _context is not None:
+                _context.record_failure('knowledge_recall', e)
             return []
 
     def _touch_accessed(self, conn, rowids: list):

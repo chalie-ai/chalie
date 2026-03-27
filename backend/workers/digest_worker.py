@@ -398,7 +398,8 @@ def _format_visual_context(image_contexts: list) -> str:
 def unified_generate(topic, text, classification, thread_conv_service,
                      cortex_config, cortex_prompt_map, signals,
                      metadata=None, thread_id=None,
-                     returning_from_silence=False, message_embedding=None):
+                     returning_from_silence=False, message_embedding=None,
+                     topic_context=None):
     """
     Unified generation — single LLM call with all innate skills available.
 
@@ -441,7 +442,12 @@ def unified_generate(topic, text, classification, thread_conv_service,
             topic=topic,
             thread_id=thread_id,
             message_embedding=message_embedding,
+            context=topic_context,
         )
+        if topic_context and topic_context.failed_sections:
+            logging.warning(
+                f"[UNIFIED] Context assembly had failures: {topic_context.failed_sections}"
+            )
     except Exception as e:
         logging.warning(f"[UNIFIED] Context assembly failed: {e}")
 
@@ -867,9 +873,14 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
 
         assembled_context = None
         try:
+            from services.topic_context import TopicContext
+            _tool_ctx = TopicContext(topic=topic, thread_id=thread_id)
             assembled_context = get_context_assembly_service().assemble(
                 prompt=text, topic=topic, thread_id=thread_id,
+                context=_tool_ctx,
             )
+            if _tool_ctx.failed_sections:
+                logging.warning(f"[TOOL DIALOG] Context assembly had failures: {_tool_ctx.failed_sections}")
         except Exception as e:
             logging.warning(f"[TOOL DIALOG] Context assembly failed for '{tool_name}': {e}")
 
@@ -1002,9 +1013,14 @@ def _handle_cron_tool_result(text: str, metadata: dict) -> str:
 
         assembled_context = None
         try:
+            from services.topic_context import TopicContext
+            _cron_ctx = TopicContext(topic=f'cron_tool:{tool_name}', thread_id=thread_id)
             assembled_context = get_context_assembly_service().assemble(
                 prompt=text, topic=f'cron_tool:{tool_name}', thread_id=thread_id,
+                context=_cron_ctx,
             )
+            if _cron_ctx.failed_sections:
+                logging.warning(f"[CRON TOOL] Context assembly had failures: {_cron_ctx.failed_sections}")
         except Exception as e:
             logging.warning(f"[CRON TOOL] Context assembly failed: {e}")
 
@@ -1234,9 +1250,14 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
         assembled_context = None
         try:
+            from services.topic_context import TopicContext
+            _drift_ctx = TopicContext(topic=topic, thread_id=thread_id)
             assembled_context = get_context_assembly_service().assemble(
                 prompt=drift_gist, topic=topic, thread_id=thread_id,
+                context=_drift_ctx,
             )
+            if _drift_ctx.failed_sections:
+                logging.warning(f"[PROACTIVE] Context assembly had failures: {_drift_ctx.failed_sections}")
         except Exception as e:
             logging.warning(f"[PROACTIVE] Context assembly failed: {e}")
 
@@ -1912,6 +1933,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     metrics.record_timing(trace_id, 'classification', classification_time * 1000)
     metrics.record_counter('classifications_total')
 
+    # Step 6b: Create TopicContext — single source of truth for this message's topic identity
+    from services.topic_context import TopicContext
+    topic_ctx = TopicContext.from_classification(classification_result, thread_id=thread_id)
+
     # Step 7: Add exchange to thread conversation
     topic = classification_result['topic']
     exchange_id = thread_conv_service.add_exchange(thread_id, topic, {
@@ -2098,6 +2123,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             metadata=metadata, thread_id=thread_id,
             returning_from_silence=returning_from_silence,
             message_embedding=msg_embedding,
+            topic_context=topic_ctx,
         )
 
     except Exception as _gen_ex:

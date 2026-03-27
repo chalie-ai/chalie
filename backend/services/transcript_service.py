@@ -12,7 +12,10 @@ Key operations:
 """
 
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
 
 from services.embedding_utils import pack_embedding
 
@@ -219,7 +222,7 @@ def search(
         return _keyword_search(topic, query, limit, date_from, date_to)
 
 
-def get_recent(topic: str, limit: int = 20, since_id: int = None) -> List[Dict]:
+def get_recent(topic: str, limit: int = 20, since_id: int = None, _context: 'TopicContext' = None) -> List[Dict]:
     """Get the most recent transcript entries for a topic.
 
     Args:
@@ -281,6 +284,8 @@ def get_recent(topic: str, limit: int = 20, since_id: int = None) -> List[Dict]:
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} get_recent failed: {e}")
+        if _context is not None:
+            _context.record_failure('transcript_recent', e)
         return []
 
 

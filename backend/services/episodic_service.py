@@ -20,7 +20,10 @@ import math
 import struct
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
 
 from services.database_service import DatabaseService, DictCursor
 from services.embedding_utils import pack_embedding
@@ -300,7 +303,7 @@ class EpisodicService:
     def retrieve_episodes(self, query_text: str, topic: str = None,
                          intent: str = None, limit: int = 3,
                          weights: dict = None, semantic_concepts: List[Dict] = None,
-                         query_embedding=None) -> List[dict]:
+                         query_embedding=None, _context: 'TopicContext' = None) -> List[dict]:
         """Retrieve relevant episodes using hybrid search and composite scoring."""
         try:
             scoring_weights = weights or self.weights
@@ -334,6 +337,8 @@ class EpisodicService:
 
         except Exception as e:
             logging.error(f"Failed to retrieve episodes: {e}")
+            if _context is not None:
+                _context.record_failure('episodic_retrieval', e)
             return []
 
     def _apply_reconsolidation(self, episodes: List[dict]) -> None:

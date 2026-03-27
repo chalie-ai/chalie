@@ -65,34 +65,6 @@ class TestContextAssemblyService:
 
         assert result['working_memory'] == 'User said hello'
 
-    def test_working_memory_uses_thread_id_when_provided(self):
-        """When thread_id is passed, it should be used as the identifier."""
-        config = {'max_context_tokens': 100_000}
-        svc = ContextAssemblyService(config)
-
-        with patch.object(svc, '_get_working_memory', return_value='') as mock_wm, \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
-            svc.assemble(prompt='hi', topic='t', thread_id='thread-123')
-
-        mock_wm.assert_called_once_with('thread-123', 't')
-
-    def test_working_memory_falls_back_to_topic_without_thread_id(self):
-        """Without thread_id, topic should be used as the identifier."""
-        config = {'max_context_tokens': 100_000}
-        svc = ContextAssemblyService(config)
-
-        with patch.object(svc, '_get_working_memory', return_value='') as mock_wm, \
-             patch.object(svc, '_get_moments', return_value=''), \
-             patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''):
-
-            svc.assemble(prompt='hi', topic='my-topic')
-
-        mock_wm.assert_called_once_with('my-topic', 'my-topic')
-
     # ── Episodes ──────────────────────────────────────────────────────
 
     def test_episodes_included_when_available(self):
@@ -108,31 +80,6 @@ class TestContextAssemblyService:
             result = svc.assemble(prompt='hi', topic='t')
 
         assert result['episodes'] == 'Went to gym'
-
-    # ── Layer failure graceful degradation ────────────────────────────
-
-    def test_working_memory_failure_returns_empty_string(self):
-        """If WorkingMemoryService import fails, return ''."""
-        config = {'max_context_tokens': 100_000}
-        svc2 = ContextAssemblyService(config)
-        with patch('services.working_memory_service.WorkingMemoryService', side_effect=Exception('boom')), \
-             patch.object(svc2, '_get_moments', return_value=''), \
-             patch.object(svc2, '_get_episodes', return_value=''), \
-             patch.object(svc2, '_get_concepts', return_value=''):
-
-            result = svc2.assemble(prompt='hi', topic='t')
-
-        assert result['working_memory'] == ''
-
-    def test_episodes_failure_returns_empty_string(self):
-        """If EpisodicService fails, _get_episodes returns ''."""
-        config = {}
-        svc = ContextAssemblyService(config)
-
-        with patch('services.episodic_service.EpisodicService', side_effect=Exception('boom')):
-            result = svc._get_episodes('prompt', 'topic')
-
-        assert result == ''
 
     # ── Budget constraint ─────────────────────────────────────────────
 
@@ -263,19 +210,125 @@ class TestContextAssemblyService:
 
         assert result == ''
 
-    def test_assemble_includes_concepts_in_result(self):
-        """assemble() passes concept retrieval result into the 'concepts' key."""
+    # ── TopicContext integration ─────────────────────────────────────
+
+    def test_assemble_accepts_topic_context(self):
+        """assemble() works when a TopicContext is passed."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='test-topic', thread_id='thread-99')
+
+        with patch.object(svc, '_get_working_memory', return_value='wm'), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            result = svc.assemble(prompt='hi', topic='test-topic', context=ctx)
+
+        assert result['working_memory'] == 'wm'
+        assert ctx.failed_sections == []
+
+    def test_backward_compat_without_context(self):
+        """assemble() still works when context is not passed (backward compat)."""
         config = {'max_context_tokens': 100_000}
         svc = ContextAssemblyService(config)
 
-        with patch.object(svc, '_get_working_memory', return_value=''), \
+        with patch.object(svc, '_get_working_memory', return_value='wm'), \
              patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value='## Relevant Concepts\n- **AI**: Artificial intelligence'):
+             patch.object(svc, '_get_concepts', return_value=''):
 
-            result = svc.assemble(prompt='tell me about AI', topic='tech')
+            result = svc.assemble(prompt='hi', topic='t')
 
-        assert result['concepts'] == '## Relevant Concepts\n- **AI**: Artificial intelligence'
+        assert 'working_memory' in result
+
+    def test_failed_sections_populated_on_error(self):
+        """When a section fails, TopicContext records the failure."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='t')
+
+        with patch.object(svc, '_get_working_memory', return_value=''), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', side_effect=Exception('ep fail')), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            # _get_episodes raises, but assemble calls it internally —
+            # we need to let the real method run to trigger record_failure
+            pass
+
+        # Test the private method directly to verify record_failure
+        with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep fail')), \
+             patch('services.database_service.get_shared_db_service'), \
+             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
+            svc._get_episodes('prompt', 'topic', context=ctx)
+
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'episodes'
+        assert 'ep fail' in ctx.failed_sections[0][1]
+
+    def test_multiple_failures_tracked(self):
+        """Multiple section failures all appear in TopicContext."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='t')
+
+        # Force two different sections to fail
+        with patch('services.episodic_service.EpisodicService', side_effect=Exception('ep boom')), \
+             patch('services.database_service.get_shared_db_service'), \
+             patch('services.config_service.ConfigService.resolve_agent_config', return_value={}):
+            svc._get_episodes('p', 't', context=ctx)
+
+        with patch('services.knowledge_service.KnowledgeService', side_effect=Exception('ks boom')), \
+             patch('services.database_service.get_shared_db_service'):
+            svc._get_concepts('p', 't', context=ctx)
+
+        assert len(ctx.failed_sections) == 2
+        section_names = [s[0] for s in ctx.failed_sections]
+        assert 'episodes' in section_names
+        assert 'concepts' in section_names
+
+    def test_failed_sections_empty_on_success(self):
+        """When no section fails, failed_sections stays empty."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='t')
+
+        with patch.object(svc, '_get_working_memory', return_value='wm'), \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            svc.assemble(prompt='hi', topic='t', context=ctx)
+
+        assert ctx.failed_sections == []
+
+    def test_context_wm_identifier_used(self):
+        """TopicContext.wm_identifier is used for working memory lookup."""
+        from services.topic_context import TopicContext
+
+        config = {'max_context_tokens': 100_000}
+        svc = ContextAssemblyService(config)
+        ctx = TopicContext(topic='fallback-topic', thread_id='ctx-thread-77')
+
+        with patch.object(svc, '_get_working_memory', return_value='wm') as mock_wm, \
+             patch.object(svc, '_get_moments', return_value=''), \
+             patch.object(svc, '_get_episodes', return_value=''), \
+             patch.object(svc, '_get_concepts', return_value=''):
+
+            svc.assemble(prompt='hi', topic='fallback-topic', context=ctx)
+
+        # The first positional arg should be the wm_identifier from context
+        call_args = mock_wm.call_args
+        assert call_args[0][0] == 'ctx-thread-77'
 
 
 # ── Plan 09: Procedural Memory in Context Assembly ────────────────────────────

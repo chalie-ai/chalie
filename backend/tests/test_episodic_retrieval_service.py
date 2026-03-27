@@ -207,6 +207,60 @@ class TestEpisodicRetrievalService:
 
         assert result == []
 
+    # ── TopicContext integration ──────────────────────────────────────
+
+    def test_retrieve_accepts_topic_context(self, mock_db_rows):
+        """retrieve_episodes works when a TopicContext is passed."""
+        from services.topic_context import TopicContext
+
+        db, _ = mock_db_rows
+        svc = EpisodicService(db, config={})
+        ctx = TopicContext(topic='test')
+
+        with patch.object(svc, '_generate_embedding', return_value=[0.0] * 256), \
+             patch.object(svc, '_hybrid_retrieve', return_value=[]):
+            result = svc.retrieve_episodes(query_text='hello', _context=ctx)
+
+        assert result == []
+        assert ctx.failed_sections == []
+
+    def test_retrieve_records_failure_to_context(self, mock_db_rows):
+        """When retrieval fails, failure is recorded on TopicContext."""
+        from services.topic_context import TopicContext
+
+        db, _ = mock_db_rows
+        svc = EpisodicService(db, config={})
+        ctx = TopicContext(topic='test')
+
+        with patch.object(svc, '_generate_embedding', side_effect=Exception('embed boom')):
+            result = svc.retrieve_episodes(query_text='test', _context=ctx)
+
+        assert result == []
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'episodic_retrieval'
+        assert 'embed boom' in ctx.failed_sections[0][1]
+
+    def test_retrieve_uses_context_embedding(self, mock_db_rows):
+        """When TopicContext has message_embedding, it can be passed as query_embedding."""
+        from services.topic_context import TopicContext
+
+        db, _ = mock_db_rows
+        svc = EpisodicService(db, config={})
+        embedding = [0.5] * 256
+        ctx = TopicContext(topic='test', message_embedding=embedding)
+
+        with patch.object(svc, '_generate_embedding') as mock_gen, \
+             patch.object(svc, '_hybrid_retrieve', return_value=[]):
+            # Pass the context's embedding as query_embedding
+            svc.retrieve_episodes(
+                query_text='hello',
+                query_embedding=ctx.message_embedding,
+                _context=ctx,
+            )
+
+        # _generate_embedding should NOT have been called since we provided query_embedding
+        mock_gen.assert_not_called()
+
 
 # ── FTS5 alias regression ─────────────────────────────────────────────────────
 

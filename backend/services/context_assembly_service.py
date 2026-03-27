@@ -7,7 +7,10 @@ context payload.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.topic_context import TopicContext
 
 try:
     from services.telemetry_service import (
@@ -63,6 +66,7 @@ class ContextAssemblyService:
         thread_id: str = None,
         recent_visible_context: list = None,
         message_embedding=None,
+        context: 'TopicContext' = None,
     ) -> Dict[str, str]:
         """
         Assemble context from all memory types.
@@ -86,13 +90,17 @@ class ContextAssemblyService:
         """
         sections = {}
 
-        # Use thread_id for working memory if available
-        wm_identifier = thread_id if thread_id else topic
-        sections['working_memory'] = self._get_working_memory(wm_identifier, topic)
-        sections['moments'] = self._get_moments(prompt)
-        sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding)
-        sections['procedural'] = self._get_procedural_hints(topic)
-        sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding)
+        # Use TopicContext when available, fall back to loose params
+        if context is not None:
+            wm_identifier = context.wm_identifier
+        else:
+            wm_identifier = thread_id if thread_id else topic
+
+        sections['working_memory'] = self._get_working_memory(wm_identifier, topic, context=context)
+        sections['moments'] = self._get_moments(prompt, context=context)
+        sections['episodes'] = self._get_episodes(prompt, topic, act_history, message_embedding=message_embedding, context=context)
+        sections['procedural'] = self._get_procedural_hints(topic, context=context)
+        sections['concepts'] = self._get_concepts(prompt, topic, act_history, message_embedding=message_embedding, context=context)
 
         # Inject recent visible context from previous session (visual continuity bridge)
         if recent_visible_context:
@@ -114,6 +122,8 @@ class ContextAssemblyService:
                 sections['self_awareness'] = ""
         except Exception as e:
             logging.debug(f"[CONTEXT] Self-awareness retrieval failed: {e}")
+            if context is not None:
+                context.record_failure('self_awareness', e)
             sections['self_awareness'] = ""
 
         # Estimate total tokens
@@ -158,7 +168,7 @@ class ContextAssemblyService:
 
         return sections
 
-    def _get_working_memory(self, identifier: str, topic: str = None) -> str:
+    def _get_working_memory(self, identifier: str, topic: str = None, context: 'TopicContext' = None) -> str:
         """Retrieve working memory from compaction + transcript.
 
         Uses stored compaction (summarized older turns) plus recent transcript
@@ -226,9 +236,11 @@ class ContextAssemblyService:
 
         except Exception as e:
             logging.debug(f"[CONTEXT] Transcript-based working memory failed, using legacy: {e}")
-            return self._get_working_memory_legacy(identifier)
+            if context is not None:
+                context.record_failure('working_memory', e)
+            return self._get_working_memory_legacy(identifier, context=context)
 
-    def _get_working_memory_legacy(self, identifier: str) -> str:
+    def _get_working_memory_legacy(self, identifier: str, context: 'TopicContext' = None) -> str:
         """Legacy working memory from MemoryStore FIFO buffer.
 
         Args:
@@ -244,9 +256,11 @@ class ContextAssemblyService:
             return wm.get_formatted_context(identifier)
         except Exception as e:
             logging.debug(f"[CONTEXT] Working memory unavailable: {e}")
+            if context is not None:
+                context.record_failure('working_memory_legacy', e)
             return ""
 
-    def _get_moments(self, prompt: str) -> str:
+    def _get_moments(self, prompt: str, context: 'TopicContext' = None) -> str:
         """Retrieve relevant pinned moments via semantic search.
 
         Args:
@@ -290,9 +304,11 @@ class ContextAssemblyService:
             return "\n".join(lines)
         except Exception as e:
             logging.debug(f"[CONTEXT] Moments unavailable: {e}")
+            if context is not None:
+                context.record_failure('moments', e)
             return ""
 
-    def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
+    def _get_episodes(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
         """Retrieve relevant episodic memories via semantic search.
 
         Downweights unreliable or contradicted episodes before returning results.
@@ -361,9 +377,11 @@ class ContextAssemblyService:
             return "\n".join(lines)
         except Exception as e:
             logging.debug(f"[CONTEXT] Episodic memory unavailable: {e}")
+            if context is not None:
+                context.record_failure('episodes', e)
             return ""
 
-    def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None) -> str:
+    def _get_concepts(self, prompt: str, topic: str, act_history: str = "", message_embedding=None, context: 'TopicContext' = None) -> str:
         """Retrieve relevant semantic concepts for context injection.
 
         Downweights unreliable or contradicted concepts before applying the confidence filter.
@@ -408,9 +426,11 @@ class ContextAssemblyService:
             return "\n".join(lines) if len(lines) > 1 else ""
         except Exception as e:
             logging.debug(f"[CONTEXT] Concept retrieval unavailable: {e}")
+            if context is not None:
+                context.record_failure('concepts', e)
             return ""
 
-    def _get_procedural_hints(self, topic: str = None) -> str:
+    def _get_procedural_hints(self, topic: str = None, context: 'TopicContext' = None) -> str:
         """
         Retrieve learned action reliability from procedural memory.
 
@@ -458,6 +478,8 @@ class ContextAssemblyService:
 
         except Exception as e:
             logging.debug(f"[CONTEXT] Procedural memory unavailable: {e}")
+            if context is not None:
+                context.record_failure('procedural', e)
             return ""
 
     def _extract_semantic_from_history(self, act_history: str) -> List[Dict]:

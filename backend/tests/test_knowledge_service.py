@@ -784,3 +784,32 @@ class TestValidateTrait:
     def test_rejects_topic_slug_too_long(self):
         result = _validate_trait('topic_time_a_b_c_d', 'some valid value')
         assert result == 'topic_slug_too_long'
+
+
+class TestKnowledgeTopicContext:
+    """TopicContext integration tests for KnowledgeService."""
+
+    def test_recall_accepts_topic_context(self, svc):
+        """recall() works when a TopicContext is passed."""
+        from services.topic_context import TopicContext
+
+        ctx = TopicContext(topic='test')
+        result = svc.recall('nonexistent query', _context=ctx)
+        assert result == []
+        assert ctx.failed_sections == []
+
+    def test_recall_records_failure_to_context(self):
+        """When recall fails, failure is recorded on TopicContext."""
+        from services.topic_context import TopicContext
+
+        ctx = TopicContext(topic='test')
+        # Create a service with a broken db that raises on connection
+        broken_db = MagicMock()
+        broken_db.connection.side_effect = Exception('db exploded')
+        svc = KnowledgeService(broken_db)
+
+        result = svc.recall('test query', _context=ctx)
+        assert result == []
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'knowledge_recall'
+        assert 'db exploded' in ctx.failed_sections[0][1]

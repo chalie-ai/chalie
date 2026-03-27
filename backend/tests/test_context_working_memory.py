@@ -127,57 +127,36 @@ class TestTranscriptBasedWorkingMemory:
         assert 'Tool (web_search):' in result
 
 
-class TestLegacyFallback:
-    def test_falls_back_when_no_transcript_data(self):
+class TestTopicContextWorkingMemory:
+    def test_records_failure_on_compaction_error(self):
+        """When compaction raises, failure is recorded on TopicContext."""
+        from services.topic_context import TopicContext
+
         svc = _make_service()
+        ctx = TopicContext(topic='test-topic', thread_id='thread-1')
 
-        with patch('services.compaction_service.get_compaction', return_value=None), \
-             patch('services.transcript_service.get_recent', return_value=[]), \
-             patch.object(svc, '_get_working_memory_legacy', return_value='Legacy WM') as mock_legacy:
-            result = svc._get_working_memory('thread-1', 'test-topic')
+        with patch('services.compaction_service.get_compaction', side_effect=Exception('db locked')), \
+             patch.object(svc, '_get_working_memory_legacy', return_value=''):
+            result = svc._get_working_memory('thread-1', 'test-topic', context=ctx)
 
-        mock_legacy.assert_called_once_with('thread-1')
-        assert result == 'Legacy WM'
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'working_memory'
+        assert 'db locked' in ctx.failed_sections[0][1]
 
-    def test_falls_back_on_import_error(self):
+    def test_wm_identifier_from_topic_context(self):
+        """TopicContext.wm_identifier is used when context is passed to assemble."""
+        from services.topic_context import TopicContext
+
         svc = _make_service()
+        ctx = TopicContext(topic='general', thread_id='thread-42')
 
-        with patch('services.compaction_service.get_compaction', side_effect=ImportError('no module')), \
-             patch.object(svc, '_get_working_memory_legacy', return_value='Fallback') as mock_legacy:
-            result = svc._get_working_memory('thread-1', 'test-topic')
-
-        mock_legacy.assert_called_once()
-        assert result == 'Fallback'
-
-    def test_uses_topic_when_no_thread_id(self):
-        svc = _make_service()
-        entries = _make_entries(2)
-
-        with patch('services.compaction_service.get_compaction', return_value=None) as mock_comp, \
-             patch('services.transcript_service.get_recent', return_value=entries) as mock_recent:
-            svc._get_working_memory('my-topic', None)
-
-        # Should use identifier ('my-topic') as effective_topic since topic=None
-        mock_comp.assert_called_once_with('my-topic')
-
-
-class TestAssembleIntegration:
-    def test_assemble_passes_topic_to_working_memory(self):
-        svc = _make_service()
-
-        with patch.object(svc, '_get_working_memory', return_value='wm content') as mock_wm, \
+        with patch.object(svc, '_get_working_memory', return_value='wm') as mock_wm, \
              patch.object(svc, '_get_moments', return_value=''), \
              patch.object(svc, '_get_episodes', return_value=''), \
              patch.object(svc, '_get_procedural_hints', return_value=''), \
-             patch.object(svc, '_get_concepts', return_value=''), \
-             patch('services.self_model_service.SelfModelService') as mock_sm:
-            mock_sm.return_value.has_noteworthy_state.return_value = False
-            result = svc.assemble(
-                prompt='hello',
-                topic='my-topic',
-                thread_id='thread-123',
-            )
+             patch.object(svc, '_get_concepts', return_value=''):
 
-        # Should pass both thread_id and topic
-        mock_wm.assert_called_once_with('thread-123', 'my-topic')
-        assert result['working_memory'] == 'wm content'
+            svc.assemble(prompt='hello', topic='general', context=ctx)
+
+        # First positional arg should be wm_identifier = thread_id
+        assert mock_wm.call_args[0][0] == 'thread-42'

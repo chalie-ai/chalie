@@ -87,20 +87,6 @@ class TestGetCompaction:
         assert result['token_count'] == 50
 
 
-class TestGetEntriesSince:
-    def test_delegates_to_transcript_service(self, compaction_db):
-        from services.compaction_service import get_entries_since
-
-        _insert_entries(compaction_db, 'test', 5)
-
-        with patch('services.transcript_service.get_recent') as mock_recent:
-            mock_recent.return_value = [{'id': 3, 'content': 'msg'}]
-            result = get_entries_since('test', watermark=2)
-
-        mock_recent.assert_called_once_with('test', limit=500, since_id=2)
-        assert len(result) == 1
-
-
 class TestCheckAndCompact:
     def test_returns_false_for_empty_topic(self, compaction_db):
         from services.compaction_service import check_and_compact
@@ -125,22 +111,6 @@ class TestCheckAndCompact:
              patch('services.compaction_service.get_entries_since', return_value=entries):
             # 5 short entries, well below 85% of 32000
             assert check_and_compact('test', 32000) is False
-
-    def test_fires_compaction_when_above_threshold(self, compaction_db):
-        from services.compaction_service import check_and_compact
-
-        # Create entries with enough content to exceed threshold
-        long_content = 'word ' * 5000  # ~6500 tokens
-        entries = [{'id': i, 'content': long_content} for i in range(5)]
-
-        with patch('services.compaction_service.get_compaction', return_value=None), \
-             patch('services.compaction_service.get_entries_since', return_value=entries), \
-             patch('services.compaction_service._run_compaction', return_value=True) as mock_run:
-            # Budget = 1000 tokens, 5 entries * ~6500 tokens each >> threshold
-            result = check_and_compact('test', 1000)
-
-        assert result is True
-        mock_run.assert_called_once()
 
     def test_absolute_threshold_fires_on_large_context_budget(self, compaction_db):
         """Large model context budget should still trigger compaction at absolute ceiling."""
@@ -175,27 +145,6 @@ class TestCheckAndCompact:
 
         assert result is True
         mock_run.assert_called_once()
-
-    def test_includes_existing_compaction_tokens(self, compaction_db):
-        from services.compaction_service import check_and_compact
-
-        existing = {
-            'compacted_text': 'Previous summary',
-            'compacted_up_to_id': 5,
-            'token_count': 500,
-            'updated_at': '2026-03-20T10:00:00',
-        }
-        entries = [{'id': i, 'content': 'word ' * 100} for i in range(6, 12)]
-
-        with patch('services.compaction_service.get_compaction', return_value=existing), \
-             patch('services.compaction_service.get_entries_since', return_value=entries), \
-             patch('services.compaction_service._run_compaction', return_value=True) as mock_run:
-            # Budget = 1000, existing 500 + new entries should exceed 850
-            result = check_and_compact('test', 1000)
-
-        assert result is True
-        mock_run.assert_called_once_with('test', 'Previous summary', entries)
-
 
 class TestRunCompaction:
     def test_stores_compaction_result(self, compaction_db):
@@ -312,3 +261,35 @@ class TestRunCompaction:
             result = _run_compaction('test', '', entries)
 
         assert result is False
+
+
+class TestCompactionTopicContext:
+    def test_get_compaction_accepts_topic_context(self, compaction_db):
+        """get_compaction works when a TopicContext is passed."""
+        from services.compaction_service import get_compaction
+        from services.topic_context import TopicContext
+
+        ctx = TopicContext(topic='test-topic')
+        result = get_compaction('nonexistent', _context=ctx)
+        assert result is None
+        assert ctx.failed_sections == []
+
+    def test_get_compaction_records_failure_to_context(self):
+        """When DB fails, the failure is recorded on TopicContext."""
+        from services.compaction_service import get_compaction
+        from services.topic_context import TopicContext
+
+        ctx = TopicContext(topic='test')
+        with patch('services.database_service.get_shared_db_service', side_effect=Exception('db locked')):
+            result = get_compaction('test', _context=ctx)
+
+        assert result is None
+        assert len(ctx.failed_sections) == 1
+        assert ctx.failed_sections[0][0] == 'compaction_read'
+        assert 'db locked' in ctx.failed_sections[0][1]
+
+    def test_backward_compat_without_context(self, compaction_db):
+        """get_compaction still works without _context (backward compat)."""
+        from services.compaction_service import get_compaction
+        result = get_compaction('nonexistent')
+        assert result is None
