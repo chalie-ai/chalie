@@ -910,7 +910,7 @@ class ReasoningLoopService:
 
         # Step 6: Retrieve grounding episode
         grounding_episode = None
-        concept_names = [c['concept_name'] for c in activated[:3]]
+        concept_names = [c.get('concept_name') or c.get('name', '') for c in activated[:3]]
         if concept_names:
             query_text = " ".join(concept_names)
             episodes = self.episodic_retrieval.retrieve_episodes(
@@ -1280,13 +1280,13 @@ class ReasoningLoopService:
             if the LLM fails or returns an invalid response after all retries.
         """
         # Build prompt from template
-        seed_text = f"{seed['concept_name']}: {seed['definition']}"
+        seed_text = f"{seed['concept_name']}: {seed.get('definition', '')}"
 
         activated_text = "\n".join(
-            f"- {c['concept_name']}: {c.get('definition', 'N/A')} "
+            f"- {c.get('concept_name') or c.get('name', '?')}: {c.get('definition', 'N/A')} "
             f"(activation: {c.get('activation_score', 0):.2f})"
             for c in activated[:self.max_activated_concepts]
-            if c['id'] != seed['concept_id']
+            if c.get('id') != seed.get('concept_id')
         ) or "No additional associations."
 
         episode_text = "No related experience recalled."
