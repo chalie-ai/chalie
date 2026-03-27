@@ -1297,15 +1297,7 @@ class ReasoningLoopService:
                 f"Outcome: {episode.get('outcome', 'N/A')}"
             )
 
-        # Temporal rhythm context (may be empty if no patterns yet)
         rhythm_text = ""
-        try:
-            from services.temporal_pattern_service import TemporalPatternService
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            rhythm_text = TemporalPatternService(db).get_rhythm_summary()
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Temporal rhythm context fetch failed: {e}", exc_info=True)
 
         # Inject constraint context so drift thoughts can factor in blocked paths
         constraint_context = ''
