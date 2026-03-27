@@ -19,37 +19,29 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# Singleton cache — capability instances persist for the process lifetime so
+# that in-memory state (e.g. ``_connected``) survives across API calls.
+_capabilities_cache: dict | None = None
+
 
 def load_capabilities() -> dict:
-    """Discover, load, and return all capability plugins found under this package.
+    """Discover, load, and return all capability plugin instances.
 
-    Discovery algorithm:
-
-    1. Scan every direct sub-directory of the ``capabilities/`` package directory
-       for a ``manifest.yaml`` file.
-    2. Parse each manifest with :func:`yaml.safe_load`.
-    3. Use the ``entry_class`` field from the manifest to import the concrete
-       class from ``capabilities.<subdir>.capability``.
-    4. Instantiate the class (no constructor arguments).
-    5. Return a :class:`dict` keyed by the manifest ``id`` field.
-
-    Each capability is loaded inside a ``try/except`` block so that a broken or
-    misconfigured capability never prevents healthy ones from loading.
-
-    The function is *idempotent* — calling it multiple times is safe; each call
-    performs a fresh filesystem scan and returns a new dict of fresh instances.
+    On the first call, scans every direct sub-directory of ``capabilities/``
+    for a ``manifest.yaml``, imports and instantiates the declared
+    ``entry_class``, and caches the result.  Subsequent calls return the
+    same cached instances so that in-memory state (``_connected``, etc.)
+    is preserved across API requests.
 
     Returns:
         dict[str, AbstractCapability]: Mapping of capability ``id`` →
         instantiated capability object.  Returns an empty dict if no
         ``manifest.yaml`` files are found or all loads fail.
-
-    Examples:
-        >>> from capabilities import load_capabilities
-        >>> caps = load_capabilities()
-        >>> "caldav" in caps  # True once caldav_capability/ exists
-        False
     """
+    global _capabilities_cache
+    if _capabilities_cache is not None:
+        return _capabilities_cache
+
     capabilities_dir = Path(__file__).parent
     discovered: dict = {}
 
@@ -97,4 +89,5 @@ def load_capabilities() -> dict:
         len(discovered),
         list(discovered.keys()) if discovered else "none",
     )
-    return discovered
+    _capabilities_cache = discovered
+    return _capabilities_cache
