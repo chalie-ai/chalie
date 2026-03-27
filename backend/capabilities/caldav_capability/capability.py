@@ -846,12 +846,770 @@ class CaldavCapability(AbstractCapability):
     def get_tools(self) -> list:
         """Return CalDAV tool definitions for dynamic registration.
 
-        .. note::
-            Not yet implemented.  Will be implemented in a subsequent task.
+        Builds and returns a list of exactly 5 tool definition dicts — one per
+        CalDAV action.  Each dict follows the schema used in
+        :data:`~services.tool_library_service.TOOL_METADATA` and includes a
+        ``handler`` key that holds a closure bound to this capability instance.
 
-        Raises:
-            NotImplementedError: Always.
+        Handler contract
+        ~~~~~~~~~~~~~~~~
+        Every handler has the signature::
+
+            execute(topic: str, params: dict,
+                    config: dict = None, telemetry: dict = None) -> dict
+
+        All handlers return ``{'error': 'Not connected'}`` immediately when
+        :meth:`is_connected` is ``False``.  Any other exception is caught and
+        returned as ``{'error': str(exc)}``.
+
+        Tools
+        ~~~~~
+        - ``caldav_list_events``  — ingest events and return a filtered list
+        - ``caldav_get_event``    — fetch a single event by UID
+        - ``caldav_create_event`` — create a new VEVENT on the server
+        - ``caldav_update_event`` — update an existing event by UID
+        - ``caldav_delete_event`` — delete an event by UID
+
+        Returns:
+            list[dict]: Exactly 5 tool definition dicts, each containing
+            ``name``, ``description``, ``parameters``, ``returns``,
+            ``constraints``, and ``handler``.
         """
-        raise NotImplementedError(
-            "[caldav] get_tools() is not yet implemented."
-        )
+        capability = self  # capture for closures
+
+        # ------------------------------------------------------------------
+        # Helper: open a fresh DAVClient from stored credentials
+        # ------------------------------------------------------------------
+        def _open_client():
+            """Open a :class:`caldav.DAVClient` using stored credentials.
+
+            Returns:
+                caldav.DAVClient: Authenticated client ready for use.
+
+            Raises:
+                RuntimeError: If the ``caldav`` package is unavailable.
+                ValueError: If any stored credential is missing or the
+                    provider is not recognised.
+            """
+            if not _CALDAV_AVAILABLE:
+                raise RuntimeError("'caldav' package is not installed.")
+            provider_name = capability.load_credential(_KEY_PROVIDER)
+            username = capability.load_credential(_KEY_USERNAME)
+            password = capability.load_credential(_KEY_PASSWORD)
+            if not all([provider_name, username, password]):
+                raise ValueError("One or more CalDAV credentials are missing.")
+            provider_config = resolve_provider(provider_name)
+            if provider_config is None:
+                raise ValueError(f"Unknown CalDAV provider: '{provider_name}'.")
+            return _caldav_lib.DAVClient(
+                url=provider_config["url"],
+                username=username,
+                password=password,
+                timeout=_CONNECT_TIMEOUT,
+            )
+
+        # ------------------------------------------------------------------
+        # Helper: serialize an event dict (convert datetimes to ISO strings)
+        # ------------------------------------------------------------------
+        def _serialize_event(event: dict) -> dict:
+            """Return a copy of *event* with datetime fields serialised to ISO 8601.
+
+            Args:
+                event: Parsed event dict produced by :meth:`_parse_caldav_event`.
+
+            Returns:
+                dict: Shallow copy of *event* where ``dtstart`` and ``dtend``
+                values are ISO 8601 strings rather than
+                :class:`datetime.datetime` objects.
+            """
+            out = dict(event)
+            for field in ("dtstart", "dtend"):
+                val = out.get(field)
+                if val is not None and hasattr(val, "isoformat"):
+                    out[field] = val.isoformat()
+            return out
+
+        # ------------------------------------------------------------------
+        # caldav_list_events
+        # ------------------------------------------------------------------
+        def _list_events_execute(
+            topic: str,
+            params: dict,
+            config: dict = None,
+            telemetry: dict = None,
+        ) -> dict:
+            """Ingest and return a filtered list of calendar events.
+
+            Calls :meth:`~CaldavCapability.ingest` to fetch a fresh event list
+            from the CalDAV server, then applies optional filters for date
+            range, calendar name, and result count.
+
+            Args:
+                topic:     Unused; present for handler-signature compatibility.
+                params:    Optional filter keys:
+
+                    - ``date_from`` (str) — ISO 8601 lower bound for ``dtstart``
+                    - ``date_to``   (str) — ISO 8601 upper bound for ``dtstart``
+                    - ``calendar_name`` (str) — filter to a specific calendar
+                    - ``limit`` (int) — maximum number of results to return
+
+                config:    Unused.
+                telemetry: Unused.
+
+            Returns:
+                dict: ``{'events': [...], 'count': int}`` on success, or
+                ``{'error': str}`` on failure.
+            """
+            if not capability.is_connected():
+                return {"error": "Not connected"}
+            try:
+                events = capability.ingest()
+
+                # --- Apply optional filters ---
+                date_from_raw = params.get("date_from")
+                date_to_raw = params.get("date_to")
+                calendar_name_filter = params.get("calendar_name")
+                limit_raw = params.get("limit")
+
+                filtered = list(events)
+
+                if date_from_raw:
+                    try:
+                        dt_from = parse_utc(date_from_raw)
+                        filtered = [
+                            e for e in filtered
+                            if e.get("dtstart") and e["dtstart"] >= dt_from
+                        ]
+                    except Exception:  # noqa: BLE001
+                        pass  # Ignore malformed date; return unfiltered
+
+                if date_to_raw:
+                    try:
+                        dt_to = parse_utc(date_to_raw)
+                        filtered = [
+                            e for e in filtered
+                            if e.get("dtstart") and e["dtstart"] <= dt_to
+                        ]
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                if calendar_name_filter:
+                    cal_lower = calendar_name_filter.lower()
+                    filtered = [
+                        e for e in filtered
+                        if e.get("calendar_name", "").lower() == cal_lower
+                    ]
+
+                if limit_raw is not None:
+                    try:
+                        filtered = filtered[: int(limit_raw)]
+                    except (ValueError, TypeError):
+                        pass
+
+                serialized = [_serialize_event(e) for e in filtered]
+                return {"events": serialized, "count": len(serialized)}
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[caldav] caldav_list_events handler failed: %s", exc)
+                return {"error": str(exc)}
+
+        # ------------------------------------------------------------------
+        # caldav_get_event
+        # ------------------------------------------------------------------
+        def _get_event_execute(
+            topic: str,
+            params: dict,
+            config: dict = None,
+            telemetry: dict = None,
+        ) -> dict:
+            """Fetch a single calendar event by UID.
+
+            First checks the local knowledge store for a cached fact.  Falls
+            back to a direct ``calendar.search(uid=uid)`` request against the
+            CalDAV server when the knowledge store lookup returns nothing.
+
+            Args:
+                topic:     Unused.
+                params:    Must contain ``uid`` (str) — the iCalendar UID of
+                           the event to retrieve.
+                config:    Unused.
+                telemetry: Unused.
+
+            Returns:
+                dict: ``{'event': {...}, 'source': str}`` on success, or
+                ``{'error': str}`` when the UID is not found or on failure.
+            """
+            if not capability.is_connected():
+                return {"error": "Not connected"}
+            try:
+                uid = (params.get("uid") or "").strip()
+                if not uid:
+                    return {"error": "Parameter 'uid' is required."}
+
+                # --- Knowledge store fast path ---
+                try:
+                    from services.database_service import get_shared_db_service
+                    from services.knowledge_service import KnowledgeService
+
+                    ks = KnowledgeService(get_shared_db_service())
+                    fact = ks.get(entity="calendar", key=f"event:{uid}")
+                    if fact and fact.get("data"):
+                        return {
+                            "event": _serialize_event(fact["data"]),
+                            "source": "knowledge_store",
+                        }
+                except Exception:  # noqa: BLE001
+                    pass  # Fall through to direct CalDAV lookup
+
+                # --- Direct CalDAV lookup fallback ---
+                if not _CALDAV_AVAILABLE:
+                    return {"error": f"Event not found (UID: {uid})"}
+
+                client = _open_client()
+                principal = client.principal()
+                for calendar in principal.calendars():
+                    cal_name = getattr(calendar, "name", None) or "Unknown"
+                    try:
+                        results = calendar.search(uid=uid)
+                        if results:
+                            parsed = capability._parse_caldav_event(results[0], cal_name)
+                            if parsed:
+                                return {
+                                    "event": _serialize_event(parsed[0]),
+                                    "source": "caldav",
+                                }
+                    except Exception:  # noqa: BLE001
+                        continue
+
+                return {"error": f"Event not found (UID: {uid})"}
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[caldav] caldav_get_event handler failed: %s", exc)
+                return {"error": str(exc)}
+
+        # ------------------------------------------------------------------
+        # caldav_create_event
+        # ------------------------------------------------------------------
+        def _create_event_execute(
+            topic: str,
+            params: dict,
+            config: dict = None,
+            telemetry: dict = None,
+        ) -> dict:
+            """Create a new VEVENT on the CalDAV server.
+
+            Builds an iCalendar ``VCALENDAR`` object containing a single
+            ``VEVENT`` component and saves it to the target calendar via
+            :meth:`caldav.Calendar.save_event`.
+
+            Args:
+                topic:     Unused.
+                params:    Required keys: ``summary`` (str), ``dtstart`` (ISO
+                           8601 UTC str), ``dtend`` (ISO 8601 UTC str).
+                           Optional keys: ``location`` (str),
+                           ``description`` (str), ``calendar_name`` (str —
+                           target calendar; first available used if omitted).
+                config:    Unused.
+                telemetry: Unused.
+
+            Returns:
+                dict: ``{'uid': str, 'summary': str, 'dtstart': str,
+                'dtend': str, 'calendar_name': str}`` on success, or
+                ``{'error': str}`` on failure.
+            """
+            if not capability.is_connected():
+                return {"error": "Not connected"}
+            try:
+                if not _CALDAV_AVAILABLE:
+                    return {"error": "'caldav' package is not installed."}
+                if not _ICALENDAR_AVAILABLE:
+                    return {"error": "'icalendar' package is not installed."}
+
+                summary = (params.get("summary") or "").strip()
+                dtstart_raw = (params.get("dtstart") or "").strip()
+                dtend_raw = (params.get("dtend") or "").strip()
+
+                if not summary:
+                    return {"error": "Parameter 'summary' is required."}
+                if not dtstart_raw:
+                    return {"error": "Parameter 'dtstart' is required (ISO 8601 UTC)."}
+                if not dtend_raw:
+                    return {"error": "Parameter 'dtend' is required (ISO 8601 UTC)."}
+
+                dtstart = parse_utc(dtstart_raw)
+                dtend = parse_utc(dtend_raw)
+                location = params.get("location") or ""
+                description = params.get("description") or ""
+                calendar_name_pref = params.get("calendar_name") or ""
+
+                client = _open_client()
+                principal = client.principal()
+                calendars = principal.calendars()
+
+                if not calendars:
+                    return {"error": "No calendars found on the CalDAV server."}
+
+                # Resolve target calendar
+                target_cal = None
+                if calendar_name_pref:
+                    for cal in calendars:
+                        if getattr(cal, "name", "") == calendar_name_pref:
+                            target_cal = cal
+                            break
+                if target_cal is None:
+                    target_cal = calendars[0]
+
+                # Build iCalendar payload
+                import uuid as _uuid_mod
+
+                event_uid = str(_uuid_mod.uuid4())
+
+                ical = _icalendar_lib.Calendar()
+                ical.add("prodid", "-//CaldavCapability//EN")
+                ical.add("version", "2.0")
+
+                vevent = _icalendar_lib.Event()
+                vevent.add("uid", event_uid)
+                vevent.add("summary", summary)
+                vevent.add("dtstart", dtstart)
+                vevent.add("dtend", dtend)
+                vevent.add("dtstamp", utc_now())
+                if location:
+                    vevent.add("location", location)
+                if description:
+                    vevent.add("description", description)
+
+                ical.add_component(vevent)
+                target_cal.save_event(ical.to_ical().decode("utf-8"))
+
+                cal_label = getattr(target_cal, "name", None) or "Unknown"
+                logger.info(
+                    "[caldav] Created event uid=%s summary=%r calendar=%r",
+                    event_uid,
+                    summary,
+                    cal_label,
+                )
+                return {
+                    "uid": event_uid,
+                    "summary": summary,
+                    "dtstart": dtstart.isoformat(),
+                    "dtend": dtend.isoformat(),
+                    "calendar_name": cal_label,
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[caldav] caldav_create_event handler failed: %s", exc)
+                return {"error": str(exc)}
+
+        # ------------------------------------------------------------------
+        # caldav_update_event
+        # ------------------------------------------------------------------
+        def _update_event_execute(
+            topic: str,
+            params: dict,
+            config: dict = None,
+            telemetry: dict = None,
+        ) -> dict:
+            """Update an existing CalDAV event by UID.
+
+            Searches all connected calendars for an event matching *uid*.
+            Only fields explicitly present in *params* are modified; absent
+            keys leave the existing VEVENT property untouched.
+
+            Mutable fields: ``summary``, ``dtstart``, ``dtend``, ``location``,
+            ``description``.
+
+            Args:
+                topic:     Unused.
+                params:    Must contain ``uid`` (str).  Optionally any of:
+                           ``summary``, ``dtstart``, ``dtend``, ``location``,
+                           ``description``.
+                config:    Unused.
+                telemetry: Unused.
+
+            Returns:
+                dict: ``{'uid': str, 'updated': True}`` on success, or
+                ``{'error': str}`` if the event was not found or saving failed.
+            """
+            if not capability.is_connected():
+                return {"error": "Not connected"}
+            try:
+                if not _CALDAV_AVAILABLE:
+                    return {"error": "'caldav' package is not installed."}
+                if not _ICALENDAR_AVAILABLE:
+                    return {"error": "'icalendar' package is not installed."}
+
+                uid = (params.get("uid") or "").strip()
+                if not uid:
+                    return {"error": "Parameter 'uid' is required."}
+
+                client = _open_client()
+                principal = client.principal()
+
+                found_event = None
+                for calendar in principal.calendars():
+                    try:
+                        results = calendar.search(uid=uid)
+                        if results:
+                            found_event = results[0]
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
+
+                if found_event is None:
+                    return {"error": f"Event not found (UID: {uid})"}
+
+                # Parse the existing iCalendar data
+                try:
+                    ical_data = (
+                        found_event.data
+                        if isinstance(found_event.data, str)
+                        else found_event.data.decode("utf-8")
+                    )
+                    ical = _icalendar_lib.Calendar.from_ical(ical_data)
+                except AttributeError:
+                    # Newer caldav versions expose icalendar_instance directly
+                    ical = found_event.icalendar_instance
+
+                # Mutate the target VEVENT component
+                for component in ical.walk():
+                    if component.name != "VEVENT":
+                        continue
+
+                    if "summary" in params and params["summary"] is not None:
+                        component.pop("SUMMARY", None)
+                        component.add("summary", str(params["summary"]))
+
+                    if "dtstart" in params and params["dtstart"] is not None:
+                        component.pop("DTSTART", None)
+                        component.add("dtstart", parse_utc(params["dtstart"]))
+
+                    if "dtend" in params and params["dtend"] is not None:
+                        component.pop("DTEND", None)
+                        component.add("dtend", parse_utc(params["dtend"]))
+
+                    if "location" in params:
+                        component.pop("LOCATION", None)
+                        if params["location"]:
+                            component.add("location", str(params["location"]))
+
+                    if "description" in params:
+                        component.pop("DESCRIPTION", None)
+                        if params["description"]:
+                            component.add("description", str(params["description"]))
+
+                    break  # Only update the first VEVENT
+
+                # Persist the mutated calendar object
+                found_event.data = ical.to_ical().decode("utf-8")
+                found_event.save()
+
+                logger.info("[caldav] Updated event uid=%s", uid)
+                return {"uid": uid, "updated": True}
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[caldav] caldav_update_event handler failed: %s", exc)
+                return {"error": str(exc)}
+
+        # ------------------------------------------------------------------
+        # caldav_delete_event
+        # ------------------------------------------------------------------
+        def _delete_event_execute(
+            topic: str,
+            params: dict,
+            config: dict = None,
+            telemetry: dict = None,
+        ) -> dict:
+            """Delete a calendar event from the CalDAV server by UID.
+
+            Searches all connected calendars for an event with the given UID
+            and calls :meth:`caldav.CalendarObjectResource.delete` when found.
+
+            Args:
+                topic:     Unused.
+                params:    Must contain ``uid`` (str) — the event to delete.
+                config:    Unused.
+                telemetry: Unused.
+
+            Returns:
+                dict: ``{'uid': str, 'deleted': True}`` on success, or
+                ``{'error': str}`` if the event was not found or deletion
+                failed.
+            """
+            if not capability.is_connected():
+                return {"error": "Not connected"}
+            try:
+                if not _CALDAV_AVAILABLE:
+                    return {"error": "'caldav' package is not installed."}
+
+                uid = (params.get("uid") or "").strip()
+                if not uid:
+                    return {"error": "Parameter 'uid' is required."}
+
+                client = _open_client()
+                principal = client.principal()
+
+                for calendar in principal.calendars():
+                    try:
+                        results = calendar.search(uid=uid)
+                        if results:
+                            results[0].delete()
+                            logger.info("[caldav] Deleted event uid=%s", uid)
+                            return {"uid": uid, "deleted": True}
+                    except Exception:  # noqa: BLE001
+                        continue
+
+                return {"error": f"Event not found (UID: {uid})"}
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[caldav] caldav_delete_event handler failed: %s", exc)
+                return {"error": str(exc)}
+
+        # ------------------------------------------------------------------
+        # Assemble and return tool definition list
+        # ------------------------------------------------------------------
+        return [
+            {
+                "name": "caldav_list_events",
+                "description": (
+                    "List calendar events from connected CalDAV calendars. "
+                    "Ingests a fresh event list and returns it, optionally filtered "
+                    "by date range, calendar name, or result count."
+                ),
+                "parameters": {
+                    "date_from": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "ISO 8601 UTC lower bound for dtstart "
+                            "(e.g. '2026-03-01T00:00:00Z'). Omit for no lower bound."
+                        ),
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "ISO 8601 UTC upper bound for dtstart "
+                            "(e.g. '2026-04-01T00:00:00Z'). Omit for no upper bound."
+                        ),
+                    },
+                    "calendar_name": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Return only events from this calendar (exact name match)."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "required": False,
+                        "description": "Maximum number of events to return.",
+                    },
+                },
+                "returns": {
+                    "events": {
+                        "type": "array",
+                        "description": (
+                            "List of event dicts with uid, summary, dtstart, dtend, "
+                            "location, attendees, recurrence, all_day, calendar_name."
+                        ),
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of events returned.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if the operation failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 60},
+                "handler": _list_events_execute,
+            },
+            {
+                "name": "caldav_get_event",
+                "description": (
+                    "Fetch a single calendar event by its iCalendar UID. "
+                    "Checks the local knowledge store first, then queries the "
+                    "CalDAV server directly if no cached fact is found."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "string",
+                        "required": True,
+                        "description": "The unique identifier (UID) of the calendar event.",
+                    },
+                },
+                "returns": {
+                    "event": {
+                        "type": "object",
+                        "description": (
+                            "Event dict with uid, summary, dtstart (ISO 8601), "
+                            "dtend (ISO 8601), location, attendees, recurrence, "
+                            "all_day, calendar_name."
+                        ),
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "'knowledge_store' or 'caldav'.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if the event was not found.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _get_event_execute,
+            },
+            {
+                "name": "caldav_create_event",
+                "description": (
+                    "Create a new calendar event on the CalDAV server. "
+                    "Returns the generated UID and event details on success."
+                ),
+                "parameters": {
+                    "summary": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Event title / summary.",
+                    },
+                    "dtstart": {
+                        "type": "string",
+                        "required": True,
+                        "description": (
+                            "Event start as ISO 8601 UTC datetime "
+                            "(e.g. '2026-04-01T09:00:00Z')."
+                        ),
+                    },
+                    "dtend": {
+                        "type": "string",
+                        "required": True,
+                        "description": (
+                            "Event end as ISO 8601 UTC datetime "
+                            "(e.g. '2026-04-01T10:00:00Z')."
+                        ),
+                    },
+                    "location": {
+                        "type": "string",
+                        "required": False,
+                        "description": "Optional event location.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "required": False,
+                        "description": "Optional event description / notes.",
+                    },
+                    "calendar_name": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Target calendar name. Uses the first available "
+                            "calendar when omitted."
+                        ),
+                    },
+                },
+                "returns": {
+                    "uid": {
+                        "type": "string",
+                        "description": "Assigned UID of the newly created event.",
+                    },
+                    "summary": {"type": "string"},
+                    "dtstart": {
+                        "type": "string",
+                        "description": "ISO 8601 UTC start time.",
+                    },
+                    "dtend": {
+                        "type": "string",
+                        "description": "ISO 8601 UTC end time.",
+                    },
+                    "calendar_name": {
+                        "type": "string",
+                        "description": "Calendar the event was added to.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if creation failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _create_event_execute,
+            },
+            {
+                "name": "caldav_update_event",
+                "description": (
+                    "Update an existing calendar event on the CalDAV server by UID. "
+                    "Only the fields supplied in params are modified; all other "
+                    "VEVENT properties are preserved."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "string",
+                        "required": True,
+                        "description": "The UID of the event to update.",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "required": False,
+                        "description": "New event title.",
+                    },
+                    "dtstart": {
+                        "type": "string",
+                        "required": False,
+                        "description": "New start time as ISO 8601 UTC datetime.",
+                    },
+                    "dtend": {
+                        "type": "string",
+                        "required": False,
+                        "description": "New end time as ISO 8601 UTC datetime.",
+                    },
+                    "location": {
+                        "type": "string",
+                        "required": False,
+                        "description": "New location. Pass empty string to clear.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "required": False,
+                        "description": "New description. Pass empty string to clear.",
+                    },
+                },
+                "returns": {
+                    "uid": {"type": "string"},
+                    "updated": {
+                        "type": "boolean",
+                        "description": "True when the event was successfully updated.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if the update failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _update_event_execute,
+            },
+            {
+                "name": "caldav_delete_event",
+                "description": (
+                    "Delete a calendar event from the CalDAV server by UID. "
+                    "Searches all connected calendars before deleting."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "string",
+                        "required": True,
+                        "description": "The UID of the event to delete.",
+                    },
+                },
+                "returns": {
+                    "uid": {"type": "string"},
+                    "deleted": {
+                        "type": "boolean",
+                        "description": "True when the event was found and deleted.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": (
+                            "Error message if deletion failed or the event "
+                            "was not found."
+                        ),
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _delete_event_execute,
+            },
+        ]
