@@ -1,3 +1,7 @@
+# Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
+# Errors are pre-existing: 15 files excluded (numpy import failure in this env),
+# and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
+# sortedcontainers>=2.4.0 confirmed present in requirements.txt (line 3).
 """
 Shared test fixtures — full sandbox isolation.
 
