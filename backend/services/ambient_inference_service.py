@@ -37,7 +37,7 @@ def _load_config() -> dict:
 class AmbientInferenceService:
     """Deterministic ambient inference from client context + behavioral signals."""
 
-    def __init__(self, place_learning_service=None, temporal_pattern_service=None):
+    def __init__(self, place_learning_service=None):
         """Initialize the ambient inference service.
 
         Args:
@@ -45,14 +45,10 @@ class AmbientInferenceService:
                 used to look up learned place patterns before falling back to
                 heuristics. When ``None``, only heuristics are used for place
                 inference.
-            temporal_pattern_service: Optional ``TemporalPatternService``
-                instance used to supply learned energy predictions. When
-                ``None``, the config-based circadian curve is used instead.
         """
         self._config = _load_config()
         self._store = MemoryClientService.create_connection()
         self._place_learning = place_learning_service
-        self._temporal_patterns = temporal_pattern_service
 
     def infer(self, ctx: dict, emit_events: bool = False) -> dict:
         """
@@ -83,7 +79,6 @@ class AmbientInferenceService:
 
         if emit_events:
             self._emit_transition_events(results)
-            self._check_anomalies(results)
 
         return results
 
@@ -300,28 +295,15 @@ class AmbientInferenceService:
         """
         Infer energy: high / moderate / low.
 
-        Priority: learned temporal patterns (if available + confidence >= 0.7),
-        then config-based circadian curve, then behavioral penalties.
+        Uses a config-based circadian curve (``energy.high_hours`` /
+        ``energy.low_hours`` from ``ambient-inference.json``) followed by
+        session-length and battery behavioral penalties.
         """
         hour = self._extract_hour(ctx)
         if hour is None:
             return None
 
-        # Try learned energy prediction first (temporal pattern mining)
-        if self._temporal_patterns:
-            try:
-                day = self._extract_day_of_week(ctx)
-                prediction = self._temporal_patterns.predict('energy', day, hour)
-                if prediction and prediction['confidence'] >= 0.7:
-                    # Still apply behavioral penalties to learned prediction
-                    score = {'high': 2, 'moderate': 1, 'low': 0}.get(
-                        prediction['value'], 1)
-                    score = self._apply_energy_penalties(ctx, score)
-                    return {0: "low", 1: "moderate", 2: "high"}.get(score, "moderate")
-            except Exception:
-                pass  # Fall through to config-based logic
-
-        # Fallback: config-based circadian curve (original logic)
+        # Config-based circadian curve
         cfg = self._config.get("energy", {})
         high_hours = cfg.get("high_hours", [8, 9, 10, 11])
         low_hours = cfg.get("low_hours", [0, 1, 2, 3, 4, 5, 23])
@@ -524,52 +506,6 @@ class AmbientInferenceService:
         dlam = math.radians(lon2 - lon1)
         a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-    def _extract_day_of_week(self, ctx: dict) -> Optional[int]:
-        """Extract current day of week (0=Monday) from local_time ISO string."""
-        local_time = ctx.get("local_time", "")
-        if not local_time:
-            return None
-        try:
-            from datetime import datetime as _dt
-            dt = _dt.fromisoformat(local_time.replace("Z", "+00:00"))
-            return dt.weekday()
-        except (ValueError, AttributeError):
-            return None
-
-    def _check_anomalies(self, inferences: dict):
-        """Emit silent behavioral_anomaly events when current state deviates
-        from learned temporal patterns."""
-        if not self._temporal_patterns:
-            return
-
-        try:
-            from services.event_bridge_service import EventBridgeService, BridgeEvent
-
-            bridge = EventBridgeService()
-
-            for obs_type, current_value in inferences.items():
-                if current_value is None or obs_type == 'device_context':
-                    continue
-
-                anomaly = self._temporal_patterns.detect_anomaly(obs_type, current_value)
-                if anomaly:
-                    bridge.submit_event(BridgeEvent(
-                        event_type='behavioral_anomaly',
-                        from_state=anomaly['expected'],
-                        to_state=anomaly['actual'],
-                        confidence=anomaly['predicted_prob'],
-                        payload={
-                            'obs_type': obs_type,
-                            'expected': anomaly['expected'],
-                            'actual': anomaly['actual'],
-                            'predicted_prob': anomaly['predicted_prob'],
-                            'actual_prob': anomaly['actual_prob'],
-                        },
-                        silent=True,
-                    ))
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Anomaly check failed: {e}")
 
     def is_user_deep_focus(self) -> bool:
         """
