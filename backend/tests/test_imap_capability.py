@@ -144,3 +144,84 @@ def test_ingest_incremental():
          patch.object(cap, "store_credential"):
         results = cap.ingest()
     assert len(results) == 1
+
+
+# --- classify_email ---
+
+def _item(addr="a@b.com", subj="Hi", unsub=False, reply_to=""):
+    return {"has_unsubscribe": unsub, "from_addr": addr, "subject": subj, "in_reply_to": reply_to}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("item,expected", [
+    (_item(unsub=True), "noise"),
+    (_item(addr="noreply@github.com"), "noise"),
+    (_item(addr="newsletter@co.com"), "noise"),
+    (_item(reply_to="<prev@ex>"), "actionable"),
+    (_item(subj="Please confirm"), "actionable"),
+    (_item(subj="Invoice #123"), "actionable"),
+    (_item(addr="colleague@work.com", subj="Meeting notes"), "informational"),
+])
+def test_classify_email(item, expected):
+    from capabilities.imap_capability.capability import classify_email
+    assert classify_email(item) == expected
+
+
+# --- understand ---
+
+def _email_item(uid=1, msg_id="<m@ex>", subj="Hi", name="Bob", addr="bob@ex.com", unsub=False, reply=""):
+    return {"uid": uid, "message_id": msg_id, "subject": subj, "from_name": name,
+            "from_addr": addr, "has_unsubscribe": unsub, "in_reply_to": reply}
+
+
+@pytest.mark.unit
+def test_understand_empty_returns_empty():
+    assert _make().understand([]) == []
+
+
+@pytest.mark.unit
+def test_understand_classifies_and_stores():
+    cap = _make()
+    items = [
+        _email_item(),
+        _email_item(uid=2, msg_id="<m2@ex>", unsub=True),
+        _email_item(uid=3, msg_id="<m3@ex>", reply="<prev@ex>"),
+    ]
+    ks_mock = MagicMock()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = cap.understand(items)
+    assert result[0]["triage"] == "informational"
+    assert result[1]["triage"] == "noise"
+    assert result[2]["triage"] == "actionable"
+    assert result[2]["is_thread"] is True
+    assert ks_mock.store.call_count == 3
+    assert ks_mock.store.call_args_list[0].kwargs["entity"] == "email"
+
+
+@pytest.mark.unit
+def test_understand_survives_exception():
+    items = [_email_item()]
+    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
+        assert _make().understand(items) == items
+
+
+# --- monitor ---
+
+@pytest.mark.unit
+def test_monitor_calls_ingest_understand():
+    cap = _make()
+    with patch.object(cap, "ingest", return_value=[{"uid": 1}]) as ing, \
+         patch.object(cap, "understand") as und:
+        cap.monitor()
+    ing.assert_called_once()
+    und.assert_called_once()
+
+
+@pytest.mark.unit
+def test_monitor_skips_understand_when_empty():
+    cap = _make()
+    with patch.object(cap, "ingest", return_value=[]), \
+         patch.object(cap, "understand") as und:
+        cap.monitor()
+    und.assert_not_called()

@@ -11,6 +11,7 @@ import email.policy
 import email.utils
 import logging
 import pathlib
+import re
 from datetime import timedelta
 
 import yaml
@@ -30,6 +31,38 @@ _K_TLS = "imap:tls"
 _K_WATERMARK = "imap:last_uid"
 
 _INITIAL_DAYS = 7
+
+# ---------------------------------------------------------------------------
+# Deterministic triage heuristics
+# ---------------------------------------------------------------------------
+
+_NOISE_ADDR_RE = re.compile(
+    r"(noreply|no-reply|donotreply|notifications?|mailer-daemon|bounce|"
+    r"marketing|newsletter|promo|updates?@)",
+    re.IGNORECASE,
+)
+
+_ACTIONABLE_SUBJ_RE = re.compile(
+    r"(deadline|confirm|approve|invoice|urgent|action.?required|please\s+re(ply|view|spond)|"
+    r"payment|overdue|expir|reminder|required|asap|important|request|sign\b|"
+    r"rsvp|accept|decline|awaiting)",
+    re.IGNORECASE,
+)
+
+
+def classify_email(item: dict) -> str:
+    """Classify an email header dict as noise, informational, or actionable."""
+    if item.get("has_unsubscribe"):
+        return "noise"
+    addr = item.get("from_addr", "")
+    if _NOISE_ADDR_RE.search(addr):
+        return "noise"
+    subj = item.get("subject", "")
+    if item.get("in_reply_to"):
+        return "actionable"
+    if _ACTIONABLE_SUBJ_RE.search(subj):
+        return "actionable"
+    return "informational"
 
 
 def _hdr(msg, name):
@@ -172,10 +205,43 @@ class ImapCapability(AbstractCapability):
                 pass
 
     def understand(self, items):
+        """Classify headers and store as knowledge facts.
+
+        Each email is tagged noise/informational/actionable via deterministic
+        heuristics, then persisted via KnowledgeService so the LLM can reason
+        about email context.
+        """
+        if not items:
+            return items
+        try:
+            from services.database_service import get_shared_db_service
+            from services.knowledge_service import KnowledgeService
+
+            ks = KnowledgeService(get_shared_db_service())
+            for item in items:
+                item["triage"] = classify_email(item)
+                item["is_thread"] = bool(item.get("in_reply_to"))
+                self._store_email_fact(ks, item)
+        except Exception as exc:
+            logger.error("[imap] understand: %s", exc, exc_info=True)
         return items
 
+    @staticmethod
+    def _store_email_fact(ks, item):
+        """Persist one email header as a knowledge fact + sender relationship."""
+        key_id = item.get("message_id") or f"uid:{item['uid']}"
+        sender = item.get("from_name") or item.get("from_addr", "unknown")
+        ks.store(
+            kind="fact", entity="email", key=f"msg:{key_id}",
+            value=f"[{item['triage']}] {sender}: {item.get('subject', '')}",
+            data=item, decay_class="fast", confidence=0.7, source="imap",
+        )
+
     def monitor(self):
-        pass
+        """Fetch new headers and run triage + knowledge storage."""
+        items = self.ingest()
+        if items:
+            self.understand(items)
 
     def act(self, action, params):
         return {"error": f"'{action}' not implemented"}
