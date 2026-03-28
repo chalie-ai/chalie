@@ -296,7 +296,8 @@ class VaultService:
         try:
             row = self._load_vault_config()
             return "locked" if row is not None else "uninitialized"
-        except Exception:
+        except Exception as exc:
+            logger.warning("[Vault] get_state() failed: %s", exc)
             return "uninitialized"
 
     def lock(self) -> None:

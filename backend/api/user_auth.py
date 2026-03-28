@@ -55,7 +55,8 @@ def _get_vault_state() -> str:
     try:
         from services.vault_service import get_vault_service
         return get_vault_service().get_state()
-    except Exception:
+    except Exception as exc:
+        logger.warning("[Auth] vault state check failed: %s", exc)
         return "uninitialized"
 
 
