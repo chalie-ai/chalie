@@ -235,7 +235,7 @@ class DocumentProcessingService:
             logger.info(f"[DOC PROC] {fname} complete — total: {_elapsed()}")
 
             # Step 14: Document classification (non-fatal enrichment)
-            # Infers category, project, and date via LLM.
+            # Infers category, project, and date via embedding similarity.
             try:
                 from services.document_classification_service import DocumentClassificationService
                 folder_context = ''

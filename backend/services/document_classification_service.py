@@ -1,29 +1,34 @@
 """
-Document Classification Service — LLM-driven category, project, and date inference.
+Document Classification Service — embedding-based category, project, and date inference.
 
-Classifies documents into natural-language categories and projects by sending
-the document summary, extracted metadata, and existing groups to an LLM.
-Registered as cognitive job 'document-classification' in the Brain dashboard.
+Classifies documents by comparing their summary embedding against existing
+category/project label embeddings (cosine similarity via dot product on
+L2-normalised vectors from EmbeddingService).
+
+No LLM calls. No fixed taxonomy. Categories grow organically as documents
+are added. When no existing label scores above threshold, a new label is
+derived from the document's extracted metadata (keyword-detected type,
+key terms, or filename).
 """
 
-import json
 import logging
 import re
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Minimum cosine similarity to reuse an existing label.
+# Below this, a new label is generated from metadata.
+CATEGORY_THRESHOLD = 0.45
+PROJECT_THRESHOLD = 0.50
 
 
 class DocumentClassificationService:
     """Infer doc_category, doc_project, and doc_date for a document."""
 
     def __init__(self, db_service=None):
-        """Initialize the classification service.
-
-        Args:
-            db_service: Optional :class:`~services.database_service.DatabaseService`
-                instance. Falls back to the shared singleton when ``None``.
-        """
         self.db = db_service
 
     def classify_document(
@@ -36,7 +41,7 @@ class DocumentClassificationService:
         folder_context: str = '',
     ) -> Optional[Dict[str, Any]]:
         """
-        Run LLM classification on a document.
+        Run embedding-based classification on a document.
 
         Returns {"category": ..., "project": ..., "date": ...} or None on failure.
         Skips documents with meta_locked=1.
@@ -55,31 +60,33 @@ class DocumentClassificationService:
             return None
 
         try:
-            result = self._call_llm(
-                summary=summary,
-                clean_text=clean_text,
-                metadata=metadata,
-                original_name=original_name,
-                folder_context=folder_context,
-                existing_groups=self._get_existing_groups(doc_service),
+            existing = self._get_existing_groups(doc_service)
+
+            # Build a rich text representation for embedding
+            classify_text = self._build_classify_text(
+                summary, metadata, original_name, folder_context,
             )
-            if not result:
-                return None
 
-            # Apply date cascade: LLM date → extracted dates → created_at
-            doc_date = result.get('date') or ''
-            if not doc_date or doc_date == 'unknown':
-                doc_date = self._fallback_date(metadata, doc)
+            category = self._match_or_create_label(
+                classify_text,
+                existing.get('categories', []),
+                CATEGORY_THRESHOLD,
+                fallback_label=self._infer_category(metadata, original_name),
+            )
+            project = self._match_or_create_label(
+                classify_text,
+                existing.get('projects', []),
+                PROJECT_THRESHOLD,
+                fallback_label=self._infer_project(metadata, folder_context),
+            )
 
-            category = result.get('category') or None
-            project = result.get('project') or None
-            if project and project.lower() in ('generic', 'none', 'unknown', 'n/a', ''):
-                project = None
+            # Date cascade: extracted dates → created_at
+            doc_date = self._fallback_date(metadata, doc)
 
             doc_service.update_classification(
                 doc_id,
                 category=category,
-                project=project,
+                project=project or None,
                 doc_date=doc_date or None,
             )
 
@@ -93,108 +100,133 @@ class DocumentClassificationService:
             logger.warning(f"[DOC CLASS] Classification failed for {doc_id} (non-fatal): {e}")
             return None
 
-    def _call_llm(
+    # ─────────────────────────────────────────────
+    # Embedding-based matching
+    # ─────────────────────────────────────────────
+
+    def _match_or_create_label(
+        self,
+        doc_text: str,
+        existing_labels: List[str],
+        threshold: float,
+        fallback_label: str,
+    ) -> str:
+        """Match doc_text against existing labels by cosine similarity.
+
+        Returns the best-matching existing label if above threshold,
+        otherwise returns fallback_label.
+        """
+        if not existing_labels:
+            return fallback_label
+
+        from services.embedding_service import get_embedding_service
+        emb_svc = get_embedding_service()
+
+        doc_emb = emb_svc.generate_embedding_np(doc_text)
+        label_embs = emb_svc.generate_embeddings_batch(existing_labels)
+
+        best_sim = -1.0
+        best_label = fallback_label
+        for label, label_emb in zip(existing_labels, label_embs, strict=True):
+            sim = float(np.dot(doc_emb, label_emb))
+            if sim > best_sim:
+                best_sim = sim
+                best_label = label
+
+        if best_sim >= threshold:
+            return best_label
+        return fallback_label
+
+    # ─────────────────────────────────────────────
+    # Text construction
+    # ─────────────────────────────────────────────
+
+    def _build_classify_text(
         self,
         summary: str,
-        clean_text: str,
         metadata: dict,
         original_name: str,
         folder_context: str,
-        existing_groups: dict,
-    ) -> Optional[dict]:
-        """Send a classification request to the assigned LLM provider.
+    ) -> str:
+        """Build a rich text blob for embedding from document signals."""
+        parts = []
+        if original_name:
+            parts.append(original_name)
+        if folder_context:
+            parts.append(folder_context)
+        if summary:
+            parts.append(summary[:500])
 
-        Args:
-            summary: Document summary text.
-            clean_text: Normalized full document text (truncated to 2000 chars).
-            metadata: Extracted metadata dict (companies, dates, document_type, etc.).
-            original_name: Original filename of the document.
-            folder_context: Optional watched-folder label for context.
-            existing_groups: Dict with ``categories`` and ``projects`` lists for
-                consistency nudging.
+        doc_type = metadata.get('document_type', {}).get('value', '')
+        if doc_type and doc_type != 'document':
+            parts.append(f"Type: {doc_type}")
+        if metadata.get('companies'):
+            names = [c['name'] for c in metadata['companies'][:5]]
+            parts.append(f"Companies: {', '.join(names)}")
+        if metadata.get('key_terms'):
+            parts.append(f"Terms: {', '.join(metadata['key_terms'][:8])}")
 
-        Returns:
-            Parsed JSON dict with ``category``, ``project``, and ``date`` keys,
-            or ``None`` on LLM or parse failure.
-        """
-        try:
-            from services.config_service import ConfigService
-            from services.llm_service import create_llm_service
+        return ' — '.join(parts) if parts else 'document'
 
-            agent_cfg = ConfigService.resolve_agent_config('document-classification')
-            prompt_template = ConfigService.get_agent_prompt('document-classification')
-            if not prompt_template:
-                logger.warning("[DOC CLASS] No classification prompt found")
-                return None
+    # ─────────────────────────────────────────────
+    # Fallback label generation (no LLM)
+    # ─────────────────────────────────────────────
 
-            # Build metadata summary
-            meta_lines = []
-            doc_type = metadata.get('document_type', {}).get('value', '')
-            if doc_type and doc_type != 'document':
-                meta_lines.append(f"Detected type: {doc_type}")
-            if metadata.get('companies'):
-                meta_lines.append(
-                    f"Companies: {', '.join(c['name'] for c in metadata['companies'][:5])}"
-                )
-            if metadata.get('dates'):
-                meta_lines.append(
-                    f"Dates found: {', '.join(d['value'] for d in metadata['dates'][:5])}"
-                )
-            if metadata.get('monetary_values'):
-                money = [f"{v['currency']} {v['amount']}" for v in metadata['monetary_values'][:5]]
-                meta_lines.append(f"Monetary values: {', '.join(money)}")
-            if metadata.get('key_terms'):
-                meta_lines.append(f"Key terms: {', '.join(metadata['key_terms'][:8])}")
-            metadata_summary = '\n'.join(meta_lines) if meta_lines else 'No metadata extracted.'
+    def _infer_category(self, metadata: dict, original_name: str) -> str:
+        """Derive a category label from metadata when no existing label matches."""
+        # Prefer keyword-detected document type
+        doc_type = metadata.get('document_type', {}).get('value', '')
+        if doc_type and doc_type != 'document':
+            return doc_type.title()
 
-            # Build existing groups context
-            groups_text = ''
-            if existing_groups.get('categories'):
-                groups_text += f"Existing categories: {', '.join(existing_groups['categories'])}\n"
-            if existing_groups.get('projects'):
-                groups_text += f"Existing projects: {', '.join(existing_groups['projects'])}\n"
+        # Fall back to filename hints
+        name_lower = (original_name or '').lower()
+        for hint, label in (
+            ('invoice', 'Invoice'), ('receipt', 'Receipt'),
+            ('contract', 'Contract'), ('warranty', 'Warranty'),
+            ('manual', 'Manual'), ('policy', 'Policy'),
+            ('agreement', 'Agreement'), ('report', 'Report'),
+            ('letter', 'Letter'), ('memo', 'Memo'),
+            ('resume', 'Resume'), ('cv', 'Resume'),
+        ):
+            if hint in name_lower:
+                return label
 
-            # Truncate text for context
-            truncated_text = (clean_text or '')[:2000]
+        # Last resort: use the most prominent key term
+        terms = metadata.get('key_terms', [])
+        if terms:
+            return terms[0].title()
 
-            system_prompt = (
-                prompt_template
-                .replace('{{original_name}}', original_name or 'Unknown')
-                .replace('{{summary}}', summary or '')
-                .replace('{{metadata_summary}}', metadata_summary)
-                .replace('{{folder_context}}', folder_context or 'None')
-                .replace('{{existing_groups}}', groups_text or 'None yet — this is the first document.')
-                .replace('{{clean_text}}', truncated_text)
-            )
+        return 'Document'
 
-            llm = create_llm_service(agent_cfg)
-            response = llm.send_message(system_prompt, "Classify this document.")
+    def _infer_project(self, metadata: dict, folder_context: str) -> Optional[str]:
+        """Derive a project label from folder context or metadata."""
+        # Watched folder label is a strong project signal
+        if folder_context:
+            # Extract label from "Watched folder: <label>" or subfolder path
+            pattern = r'Watched folder:\s*(.+?)(?:\s*/\s*(.+))?$'
+            match = re.match(pattern, folder_context)
+            if match:
+                subfolder = match.group(2)
+                if subfolder and subfolder != '.':
+                    return subfolder.strip().title()
+                label = match.group(1).strip()
+                if label and label != '/':
+                    return label.title()
 
-            result = json.loads(response.text)
-            if 'category' in result:
-                return result
+        # Companies can hint at a project
+        companies = metadata.get('companies', [])
+        if len(companies) == 1:
+            return companies[0]['name']
 
-            logger.warning("[DOC CLASS] Response missing 'category' key")
-            return None
+        return None
 
-        except json.JSONDecodeError as e:
-            logger.warning(f"[DOC CLASS] Failed to parse LLM JSON: {e}")
-            return None
-        except Exception as e:
-            logger.warning(f"[DOC CLASS] LLM call failed: {e}")
-            return None
+    # ─────────────────────────────────────────────
+    # Existing groups
+    # ─────────────────────────────────────────────
 
     def _get_existing_groups(self, doc_service) -> dict:
-        """Fetch existing document category and project values for LLM context.
-
-        Args:
-            doc_service: :class:`~services.document_service.DocumentService` instance
-                used to query existing classification groups.
-
-        Returns:
-            Dict with ``categories`` (list of str) and ``projects`` (list of str),
-            each capped at 20 entries.
-        """
+        """Fetch existing category and project values for similarity matching."""
         categories = doc_service.get_classification_groups('doc_category')
         projects = doc_service.get_classification_groups('doc_project')
         return {
@@ -202,51 +234,32 @@ class DocumentClassificationService:
             'projects': [g['value'] for g in projects if g['value'] != 'Uncategorized'][:20],
         }
 
+    # ─────────────────────────────────────────────
+    # Date handling (unchanged)
+    # ─────────────────────────────────────────────
+
     def _fallback_date(self, metadata: dict, doc: dict) -> str:
-        """Apply date cascade: extracted dates → document created_at.
-
-        Args:
-            metadata: Extracted metadata dict with optional ``dates`` list.
-            doc: Document dict with ``created_at`` field.
-
-        Returns:
-            Normalized date string (``YYYY-MM-DD``) or empty string if no date found.
-        """
-        # Try extracted dates
+        """Apply date cascade: extracted dates → document created_at."""
         dates = metadata.get('dates', [])
         if dates:
-            # Pick the first well-formed date
             for d in dates:
                 val = d.get('value', '')
-                # Try to normalize to YYYY-MM-DD
                 normalized = self._normalize_date(val)
                 if normalized:
                     return normalized
 
-        # Fall back to document created_at
         created = doc.get('created_at', '')
         if created:
-            return created[:10]  # YYYY-MM-DD from ISO datetime
+            return created[:10]
 
         return ''
 
     def _normalize_date(self, date_str: str) -> str:
-        """Attempt to normalize a date string to ISO ``YYYY-MM-DD`` format.
-
-        Args:
-            date_str: Raw date string in any of the supported formats
-                (ISO, ``DD/MM/YYYY``, ``MM/DD/YYYY``, ``DD-MM-YYYY``).
-
-        Returns:
-            Normalized date string in ``YYYY-MM-DD`` format, or empty string
-            if the input cannot be parsed.
-        """
+        """Normalize a date string to YYYY-MM-DD format."""
         if not date_str:
             return ''
-        # Already in ISO format
         if re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
             return date_str[:10]
-        # Common formats: DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY
         for fmt in (
             r'(\d{1,2})/(\d{1,2})/(\d{4})',
             r'(\d{1,2})-(\d{1,2})-(\d{4})',
@@ -254,7 +267,6 @@ class DocumentClassificationService:
             m = re.match(fmt, date_str)
             if m:
                 a, b, year = int(m.group(1)), int(m.group(2)), m.group(3)
-                # Assume DD/MM/YYYY if first > 12
                 if a > 12:
                     return f"{year}-{b:02d}-{a:02d}"
                 return f"{year}-{a:02d}-{b:02d}"
