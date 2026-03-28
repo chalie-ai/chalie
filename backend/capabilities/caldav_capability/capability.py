@@ -902,6 +902,14 @@ class CaldavCapability(AbstractCapability):
                         (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(),
                          conflict_uid, now.isoformat()),
                     )
+                    try:
+                        from capabilities.signal_bridge import emit_capability_signal
+                        emit_capability_signal(
+                            "caldav", "novel_observation",
+                            conflict_msg, source="caldav:conflict",
+                        )
+                    except Exception:
+                        pass
 
                 # Daily digest (recurring prompt, hidden)
                 cursor.execute(
