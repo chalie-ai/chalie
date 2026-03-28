@@ -68,7 +68,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
     exec_globals = dict(_RESTRICTED_GLOBALS)
 
     try:
-        exec(byte_code, exec_globals)  # noqa: S102 -- intentional restricted exec
+        exec(byte_code, exec_globals)
     except Exception as exc:
         captured = str(exec_globals.get("_print", PrintCollector()))
         error_msg = f"{type(exc).__name__}: {exc}"

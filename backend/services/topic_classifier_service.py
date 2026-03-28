@@ -35,7 +35,7 @@ def _get_embed_service():
     return _EMBED_SERVICE
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 def generate_embedding(text: str) -> np.ndarray:

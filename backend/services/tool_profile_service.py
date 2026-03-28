@@ -42,7 +42,7 @@ def _compute_manifest_hash(manifest: dict) -> str:
     return hashlib.md5(content.encode()).hexdigest()
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 def _read_tool_source(tool_name: str, max_lines: int = 3000) -> str:

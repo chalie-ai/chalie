@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MOMENTS]"
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class MomentService:

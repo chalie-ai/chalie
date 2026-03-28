@@ -870,11 +870,10 @@ def process_tool_dialog(text: str, tool_name: str, trigger_prompt: str) -> str:
         # Build minimal routing signals — tool dialogs don't need full signal collection
         signals = {'_prompt_text': text}
 
-        assembled_context = None
         try:
             from services.topic_context import TopicContext
             _tool_ctx = TopicContext(topic=topic, thread_id=thread_id)
-            assembled_context = get_context_assembly_service().assemble(
+            get_context_assembly_service().assemble(
                 prompt=text, topic=topic, thread_id=thread_id,
                 context=_tool_ctx,
             )
@@ -931,15 +930,11 @@ def store_tool_dialog_memory(tool_name: str, turns: list):
     if not turns:
         return
 
-    topic = f'tool_dialog:{tool_name}'
-
     # Build compact exchange summary
     if len(turns) <= 2:
         prompt_msg = turns[0].get('request', '')
-        response_msg = turns[-1].get('response', '')
     else:
         prompt_msg = turns[0].get('request', '') + f'\n[{len(turns) - 2} intermediate turns omitted]'
-        response_msg = turns[-1].get('response', '')
 
     try:
         enqueue_trait_extraction(
@@ -1752,16 +1747,13 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         logging.warning(f"[DIGEST] Interaction log not available: {e}")
 
     # Initialize event bus
-    event_bus = EventBusService()
+    EventBusService()
 
     # Initialize metrics
     metrics = MetricsService()
     trace_id = metrics.start_trace()
     metrics.record_counter('requests_total')
     request_start_time = time.time()
-
-    # Initialize mode router
-    mode_router = get_mode_router()
 
     # ═══════════════════════════════════════════════════════════
     # PHASE A: IMMEDIATE COMMIT (before any LLM call)
@@ -1992,19 +1984,10 @@ def digest_worker(text: str, metadata: dict = None) -> str:
                         f"similarity={distraction['similarity_to_focus']:.3f} "
                         f"to '{distraction['focus_description'][:50]}'"
                     )
-                    # Store as routing signal for focus distraction detection
-                    signals_extra = {'focus_distraction': True,
-                                     'focus_similarity': distraction['similarity_to_focus']}
-                else:
-                    signals_extra = {}
-            else:
-                signals_extra = {}
         except Exception as _de:
             logging.debug(f"[DIGEST] Distraction check failed: {_de}")
-            signals_extra = {}
     except Exception as _fe:
         logging.debug(f"[DIGEST] Focus services failed: {_fe}")
-        signals_extra = {}
 
     # Step 8: Cache this topic as the most recent
     recent_topic_service.set_recent_topic(topic)

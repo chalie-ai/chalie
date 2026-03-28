@@ -134,7 +134,7 @@ class EngagementSignalService:
             # Score is in the unremarkable band — nothing to surface
             return []
 
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug(
                 "%s Failed to read engagement score — returning []",
                 LOG_PREFIX,

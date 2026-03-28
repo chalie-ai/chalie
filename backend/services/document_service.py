@@ -35,7 +35,7 @@ _DEFAULT_DOCS_ROOT = str(Path(__file__).resolve().parent.parent / "data" / "docu
 DOCUMENTS_ROOT = os.environ.get('DOCUMENTS_ROOT', _DEFAULT_DOCS_ROOT)
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
+from services.embedding_utils import pack_embedding as _pack_embedding
 
 
 class DocumentService:
