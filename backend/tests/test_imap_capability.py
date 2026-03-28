@@ -1,7 +1,8 @@
-"""Unit tests for ImapCapability — credential and connect skeleton."""
+"""Unit tests for ImapCapability — credential, connect, and ingest."""
 
 from __future__ import annotations
 
+from email.mime.text import MIMEText
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +17,20 @@ def _make():
     from capabilities.imap_capability.capability import ImapCapability
     return ImapCapability()
 
+
+def _email_bytes(subject="Test", from_="John <john@example.com>",
+                 to="jane@example.com", date="Mon, 28 Mar 2026 10:00:00 +0000",
+                 msg_id="<123@example.com>"):
+    msg = MIMEText("body", "plain")
+    msg["From"] = from_
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg["Date"] = date
+    msg["Message-ID"] = msg_id
+    return msg.as_bytes()
+
+
+# --- Identity & configure ---
 
 @pytest.mark.unit
 def test_identity():
@@ -71,3 +86,61 @@ def test_connect_failure():
     with patch.object(cap, "load_credential", side_effect=_CREDS.get), \
          patch("imapclient.IMAPClient", side_effect=Exception("refused")):
         assert cap.connect() is False
+
+
+# --- parse_headers ---
+
+@pytest.mark.unit
+def test_parse_headers():
+    from capabilities.imap_capability.capability import parse_headers
+    r = parse_headers(42, _email_bytes())
+    assert (r["uid"], r["from_addr"], r["subject"]) == (42, "john@example.com", "Test")
+    msg = MIMEText("body", "plain")
+    msg["From"] = "news@example.com"
+    msg["List-Unsubscribe"] = "<mailto:unsub@example.com>"
+    assert parse_headers(1, msg.as_bytes())["has_unsubscribe"] is True
+
+
+# --- ingest ---
+
+@pytest.mark.unit
+def test_ingest_not_connected():
+    cap = _make()
+    assert cap.ingest() == []
+
+
+@pytest.mark.unit
+def test_ingest_fresh():
+    cap = _make()
+    cap._connected = True
+    mc = MagicMock()
+    mc.search.return_value = [100, 101]
+    mc.fetch.return_value = {
+        100: {b"RFC822.HEADER": _email_bytes(subject="A")},
+        101: {b"RFC822.HEADER": _email_bytes(subject="B")},
+    }
+    creds = {**_CREDS, "imap:last_uid": None}
+    with patch.object(cap, "load_credential", side_effect=creds.get), \
+         patch("imapclient.IMAPClient", return_value=mc), \
+         patch.object(cap, "store_credential") as sc:
+        results = cap.ingest()
+    assert [r["subject"] for r in results] == ["A", "B"]
+    sc.assert_called_with("imap:last_uid", "101")
+
+
+@pytest.mark.unit
+def test_ingest_incremental():
+    cap = _make()
+    cap._connected = True
+    mc = MagicMock()
+    mc.search.return_value = [200, 201]
+    mc.fetch.return_value = {
+        200: {b"RFC822.HEADER": _email_bytes(subject="Old")},
+        201: {b"RFC822.HEADER": _email_bytes(subject="New")},
+    }
+    creds = {**_CREDS, "imap:last_uid": "200"}
+    with patch.object(cap, "load_credential", side_effect=creds.get), \
+         patch("imapclient.IMAPClient", return_value=mc), \
+         patch.object(cap, "store_credential"):
+        results = cap.ingest()
+    assert len(results) == 1
