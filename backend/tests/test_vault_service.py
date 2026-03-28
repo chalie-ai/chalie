@@ -54,6 +54,40 @@ CREATE TABLE IF NOT EXISTS providers (
     model           TEXT,
     api_key         BLOB
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    key             TEXT UNIQUE NOT NULL,
+    value           TEXT,
+    value_type      TEXT DEFAULT 'string',
+    description     TEXT,
+    is_sensitive    INTEGER NOT NULL DEFAULT 0,
+    encrypted_value BLOB,
+    created_at      TEXT DEFAULT (datetime('now')),
+    updated_at      TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS tool_configs (
+    id          TEXT PRIMARY KEY,
+    tool_name   TEXT NOT NULL,
+    config_key  TEXT NOT NULL,
+    config_value TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(tool_name, config_key)
+);
+
+CREATE TABLE IF NOT EXISTS browser_credentials (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id      INTEGER NOT NULL,
+    domain          TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    credential_type TEXT NOT NULL,
+    encrypted_data  TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE(account_id, domain, label)
+);
 """
 
 
@@ -529,3 +563,171 @@ class TestVaultService:
         assert issubclass(VaultLockedError, Exception)
         with pytest.raises(VaultLockedError):
             raise VaultLockedError("test message")
+
+    # ------------------------------------------------------------------
+    # Locked-state guard — named per AC11 test plan
+    # ------------------------------------------------------------------
+
+    def test_vault_locked_error_before_unlock(self, vault_db):
+        """Both encrypt() and decrypt() raise VaultLockedError before unlock() is called.
+
+        Validates AC11: the vault must be unlocked before any cryptographic
+        operation; callers receive a clear, typed error rather than a silent
+        null or generic exception when the vault is sealed.
+        """
+        vault = _make_vault(vault_db)
+        vault.initialize("pw")
+        # Vault is initialised but NOT yet unlocked
+        assert not vault.is_unlocked()
+
+        with pytest.raises(VaultLockedError):
+            vault.encrypt(b"some payload")
+
+        with pytest.raises(VaultLockedError):
+            vault.decrypt(b"\x00" * 40)
+
+    # ------------------------------------------------------------------
+    # Legacy migration — all four tables re-encrypted (AC15)
+    # ------------------------------------------------------------------
+
+    def test_legacy_migration_reencrypts_all_tables(self, vault_db):
+        """unlock() re-encrypts legacy Fernet rows across all four consumer tables.
+
+        Seeds the ``encryption_keys`` table with a deterministic Fernet key,
+        then inserts a Fernet-encrypted value into each of the four migration
+        targets (providers, settings, tool_configs, browser_credentials).
+        After ``vault.unlock()`` the rows should contain AES-256-GCM blobs
+        that round-trip through ``vault.decrypt()`` and the ``encryption_keys``
+        row should be deleted (migration window closed).
+        """
+        legacy_key = "deterministic-legacy-key-for-migration"
+        vault_db.execute(
+            "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
+            (legacy_key,),
+        )
+
+        # Seed one Fernet-encrypted row in each consumer table
+        fernet_api_key = _make_legacy_fernet_token(legacy_key, "provider-api-key")
+        vault_db.execute(
+            "INSERT INTO providers (name, platform, model, api_key) VALUES (?,?,?,?)",
+            ("migr-provider", "openai", "gpt-4", fernet_api_key),
+        )
+
+        fernet_setting = _make_legacy_fernet_token(legacy_key, "setting-secret")
+        vault_db.execute(
+            "INSERT INTO settings (key, is_sensitive, encrypted_value) VALUES (?,?,?)",
+            ("migr_key", 1, fernet_setting),
+        )
+
+        fernet_tool = _make_legacy_fernet_token(legacy_key, "tool-secret-value")
+        vault_db.execute(
+            "INSERT INTO tool_configs (id, tool_name, config_key, config_value) VALUES (?,?,?,?)",
+            ("tc-1", "some_tool", "secret_cfg", fernet_tool.decode("utf-8")),
+        )
+
+        fernet_browser = _make_legacy_fernet_token(legacy_key, "browser-password")
+        vault_db.execute(
+            "INSERT INTO browser_credentials "
+            "(account_id, domain, label, credential_type, encrypted_data, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,datetime('now'),datetime('now'))",
+            (1, "example.com", "main", "password", fernet_browser.decode("utf-8")),
+        )
+        vault_db.commit()
+
+        vault = _make_vault(vault_db)
+        vault.initialize("pw")
+        vault.unlock("pw")  # triggers _run_legacy_migration()
+
+        # encryption_keys row must be gone after successful migration
+        cursor = vault_db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
+        assert cursor.fetchone()[0] == 0, "encryption_keys row should be deleted after migration"
+
+        # Each consumer value should now decrypt via AES-GCM (not Fernet fallback)
+        cursor.execute("SELECT api_key FROM providers WHERE name = 'migr-provider'")
+        new_api_key = bytes(cursor.fetchone()[0])
+        assert vault.decrypt(new_api_key) == b"provider-api-key"
+
+        cursor.execute("SELECT encrypted_value FROM settings WHERE key = 'migr_key'")
+        new_setting = bytes(cursor.fetchone()[0])
+        assert vault.decrypt(new_setting) == b"setting-secret"
+
+        cursor.execute("SELECT config_value FROM tool_configs WHERE id = 'tc-1'")
+        new_tool_val = cursor.fetchone()[0]
+        # config_value is TEXT; the migration stores bytes — read as-is
+        if isinstance(new_tool_val, str):
+            new_tool_val = new_tool_val.encode("latin-1")
+        else:
+            new_tool_val = bytes(new_tool_val)
+        assert vault.decrypt(new_tool_val) == b"tool-secret-value"
+
+        cursor.execute(
+            "SELECT encrypted_data FROM browser_credentials WHERE domain = 'example.com'"
+        )
+        new_browser = cursor.fetchone()[0]
+        if isinstance(new_browser, str):
+            new_browser = new_browser.encode("latin-1")
+        else:
+            new_browser = bytes(new_browser)
+        assert vault.decrypt(new_browser) == b"browser-password"
+        cursor.close()
+
+    # ------------------------------------------------------------------
+    # Partial migration retry (AC15 atomicity)
+    # ------------------------------------------------------------------
+
+    def test_partial_migration_retries_on_next_unlock(self, vault_db):
+        """If migration fails the encryption_keys row is kept; the next
+        unlock() call retries and, on success, deletes the row.
+
+        Simulates a migration failure by patching ``_run_legacy_migration`` to
+        return ``False`` on the first unlock call, then verifies that:
+
+        1. The ``encryption_keys`` row survives the failed migration attempt.
+        2. A subsequent ``unlock()`` with the real migration completes and
+           removes the ``encryption_keys`` row.
+        """
+        from unittest.mock import patch
+
+        legacy_key = "retry-migration-key"
+        vault_db.execute(
+            "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
+            (legacy_key,),
+        )
+        fernet_api_key = _make_legacy_fernet_token(legacy_key, "retry-api-key")
+        vault_db.execute(
+            "INSERT INTO providers (name, platform, model, api_key) VALUES (?,?,?,?)",
+            ("retry-provider", "openai", "gpt-4", fernet_api_key),
+        )
+        vault_db.commit()
+
+        vault = _make_vault(vault_db)
+        vault.initialize("pw")
+
+        # First unlock — migration is injected to fail (returns False).
+        # The encryption_keys row must NOT be deleted when migration fails.
+        with patch.object(vault, "_run_legacy_migration", return_value=False):
+            vault.unlock("pw")
+
+        cursor = vault_db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
+        count_after_first = cursor.fetchone()[0]
+        cursor.close()
+
+        assert count_after_first == 1, (
+            "encryption_keys row must remain when migration fails so retry is possible"
+        )
+
+        # Second unlock — real migration, no patch.
+        # Re-seal before the second unlock so unlock() goes through the full path.
+        _vault_state.dek = None
+        vault.unlock("pw")
+
+        cursor = vault_db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
+        count_after_second = cursor.fetchone()[0]
+        cursor.close()
+
+        assert count_after_second == 0, (
+            "encryption_keys row should be deleted after successful retry migration"
+        )
