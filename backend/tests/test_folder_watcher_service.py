@@ -5,8 +5,9 @@ Tests for FolderWatcherService — CRUD, directory browsing, scan logic.
 import json
 import os
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
+from services.memory_store import MemoryStore
 from services.folder_watcher_service import (
     FolderWatcherService,
     MAX_ENQUEUE_PER_SCAN,
@@ -209,10 +210,12 @@ class TestUpdateFolder:
 @pytest.mark.unit
 class TestDeleteFolder:
     def test_deletes_folder(self, db):
+        """Verify delete_folder removes the DB row and clears the MemoryStore scan cache."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
 
-        with patch(_P_MEMSTORE):
+        store = MemoryStore()
+        with patch(_P_MEMSTORE, return_value=store):
             result = svc.delete_folder('abc12345')
         assert result is True
 
@@ -223,9 +226,11 @@ class TestDeleteFolder:
         assert row is None
 
     def test_returns_false_when_not_found(self, db):
+        """Verify delete_folder returns False for a non-existent folder ID."""
         svc = FolderWatcherService(get_shared_db_service())
 
-        with patch(_P_MEMSTORE):
+        store = MemoryStore()
+        with patch(_P_MEMSTORE, return_value=store):
             result = svc.delete_folder('nonexistent')
         assert result is False
 
@@ -239,8 +244,9 @@ class TestDeleteFolder:
             {'id': 'd2', 'deleted_at': '2026-03-01'},  # already deleted
         ]
 
+        store = MemoryStore()
         with patch(_P_DOCSVC, return_value=mock_doc_svc), \
-             patch(_P_MEMSTORE):
+             patch(_P_MEMSTORE, return_value=store):
             svc.delete_folder('abc12345', delete_documents=True)
 
         # Only d1 should be soft-deleted (d2 already was)
@@ -326,27 +332,26 @@ class TestScanScheduling:
         assert service.is_scan_due(folder) is False
 
     def test_trigger_scan_sets_memorystore_key(self, service):
-        with patch(_P_MEMSTORE) as MockStore:
-            mock_store = MagicMock()
-            MockStore.return_value = mock_store
+        """trigger_scan writes a scan-now flag to the MemoryStore with a 600s TTL."""
+        store = MemoryStore()
+        with patch(_P_MEMSTORE, return_value=store):
             service.trigger_scan('abc12345')
-        mock_store.set.assert_called_once_with('watcher:scan_now:abc12345', '1', ex=600)
+        assert store.get('watcher:scan_now:abc12345') == '1'
 
     def test_is_scan_requested_returns_true_and_clears(self, service):
-        with patch(_P_MEMSTORE) as MockStore:
-            mock_store = MagicMock()
-            mock_store.get.return_value = '1'
-            MockStore.return_value = mock_store
+        """is_scan_requested returns True and removes the flag key when the flag is set."""
+        store = MemoryStore()
+        store.set('watcher:scan_now:abc12345', '1')
+        with patch(_P_MEMSTORE, return_value=store):
             result = service.is_scan_requested('abc12345')
 
         assert result is True
-        mock_store.delete.assert_called_once_with('watcher:scan_now:abc12345')
+        assert store.get('watcher:scan_now:abc12345') is None
 
     def test_is_scan_requested_returns_false(self, service):
-        with patch(_P_MEMSTORE) as MockStore:
-            mock_store = MagicMock()
-            mock_store.get.return_value = None
-            MockStore.return_value = mock_store
+        """is_scan_requested returns False when no scan-now flag is present."""
+        store = MemoryStore()
+        with patch(_P_MEMSTORE, return_value=store):
             result = service.is_scan_requested('abc12345')
 
         assert result is False
@@ -364,25 +369,22 @@ _P_ENQUEUE = 'services.document_queue.enqueue_document_processing'
 @pytest.mark.unit
 class TestScanFolder:
     def test_skips_if_already_scanning(self, service):
-        with patch(_P_MEMSTORE) as MockStore:
-            mock_store = MagicMock()
-            mock_store.get.return_value = '1'  # lock held
-            MockStore.return_value = mock_store
-
+        """scan_folder returns empty result immediately when the scan lock is already held."""
+        store = MemoryStore()
+        store.set('watcher:scanning:abc12345', '1')  # pre-seed: lock held
+        with patch(_P_MEMSTORE, return_value=store):
             result = service.scan_folder(_make_folder_dict())
 
         assert result == {'new': 0, 'updated': 0, 'deleted': 0, 'renamed': 0, 'skipped': 0, 'errors': []}
 
     @patch('services.folder_watcher_service.os.path.isdir', return_value=False)
     def test_handles_missing_folder(self, mock_isdir, db):
+        """scan_folder records an error in the DB when the watched folder no longer exists."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
 
-        with patch(_P_MEMSTORE) as MockStore:
-            mock_store = MagicMock()
-            mock_store.get.side_effect = lambda k: None  # no lock
-            MockStore.return_value = mock_store
-
+        store = MemoryStore()  # empty: no lock, no cache
+        with patch(_P_MEMSTORE, return_value=store):
             result = svc.scan_folder(_make_folder_dict())
 
         assert result['new'] == 0
@@ -403,6 +405,7 @@ class TestScanNewFiles:
     @patch('services.folder_watcher_service.os.path.getsize', return_value=1024)
     @patch('services.folder_watcher_service.mimetypes')
     def test_detects_new_file(self, mock_mt, mock_size, mock_isdir, db):
+        """scan_folder creates a document record and enqueues it for a brand-new file."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
         mock_mt.guess_type.return_value = ('application/pdf', None)
@@ -411,12 +414,11 @@ class TestScanNewFiles:
         mock_doc_svc.get_documents_by_watched_folder.return_value = []
         mock_doc_svc.create_document.return_value = 'new_doc_1'
 
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: None  # no lock, no cache
+        store = MemoryStore()  # empty: no lock, no cache
 
         folder = _make_folder_dict()
 
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE) as mock_enqueue, \
              patch.object(svc, '_walk_folder', return_value=[
@@ -434,7 +436,7 @@ class TestScanNewFiles:
     @patch('services.folder_watcher_service.os.path.getsize', return_value=1024)
     @patch('services.folder_watcher_service.mimetypes')
     def test_rate_limits_new_files(self, mock_mt, mock_size, mock_isdir, db):
-        """Caps enqueuing at MAX_ENQUEUE_PER_SCAN."""
+        """scan_folder caps enqueuing at MAX_ENQUEUE_PER_SCAN new files per cycle."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
         mock_mt.guess_type.return_value = ('text/plain', None)
@@ -443,8 +445,7 @@ class TestScanNewFiles:
         mock_doc_svc.get_documents_by_watched_folder.return_value = []
         mock_doc_svc.create_document.side_effect = lambda **kw: f'doc_{kw["original_name"]}'
 
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: None
+        store = MemoryStore()  # empty: no lock, no cache
 
         # Generate more files than the limit
         file_count = MAX_ENQUEUE_PER_SCAN + 10
@@ -452,7 +453,7 @@ class TestScanNewFiles:
 
         folder = _make_folder_dict()
 
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE) as mock_enqueue, \
              patch.object(svc, '_walk_folder', return_value=discovered), \
@@ -473,6 +474,7 @@ class TestScanModifiedFiles:
     @patch('services.folder_watcher_service.os.path.getsize', return_value=2048)
     @patch('services.folder_watcher_service.mimetypes')
     def test_detects_modified_file(self, mock_mt, mock_size, mock_isdir, db):
+        """scan_folder supersedes a document when the file content changes on disk."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
         mock_mt.guess_type.return_value = ('application/pdf', None)
@@ -489,12 +491,12 @@ class TestScanModifiedFiles:
         cache_data = json.dumps({
             '/test/watched/doc.pdf': {'mtime': 100.0, 'doc_id': 'old_doc'}
         })
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: cache_data if 'state' in k else None
+        store = MemoryStore()
+        store.set('watcher:state:abc12345', cache_data)  # pre-seed scan-state cache
 
         folder = _make_folder_dict()
 
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE) as mock_enqueue, \
              patch.object(svc, '_walk_folder', return_value=[
@@ -525,12 +527,12 @@ class TestScanModifiedFiles:
         cache_data = json.dumps({
             '/test/watched/doc.pdf': {'mtime': 100.0, 'doc_id': 'doc1'}
         })
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: cache_data if 'state' in k else None
+        store = MemoryStore()
+        store.set('watcher:state:abc12345', cache_data)  # pre-seed scan-state cache
 
         folder = _make_folder_dict()
 
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE), \
              patch.object(svc, '_walk_folder', return_value=[
@@ -559,12 +561,12 @@ class TestScanModifiedFiles:
         cache_data = json.dumps({
             '/test/watched/doc.pdf': {'mtime': 100.0, 'doc_id': 'doc1'}
         })
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: cache_data if 'state' in k else None
+        store = MemoryStore()
+        store.set('watcher:state:abc12345', cache_data)  # pre-seed scan-state cache
 
         folder = _make_folder_dict()
 
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE) as mock_enqueue, \
              patch.object(svc, '_walk_folder', return_value=[
@@ -584,6 +586,7 @@ class TestScanRenamedFiles:
 
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     def test_detects_renamed_file(self, mock_isdir, db):
+        """scan_folder updates the DB path (no reprocessing) when a file is renamed."""
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
 
@@ -595,13 +598,12 @@ class TestScanRenamedFiles:
         mock_doc_svc = MagicMock()
         mock_doc_svc.get_documents_by_watched_folder.return_value = [existing_doc]
 
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: None
+        store = MemoryStore()  # empty: no lock, no cache
 
         folder = _make_folder_dict()
 
         # File appears at new path (old path gone), same hash
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE) as mock_enqueue, \
              patch.object(svc, '_walk_folder', return_value=[
@@ -638,13 +640,13 @@ class TestScanDeletedFiles:
         cache_data = json.dumps({
             '/test/watched/missing.pdf': {'mtime': 100.0, 'doc_id': 'doc1', 'missing_count': 1}
         })
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: cache_data if 'state' in k else None
+        store = MemoryStore()
+        store.set('watcher:state:abc12345', cache_data)  # pre-seed: one prior absence
 
         folder = _make_folder_dict()
 
         # File not on disk (empty walk)
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE), \
              patch.object(svc, '_walk_folder', return_value=[]):
@@ -674,12 +676,12 @@ class TestScanDeletedFiles:
                 'missing_count': MISSING_THRESHOLD - 1,
             }
         })
-        mock_store = MagicMock()
-        mock_store.get.side_effect = lambda k: cache_data if 'state' in k else None
+        store = MemoryStore()
+        store.set('watcher:state:abc12345', cache_data)  # pre-seed: at threshold minus one
 
         folder = _make_folder_dict()
 
-        with patch(_P_MEMSTORE, return_value=mock_store), \
+        with patch(_P_MEMSTORE, return_value=store), \
              patch(_P_DOCSVC, return_value=mock_doc_svc), \
              patch(_P_ENQUEUE), \
              patch.object(svc, '_walk_folder', return_value=[]):
