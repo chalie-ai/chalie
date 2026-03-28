@@ -551,3 +551,77 @@ class TestFormatScheduleHint:
             location="HQ", attendees=["a@b.com", "c@d.com"],
         )])
         assert "[Work]" in hint and "@ HQ" in hint and "(2 attendees)" in hint
+
+
+# -----------------------------------------------------------------------
+# First-connect greeting
+# -----------------------------------------------------------------------
+
+
+class TestFirstConnectGreeting:
+    """Tests for :meth:`CaldavCapability._maybe_send_greeting`."""
+
+    @staticmethod
+    def _make_event(**overrides):
+        base = {
+            'uid': 'evt-1', 'summary': 'Team standup',
+            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
+            'location': None, 'attendees': [], 'recurrence': None,
+            'all_day': False, 'calendar_name': 'Work',
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_first_ingest_sends_greeting(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = None  # no flag yet
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+        events = [self._make_event()]
+
+        result = cap._maybe_send_greeting(events, now)
+        assert result is True
+        store.rpush.assert_called_once()
+        # Verify the prompt-queue push contains schedule data
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        assert "CALENDAR CONNECTED" in payload['prompt']
+        assert "Team standup" in payload['prompt']
+        assert payload['metadata']['source'] == 'capability_greeting'
+        # Flag was set
+        store.set.assert_called_once_with('caldav:greeting_sent', '1')
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_second_ingest_skips_greeting(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = "1"  # flag already set
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+
+        result = cap._maybe_send_greeting([self._make_event()], now)
+        assert result is False
+        store.rpush.assert_not_called()
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_empty_schedule_still_sends_greeting(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+
+        result = cap._maybe_send_greeting([], now)
+        assert result is True
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        assert "No upcoming events" in payload['prompt']

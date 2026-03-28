@@ -583,6 +583,9 @@ class CaldavCapability(AbstractCapability):
         # --- Inject world-state schedule hint ---
         self._inject_schedule_hint(all_events, now)
 
+        # --- First-connect greeting (once per lifetime) ---
+        self._maybe_send_greeting(all_events, now)
+
         logger.info(
             "[caldav] ingest() complete — %d events fetched.", len(all_events)
         )
@@ -964,6 +967,66 @@ class CaldavCapability(AbstractCapability):
             })
         except Exception as exc:  # noqa: BLE001
             logger.debug("[caldav] _emit_calendar_events() failed: %s", exc)
+
+    _GREETING_FLAG = "caldav:greeting_sent"
+
+    def _maybe_send_greeting(self, events: list, now: "_dt_module.datetime") -> bool:
+        """Push a one-time greeting prompt when calendar data first arrives.
+
+        On the very first successful ingest after the capability is configured,
+        pushes a greeting prompt to the ``prompt-queue``.  The digest worker
+        picks it up, synthesises a natural message via the LLM, and delivers it
+        as a proactive message to the user.
+
+        Subsequent calls are no-ops (the :attr:`_GREETING_FLAG` MemoryStore key
+        persists for the process lifetime).
+
+        Args:
+            events: Parsed event dicts from :meth:`_parse_caldav_event`.
+            now:    Current UTC datetime.
+
+        Returns:
+            bool: ``True`` if a greeting was enqueued, ``False`` otherwise.
+        """
+        try:
+            from services.memory_client import MemoryClientService
+            import json as _json
+
+            store = MemoryClientService.create_connection()
+            if store.get(self._GREETING_FLAG):
+                return False
+
+            hint = _format_schedule_hint(
+                sorted(
+                    [e for e in events
+                     if e.get('dtstart') and now <= e['dtstart'] < now + timedelta(hours=24)],
+                    key=lambda e: e['dtstart'],
+                ),
+                max_events=self._HINT_MAX_EVENTS,
+            )
+
+            store.rpush('prompt-queue', _json.dumps({
+                'prompt': (
+                    "[CAPABILITY GREETING: CALENDAR CONNECTED]\n"
+                    "The user just connected their calendar for the first time. "
+                    "Here is their upcoming schedule:\n"
+                    f"{hint}\n\n"
+                    "Greet them warmly, mention 1-2 highlights from their schedule. "
+                    "Be brief and personal — this is the moment they see Chalie "
+                    "knows their real life."
+                ),
+                'metadata': {
+                    'type': 'proactive_drift',
+                    'source': 'capability_greeting',
+                    'topic': 'proactive',
+                },
+            }))
+            store.set(self._GREETING_FLAG, "1")
+            logger.info("[caldav] First-connect greeting enqueued.")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[caldav] _maybe_send_greeting() failed: %s", exc)
+            return False
 
     # Maximum number of events included in the schedule hint.
     _HINT_MAX_EVENTS = 5
