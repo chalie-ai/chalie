@@ -664,6 +664,65 @@ def test_send_tool_calls_send_email():
     assert result["success"] is True
 
 
+# --- send_email name auto-resolution ---
+
+@pytest.mark.unit
+def test_send_tool_resolves_name_single_match():
+    """When 'to' has no @, resolve via ContactResolver — single match sends directly."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_send_email")["handler"]
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch.object(cap, "_open_smtp", return_value=smtp_mock), \
+         patch("capabilities.contact_resolver.resolve",
+               return_value=[{"email": "sarah@work.com", "name": "Sarah Chen"}]):
+        result = handler("t1", {"to": "Sarah", "subject": "Hi", "body": "Hello"})
+    assert result["success"] is True
+    assert result["resolved_from"] == "Sarah"
+    sent_msg = smtp_mock.send_message.call_args[0][0]
+    assert sent_msg["To"] == "sarah@work.com"
+
+
+@pytest.mark.unit
+def test_send_tool_resolves_name_multiple_matches():
+    """When resolve returns multiple contacts, return disambiguation."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_send_email")["handler"]
+    with patch("capabilities.contact_resolver.resolve",
+               return_value=[
+                   {"email": "sarah@work.com", "name": "Sarah Chen"},
+                   {"email": "sarah@personal.com", "name": "Sarah Jones"},
+               ]):
+        result = handler("t1", {"to": "Sarah", "subject": "Hi", "body": "Hello"})
+    assert result["error"] == "ambiguous_recipient"
+    assert len(result["candidates"]) == 2
+
+
+@pytest.mark.unit
+def test_send_tool_resolves_name_no_matches():
+    """When resolve returns nothing, return unknown_recipient error."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_send_email")["handler"]
+    with patch("capabilities.contact_resolver.resolve", return_value=[]):
+        result = handler("t1", {"to": "Nobody", "subject": "Hi", "body": "Hello"})
+    assert result["error"] == "unknown_recipient"
+
+
+@pytest.mark.unit
+def test_send_tool_email_address_bypasses_resolve():
+    """When 'to' contains @, skip resolution entirely."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_send_email")["handler"]
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch.object(cap, "_open_smtp", return_value=smtp_mock), \
+         patch("capabilities.contact_resolver.resolve") as resolve_mock:
+        result = handler("t1", {"to": "bob@test.com", "subject": "Hi", "body": "Hello"})
+    resolve_mock.assert_not_called()
+    assert result["success"] is True
+    assert "resolved_from" not in result
+
+
 @pytest.mark.unit
 def test_act_routes_send_email():
     """act('send_email', ...) delegates to _send_email."""

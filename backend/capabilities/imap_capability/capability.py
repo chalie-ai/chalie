@@ -606,16 +606,39 @@ class ImapCapability(AbstractCapability):
             body = (params.get("body") or "").strip()
             if not to or not subject or not body:
                 return {"error": "to, subject, and body are required"}
-            return capability._send_email(
+            # Auto-resolve name to email via ContactResolver
+            resolved_from = None
+            if "@" not in to:
+                from capabilities.contact_resolver import resolve
+                matches = resolve(to, limit=5)
+                if len(matches) == 1:
+                    resolved_from = to
+                    to = matches[0]["email"]
+                elif len(matches) > 1:
+                    return {
+                        "error": "ambiguous_recipient",
+                        "message": f"Multiple contacts match '{to}'. Please clarify.",
+                        "candidates": matches,
+                    }
+                else:
+                    return {
+                        "error": "unknown_recipient",
+                        "message": f"No contacts found for '{to}'. Please provide an email address.",
+                    }
+            result = capability._send_email(
                 to=to, subject=subject, body=body,
                 in_reply_to=params.get("in_reply_to", ""),
             )
+            if resolved_from:
+                result["resolved_from"] = resolved_from
+            return result
 
         return [
             {
                 "name": "imap_send_email",
                 "description": (
-                    "Send or reply to an email. Provide recipient address, "
+                    "Send or reply to an email. Provide recipient (email address "
+                    "or contact name — names are auto-resolved via people index), "
                     "subject, and plain-text body. For replies, include "
                     "in_reply_to with the original Message-ID to thread correctly."
                 ),
@@ -623,7 +646,10 @@ class ImapCapability(AbstractCapability):
                     "to": {
                         "type": "string",
                         "required": True,
-                        "description": "Recipient email address.",
+                        "description": (
+                            "Recipient email address or contact name "
+                            "(names auto-resolved via people index)."
+                        ),
                     },
                     "subject": {
                         "type": "string",
