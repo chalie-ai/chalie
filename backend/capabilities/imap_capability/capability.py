@@ -14,6 +14,7 @@ import pathlib
 import re
 from datetime import datetime as _dt, timedelta
 
+import numpy as np
 import yaml
 
 from capabilities.base import AbstractCapability
@@ -47,8 +48,6 @@ def _imap_date(iso_str: str) -> str:
 # ---------------------------------------------------------------------------
 # Embedding-based triage (replaces regex synonym maps — see feedback_no_synonym_maps)
 # ---------------------------------------------------------------------------
-
-import numpy as np
 
 _TRIAGE_ANCHORS = {
     "noise": (

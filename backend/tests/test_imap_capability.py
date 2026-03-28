@@ -5,6 +5,7 @@ from __future__ import annotations
 from email.mime.text import MIMEText
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 _CREDS = {
@@ -148,8 +149,6 @@ def test_ingest_incremental():
 
 # --- classify_email ---
 
-import numpy as np
-
 def _item(addr="a@b.com", subj="Hi", unsub=False, reply_to="", from_name=""):
     return {
         "has_unsubscribe": unsub, "from_addr": addr,
@@ -183,7 +182,8 @@ def _mock_email_classify():
     }
     mock_svc = MagicMock()
     mock_svc.generate_embedding_np.side_effect = _route_embedding
-    with patch("services.embedding_service.get_embedding_service", return_value=mock_svc):
+    _p = "services.embedding_service.get_embedding_service"
+    with patch(_p, return_value=mock_svc):
         yield mock_svc
     cap_mod._anchor_cache = old
 
