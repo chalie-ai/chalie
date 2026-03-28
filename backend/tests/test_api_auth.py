@@ -9,8 +9,6 @@ extension requirement that prevents the shared ``db`` fixture from working in
 environments where that native extension is unavailable.
 """
 
-import sqlite3
-import shutil
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask
