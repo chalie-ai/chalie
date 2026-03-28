@@ -770,6 +770,41 @@ def update_apply():
 
 
 # ──────────────────────────────────────────────
+# Thread reset (test harness support)
+# ──────────────────────────────────────────────
+
+@system_bp.route('/system/reset-thread', methods=['POST'])
+@require_session
+def reset_thread():
+    """Expire the active thread for a channel, forcing the next message to start fresh.
+
+    Used by the nightly-test harness to test cross-thread memory recall
+    (i.e., knowledge pipeline) vs. in-context transcript recall.
+
+    Body (optional): {"channel": "default"}
+    """
+    try:
+        from services.thread_service import ThreadService
+        from services.memory_client import MemoryClientService
+
+        data = request.get_json(silent=True) or {}
+        channel_id = data.get('channel', 'default')
+
+        store = MemoryClientService.create_connection()
+        ts = ThreadService(store)
+        thread_id = ts.get_active_thread_id(channel_id)
+
+        if not thread_id:
+            return jsonify({'ok': True, 'message': 'No active thread', 'expired': None}), 200
+
+        ts.expire_thread(thread_id)
+        logger.info(f"[RESET-THREAD] Expired thread {thread_id} for channel {channel_id}")
+        return jsonify({'ok': True, 'expired': thread_id}), 200
+    except Exception as e:
+        logger.error(f"[REST API] reset-thread error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 # Settings endpoints
 # ──────────────────────────────────────────────
 
