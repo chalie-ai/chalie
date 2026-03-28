@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 from flask import Flask
 from api.system import system_bp
+from services.memory_store import MemoryStore
 
 
 @pytest.mark.unit
@@ -526,11 +527,11 @@ class TestSystemAPI:
             )
         db.commit()
 
-        mock_store = MagicMock()
-        mock_store.keys.return_value = []
-        mock_store.llen.return_value = 0
+        # A fresh MemoryStore naturally returns [] for keys() and 0 for llen() —
+        # no pre-population needed for this structural smoke-test.
+        store = MemoryStore()
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200
@@ -585,10 +586,26 @@ class TestSystemAPI:
     # ────────────────────────────────────────────
 
     def _ready_patches(self, db_ok=True, store_ok=True, worker_ok=True):
-        """Build patch context for /ready — all three components can be individually broken."""
-        mock_store = MagicMock()
-        if not store_ok:
-            mock_store.ping.side_effect = Exception('store down')
+        """Build patch context for /ready — all three components can be individually broken.
+
+        Args:
+            db_ok (bool): When False, patches get_shared_db_service() to raise.
+            store_ok (bool): When True, uses a real MemoryStore (Category A). When False,
+                uses a broken_store MagicMock whose ping() raises (Category C).
+            worker_ok (bool): When False, patches PromptQueue to raise ImportError.
+
+        Returns:
+            dict: Mapping of patch target strings to mock/real values for use with
+                ``unittest.mock.patch``.
+        """
+        if store_ok:
+            # Category A: real MemoryStore — ping() succeeds, no pre-population needed.
+            store = MemoryStore()
+        else:
+            # Category C: error-path only — keep a MagicMock so ping() can raise.
+            broken_store = MagicMock()
+            broken_store.ping.side_effect = Exception('store down')
+            store = broken_store
 
         # Load the real ONNX embedding model so the /ready endpoint sees _session
         # as non-None and reports 'ok'. No mock — we verify the real model works.
@@ -600,7 +617,7 @@ class TestSystemAPI:
         mock_onnx_svc.ready = True
 
         patches = {
-            'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=mock_store),
+            'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=store),
             'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
 
