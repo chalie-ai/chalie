@@ -2,34 +2,34 @@
 
 import pytest
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+from services.memory_store import MemoryStore
 
 
 @pytest.fixture
 def mock_store():
-    """In-memory dict simulating MemoryStore with TTL support."""
-    store_data = {}
+    """Real MemoryStore instance for tool health service tests.
 
-    class FakeStore:
-        def get(self, key):
-            return store_data.get(key)
-
-        def setex(self, key, ttl, value):
-            store_data[key] = value
-
-        def keys(self, pattern):
-            import fnmatch
-            return [k for k in store_data if fnmatch.fnmatch(k, pattern)]
-
-    return FakeStore(), store_data
+    Returns:
+        MemoryStore: An isolated, empty MemoryStore that the patch_memory_store
+            autouse fixture wires into the service under test.
+    """
+    return MemoryStore()
 
 
 @pytest.fixture(autouse=True)
 def patch_memory_store(mock_store):
-    store, _ = mock_store
+    """Patch the service's internal store accessor with *mock_store*.
+
+    Args:
+        mock_store: The real MemoryStore fixture instance.
+
+    Yields:
+        None: Yields control to the test, then removes the patch.
+    """
     with patch(
         'services.tool_health_service._get_store',
-        return_value=store,
+        return_value=mock_store,
     ):
         yield
 
@@ -41,8 +41,8 @@ class TestGetPotential:
         assert get_potential('mealdb') == 1.0
 
     def test_reads_stored_potential(self, mock_store):
-        store, data = mock_store
-        data['tool_health:mealdb'] = json.dumps({'potential': 0.5})
+        """Stored potential value is read back correctly by get_potential."""
+        mock_store.set('tool_health:mealdb', json.dumps({'potential': 0.5}))
         from services.tool_health_service import get_potential
         assert get_potential('mealdb') == 0.5
 
@@ -50,10 +50,10 @@ class TestGetPotential:
 @pytest.mark.unit
 class TestRecordOutcome:
     def test_success_boosts_potential(self, mock_store):
-        store, data = mock_store
-        data['tool_health:web_search'] = json.dumps({
+        """A 'success' outcome raises potential by 0.15 from the stored baseline."""
+        mock_store.set('tool_health:web_search', json.dumps({
             'potential': 0.5, 'failures': 2, 'successes': 0,
-        })
+        }))
         from services.tool_health_service import record_outcome
         new = record_outcome('web_search', 'success')
         assert new == 0.65  # 0.5 + 0.15
@@ -69,10 +69,10 @@ class TestRecordOutcome:
         assert new == 0.5  # 1.0 * 0.5
 
     def test_critic_correction_harsh_decay(self, mock_store):
-        store, data = mock_store
-        data['tool_health:mealdb'] = json.dumps({
+        """A 'critic_correction' outcome decays potential by 60% (× 0.4)."""
+        mock_store.set('tool_health:mealdb', json.dumps({
             'potential': 1.0, 'failures': 0, 'successes': 0,
-        })
+        }))
         from services.tool_health_service import record_outcome
         new = record_outcome('mealdb', 'critic_correction')
         assert new == 0.4  # 1.0 * 0.4
@@ -83,10 +83,10 @@ class TestRecordOutcome:
         assert new == 0.3  # 1.0 * 0.3
 
     def test_floor_prevents_zero(self, mock_store):
-        store, data = mock_store
-        data['tool_health:broken'] = json.dumps({
+        """Potential is clamped at 0.05 regardless of decay magnitude."""
+        mock_store.set('tool_health:broken', json.dumps({
             'potential': 0.06, 'failures': 5, 'successes': 0,
-        })
+        }))
         from services.tool_health_service import record_outcome
         new = record_outcome('broken', 'error')
         assert new == 0.05  # floor
@@ -182,9 +182,9 @@ class TestFormatHealthHint:
 @pytest.mark.unit
 class TestGetAllHealth:
     def test_returns_all_tracked_tools(self, mock_store):
-        store, data = mock_store
-        data['tool_health:mealdb'] = json.dumps({'potential': 0.5, 'failures': 2})
-        data['tool_health:ddg'] = json.dumps({'potential': 0.3, 'failures': 3})
+        """get_all_health returns every tool whose key exists in the store."""
+        mock_store.set('tool_health:mealdb', json.dumps({'potential': 0.5, 'failures': 2}))
+        mock_store.set('tool_health:ddg', json.dumps({'potential': 0.3, 'failures': 3}))
         from services.tool_health_service import get_all_health
         health = get_all_health()
         assert 'mealdb' in health

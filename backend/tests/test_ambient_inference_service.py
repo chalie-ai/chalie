@@ -2,31 +2,19 @@
 import json
 import pytest
 from unittest.mock import MagicMock, patch
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
 def mock_store():
-    """Create a mock MemoryStore for hysteresis state."""
-    store = {}
+    """Return a real, isolated MemoryStore for hysteresis and history state.
 
-    class FakeStore:
-        def get(self, key):
-            return store.get(key)
-
-        def setex(self, key, ttl, value):
-            store[key] = value
-
-        def set(self, key, value, **kwargs):
-            store[key] = value
-
-        def lrange(self, key, start, end):
-            return store.get(key, [])
-
-    fake = FakeStore()
-    fake._store = store
-    return fake
+    Returns:
+        MemoryStore: A fresh, empty store instance scoped to the calling test.
+    """
+    return MemoryStore()
 
 
 @pytest.fixture
@@ -231,33 +219,37 @@ class TestEnergyInference:
 class TestMobilityInference:
     def test_jitter_stays_stationary(self, inference_service, mock_store):
         """Movement <500m → still stationary."""
-        # Two locations ~100m apart
-        mock_store._store["client_context:history"] = [
+        # Two locations ~100m apart — push in order so lrange returns them correctly
+        mock_store.rpush(
+            "client_context:history",
             json.dumps({"location": {"lat": 35.9000, "lon": 14.5000}}),
             json.dumps({"location": {"lat": 35.9008, "lon": 14.5008}}),
-        ]
+        )
         assert inference_service._infer_mobility({}) == "stationary"
 
     def test_sustained_movement_is_commuting(self, inference_service, mock_store):
         """Sustained >2km over 2+ samples → commuting."""
-        mock_store._store["client_context:history"] = [
+        mock_store.rpush(
+            "client_context:history",
             json.dumps({"location": {"lat": 35.90, "lon": 14.50}}),
             json.dumps({"location": {"lat": 35.92, "lon": 14.52}}),
             json.dumps({"location": {"lat": 35.95, "lon": 14.55}}),
-        ]
+        )
         result = inference_service._infer_mobility({})
         assert result == "commuting"
 
     def test_no_history_is_stationary(self, inference_service, mock_store):
+        """An empty store has no history, so mobility defaults to stationary."""
         assert inference_service._infer_mobility({}) == "stationary"
 
     def test_large_distance_is_traveling(self, inference_service, mock_store):
         """Movement >50km → traveling."""
-        mock_store._store["client_context:history"] = [
+        mock_store.rpush(
+            "client_context:history",
             json.dumps({"location": {"lat": 35.90, "lon": 14.50}}),
             json.dumps({"location": {"lat": 36.50, "lon": 15.10}}),
             json.dumps({"location": {"lat": 37.00, "lon": 15.50}}),
-        ]
+        )
         result = inference_service._infer_mobility({})
         assert result == "traveling"
 
@@ -347,51 +339,32 @@ class TestFullInference:
 
 class TestSessionReentry:
     def test_stale_context_sets_reentry(self):
+        """Saving a new context after a >30-min gap sets the session-reentry flag.
+
+        Uses a single real MemoryStore for both the service connection and the
+        direct store reference so that the pre-seeded context and the written
+        re-entry flag share the same keyspace.
+        """
         import time
-        store = {}
+        from services.memory_store import MemoryStore
 
-        class FakeStore:
-            def get(self, key):
-                raw = store.get(key)
-                return raw
-
-            def set(self, key, value, **kwargs):
-                store[key] = value
-
-            def setex(self, key, ttl, value):
-                store[key] = value
-
-            def incr(self, key):
-                store[key] = int(store.get(key, 0)) + 1
-
-            def expire(self, key, ttl):
-                pass
-
-            def lpush(self, key, *values):
-                if key not in store:
-                    store[key] = []
-                for v in values:
-                    store[key].insert(0, v)
-
-            def ltrim(self, key, start, end):
-                if key in store:
-                    store[key] = store[key][start:end + 1]
+        memory_store = MemoryStore()
 
         with patch("services.client_context_service.MemoryClientService") as mock_mcs:
-            mock_mcs.create_connection.return_value = FakeStore()
+            mock_mcs.create_connection.return_value = memory_store
             from services.client_context_service import ClientContextService
             service = ClientContextService()
-            service._store = FakeStore()
+            service._store = memory_store
 
             # Simulate stale context (saved 40min ago)
             old_ctx = {"saved_at": time.time() - 2400, "timezone": "UTC"}
-            store["client_context:primary"] = json.dumps(old_ctx)
+            memory_store.set("client_context:primary", json.dumps(old_ctx))
 
             # Save new context — should detect re-entry
             service.save({"timezone": "UTC", "local_time": "2026-02-25T10:00:00.000Z"})
 
             # Check re-entry flag was set
-            assert "ambient:session_reentry" in store
+            assert memory_store.get("ambient:session_reentry") is not None
 
 
 # ── Graceful degradation ─────────────────────────────────────────
