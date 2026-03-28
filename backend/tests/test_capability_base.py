@@ -332,7 +332,11 @@ class TestLoadCapabilities:
         scan yields an empty iterator, simulating a clean state with no
         capability packages installed.
         """
+        import capabilities as _cap
         from capabilities import load_capabilities
+
+        old_cache = _cap._capabilities_cache
+        _cap._capabilities_cache = None
 
         mock_parent = MagicMock()
         mock_parent.iterdir.return_value = []
@@ -340,10 +344,13 @@ class TestLoadCapabilities:
         mock_file_path = MagicMock()
         mock_file_path.parent = mock_parent
 
-        with patch("capabilities.Path", return_value=mock_file_path):
-            result = load_capabilities()
+        try:
+            with patch("capabilities.Path", return_value=mock_file_path):
+                result = load_capabilities()
 
-        assert result == {}
+            assert result == {}
+        finally:
+            _cap._capabilities_cache = old_cache
 
 
 @pytest.mark.unit
