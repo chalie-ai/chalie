@@ -395,7 +395,7 @@ No external services required. SQLite and MemoryStore are embedded — everythin
 
 - **No Telemetry**: Zero external calls except to configured LLM/voice providers
 - **Local First**: All data stored locally unless external providers configured
-- **Encryption**: API keys and provider credentials encrypted in SQLite
+- **Encryption**: AES-256-GCM envelope encryption via VaultService (password-derived KEK wraps a random DEK)
 - **CORS**: Defaults to localhost, restrict before production
 
 ## Interface Layer
