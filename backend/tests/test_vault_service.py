@@ -281,7 +281,8 @@ class TestVaultService:
         assert not vault.is_unlocked()
 
     def test_lock_clears_dek(self, vault_db):
-        """lock() seals the vault so subsequent encrypt/decrypt raise VaultLockedError."""
+        """lock() seals the vault so subsequent encrypt/decrypt raise
+        VaultLockedError."""
         vault = _make_vault(vault_db)
         vault.initialize("pw")
         vault.unlock("pw")
@@ -448,7 +449,9 @@ class TestVaultService:
         stored = bytes(cursor.fetchone()[0])
         cursor.close()
 
-        assert stored == ciphertext, "change_password() must not touch consumer table data"
+        assert stored == ciphertext, (
+            "change_password() must not touch consumer table data"
+        )
 
     def test_change_password_dek_unchanged_after_relock(self, vault_db):
         """After change_password and re-unlock with new password, old data decrypts."""
@@ -537,7 +540,8 @@ class TestVaultService:
     # ------------------------------------------------------------------
 
     def test_vault_locked_error_before_unlock(self, vault_db):
-        """Both encrypt() and decrypt() raise VaultLockedError before unlock() is called.
+        """Both encrypt() and decrypt() raise VaultLockedError before
+        unlock() is called.
 
         Validates AC11: the vault must be unlocked before any cryptographic
         operation; callers receive a clear, typed error rather than a silent
@@ -589,14 +593,17 @@ class TestVaultService:
 
         fernet_tool = _make_legacy_fernet_token(legacy_key, "tool-secret-value")
         vault_db.execute(
-            "INSERT INTO tool_configs (id, tool_name, config_key, config_value) VALUES (?,?,?,?)",
+            "INSERT INTO tool_configs "
+            "(id, tool_name, config_key, config_value) "
+            "VALUES (?,?,?,?)",
             ("tc-1", "some_tool", "secret_cfg", fernet_tool.decode("utf-8")),
         )
 
         fernet_browser = _make_legacy_fernet_token(legacy_key, "browser-password")
         vault_db.execute(
             "INSERT INTO browser_credentials "
-            "(account_id, domain, label, credential_type, encrypted_data, created_at, updated_at) "
+            "(account_id, domain, label, credential_type, "
+            "encrypted_data, created_at, updated_at) "
             "VALUES (?,?,?,?,?,datetime('now'),datetime('now'))",
             (1, "example.com", "main", "password", fernet_browser.decode("utf-8")),
         )
@@ -609,7 +616,10 @@ class TestVaultService:
         # encryption_keys row must be gone after successful migration
         cursor = vault_db.cursor()
         cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
-        assert cursor.fetchone()[0] == 0, "encryption_keys row should be deleted after migration"
+        assert cursor.fetchone()[0] == 0, (
+            "encryption_keys row should be deleted "
+            "after migration"
+        )
 
         # Each consumer value should now be a base64-encoded AES-GCM blob
         # that round-trips through base64 decode → vault.decrypt().
@@ -626,7 +636,8 @@ class TestVaultService:
         assert vault.decrypt(base64.b64decode(new_tool_val)) == b"tool-secret-value"
 
         cursor.execute(
-            "SELECT encrypted_data FROM browser_credentials WHERE domain = 'example.com'"
+            "SELECT encrypted_data FROM browser_credentials "
+            "WHERE domain = 'example.com'"
         )
         new_browser = cursor.fetchone()[0]
         assert vault.decrypt(base64.b64decode(new_browser)) == b"browser-password"

@@ -61,11 +61,13 @@ def _get_vault_state() -> str:
 
 @user_auth_bp.route('/auth/status', methods=['GET'])
 def auth_status():
-    """Check whether master account exists, providers are configured, and user has session.
+    """Check whether master account exists, providers are configured, and
+    user has session.
 
     Returns a JSON body with the following keys:
 
-    * ``has_master_account`` — ``True`` if at least one row exists in ``master_account``.
+    * ``has_master_account`` — ``True`` if at least one row exists in
+      ``master_account``.
     * ``has_providers``      — ``True`` if at least one active provider is configured.
     * ``has_session``        — ``True`` if the request carries a valid session token.
     * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
@@ -142,7 +144,11 @@ def register():
             # Hash password and create account
             password_hash = generate_password_hash(password)
             session.execute(
-                text("INSERT INTO master_account (username, password_hash) VALUES (:username, :password_hash)"),
+                text(
+                    "INSERT INTO master_account "
+                    "(username, password_hash) "
+                    "VALUES (:username, :password_hash)"
+                ),
                 {"username": username, "password_hash": password_hash}
             )
             session.commit()
@@ -157,7 +163,10 @@ def register():
             logger.error(
                 "[Auth] Vault initialisation failed after registration: %s", vault_exc
             )
-            return jsonify({"error": "Account created but vault initialization failed"}), 500
+            return jsonify({
+                "error": "Account created but vault "
+                "initialization failed"
+            }), 500
 
         # Create session and set cookie
         resp = make_response(jsonify({"ok": True, "vault_state": "unlocked"}), 201)
@@ -173,7 +182,8 @@ def login():
     """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
     After a successful password check the vault is unlocked with the same
-    password.  If the vault returns ``False`` from :meth:`~services.vault_service.VaultService.unlock`
+    password.  If the vault returns ``False`` from
+    :meth:`~services.vault_service.VaultService.unlock`
     (wrong password or vault inconsistency) the endpoint returns 401.  If the
     vault has never been initialised (``RuntimeError``) the login still succeeds
     but ``vault_state`` is ``"locked"`` in the response and a warning is logged.
@@ -201,7 +211,10 @@ def login():
         # Fetch account and verify password hash
         with db.get_session() as session:
             row = session.execute(
-                text("SELECT password_hash FROM master_account WHERE username = :username"),
+                text(
+                    "SELECT password_hash FROM master_account "
+                    "WHERE username = :username"
+                ),
                 {"username": username}
             ).fetchone()
 
@@ -216,11 +229,17 @@ def login():
         vault_state = "locked"
         try:
             if vault.get_state() == "uninitialized":
-                logger.info("[Auth] Vault uninitialized — auto-initializing for existing user")
+                logger.info(
+                    "[Auth] Vault uninitialized — "
+                    "auto-initializing for existing user"
+                )
                 vault.initialize(password)
             unlocked = vault.unlock(password)
             if not unlocked:
-                logger.warning("[Auth] vault.unlock() returned False despite correct password")
+                logger.warning(
+                    "[Auth] vault.unlock() returned False "
+                    "despite correct password"
+                )
                 return jsonify({"error": "Invalid credentials"}), 401
             vault_state = "unlocked"
             _reconnect_capabilities()

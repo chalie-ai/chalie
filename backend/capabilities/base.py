@@ -269,7 +269,8 @@ class AbstractCapability(ABC):
     # ------------------------------------------------------------------
 
     def store_credential(self, key: str, value: str) -> None:
-        """Encrypt *value* with AES-256-GCM via VaultService and persist it in ``tool_configs``.
+        """Encrypt *value* with AES-256-GCM via VaultService and persist
+        it in ``tool_configs``.
 
         The credential is stored under ``tool_name = self.get_id()`` and
         ``config_key = key``.  The encrypted blob is base64-encoded before
@@ -296,7 +297,8 @@ class AbstractCapability(ABC):
         try:
             import base64
             from services.vault_service import get_vault_service
-            encrypted = base64.b64encode(get_vault_service().encrypt_str(value)).decode()
+            blob = get_vault_service().encrypt_str(value)
+            encrypted = base64.b64encode(blob).decode()
             svc = _get_tool_config_service()
             svc.set_tool_config(self.get_id(), {key: encrypted})
         except Exception as exc:
@@ -335,7 +337,8 @@ class AbstractCapability(ABC):
             return get_vault_service().decrypt_str(raw)
         except VaultLockedError as exc:
             logger.warning(
-                "[%s] load_credential(%r) failed — vault is locked (returning None): %s",
+                "[%s] load_credential(%r) failed — vault is "
+                "locked (returning None): %s",
                 self.get_id(), key, exc,
             )
             return None

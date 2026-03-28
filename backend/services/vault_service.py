@@ -76,7 +76,8 @@ def _derive_kek(password: str, salt: bytes, iterations: int = _KDF_ITERATIONS) -
         iterations: PBKDF2 iteration count.  Defaults to :data:`_KDF_ITERATIONS`.
 
     Returns:
-        32-byte KEK bytes suitable for use with :class:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM`.
+        32-byte KEK bytes suitable for use with
+        :class:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM`.
     """
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives import hashes
@@ -100,7 +101,8 @@ def _aesgcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
 
     Returns:
         Ciphertext + 16-byte authentication tag as a single bytes object
-        (the format produced by :meth:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM.encrypt`).
+        (the format produced by
+        :meth:`~cryptography.hazmat.primitives.ciphers.aead.AESGCM.encrypt`).
     """
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     return AESGCM(key).encrypt(nonce, plaintext, None)
@@ -112,7 +114,8 @@ def _aesgcm_decrypt(key: bytes, nonce: bytes, ciphertext_tag: bytes) -> bytes:
     Args:
         key:             32-byte AES key.
         nonce:           12-byte nonce that was used during encryption.
-        ciphertext_tag:  Ciphertext + 16-byte tag (as produced by :func:`_aesgcm_encrypt`).
+        ciphertext_tag:  Ciphertext + 16-byte tag
+            (as produced by :func:`_aesgcm_encrypt`).
 
     Returns:
         Plaintext bytes.
@@ -209,7 +212,10 @@ class VaultService:
                  now_iso, now_iso),
             )
 
-        logger.info("[Vault] Vault initialised — new DEK wrapped with password-derived KEK")
+        logger.info(
+            "[Vault] Vault initialised — new DEK wrapped "
+            "with password-derived KEK"
+        )
 
     def unlock(self, password: str) -> bool:
         """Derive the KEK from *password*, unwrap the DEK, and cache it in memory.
@@ -253,7 +259,10 @@ class VaultService:
         try:
             dek = _aesgcm_decrypt(kek, nonce, wrapped_dek)
         except InvalidTag:
-            logger.warning("[Vault] unlock() failed — incorrect password or corrupted vault_config")
+            logger.warning(
+                "[Vault] unlock() failed — incorrect password "
+                "or corrupted vault_config"
+            )
             return False
 
         _vault_state.dek = dek
@@ -415,7 +424,8 @@ class VaultService:
         row = self._load_vault_config()
         if row is None:
             raise RuntimeError(
-                "[Vault] vault_config is empty — call initialize() before change_password()"
+                "[Vault] vault_config is empty — "
+                "call initialize() before change_password()"
             )
 
         old_salt = bytes(row["kdf_salt"])
@@ -501,7 +511,10 @@ class VaultService:
         fernet_key = base64.urlsafe_b64encode(key_bytes)
         f = Fernet(fernet_key)
 
-        logger.info("[Vault] Legacy Fernet key found — migrating encrypted data to AES-256-GCM")
+        logger.info(
+            "[Vault] Legacy Fernet key found — migrating "
+            "encrypted data to AES-256-GCM"
+        )
 
         # ── Migrate each table ───────────────────────────────────────────
         _TABLES = [
@@ -525,19 +538,28 @@ class VaultService:
                     for row_id, encrypted_val in rows:
                         if encrypted_val is None:
                             continue
-                        token = (bytes(encrypted_val) if isinstance(encrypted_val, (bytes, memoryview))
-                                 else encrypted_val.encode("utf-8"))
+                        if isinstance(encrypted_val, (bytes, memoryview)):
+                            token = bytes(encrypted_val)
+                        else:
+                            token = encrypted_val.encode("utf-8")
                         try:
                             plaintext = f.decrypt(token)
                         except (InvalidToken, Exception):
-                            logger.warning("[Vault] Skipping row %s — Fernet decrypt failed "
-                                           "(was already broken)", row_id)
+                            logger.warning(
+                                "[Vault] Skipping row %s — "
+                                "Fernet decrypt failed "
+                                "(was already broken)",
+                                row_id,
+                            )
                             continue
                         new_val = base64.b64encode(self.encrypt(plaintext)).decode()
                         conn.execute(update_sql, (new_val, row_id))
                         total += 1
             except Exception as exc:
-                logger.warning("[Vault] Migration query failed: %s — %s", select_sql[:50], exc)
+                logger.warning(
+                    "[Vault] Migration query failed: %s — %s",
+                    select_sql[:50], exc,
+                )
 
         # ── Delete the legacy key — migration is done ────────────────────
         with self._db.connection() as conn:
@@ -568,7 +590,10 @@ class VaultService:
         except Exception:
             return None
 
-        logger.info("[Vault] Found legacy .key file at %s — seeding encryption_keys table", key_path)
+        logger.info(
+            "[Vault] Found legacy .key file at %s — "
+            "seeding encryption_keys table", key_path,
+        )
         with self._db.connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS encryption_keys (

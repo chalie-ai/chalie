@@ -248,7 +248,8 @@ class TestAbstractCapability:
         assert cap.is_connected() is False
 
     def test_store_and_load_credential_roundtrip(self):
-        """``store_credential`` followed by ``load_credential`` must return the original value.
+        """``store_credential`` followed by ``load_credential`` must
+        return the original value.
 
         Patches ``services.vault_service.get_vault_service`` to return a
         deterministic in-memory vault mock and
@@ -258,9 +259,15 @@ class TestAbstractCapability:
         mem_svc = _InMemoryToolConfigService()
         mock_vault = _MockVaultService()
 
-        with patch("services.vault_service.get_vault_service", return_value=mock_vault), \
-             patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-
+        vault_patch = patch(
+            "services.vault_service.get_vault_service",
+            return_value=mock_vault,
+        )
+        cfg_patch = patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        )
+        with vault_patch, cfg_patch:
             cap = _MinimalCapability._build()
             cap.store_credential("username", "alice")
             result = cap.load_credential("username")
@@ -276,9 +283,15 @@ class TestAbstractCapability:
         mem_svc = _InMemoryToolConfigService()
         mock_vault = _MockVaultService()
 
-        with patch("services.vault_service.get_vault_service", return_value=mock_vault), \
-             patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-
+        vault_patch = patch(
+            "services.vault_service.get_vault_service",
+            return_value=mock_vault,
+        )
+        cfg_patch = patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        )
+        with vault_patch, cfg_patch:
             cap = _MinimalCapability._build()
             result = cap.load_credential("missing")
 
@@ -301,7 +314,12 @@ class TestHealthTracking:
     def test_health_details_defaults(self):
         """Fresh capability has zero errors and no last_error."""
         cap = _MinimalCapability._build()
-        assert cap.health_details() == {"connected": False, "error_count": 0, "last_error": None}
+        expected = {
+            "connected": False,
+            "error_count": 0,
+            "last_error": None,
+        }
+        assert cap.health_details() == expected
 
     def test_run_monitor_success_resets_and_persists(self):
         """Successful monitor() resets error count and persists zero."""
@@ -317,15 +335,28 @@ class TestHealthTracking:
     def test_run_monitor_increments_on_failure(self):
         """Failed monitor() increments error count and records the error."""
         cap = _make_health_cap(ConnectionError("server unreachable"))
-        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+        mem_svc = _InMemoryToolConfigService()
+        with patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        ):
             cap.run_monitor()
-        assert cap.health_details() == {"connected": True, "error_count": 1, "last_error": "server unreachable"}
+        expected = {
+            "connected": True,
+            "error_count": 1,
+            "last_error": "server unreachable",
+        }
+        assert cap.health_details() == expected
 
     def test_run_monitor_auto_disconnects_after_threshold(self):
         """Capability auto-disconnects after MAX_CONSECUTIVE_FAILURES."""
         cap = _make_health_cap(ConnectionError("down"))
-        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1  # one away
-        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1
+        mem_svc = _InMemoryToolConfigService()
+        with patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        ):
             cap.run_monitor()  # this pushes it over
         assert cap._connected is False
 
@@ -344,7 +375,11 @@ class TestHealthTracking:
         cap = _make_health_cap()
         cap._error_count = 3
         cap._last_error = "was broken"
-        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+        mem_svc = _InMemoryToolConfigService()
+        with patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        ):
             cap.run_monitor()
         assert cap._error_count == 0
         assert cap._connected is True

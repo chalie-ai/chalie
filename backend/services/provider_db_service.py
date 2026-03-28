@@ -54,10 +54,16 @@ def compute_job_group(caps: Dict[str, str]) -> str:
 def load_jobs_for_group(group_name: str) -> List[str]:
     """Return job IDs belonging to a capability group."""
     import os
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+    config_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        'configs', 'cognitive_jobs.json',
+    )
     with open(config_path, 'r') as f:
         all_jobs = json.load(f).get('jobs', [])
-    return [j['id'] for j in all_jobs if compute_job_group(j.get('caps', {})) == group_name]
+    return [
+        j['id'] for j in all_jobs
+        if compute_job_group(j.get('caps', {})) == group_name
+    ]
 
 
 class ProviderDbService:
@@ -154,7 +160,8 @@ class ProviderDbService:
             ``None`` when the vault is sealed).
         """
         if isinstance(row, dict):
-            api_key = self._unseal_api_key(row['api_key']) if row.get('api_key') else None
+            raw_key = row.get('api_key')
+            api_key = self._unseal_api_key(raw_key) if raw_key else None
             default_model = row['model']
             return {
                 "id": row['id'],
@@ -283,7 +290,11 @@ class ProviderDbService:
         if 'supports_vision' in data:
             vision = 1 if data['supports_vision'] else 0
         else:
-            vision = 1 if _infer_vision_support(data.get('platform', ''), default_model) else 0
+            vision = (
+                1 if _infer_vision_support(
+                    data.get('platform', ''), default_model,
+                ) else 0
+            )
 
         models_json = json.dumps(models_list)
 
@@ -341,7 +352,8 @@ class ProviderDbService:
             updates.append("is_active = ?")
             params.append(1 if data["is_active"] else 0)
 
-        # Auto-infer vision support if platform or model changed and supports_vision not explicit
+        # Auto-infer vision support if platform or model changed
+        # and supports_vision not explicit
         if 'supports_vision' not in data and ('platform' in data or 'model' in data):
             current = self.get_provider_by_id(provider_id)
             if current:
@@ -378,7 +390,11 @@ class ProviderDbService:
         # Check if provider is referenced by any job assignment
         assignment = self.get_job_assignment_by_provider_id(provider_id)
         if assignment:
-            raise ValueError(f"Cannot delete provider {provider_id}; it is referenced by job '{assignment['job_name']}'")
+            raise ValueError(
+                f"Cannot delete provider {provider_id}; "
+                f"it is referenced by job "
+                f"'{assignment['job_name']}'"
+            )
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -414,7 +430,9 @@ class ProviderDbService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT job_name, provider_id, model FROM job_provider_assignments WHERE job_name = ?",
+                "SELECT job_name, provider_id, model "
+                "FROM job_provider_assignments "
+                "WHERE job_name = ?",
                 (job_name,)
             )
             row = cursor.fetchone()
@@ -427,12 +445,16 @@ class ProviderDbService:
                 "model": row[2],
             }
 
-    def get_job_assignment_by_provider_id(self, provider_id: int) -> Optional[Dict[str, Any]]:
+    def get_job_assignment_by_provider_id(
+        self, provider_id: int,
+    ) -> Optional[Dict[str, Any]]:
         """Get job assignment by provider ID (for deletion check)."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT job_name, provider_id, model FROM job_provider_assignments WHERE provider_id = ? LIMIT 1",
+                "SELECT job_name, provider_id, model "
+                "FROM job_provider_assignments "
+                "WHERE provider_id = ? LIMIT 1",
                 (provider_id,)
             )
             row = cursor.fetchone()
@@ -445,7 +467,10 @@ class ProviderDbService:
                 "model": row[2],
             }
 
-    def set_job_assignment(self, job_name: str, provider_id: int, model: Optional[str] = None) -> Dict[str, Any]:
+    def set_job_assignment(
+        self, job_name: str, provider_id: int,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Create or update a job->provider assignment with optional model override."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -463,7 +488,9 @@ class ProviderDbService:
                 )
             else:
                 cursor.execute(
-                    "INSERT INTO job_provider_assignments (job_name, provider_id, model) VALUES (?, ?, ?)",
+                    "INSERT INTO job_provider_assignments "
+                    "(job_name, provider_id, model) "
+                    "VALUES (?, ?, ?)",
                     (job_name, provider_id, model)
                 )
 
@@ -474,7 +501,10 @@ class ProviderDbService:
                 "model": model,
             }
 
-    def set_group_assignments(self, group_name: str, provider_id: int, model: Optional[str] = None) -> List[Dict[str, Any]]:
+    def set_group_assignments(
+        self, group_name: str, provider_id: int,
+        model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Batch-assign a provider+model to all jobs in a capability group.
 
         Group membership is derived from cognitive_jobs.json caps.
