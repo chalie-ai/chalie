@@ -18,6 +18,7 @@ import pytest
 
 import services.database_service as _db_mod
 from services.database_service import DatabaseService
+import services.vault_service as _vault_mod
 from services.vault_service import (
     VaultService,
     VaultLockedError,
@@ -117,9 +118,10 @@ def vault_db(tmp_path):
     _db_mod._local.conn = None
     _db_mod._local.db_path = None
 
-    # Patch the process-wide singleton
+    # Patch the process-wide singletons
     original_singleton = _db_mod._shared_db_service
     _db_mod._shared_db_service = db_service
+    _vault_mod._vault_service_instance = None  # reset cached VaultService
 
     # Yield a raw connection for test data seeding
     raw_conn = db_service._get_connection()
@@ -128,6 +130,7 @@ def vault_db(tmp_path):
     finally:
         db_service.close_pool()
         _db_mod._shared_db_service = original_singleton
+        _vault_mod._vault_service_instance = None  # reset cached VaultService
         _db_mod._local.conn = None
         _db_mod._local.db_path = None
 
@@ -643,33 +646,25 @@ class TestVaultService:
         cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
         assert cursor.fetchone()[0] == 0, "encryption_keys row should be deleted after migration"
 
-        # Each consumer value should now decrypt via AES-GCM (not Fernet fallback)
+        # Each consumer value should now be a base64-encoded AES-GCM blob
+        # that round-trips through base64 decode → vault.decrypt().
         cursor.execute("SELECT api_key FROM providers WHERE name = 'migr-provider'")
-        new_api_key = bytes(cursor.fetchone()[0])
-        assert vault.decrypt(new_api_key) == b"provider-api-key"
+        new_api_key = cursor.fetchone()[0]
+        assert vault.decrypt(base64.b64decode(new_api_key)) == b"provider-api-key"
 
         cursor.execute("SELECT encrypted_value FROM settings WHERE key = 'migr_key'")
-        new_setting = bytes(cursor.fetchone()[0])
-        assert vault.decrypt(new_setting) == b"setting-secret"
+        new_setting = cursor.fetchone()[0]
+        assert vault.decrypt(base64.b64decode(new_setting)) == b"setting-secret"
 
         cursor.execute("SELECT config_value FROM tool_configs WHERE id = 'tc-1'")
         new_tool_val = cursor.fetchone()[0]
-        # config_value is TEXT; the migration stores bytes — read as-is
-        if isinstance(new_tool_val, str):
-            new_tool_val = new_tool_val.encode("latin-1")
-        else:
-            new_tool_val = bytes(new_tool_val)
-        assert vault.decrypt(new_tool_val) == b"tool-secret-value"
+        assert vault.decrypt(base64.b64decode(new_tool_val)) == b"tool-secret-value"
 
         cursor.execute(
             "SELECT encrypted_data FROM browser_credentials WHERE domain = 'example.com'"
         )
         new_browser = cursor.fetchone()[0]
-        if isinstance(new_browser, str):
-            new_browser = new_browser.encode("latin-1")
-        else:
-            new_browser = bytes(new_browser)
-        assert vault.decrypt(new_browser) == b"browser-password"
+        assert vault.decrypt(base64.b64decode(new_browser)) == b"browser-password"
         cursor.close()
 
     # ------------------------------------------------------------------

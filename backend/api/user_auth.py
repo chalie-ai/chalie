@@ -15,10 +15,9 @@ user_auth_bp = Blueprint('user_auth', __name__)
 def _reconnect_capabilities() -> None:
     """Load capability plugins and reconnect any that have stored credentials.
 
-    Mirrors the capability-framework block in ``run.py`` but runs *after*
-    vault unlock so that capabilities can successfully decrypt their stored
-    credentials.  This is the post-unlock hook required by the sealed-vault
-    boot sequence.
+    Post-unlock hook: runs after vault unlock so capabilities can decrypt their
+    stored credentials.  Capability init is deferred from boot (``run.py``) to
+    here because the vault requires the master password to unseal.
 
     Any error is caught and logged as a warning so a capability failure never
     prevents a successful login response from being returned to the client.
@@ -48,35 +47,14 @@ def _reconnect_capabilities() -> None:
 
 
 def _get_vault_state() -> str:
-    """Return the current vault state as a string suitable for API responses.
+    """Return the current vault state via VaultService.get_state().
 
-    Queries the ``vault_config`` table to distinguish between a vault that has
-    never been initialised and one that has been initialised but is currently
-    sealed.  All errors are swallowed so that a database problem never crashes
+    All errors are swallowed so that a database problem never crashes
     the ``/auth/status`` endpoint.
-
-    Returns:
-        ``"unlocked"``       — vault is open and the DEK is in memory.
-        ``"locked"``         — ``vault_config`` row exists but DEK is not in memory.
-        ``"uninitialized"``  — no ``vault_config`` row (pre-registration state).
     """
     try:
         from services.vault_service import get_vault_service
-        from services.database_service import get_shared_db_service
-
-        vault = get_vault_service()
-        if vault.is_unlocked():
-            return "unlocked"
-
-        # Check whether the vault has ever been initialised
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM vault_config WHERE id = 1")
-            count = cursor.fetchone()[0]
-            cursor.close()
-
-        return "locked" if count > 0 else "uninitialized"
+        return get_vault_service().get_state()
     except Exception:
         return "uninitialized"
 

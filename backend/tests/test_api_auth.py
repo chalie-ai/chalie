@@ -108,6 +108,7 @@ def _make_vault_mock(*, unlocked: bool = True, initialize_raises=None, unlock_re
     mock_vault.is_unlocked.return_value = unlocked
     mock_vault.unlock.return_value = unlock_returns
     mock_vault.lock.return_value = None
+    mock_vault.get_state.return_value = "unlocked" if unlocked else "uninitialized"
 
     if initialize_raises is not None:
         mock_vault.initialize.side_effect = initialize_raises

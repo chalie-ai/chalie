@@ -18,6 +18,7 @@ module-level singleton that is safe for a single-process, single-account
 architecture.  It is cleared on ``lock()`` or server restart.
 """
 
+import base64
 import logging
 import os
 from dataclasses import dataclass, field
@@ -191,6 +192,9 @@ class VaultService:
         kek = _derive_kek(password, salt)
         wrapped_dek = _aesgcm_encrypt(kek, nonce, dek)
 
+        from services.time_utils import utc_now
+        now_iso = utc_now().isoformat()
+
         with self._db.connection() as conn:
             conn.execute("DELETE FROM vault_config WHERE id = 1")
             conn.execute(
@@ -199,9 +203,10 @@ class VaultService:
                     (id, kdf_salt, kdf_algorithm, kdf_iterations,
                      wrapped_dek, dek_nonce, created_at, updated_at)
                 VALUES
-                    (1, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                    (1, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (salt, _KDF_ALGORITHM, _KDF_ITERATIONS, wrapped_dek, nonce),
+                (salt, _KDF_ALGORITHM, _KDF_ITERATIONS, wrapped_dek, nonce,
+                 now_iso, now_iso),
             )
 
         logger.info("[Vault] Vault initialised — new DEK wrapped with password-derived KEK")
@@ -268,6 +273,22 @@ class VaultService:
             last :meth:`lock` call or server restart, ``False`` otherwise.
         """
         return _vault_state.dek is not None
+
+    def get_state(self) -> str:
+        """Return the vault state as a string.
+
+        Returns:
+            ``"unlocked"``      — DEK is in memory.
+            ``"locked"``        — ``vault_config`` row exists but DEK is not loaded.
+            ``"uninitialized"`` — no ``vault_config`` row.
+        """
+        if self.is_unlocked():
+            return "unlocked"
+        try:
+            row = self._load_vault_config()
+            return "locked" if row is not None else "uninitialized"
+        except Exception:
+            return "uninitialized"
 
     def lock(self) -> None:
         """Seal the vault by clearing the in-memory DEK.
@@ -434,6 +455,8 @@ class VaultService:
         new_kek = _derive_kek(new_password, new_salt)
         new_wrapped_dek = _aesgcm_encrypt(new_kek, new_nonce, dek)
 
+        from services.time_utils import utc_now
+
         with self._db.connection() as conn:
             conn.execute(
                 """
@@ -443,10 +466,11 @@ class VaultService:
                     kdf_iterations = ?,
                     wrapped_dek    = ?,
                     dek_nonce      = ?,
-                    updated_at     = datetime('now')
+                    updated_at     = ?
                 WHERE id = 1
                 """,
-                (new_salt, _KDF_ALGORITHM, _KDF_ITERATIONS, new_wrapped_dek, new_nonce),
+                (new_salt, _KDF_ALGORITHM, _KDF_ITERATIONS, new_wrapped_dek,
+                 new_nonce, utc_now().isoformat()),
             )
 
         # Update in-memory DEK cache if the vault was already unlocked
@@ -485,7 +509,6 @@ class VaultService:
             ``False`` if any table failed; the next :meth:`unlock` call will
                 retry automatically (Fernet fallback remains active).
         """
-        import base64
         import hashlib
         from cryptography.fernet import Fernet, InvalidToken
 
@@ -558,7 +581,7 @@ class VaultService:
                         plaintext = _try_fernet(r[val_col])
                         if plaintext is None:
                             continue  # Not Fernet-encrypted; skip
-                        new_blob = self.encrypt(plaintext)
+                        new_blob = base64.b64encode(self.encrypt(plaintext)).decode()
                         conn.execute(update_sql, (new_blob, r[id_col]))
                         count += 1
 
@@ -665,7 +688,6 @@ class VaultService:
             Decrypted plaintext bytes if Fernet decryption succeeds,
             ``None`` if the legacy key is absent or decryption fails.
         """
-        import base64
         import hashlib
 
         try:
@@ -703,17 +725,22 @@ class VaultService:
 
 # ── Module-level factory ───────────────────────────────────────────────────────
 
+_vault_service_instance: Optional[VaultService] = None
+
+
 def get_vault_service() -> VaultService:
-    """Return a :class:`VaultService` wired to the shared database singleton.
+    """Return the process-wide :class:`VaultService` singleton.
 
     Uses deferred import of :func:`~services.database_service.get_shared_db_service`
-    to avoid circular import issues at module load time.
+    to avoid circular import issues at module load time.  The instance is
+    cached after first creation so every call site shares the same object.
 
     Returns:
-        A new :class:`VaultService` instance backed by the process-wide
+        The cached :class:`VaultService` singleton backed by the process-wide
         :class:`~services.database_service.DatabaseService` singleton.
-        The module-level :data:`_vault_state` is shared across all returned
-        instances, so unlock/lock state is consistent within a single process.
     """
-    from services.database_service import get_shared_db_service
-    return VaultService(get_shared_db_service())
+    global _vault_service_instance
+    if _vault_service_instance is None:
+        from services.database_service import get_shared_db_service
+        _vault_service_instance = VaultService(get_shared_db_service())
+    return _vault_service_instance

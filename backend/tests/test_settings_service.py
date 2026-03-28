@@ -13,6 +13,7 @@ import pytest
 from unittest.mock import patch
 
 import services.database_service as _db_mod
+import services.vault_service as _vault_mod
 from services.database_service import DatabaseService
 from services.settings_service import SettingsService
 from services.vault_service import _vault_state, get_vault_service
@@ -78,6 +79,7 @@ def settings_db(tmp_path):
 
     original_singleton = _db_mod._shared_db_service
     _db_mod._shared_db_service = db_service
+    _vault_mod._vault_service_instance = None  # reset cached VaultService
 
     raw_conn = db_service._get_connection()
     try:
@@ -85,6 +87,7 @@ def settings_db(tmp_path):
     finally:
         db_service.close_pool()
         _db_mod._shared_db_service = original_singleton
+        _vault_mod._vault_service_instance = None  # reset cached VaultService
         _db_mod._local.conn = None
         _db_mod._local.db_path = None
 

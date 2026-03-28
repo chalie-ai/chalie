@@ -208,10 +208,6 @@ if __name__ == "__main__":
     from workers.persistent_task_worker import persistent_task_worker
     from workers.document_worker import document_purge_worker
 
-    # Ensure encryption key
-    from services.encryption_key_service import get_encryption_key
-    get_encryption_key()
-
     # Preload embedding model singleton
     try:
         logging.info("[System] Preloading embedding model...")
