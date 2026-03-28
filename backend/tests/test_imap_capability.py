@@ -370,7 +370,10 @@ def test_search_by_date_to(_mock_email_classify):
 def test_search_unanswered(_mock_email_classify):
     """unanswered=True adds UNANSWERED to IMAP criteria."""
     cap = _make()
-    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
+    tools = cap.get_tools()
+    handler = next(
+        t for t in tools if t["name"] == "imap_search_email"
+    )["handler"]
     mc = _mock_imap_client(_SEARCH_EMAILS)
     with patch.object(cap, "_open_client", return_value=mc):
         handler("t1", {"sender": "sarah", "unanswered": True})
