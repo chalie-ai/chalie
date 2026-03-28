@@ -10,6 +10,7 @@ import time
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
+from services.memory_store import MemoryStore
 from services.act_orchestrator_service import (
     ACTOrchestrator,
     ACTResult,
@@ -591,10 +592,9 @@ class TestAppendMode:
         orch._request_id = ''
         # With no request_id the method should short-circuit or return ''
         # (MemoryStore key would be 'steer:' which should be empty)
+        store = MemoryStore()
         with patch('services.memory_client.MemoryClientService.create_connection') as mock_conn:
-            mock_store = MagicMock()
-            mock_store.lrange.return_value = []
-            mock_conn.return_value = mock_store
+            mock_conn.return_value = store
             result = orch._get_steering_text()
         assert result == ''
 
@@ -1175,13 +1175,13 @@ class TestEscalateAndWait:
         mock_loop = MagicMock()
         mock_loop.context_extras = {'topic': 'test'}
 
-        mock_store = MagicMock()
-        mock_store.lrange.return_value = ['proceed with the plan']
+        store = MemoryStore()
+        store.rpush('steer:req-123', 'proceed with the plan')
 
         with patch('services.output_service.OutputService'), \
              patch('services.memory_client.MemoryClientService') as mock_mem, \
              patch('time.sleep'):
-            mock_mem.create_connection.return_value = mock_store
+            mock_mem.create_connection.return_value = store
             result = orch._escalate_and_wait(
                 mock_loop, 'Please confirm.', 'exchange-1',
                 poll_interval=0.0, max_wait=10.0,
@@ -1198,15 +1198,14 @@ class TestEscalateAndWait:
         mock_loop = MagicMock()
         mock_loop.context_extras = {'topic': 'test'}
 
-        mock_store = MagicMock()
-        mock_store.lrange.return_value = []  # Never responds
+        store = MemoryStore()  # Empty store — no steering response ever arrives
 
         with patch('services.output_service.OutputService'), \
              patch('services.memory_client.MemoryClientService') as mock_mem, \
              patch('time.sleep'), \
              patch('time.monotonic', side_effect=[0.0, 2.0]):
             # deadline = 0.0 + 1.0 = 1.0; first while check: 2.0 < 1.0 → False
-            mock_mem.create_connection.return_value = mock_store
+            mock_mem.create_connection.return_value = store
             result = orch._escalate_and_wait(
                 mock_loop, 'Please confirm.', 'exchange-1',
                 poll_interval=0.0, max_wait=1.0,
@@ -1235,13 +1234,15 @@ class TestMaybeAutoReflect:
     def _mock_auto_reflect_store(self):
         """Return a sys.modules patch dict that clears the cooldown so reflection proceeds.
 
+        A real :class:`MemoryStore` instance is used so that ``store.get`` on any
+        key returns ``None`` by default, meaning no cooldown is active.
+
         Returns:
             dict: Suitable for ``patch.dict('sys.modules', ...)``.
         """
-        mock_store = MagicMock()
-        mock_store.get.return_value = None  # Not in cooldown
+        store = MemoryStore()  # Fresh store — no cooldown key set
         mock_mem_mod = MagicMock()
-        mock_mem_mod.MemoryClientService.create_connection.return_value = mock_store
+        mock_mem_mod.MemoryClientService.create_connection.return_value = store
         return {'services.memory_client': mock_mem_mod}
 
     def test_triggers_on_degraded_exit(self):
