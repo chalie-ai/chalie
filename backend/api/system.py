@@ -785,13 +785,11 @@ def reset_thread():
     """
     try:
         from services.thread_service import ThreadService
-        from services.memory_client import MemoryClientService
 
         data = request.get_json(silent=True) or {}
         channel_id = data.get('channel', 'default')
 
-        store = MemoryClientService.create_connection()
-        ts = ThreadService(store)
+        ts = ThreadService()
         thread_id = ts.get_active_thread_id(channel_id)
 
         if not thread_id:
