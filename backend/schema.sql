@@ -357,11 +357,16 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_fired_at TEXT,
     group_id TEXT,
-    is_prompt INTEGER DEFAULT 0              -- BOOLEAN
+    is_prompt INTEGER DEFAULT 0,             -- BOOLEAN
+    source TEXT,                              -- origin: 'caldav', 'imap', 'system', NULL = user-created
+    external_uid TEXT,                        -- dedup key for external sources
+    metadata TEXT DEFAULT '{}',               -- JSON blob (location, attendees, etc.)
+    hidden INTEGER DEFAULT 0                  -- hide from user-facing list/API
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group_id, due_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid) WHERE external_uid IS NOT NULL;
 
 -- ────────────────────────────────────────────────────────────────
 -- AUTOBIOGRAPHY — user narrative synthesis

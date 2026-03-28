@@ -554,6 +554,12 @@ class DatabaseService:
                 ("providers", "models", "TEXT", None),
                 # Per-job model override — overrides provider default when set
                 ("job_provider_assignments", "model", "TEXT", None),
+                # Scheduler — external source integration columns
+                ("scheduled_items", "source", "TEXT", None),
+                ("scheduled_items", "external_uid", "TEXT",
+                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid) WHERE external_uid IS NOT NULL"),
+                ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
+                ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
             ]
             for table, col, col_def, *extra in _optional_columns:
                 cursor.execute(f"PRAGMA table_info({table})")
