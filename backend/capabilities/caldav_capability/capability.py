@@ -202,6 +202,28 @@ def _format_schedule_hint(upcoming: list, max_events: int = 5) -> str:
     return f"Next 24h ({total} events):\n" + "\n".join(lines)
 
 
+def _build_reschedule_hint(ev_a: dict, ev_b: dict) -> str:
+    """Build a reschedule suggestion identifying the shorter event to move.
+
+    Args:
+        ev_a: First conflicting event dict.
+        ev_b: Second conflicting event dict.
+
+    Returns:
+        str: Suggestion text naming the shorter event and its duration.
+    """
+    dur_a = (ev_a['dtend'] - ev_a['dtstart']).total_seconds()
+    dur_b = (ev_b['dtend'] - ev_b['dtstart']).total_seconds()
+    shorter = ev_a if dur_a <= dur_b else ev_b
+    mins = int(dur_a // 60) if dur_a <= dur_b else int(dur_b // 60)
+    return (
+        f"Easiest to move: \"{shorter.get('summary', 'Event')}\" "
+        f"(UID: {shorter.get('uid', '?')}, {mins}min). "
+        f"Use caldav_find_free_slots to find a {mins}min window, "
+        f"then caldav_update_event to reschedule it."
+    )
+
+
 def _humanize_rrule(rrule_str: str, dtstart: "_dt_module.datetime", summary: str) -> str:
     """Build a concise human-readable recurrence pattern description.
 
@@ -1221,15 +1243,21 @@ class CaldavCapability(AbstractCapability):
                 if store.get(flag_key):
                     continue
 
+                hint = _build_reschedule_hint(ev_a, ev_b)
+                hint_block = f"\n\n{hint}" if hint else ""
+                uid_a = ev_a.get('uid', '?')
+                uid_b = ev_b.get('uid', '?')
                 store.rpush('prompt-queue', _json.dumps({
                     'prompt': (
                         "[CALENDAR CONFLICT]\n"
                         f"These two events overlap:\n"
-                        f"  1. {_format_event_line(ev_a)}\n"
-                        f"  2. {_format_event_line(ev_b)}\n\n"
+                        f"  1. {_format_event_line(ev_a)} (UID: {uid_a})\n"
+                        f"  2. {_format_event_line(ev_b)} (UID: {uid_b})\n"
+                        f"{hint_block}\n\n"
                         "Alert the user about this scheduling conflict. "
-                        "Be concise — mention both events and ask if they'd "
-                        "like to reschedule one."
+                        "Suggest moving the shorter event to one of the free "
+                        "slots above. If the user agrees, use caldav_update_event "
+                        "to reschedule it."
                     ),
                     'metadata': {
                         'type': 'proactive_drift',

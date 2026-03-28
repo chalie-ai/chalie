@@ -856,3 +856,100 @@ class TestConflictAlert:
         # Dedup key should use sorted UIDs: a-uid:z-uid
         flag_key = store.setex.call_args[0][0]
         assert "a-uid:z-uid" in flag_key
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_conflict_alert_includes_reschedule_hint(self, mock_mcs):
+        """Conflict alert prompt should contain reschedule guidance."""
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+        ev_a = self._make_event(uid='a', summary='Design Review',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
+        ev_b = self._make_event(uid='b', summary='Sprint Planning',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
+        cap._maybe_send_conflict_alert([ev_a, ev_b], now)
+
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        prompt = payload['prompt']
+        assert "UID: a" in prompt
+        assert "UID: b" in prompt
+        assert "caldav_find_free_slots" in prompt
+        assert "caldav_update_event" in prompt
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_conflict_alert_picks_shorter_event(self, mock_mcs):
+        """Reschedule hint should suggest moving the shorter event."""
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+        ev_a = self._make_event(uid='short', summary='Quick Sync',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
+        ev_b = self._make_event(uid='long', summary='Workshop',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC))
+        cap._maybe_send_conflict_alert([ev_a, ev_b], now)
+
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        assert 'Quick Sync' in payload['prompt']
+        assert 'Easiest to move: "Quick Sync"' in payload['prompt']
+
+
+class TestBuildRescheduleHint:
+    """Tests for :func:`_build_reschedule_hint`."""
+
+    @staticmethod
+    def _make_event(**overrides):
+        base = {
+            'uid': 'evt-1', 'summary': 'Meeting',
+            'dtstart': datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+            'dtend': datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC),
+            'all_day': False,
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.unit
+    def test_hint_identifies_shorter_event(self):
+        from capabilities.caldav_capability.capability import _build_reschedule_hint
+        ev_a = self._make_event(uid='a', summary='Short',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC))
+        ev_b = self._make_event(uid='b', summary='Long',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC))
+        hint = _build_reschedule_hint(ev_a, ev_b)
+        assert '"Short"' in hint
+        assert 'UID: a' in hint
+        assert '30min' in hint
+
+    @pytest.mark.unit
+    def test_hint_includes_tool_names(self):
+        from capabilities.caldav_capability.capability import _build_reschedule_hint
+        ev_a = self._make_event(uid='x')
+        ev_b = self._make_event(uid='y',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC))
+        hint = _build_reschedule_hint(ev_a, ev_b)
+        assert 'caldav_find_free_slots' in hint
+        assert 'caldav_update_event' in hint
+
+    @pytest.mark.unit
+    def test_hint_equal_duration_picks_first(self):
+        from capabilities.caldav_capability.capability import _build_reschedule_hint
+        ev_a = self._make_event(uid='a', summary='Alpha')
+        ev_b = self._make_event(uid='b', summary='Beta')
+        hint = _build_reschedule_hint(ev_a, ev_b)
+        assert '"Alpha"' in hint  # ev_a picked when durations equal
