@@ -12,7 +12,7 @@ import email.utils
 import logging
 import pathlib
 import re
-from datetime import timedelta
+from datetime import datetime as _dt, timedelta
 
 import yaml
 
@@ -35,6 +35,14 @@ _K_SMTP_TLS = "smtp:tls"
 
 _INITIAL_DAYS = 7
 _MAX_BODY_CHARS = 4000
+
+
+def _imap_date(iso_str: str) -> str:
+    """Convert an ISO date string (YYYY-MM-DD) to IMAP date format (DD-Mon-YYYY)."""
+    try:
+        return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime("%d-%b-%Y")
+    except (ValueError, IndexError):
+        return iso_str
 
 # ---------------------------------------------------------------------------
 # Deterministic triage heuristics
@@ -501,10 +509,19 @@ class ImapCapability(AbstractCapability):
                     criteria = []
                     sender = (params.get("sender") or "").strip()
                     subject = (params.get("subject") or "").strip()
+                    keyword = (params.get("keyword") or "").strip()
+                    date_from = (params.get("date_from") or "").strip()
+                    date_to = (params.get("date_to") or "").strip()
                     if sender:
                         criteria.extend(["FROM", sender])
                     if subject:
                         criteria.extend(["SUBJECT", subject])
+                    if keyword:
+                        criteria.extend(["TEXT", keyword])
+                    if date_from:
+                        criteria.extend(["SINCE", _imap_date(date_from)])
+                    if date_to:
+                        criteria.extend(["BEFORE", _imap_date(date_to)])
                     if not criteria:
                         since = (utc_now() - timedelta(days=7)).strftime("%d-%b-%Y")
                         criteria.extend(["SINCE", since])
@@ -637,8 +654,8 @@ class ImapCapability(AbstractCapability):
                 "name": "imap_search_email",
                 "description": (
                     "Search emails directly on the mail server by sender, subject, "
-                    "or triage category (noise, informational, actionable). "
-                    "Returns live results from the inbox."
+                    "keyword (full-text body search), date range, or triage category "
+                    "(noise, informational, actionable). Returns live results from the inbox."
                 ),
                 "parameters": {
                     "sender": {
@@ -653,6 +670,28 @@ class ImapCapability(AbstractCapability):
                         "required": False,
                         "description": (
                             "Filter by subject keyword (case-insensitive substring match)."
+                        ),
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Full-text search across email headers and body "
+                            "(server-side IMAP TEXT search)."
+                        ),
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Only emails on or after this date (ISO format YYYY-MM-DD)."
+                        ),
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Only emails before this date (ISO format YYYY-MM-DD)."
                         ),
                     },
                     "triage": {

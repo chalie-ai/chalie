@@ -217,6 +217,16 @@ def test_monitor_skips_understand_when_empty():
     und.assert_not_called()
 
 
+# --- _imap_date ---
+
+@pytest.mark.unit
+def test_imap_date_conversion():
+    from capabilities.imap_capability.capability import _imap_date
+    assert _imap_date("2026-03-01") == "01-Mar-2026"
+    assert _imap_date("2026-12-25") == "25-Dec-2026"
+    assert _imap_date("bad-date") == "bad-date"  # passthrough on parse failure
+
+
 # --- get_tools / imap_search_email ---
 
 def _mock_imap_client(headers_by_uid):
@@ -271,6 +281,57 @@ def test_search_by_subject():
         handler("t1", {"subject": "invoice"})
     criteria = mc.search.call_args[0][0]
     assert "SUBJECT" in criteria and "invoice" in criteria
+
+
+@pytest.mark.unit
+def test_search_by_keyword():
+    """keyword param maps to IMAP TEXT criterion for full-text body search."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler("t1", {"keyword": "invoice"})
+    criteria = mc.search.call_args[0][0]
+    assert "TEXT" in criteria and "invoice" in criteria
+
+
+@pytest.mark.unit
+def test_search_by_date_from():
+    """date_from param maps to IMAP SINCE criterion with DD-Mon-YYYY format."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler("t1", {"date_from": "2026-03-01"})
+    criteria = mc.search.call_args[0][0]
+    assert "SINCE" in criteria and "01-Mar-2026" in criteria
+
+
+@pytest.mark.unit
+def test_search_by_date_to():
+    """date_to param maps to IMAP BEFORE criterion with DD-Mon-YYYY format."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler("t1", {"date_to": "2026-03-28"})
+    criteria = mc.search.call_args[0][0]
+    assert "BEFORE" in criteria and "28-Mar-2026" in criteria
+
+
+@pytest.mark.unit
+def test_search_combined_criteria():
+    """Multiple params combine into a single IMAP criteria list."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler("t1", {"sender": "sarah", "keyword": "budget",
+                        "date_from": "2026-03-01"})
+    criteria = mc.search.call_args[0][0]
+    assert "FROM" in criteria
+    assert "TEXT" in criteria
+    assert "SINCE" in criteria
 
 
 @pytest.mark.unit
