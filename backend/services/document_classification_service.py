@@ -127,7 +127,7 @@ class DocumentClassificationService:
 
         best_sim = -1.0
         best_label = fallback_label
-        for label, label_emb in zip(existing_labels, label_embs):
+        for label, label_emb in zip(existing_labels, label_embs, strict=True):
             sim = float(np.dot(doc_emb, label_emb))
             if sim > best_sim:
                 best_sim = sim
@@ -204,7 +204,8 @@ class DocumentClassificationService:
         # Watched folder label is a strong project signal
         if folder_context:
             # Extract label from "Watched folder: <label>" or subfolder path
-            match = re.match(r'Watched folder:\s*(.+?)(?:\s*/\s*(.+))?$', folder_context)
+            pattern = r'Watched folder:\s*(.+?)(?:\s*/\s*(.+))?$'
+            match = re.match(pattern, folder_context)
             if match:
                 subfolder = match.group(2)
                 if subfolder and subfolder != '.':
