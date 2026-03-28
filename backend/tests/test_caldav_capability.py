@@ -577,3 +577,49 @@ class TestModuleLevelHelpers:
         assert _events_overlap(ev_a, ev_c) is False
 
 
+# --- _next_morning_8am timezone tests ---
+
+class TestNextMorning8am:
+
+    @pytest.mark.unit
+    def test_fallback_utc_when_no_timezone(self):
+        """Without user timezone, returns 08:00 UTC next day."""
+        from capabilities.caldav_capability.capability import _next_morning_8am
+        fixed = datetime.datetime(2026, 3, 28, 10, 0, tzinfo=_UTC)
+        with patch("capabilities.caldav_capability.capability.utc_now", return_value=fixed), \
+             patch("capabilities.caldav_capability.capability._get_user_tz", return_value=None):
+            result = _next_morning_8am()
+        assert result.hour == 8
+        assert result.day == 29
+
+    @pytest.mark.unit
+    def test_uses_user_timezone(self):
+        """With user timezone, returns 08:00 local → converted to UTC."""
+        from zoneinfo import ZoneInfo
+        from capabilities.caldav_capability.capability import _next_morning_8am
+        tz_ny = ZoneInfo("America/New_York")
+        # 2026-03-28 10:00 UTC = 2026-03-28 06:00 ET (before 8am local)
+        fixed = datetime.datetime(2026, 3, 28, 10, 0, tzinfo=_UTC)
+        with patch("capabilities.caldav_capability.capability.utc_now", return_value=fixed), \
+             patch("capabilities.caldav_capability.capability._get_user_tz", return_value=tz_ny):
+            result = _next_morning_8am()
+        # 8am ET (EDT, -4) = 12:00 UTC, same day
+        assert result.hour == 12
+        assert result.day == 28
+
+    @pytest.mark.unit
+    def test_next_day_when_past_8am_local(self):
+        """If it's past 8am local, schedule for next day."""
+        from zoneinfo import ZoneInfo
+        from capabilities.caldav_capability.capability import _next_morning_8am
+        tz_ny = ZoneInfo("America/New_York")
+        # 2026-03-28 18:00 UTC = 2026-03-28 14:00 ET (past 8am local)
+        fixed = datetime.datetime(2026, 3, 28, 18, 0, tzinfo=_UTC)
+        with patch("capabilities.caldav_capability.capability.utc_now", return_value=fixed), \
+             patch("capabilities.caldav_capability.capability._get_user_tz", return_value=tz_ny):
+            result = _next_morning_8am()
+        # Next 8am ET = 2026-03-29 08:00 ET = 12:00 UTC
+        assert result.hour == 12
+        assert result.day == 29
+
+

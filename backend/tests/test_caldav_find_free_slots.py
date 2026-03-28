@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,14 +30,37 @@ def _handler(connected=True):
     return tools["caldav_find_free_slots"]
 
 
+def _setup_db(events):
+    """Create an in-memory SQLite with scheduled_items populated from events."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""CREATE TABLE scheduled_items (
+        id TEXT PRIMARY KEY, item_type TEXT, message TEXT, due_at TEXT,
+        status TEXT, topic TEXT, source TEXT, external_uid TEXT,
+        hidden INTEGER, created_at TEXT, recurrence TEXT, is_prompt INTEGER,
+        metadata TEXT
+    )""")
+    for i, e in enumerate(events):
+        meta = json.dumps({"dtend": e["dtend"], "all_day": e.get("all_day", False)})
+        conn.execute(
+            "INSERT INTO scheduled_items (id, item_type, due_at, status, source, metadata) "
+            "VALUES (?, 'event', ?, 'pending', 'caldav', ?)",
+            (f"e{i}", e["dtstart"], meta),
+        )
+    conn.commit()
+    return conn
+
+
 def _run(events, params):
-    facts = [{"key": "event:" + e["uid"], "data": json.dumps(e)} for e in events]
-    ks = MagicMock()
-    ks.search.return_value = facts
-    with patch("services.knowledge_service.KnowledgeService", MagicMock(return_value=ks)), \
-         patch("services.database_service.get_shared_db_service", return_value=MagicMock()), \
+    conn = _setup_db(events)
+    db_mock = MagicMock()
+    db_mock.connection.return_value.__enter__ = lambda s: conn
+    db_mock.connection.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("services.database_service.get_shared_db_service", return_value=db_mock), \
+         patch("capabilities.caldav_capability.capability._get_user_tz", return_value=None), \
          patch("capabilities.caldav_capability.capability.utc_now", return_value=_FIXED_NOW):
-        return _handler()(topic="", params=params)
+        result = _handler()(topic="", params=params)
+    conn.close()
+    return result
 
 
 class TestFindFreeSlots:
@@ -51,8 +75,8 @@ class TestFindFreeSlots:
                        datetime.datetime(2026, 3, 30, 13, 0, tzinfo=_UTC))
         r = _run([ev], _DAY)
         assert r["count"] == 2
-        assert r["slots"][0]["duration_minutes"] == 180
-        assert r["slots"][1]["duration_minutes"] == 240
+        assert r["free_slots"][0]["duration_minutes"] == 180
+        assert r["free_slots"][1]["duration_minutes"] == 240
 
     @pytest.mark.unit
     def test_fully_booked_and_min_duration(self):
@@ -86,19 +110,39 @@ class TestFindFreeSlots:
                           datetime.datetime(2026, 3, 30, 13, 0, tzinfo=_UTC))]
         r = _run(evs, _DAY)
         assert r["count"] == 2
-        assert r["slots"][0]["duration_minutes"] == 60
-        assert r["slots"][1]["duration_minutes"] == 240
+        assert r["free_slots"][0]["duration_minutes"] == 60
+        assert r["free_slots"][1]["duration_minutes"] == 240
 
     @pytest.mark.unit
     def test_no_events_allday_ignored_custom_hours(self):
         # No events — full working day free
         r = _run([], _DAY)
-        assert r["count"] == 1 and r["slots"][0]["duration_minutes"] == 480
+        assert r["count"] == 1 and r["free_slots"][0]["duration_minutes"] == 480
         # All-day events should not block timed slots
         ev = _evt("e1", datetime.datetime(2026, 3, 30, 0, 0, tzinfo=_UTC),
                        datetime.datetime(2026, 3, 31, 0, 0, tzinfo=_UTC), all_day=True)
         r = _run([ev], _DAY)
-        assert r["count"] == 1 and r["slots"][0]["duration_minutes"] == 480
+        assert r["count"] == 1 and r["free_slots"][0]["duration_minutes"] == 480
         # Custom working hours respected
         r = _run([], {**_DAY, "working_hours_start": 10, "working_hours_end": 14})
-        assert r["slots"][0]["duration_minutes"] == 240
+        assert r["free_slots"][0]["duration_minutes"] == 240
+
+    @pytest.mark.unit
+    def test_timezone_aware_working_hours(self):
+        """Working hours clamp uses user timezone when available."""
+        from zoneinfo import ZoneInfo
+        tz_ny = ZoneInfo("America/New_York")
+        # No events — working hours 9-17 ET = 13:00-21:00 UTC (EDT, -4)
+        conn = _setup_db([])
+        db_mock = MagicMock()
+        db_mock.connection.return_value.__enter__ = lambda s: conn
+        db_mock.connection.return_value.__exit__ = MagicMock(return_value=False)
+        with patch("services.database_service.get_shared_db_service", return_value=db_mock), \
+             patch("capabilities.caldav_capability.capability._get_user_tz", return_value=tz_ny), \
+             patch("capabilities.caldav_capability.capability.utc_now", return_value=_FIXED_NOW):
+            r = _handler()(topic="", params=_DAY)
+        conn.close()
+        # 9am-5pm ET = 13:00-21:00 UTC, but window ends at midnight UTC
+        # So working window is 13:00 - 21:00 UTC (clamped to window_end 00:00+1d)
+        assert r["count"] == 1
+        assert r["free_slots"][0]["duration_minutes"] == 480

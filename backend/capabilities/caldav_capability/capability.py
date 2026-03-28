@@ -180,9 +180,33 @@ def _format_event_line(event: dict) -> str:
     ]))
 
 
+def _get_user_tz():
+    """Return the user's ZoneInfo timezone, or None if unavailable."""
+    try:
+        from zoneinfo import ZoneInfo
+        from services.client_context_service import ClientContextService
+        tz_name = ClientContextService().get().get("timezone")
+        if tz_name:
+            return ZoneInfo(tz_name)
+    except Exception:
+        pass
+    return None
+
+
 def _next_morning_8am() -> "_dt_module.datetime":
-    """Return the next 08:00 UTC datetime."""
+    """Return the next 08:00 in the user's local timezone, as UTC.
+
+    Falls back to 08:00 UTC when no timezone is available.
+    """
     now = utc_now()
+    tz = _get_user_tz()
+    if tz:
+        local_now = now.astimezone(tz)
+        local_8am = local_now.replace(hour=8, minute=0, second=0, microsecond=0)
+        if local_8am <= local_now:
+            local_8am += timedelta(days=1)
+        from datetime import timezone as _tz
+        return local_8am.astimezone(_tz.utc)
     tomorrow = now + timedelta(days=1)
     return tomorrow.replace(hour=8, minute=0, second=0, microsecond=0)
 
@@ -1338,17 +1362,25 @@ class CaldavCapability(AbstractCapability):
         # caldav_find_free_slots
         # ------------------------------------------------------------------
         def _find_free_slots_execute(topic, params, config=None, telemetry=None):
-            """Find free time slots by querying scheduled_items."""
+            """Find free time slots by querying scheduled_items.
+
+            Clamps results to working hours per day.  The working-hours
+            window is interpreted in the user's local timezone (via
+            ClientContextService), falling back to UTC when unavailable.
+            """
             if not capability.is_connected():
                 return {"error": "CalDAV not connected. Configure via /settings."}
             try:
                 import json as _json
+                from datetime import timezone as _tz
                 from services.database_service import get_shared_db_service
                 db = get_shared_db_service()
 
                 date_from = params.get("date_from", utc_now().isoformat())
                 date_to = params.get("date_to", (utc_now() + timedelta(days=7)).isoformat())
                 min_minutes = int(params.get("min_duration_minutes", 30))
+                wh_start = int(params.get("working_hours_start", 8))
+                wh_end = int(params.get("working_hours_end", 18))
 
                 with db.connection() as conn:
                     cursor = conn.cursor()
@@ -1376,31 +1408,52 @@ class CaldavCapability(AbstractCapability):
 
                 busy.sort(key=lambda x: x[0])
 
-                # Find gaps
-                slots = []
+                # Build per-day working-hours windows in UTC
+                tz = _get_user_tz() or _tz.utc
                 window_start = parse_utc(date_from)
                 window_end = parse_utc(date_to)
-                cursor_time = window_start
+                work_windows = []
+                day = window_start.astimezone(tz).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                last_day = window_end.astimezone(tz).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                while day <= last_day:
+                    ws = day.replace(hour=wh_start).astimezone(_tz.utc)
+                    we = day.replace(hour=wh_end).astimezone(_tz.utc)
+                    # Clamp to requested range
+                    ws = max(ws, window_start)
+                    we = min(we, window_end)
+                    if ws < we:
+                        work_windows.append((ws, we))
+                    day += timedelta(days=1)
 
-                for bstart, bend in busy:
-                    if bstart > cursor_time:
-                        gap_minutes = (bstart - cursor_time).total_seconds() / 60
-                        if gap_minutes >= min_minutes:
+                # Find gaps within working windows only
+                slots = []
+                for ww_start, ww_end in work_windows:
+                    cursor_time = ww_start
+                    for bstart, bend in busy:
+                        if bend <= ww_start:
+                            continue
+                        if bstart >= ww_end:
+                            break
+                        clamped_start = max(bstart, ww_start)
+                        if clamped_start > cursor_time:
+                            gap = (clamped_start - cursor_time).total_seconds() / 60
+                            if gap >= min_minutes:
+                                slots.append({
+                                    "start": cursor_time.isoformat(),
+                                    "end": clamped_start.isoformat(),
+                                    "duration_minutes": int(gap),
+                                })
+                        cursor_time = max(cursor_time, min(bend, ww_end))
+                    if cursor_time < ww_end:
+                        gap = (ww_end - cursor_time).total_seconds() / 60
+                        if gap >= min_minutes:
                             slots.append({
                                 "start": cursor_time.isoformat(),
-                                "end": bstart.isoformat(),
-                                "duration_minutes": int(gap_minutes),
+                                "end": ww_end.isoformat(),
+                                "duration_minutes": int(gap),
                             })
-                    cursor_time = max(cursor_time, bend)
-
-                if cursor_time < window_end:
-                    gap_minutes = (window_end - cursor_time).total_seconds() / 60
-                    if gap_minutes >= min_minutes:
-                        slots.append({
-                            "start": cursor_time.isoformat(),
-                            "end": window_end.isoformat(),
-                            "duration_minutes": int(gap_minutes),
-                        })
 
                 return {"free_slots": slots, "count": len(slots)}
             except Exception as exc:

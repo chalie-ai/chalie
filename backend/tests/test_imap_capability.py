@@ -255,7 +255,7 @@ def test_search_by_sender():
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     mc = _mock_imap_client(_SEARCH_EMAILS)
     with patch.object(cap, "_open_client", return_value=mc):
-        result = handler("t1", {"sender": "sarah"})
+        handler("t1", {"sender": "sarah"})
     mc.search.assert_called_once()
     criteria = mc.search.call_args[0][0]
     assert "FROM" in criteria and "sarah" in criteria
@@ -267,7 +267,7 @@ def test_search_by_subject():
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     mc = _mock_imap_client(_SEARCH_EMAILS)
     with patch.object(cap, "_open_client", return_value=mc):
-        result = handler("t1", {"subject": "invoice"})
+        handler("t1", {"subject": "invoice"})
     criteria = mc.search.call_args[0][0]
     assert "SUBJECT" in criteria and "invoice" in criteria
 
