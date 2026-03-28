@@ -73,6 +73,8 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
         return None, "due_at must be in the future"
 
     item_type = (data.get("item_type") or "notification").strip()
+    if item_type in ("event", "system"):
+        return None, "item_type 'event' and 'system' are reserved for internal use"
     if item_type not in _VALID_TYPES:
         return None, f"item_type must be one of: {', '.join(sorted(_VALID_TYPES))}"
 
@@ -141,6 +143,7 @@ def _row_to_dict(row, cols) -> dict:
 def list_scheduler():
     """List scheduled items with optional status filter and pagination."""
     status_filter = request.args.get("status", "all").strip()
+    include_hidden = request.args.get("include_hidden", "").lower() == "true"
     try:
         limit = min(int(request.args.get("limit", 50)), 200)
         offset = max(int(request.args.get("offset", 0)), 0)
@@ -153,16 +156,22 @@ def list_scheduler():
 
         cols = ["id", "item_type", "message", "due_at", "recurrence",
                 "window_start", "window_end", "status", "topic",
-                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
+                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
+                "source", "external_uid"]
 
-        where_clause = ""
+        conditions = []
         params: list = []
 
         if status_filter != "all":
             if status_filter not in _VALID_STATUSES:
                 return jsonify({"error": f"status must be one of: all, {', '.join(sorted(_VALID_STATUSES))}"}), 400
-            where_clause = "WHERE status = ?"
+            conditions.append("status = ?")
             params.append(status_filter)
+
+        if not include_hidden:
+            conditions.append("COALESCE(hidden, 0) = 0")
+
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         with db.connection() as conn:
             cursor = conn.cursor()

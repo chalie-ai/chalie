@@ -20,6 +20,15 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
 
+# System handler registry — capabilities register callbacks for item_type='system'
+_SYSTEM_HANDLERS: dict[str, callable] = {}
+
+
+def register_system_handler(source: str, callback: callable):
+    """Register a callback for system scheduled items with the given topic."""
+    _SYSTEM_HANDLERS[source] = callback
+    logger.info(f"{LOG_PREFIX} Registered system handler: {source}")
+
 
 def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
     """
@@ -101,7 +110,7 @@ def _poll_and_fire():
             cursor = conn.cursor()
             overdue_threshold = (now - timedelta(minutes=5)).isoformat()
             cursor.execute(
-                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < ?",
+                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < ? AND item_type NOT IN ('event')",
                 (overdue_threshold,)
             )
             overdue_count = cursor.fetchone()[0]
@@ -119,7 +128,7 @@ def _poll_and_fire():
                        window_start, window_end, topic, created_by_session, group_id,
                        is_prompt
                 FROM scheduled_items
-                WHERE status = 'pending' AND due_at <= ?
+                WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event')
                 ORDER BY due_at
                 LIMIT 100
             """, (now_iso,))
@@ -204,6 +213,20 @@ def _fire_item(item: dict):
     message = item.get("message", "")
     source = item.get("item_type", "notification")
     is_prompt = (source == "prompt")
+
+    if source == "system":
+        # System handler dispatch — capabilities register callbacks
+        handler_key = item.get("topic", "")
+        handler = _SYSTEM_HANDLERS.get(handler_key)
+        if handler:
+            try:
+                handler()
+                logger.info(f"{LOG_PREFIX} Fired system handler '{handler_key}' for '{item.get('id')}'")
+            except Exception as exc:
+                logger.error(f"{LOG_PREFIX} System handler '{handler_key}' failed: {exc}")
+        else:
+            logger.warning(f"{LOG_PREFIX} No system handler for topic '{handler_key}'")
+        return
 
     if is_prompt:
         # Route through digest_worker -> cognitive triage -> LLM (original behaviour)
