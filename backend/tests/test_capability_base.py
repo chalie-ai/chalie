@@ -40,7 +40,6 @@ class _MockVaultService:
 
     def __init__(self) -> None:
         """Initialise the mock vault with a fixed 32-byte test key."""
-        import os
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         self._key = b"T" * 32  # deterministic test key
