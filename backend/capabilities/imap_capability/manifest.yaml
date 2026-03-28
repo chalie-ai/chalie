@@ -1,0 +1,15 @@
+id: imap
+name: Email (IMAP)
+version: 0.1.0
+entry_class: ImapCapability
+description: Read email from IMAP-compatible providers.
+providers:
+  - gmail
+  - outlook
+  - icloud
+  - fastmail
+  - yahoo
+  - protonmail
+  - zoho
+  - aol
+  - gmx
