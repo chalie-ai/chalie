@@ -14,7 +14,6 @@ Routes:
     CRUD     /gw/<interface_id>/data — daemon file storage
 """
 
-import json
 import logging
 import os
 import threading
