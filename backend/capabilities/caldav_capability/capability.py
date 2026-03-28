@@ -188,8 +188,8 @@ def _get_user_tz():
         tz_name = ClientContextService().get().get("timezone")
         if tz_name:
             return ZoneInfo(tz_name)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[caldav] _get_user_tz failed: %s", exc)
     return None
 
 
@@ -906,10 +906,13 @@ class CaldavCapability(AbstractCapability):
                         from capabilities.signal_bridge import emit_capability_signal
                         emit_capability_signal(
                             "caldav", "novel_observation",
-                            conflict_msg, source="caldav:conflict",
+                            conflict_msg,
+                            source="caldav:conflict",
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            "[caldav] signal emit failed: %s", exc,
+                        )
 
                 # Daily digest (recurring prompt, hidden)
                 cursor.execute(
@@ -1474,6 +1477,58 @@ class CaldavCapability(AbstractCapability):
                 return {"error": f"Failed to find free slots: {exc}"}
 
         # ------------------------------------------------------------------
+        # caldav_get_attendees
+        # ------------------------------------------------------------------
+        def _get_attendees_execute(topic, params, config=None, telemetry=None):
+            """Return resolved attendees for a calendar event by UID."""
+            if not capability.is_connected():
+                return {"error": "CalDAV not connected. Configure via /settings."}
+            uid = params.get("uid") or params.get("event_uid")
+            if not uid:
+                return {"error": "uid is required"}
+            try:
+                import json as _json
+                from services.database_service import get_shared_db_service
+                from capabilities.contact_resolver import resolve
+
+                db = get_shared_db_service()
+                external_uid = f"caldav:{uid}"
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT message, metadata FROM scheduled_items "
+                        "WHERE external_uid = ? AND item_type='event'",
+                        (external_uid,),
+                    )
+                    row = cursor.fetchone()
+
+                if not row:
+                    return {"error": f"Event '{uid}' not found"}
+
+                title, meta_raw = row
+                meta = _json.loads(meta_raw) if meta_raw else {}
+                raw_attendees = meta.get("attendees", [])
+
+                resolved = []
+                for email in raw_attendees:
+                    matches = resolve(email, limit=1)
+                    if matches:
+                        resolved.append({
+                            "email": email,
+                            "name": matches[0].get("name", ""),
+                        })
+                    else:
+                        resolved.append({"email": email, "name": ""})
+
+                return {
+                    "event_title": title,
+                    "attendees": resolved,
+                    "count": len(resolved),
+                }
+            except Exception as exc:
+                return {"error": f"Failed to get attendees: {exc}"}
+
+        # ------------------------------------------------------------------
         # Assemble and return tool definition list
         # ------------------------------------------------------------------
         return [
@@ -1752,5 +1807,43 @@ class CaldavCapability(AbstractCapability):
                 },
                 "constraints": {"timeout_seconds": 30},
                 "handler": _find_free_slots_execute,
+            },
+            {
+                "name": "caldav_get_attendees",
+                "description": (
+                    "Get resolved attendees for a calendar event by UID. "
+                    "Returns each attendee's email and display name from the "
+                    "people index. Use for 'who's in my next meeting?' queries."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "string",
+                        "required": True,
+                        "description": "The UID of the calendar event.",
+                    },
+                },
+                "returns": {
+                    "event_title": {
+                        "type": "string",
+                        "description": "Title of the event.",
+                    },
+                    "attendees": {
+                        "type": "array",
+                        "description": (
+                            "List of attendee dicts with 'email' and 'name' fields. "
+                            "Name is empty string if not resolved."
+                        ),
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of attendees.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error on failure.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 10},
+                "handler": _get_attendees_execute,
             },
         ]

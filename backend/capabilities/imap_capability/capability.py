@@ -306,8 +306,8 @@ class ImapCapability(AbstractCapability):
                         f"Actionable email from {sender}: {subject}",
                         source="imap:triage",
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[imap] signal bridge emit failed: %s", exc)
         return items
 
     def monitor(self):

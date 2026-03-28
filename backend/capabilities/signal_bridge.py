@@ -51,7 +51,8 @@ def emit_capability_signal(
     Returns:
         True if the signal was routed, False if skipped or errored.
     """
-    if signal_type not in VALID_SIGNAL_TYPES or not content or len(content.strip()) < 10:
+    if (signal_type not in VALID_SIGNAL_TYPES
+            or not content or len(content.strip()) < 10):
         return False
     try:
         from services.goal_signal_service import route_cognitive_signal

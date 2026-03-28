@@ -13,7 +13,7 @@ import pytest
 class TestSignalBridge:
     """Tests for capabilities.signal_bridge.emit_capability_signal."""
 
-    @patch("capabilities.signal_bridge.route_cognitive_signal")
+    @patch("services.goal_signal_service.route_cognitive_signal")
     def test_valid_signal_routes_to_goal_ecology(self, mock_route):
         from capabilities.signal_bridge import emit_capability_signal
 
@@ -31,7 +31,7 @@ class TestSignalBridge:
         assert "standup" in arg["payload"]["content"]
         assert arg["source_id"] == "caldav:conflict"
 
-    @patch("capabilities.signal_bridge.route_cognitive_signal")
+    @patch("services.goal_signal_service.route_cognitive_signal")
     def test_default_source_and_truncation(self, mock_route):
         from capabilities.signal_bridge import emit_capability_signal
 
@@ -48,13 +48,19 @@ class TestSignalBridge:
         assert emit_capability_signal("x", "novel_observation", "") is False
         assert emit_capability_signal("x", "novel_observation", "short") is False
 
-    @patch("capabilities.signal_bridge.route_cognitive_signal", side_effect=Exception("boom"))
+    @patch(
+        "services.goal_signal_service.route_cognitive_signal",
+        side_effect=Exception("boom"),
+    )
     def test_exception_returns_false(self, mock_route):
         from capabilities.signal_bridge import emit_capability_signal
 
-        assert emit_capability_signal("x", "novel_observation", "enough content here") is False
+        result = emit_capability_signal(
+            "x", "novel_observation", "enough content here",
+        )
+        assert result is False
 
-    @patch("capabilities.signal_bridge.route_cognitive_signal")
+    @patch("services.goal_signal_service.route_cognitive_signal")
     def test_imap_actionable_only(self, mock_route):
         """Only actionable triage produces signals; noise/informational do not."""
         from capabilities.signal_bridge import emit_capability_signal
