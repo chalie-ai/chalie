@@ -156,6 +156,12 @@ def main():
             if cap.connect():
                 for t in cap.get_tools():
                     register_tool(t['name'], t['handler'], {k: v for k, v in t.items() if k != 'handler'})
+
+        # Register cross-capability tools (no connection required)
+        from capabilities.contact_resolver import get_tool as _resolve_tool
+        _rt = _resolve_tool()
+        register_tool(_rt['name'], _rt['handler'], {k: v for k, v in _rt.items() if k != 'handler'})
+
         logger.info(f"[Startup] Capability framework loaded: {len(_capabilities)} capabilities")
     except Exception as e:
         logger.warning(f"[Startup] Capability framework load failed: {e}")

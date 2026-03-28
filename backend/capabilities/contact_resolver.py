@@ -64,3 +64,54 @@ def resolve(identifier: str, limit: int = 5) -> list[dict]:
     except Exception as exc:
         logger.debug("[contact_resolver] resolve(%r) failed: %s", identifier, exc)
         return []
+
+
+def get_tool() -> dict:
+    """Return a tool definition dict for ``resolve_contact``.
+
+    Registered at startup so the LLM can resolve names, partial emails,
+    or identifiers to known contacts from the people index built by
+    IMAP senders and CalDAV attendees.
+    """
+
+    def _execute(topic, params, config=None, telemetry=None):
+        query = (params.get("query") or "").strip()
+        if not query:
+            return {"contacts": [], "count": 0}
+        limit = min(int(params.get("limit", 10)), 20)
+        matches = resolve(query, limit=limit)
+        return {"contacts": matches, "count": len(matches)}
+
+    return {
+        "name": "resolve_contact",
+        "description": (
+            "Look up a person by name, email address, or partial identifier. "
+            "Returns matching contacts with their email and display name. "
+            "Use before sending email to resolve a name to an address, "
+            "or to identify meeting attendees."
+        ),
+        "parameters": {
+            "query": {
+                "type": "string",
+                "required": True,
+                "description": (
+                    "Name, email address, or partial identifier to search for "
+                    "(e.g. 'Sarah', 'chen@', 'alice@corp.com')."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "required": False,
+                "description": "Max results to return (default 10, max 20).",
+            },
+        },
+        "returns": {
+            "contacts": {
+                "type": "array",
+                "description": "Matching people with 'email' and 'name' fields.",
+            },
+            "count": {"type": "integer", "description": "Number of matches."},
+        },
+        "constraints": {"timeout_seconds": 5},
+        "handler": _execute,
+    }

@@ -81,3 +81,88 @@ def test_resolve_survives_exception(_patch_ks):
     _patch_ks.recall.side_effect = RuntimeError("db error")
 
     assert resolve("Alice") == []
+
+
+# --- resolve_contact tool tests ---
+
+
+@pytest.mark.unit
+def test_get_tool_returns_valid_definition():
+    from capabilities.contact_resolver import get_tool
+
+    tool = get_tool()
+    assert tool["name"] == "resolve_contact"
+    assert "handler" in tool
+    assert "query" in tool["parameters"]
+
+
+@pytest.mark.unit
+def test_tool_resolves_by_name(_patch_ks):
+    from capabilities.contact_resolver import get_tool
+
+    _patch_ks.recall.return_value = [
+        {"key": "sarah@corp.com", "value": "Sarah Chen"},
+    ]
+    handler = get_tool()["handler"]
+    result = handler("topic1", {"query": "Sarah"})
+
+    assert result["count"] == 1
+    assert result["contacts"][0]["email"] == "sarah@corp.com"
+    assert result["contacts"][0]["name"] == "Sarah Chen"
+
+
+@pytest.mark.unit
+def test_tool_resolves_by_email(_patch_ks):
+    from capabilities.contact_resolver import get_tool
+
+    _patch_ks.recall.return_value = [
+        {"key": "alice@example.com", "value": "Alice Wang"},
+    ]
+    handler = get_tool()["handler"]
+    result = handler("topic1", {"query": "alice@example.com"})
+
+    assert result["count"] == 1
+    assert result["contacts"][0]["name"] == "Alice Wang"
+
+
+@pytest.mark.unit
+def test_tool_empty_query_returns_empty():
+    from capabilities.contact_resolver import get_tool
+
+    handler = get_tool()["handler"]
+    result = handler("topic1", {"query": ""})
+
+    assert result == {"contacts": [], "count": 0}
+
+
+@pytest.mark.unit
+def test_tool_no_matches(_patch_ks):
+    from capabilities.contact_resolver import get_tool
+
+    _patch_ks.recall.return_value = []
+    handler = get_tool()["handler"]
+    result = handler("topic1", {"query": "nobody"})
+
+    assert result == {"contacts": [], "count": 0}
+
+
+@pytest.mark.unit
+def test_tool_respects_limit(_patch_ks):
+    from capabilities.contact_resolver import get_tool
+
+    handler = get_tool()["handler"]
+    handler("topic1", {"query": "test", "limit": 3})
+
+    _, kwargs = _patch_ks.recall.call_args
+    assert kwargs["limit"] == 3
+
+
+@pytest.mark.unit
+def test_tool_caps_limit_at_20(_patch_ks):
+    from capabilities.contact_resolver import get_tool
+
+    handler = get_tool()["handler"]
+    handler("topic1", {"query": "test", "limit": 50})
+
+    _, kwargs = _patch_ks.recall.call_args
+    assert kwargs["limit"] == 20
