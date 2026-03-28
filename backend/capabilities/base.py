@@ -259,6 +259,11 @@ class AbstractCapability(ABC):
                 maybe_send_first_look()
             except Exception:
                 pass
+            try:
+                from capabilities.meeting_prep import maybe_send_meeting_prep
+                maybe_send_meeting_prep()
+            except Exception as exc:
+                logger.debug("meeting_prep hook: %s", exc)
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
