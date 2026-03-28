@@ -92,7 +92,7 @@ class CredentialVault:
             ``credential_type``, and ``data`` (the decrypted credential dict).
         """
         import base64
-        from services.vault_service import get_vault_service, VaultLockedError
+        from services.vault_service import get_vault_service
         with self.db.connection() as conn:
             cursor = conn.cursor()
             if label:
