@@ -6,9 +6,6 @@ Uses a minimal SQLite fixture (no vec0 / sqlite-vec) so these tests run
 anywhere without the full production schema extension.
 """
 
-import sqlite3
-import tempfile
-
 import pytest
 from unittest.mock import patch
 

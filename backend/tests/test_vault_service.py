@@ -9,10 +9,6 @@ tables needed by VaultService and its fallback paths are created.
 
 import base64
 import hashlib
-import sqlite3
-import tempfile
-import os
-import shutil
 
 import pytest
 
