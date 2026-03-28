@@ -453,7 +453,6 @@ class AutobiographyService:
         """
         try:
             from services.background_llm_queue import create_background_llm_proxy
-            from services.config_service import ConfigService
 
             llm = create_background_llm_proxy("autobiography")
 
