@@ -366,7 +366,6 @@ class PlanDecompositionService:
         steps = plan.get('steps', [])
         status_map = {s['id']: s.get('status', 'pending') for s in steps}
         resolved = {'completed', 'skipped'}
-        terminal = {'completed', 'skipped', 'failed'}
 
         pending_steps = [s for s in steps if s.get('status') == 'pending']
         if not pending_steps:

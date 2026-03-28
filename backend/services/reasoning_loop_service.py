@@ -34,7 +34,6 @@ import random
 import threading
 import uuid
 import logging
-from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 
 from services.memory_client import MemoryClientService
@@ -1130,7 +1129,6 @@ class ReasoningLoopService:
             for row in episodes
         ]
         episode_row = random.choices(episodes, weights=weights, k=1)[0]
-        episode_id = str(episode_row[0])
         episode_gist = episode_row[1]
         episode_topic = episode_row[2]
 
@@ -1157,7 +1155,7 @@ class ReasoningLoopService:
         """
         insight_cap = self.config.get('insight_sessions_cap', 5)
 
-        last_insight_key = f"drift:insight_seed:last_used"
+        last_insight_key = "drift:insight_seed:last_used"
         last_used_epoch = self.store.get(last_insight_key)
         if last_used_epoch:
             # Check if enough drift cycles have passed (approximate: cap * check_interval)
@@ -1438,8 +1436,8 @@ class ReasoningLoopService:
             # Map signal patterns to reflective seed thoughts
             if 'recall' in signal or 'activation' in signal:
                 reflection = (
-                    f"I notice my memory recall is struggling. "
-                    f"I should consolidate what I know into stronger semantic concepts."
+                    "I notice my memory recall is struggling. "
+                    "I should consolidate what I know into stronger semantic concepts."
                 )
             elif 'queue' in signal or 'congestion' in signal:
                 reflection = (

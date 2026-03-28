@@ -681,7 +681,6 @@ class TestMuteUnmute:
 
     def test_is_muted_helper_detects_mute_marker(self):
         """_is_muted() should detect a mute marker in outcome_feedback."""
-        import json
         feedback = json.dumps([{'muted': True, 'timestamp': '2026-03-22T10:00:00+00:00'}])
         assert GoalEcologyService._is_muted(feedback) is True
 
@@ -984,7 +983,6 @@ class TestGoalHierarchy:
 
     def test_is_muted_helper_detects_unmute_marker(self):
         """_is_muted() should return False after an unmute entry follows a mute entry."""
-        import json
         feedback = json.dumps([
             {'muted': True, 'timestamp': '2026-03-22T10:00:00+00:00'},
             {'muted': False, 'timestamp': '2026-03-22T11:00:00+00:00'},

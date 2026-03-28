@@ -9,11 +9,10 @@ consulted only when MemoryStore returns empty (restart, TTL expiry).
 import json
 import uuid
 import logging
-import time
-from typing import Optional, List
+from typing import Optional
 
 from services.memory_client import MemoryClientService
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 

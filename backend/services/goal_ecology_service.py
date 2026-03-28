@@ -19,7 +19,6 @@ import concurrent.futures
 import json
 import logging
 import struct
-import threading
 
 from services.embedding_utils import pack_embedding
 import uuid
@@ -163,7 +162,6 @@ def _trigger_strategy_generation(goal_id: str, goal_type: str) -> None:
         logger.warning(f"{LOG_PREFIX} Strategy pool broken, skipping generation for goal {goal_id[:8]}")
 
 
-from services.embedding_utils import pack_embedding as _pack_embedding  # noqa: E402
 
 
 class GoalEcologyService:

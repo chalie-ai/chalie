@@ -23,7 +23,7 @@ Outcome learning:
 
 import logging
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Optional, Tuple
 
 from services.memory_client import MemoryClientService
 from .base import AutonomousAction, ActionResult, ThoughtContext

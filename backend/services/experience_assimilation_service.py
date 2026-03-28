@@ -289,7 +289,7 @@ class ExperienceAssimilationService:
             logger.debug(f"{LOG_PREFIX} Topic '{topic}': nothing worth reflecting")
             tool_names = [o.get('tool', 'unknown') for o in tool_outputs]
             self._log_rejection(topic, 'not_worth_reflecting',
-                                f"LLM judged tool outputs not worth reflecting",
+                                "LLM judged tool outputs not worth reflecting",
                                 {'tools': tool_names})
             return
 

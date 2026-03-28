@@ -15,21 +15,19 @@ Usage:
 Output: parameter grid with precision, recall, F1, and the optimal setting.
 """
 
-import itertools
 import sys
 import os
 import time
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
 
-import numpy as np
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.embedding_service import EmbeddingService
 from services.two_signal_boundary_service import (
-    TwoSignalBoundaryService, COLD_START_MSGS, SHORT_MSG_MAX_WORDS,
+    TwoSignalBoundaryService,
 )
 import services.two_signal_boundary_service as _boundary_mod
 
@@ -656,7 +654,7 @@ def main():
               f"TN={best_result.tn}  FN={best_result.fn}")
 
     # Current vs optimal
-    print(f"\n  Current settings: threshold_k=1.6, window_size=5, gate=3")
+    print("\n  Current settings: threshold_k=1.6, window_size=5, gate=3")
     current = next((r for r, g in results
                      if r.threshold_k == 1.6 and r.window_size == 5 and g == 3), None)
     if current:
@@ -668,7 +666,7 @@ def main():
             print(f"  Improvement: F1 +{delta_f1:.4f}, FPR -{delta_fpr:.4f}")
 
     # Also show the best at each gate level
-    print(f"\n  Best F1 per gate level:")
+    print("\n  Best F1 per gate level:")
     for g in gate_values:
         gate_results = [(r, g2) for r, g2 in results if g2 == g]
         if gate_results:

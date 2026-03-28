@@ -25,7 +25,6 @@ import re
 import time
 import json
 import logging
-from typing import Optional
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -485,7 +484,7 @@ class ResponseGenerationService:
                     )
                     response_data = {"response": prose, "modifiers": []}
                 else:
-                    raise Exception(f"Empty LLM response — no JSON to parse")
+                    raise Exception("Empty LLM response — no JSON to parse")
 
             # Guard: response_data must be a dict — LLM may return a bare JSON
             # array (e.g. [{...}]) which passes json.loads but has no .get()

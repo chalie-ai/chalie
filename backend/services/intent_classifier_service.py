@@ -11,7 +11,7 @@ the fast-path/slow-path decision for ACT mode.
 import re
 import logging
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 

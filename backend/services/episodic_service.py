@@ -17,7 +17,6 @@ a single cohesive service. Provides episode persistence, hybrid search
 import json
 import logging
 import math
-import struct
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, TYPE_CHECKING

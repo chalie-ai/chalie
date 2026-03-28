@@ -231,11 +231,11 @@ class AutonomousExecutionGate:
         """Build a human-readable explanation for the gate decision."""
         if tier == 0:
             return (
-                f"Tier 0 (observe) — no side-effects; always safe to auto-execute."
+                "Tier 0 (observe) — no side-effects; always safe to auto-execute."
             )
         if tier == 3:
             return (
-                f"Tier 3 (commit) — irreversible; always requires explicit user approval."
+                "Tier 3 (commit) — irreversible; always requires explicit user approval."
             )
         if auto_execute:
             return (

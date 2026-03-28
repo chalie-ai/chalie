@@ -481,7 +481,7 @@ class ConversationPhaseService:
             state["current"] = "closing"
             state["_pending_phase"] = None
             state["_pending_signals"] = 0
-            logger.debug(f"[PHASE] Immediate transition → closing")
+            logger.debug("[PHASE] Immediate transition → closing")
             return state
 
         # Anti-false-close: immediate transition back out of closing
@@ -489,7 +489,7 @@ class ConversationPhaseService:
             state["current"] = "exploring"
             state["_pending_phase"] = None
             state["_pending_signals"] = 0
-            logger.debug(f"[PHASE] Anti-false-close: closing → exploring")
+            logger.debug("[PHASE] Anti-false-close: closing → exploring")
             return state
 
         # Opening resets are always immediate (gap or cold start)
@@ -497,7 +497,7 @@ class ConversationPhaseService:
             state["current"] = "opening"
             state["_pending_phase"] = None
             state["_pending_signals"] = 0
-            logger.debug(f"[PHASE] Immediate transition → opening")
+            logger.debug("[PHASE] Immediate transition → opening")
             return state
 
         # Sticky transitions for all other phases

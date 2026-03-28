@@ -10,11 +10,9 @@ over-influencing ranking). Applies preference decay for stale tools and
 checks for usage-triggered full profile rebuilds.
 """
 
-import struct
 import time
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

@@ -22,7 +22,6 @@ and a lazy singleton accessor for the shared ``ContextAssemblyService``
 """
 
 import json
-import os
 import re
 import time
 import logging
@@ -1132,7 +1131,6 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
     """
     configs = load_configs()
     cortex_config = configs['cortex']['config']
-    cortex_prompt_map = configs['cortex']['prompt_map']
 
     topic = metadata.get('related_topic', 'general')
     drift_gist = metadata.get('drift_gist', text)
@@ -1178,11 +1176,9 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
     # Collect signals for mode routing
     try:
-        from services.session_service import SessionService
         session_service = get_session_service()
 
         # The prompt to the router is the drift thought itself
-        from services.topic_classifier_service import TopicClassifierService
         topic_classifier = get_topic_classifier()
         classification_result = topic_classifier.classify(drift_gist, recent_topic=topic)
 
@@ -1214,7 +1210,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
 
     # If router says IGNORE, respect it — the thought wasn't worth sharing
     if selected_mode == 'IGNORE':
-        logging.info(f"[PROACTIVE] Router selected IGNORE — thought filtered")
+        logging.info("[PROACTIVE] Router selected IGNORE — thought filtered")
         # Record as router_ignored for circuit breaker
         try:
             from services.autonomous_actions.engagement_tracker import EngagementTracker
@@ -1279,7 +1275,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         selected_mode = 'UNIFIED'
 
         if not response_data.get('response', '').strip():
-            logging.info(f"[PROACTIVE] Empty response generated — skipping delivery")
+            logging.info("[PROACTIVE] Empty response generated — skipping delivery")
             return f"Topic '{topic}' | Mode: PROACTIVE_EMPTY | No response generated"
 
         # Append assistant turn to working memory
@@ -1669,7 +1665,6 @@ def _store_adaptive_signals(thread_id: str, text: str, signals: dict = None):
     import json as _json
     try:
         from services.memory_client import MemoryClientService
-        import re as _re
 
         store = MemoryClientService.create_connection()
         snapshot = {

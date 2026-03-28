@@ -5,7 +5,6 @@ Listens to: semantic_consolidation_queue
 
 import logging
 import json
-from services.database_service import DatabaseService
 from services.config_service import ConfigService
 from services.background_llm_queue import create_background_llm_proxy
 from services.semantic_consolidation_service import SemanticConsolidationService
@@ -57,7 +56,6 @@ class SemanticConsolidationWorker:
             extracted = self.consolidation_service.extract_from_episode(episode)
 
             concepts_count = len(extracted.get('concepts', []))
-            relationships_count = len(extracted.get('relationships', []))
 
             if concepts_count == 0:
                 logging.info(f"No concepts extracted from episode {episode_id}")

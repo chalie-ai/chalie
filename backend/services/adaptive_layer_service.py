@@ -198,13 +198,11 @@ class AdaptiveLayerService:
             cognitive_dims = ['verbosity', 'directness', 'formality', 'certainty']
 
             # challenge_tolerance supersedes the certainty slot when explicitly stored
-            challenge_handled = False
             if challenge_tol is not None:
                 tier = self._challenge_tier(challenge_tol)
                 challenge_directive = CHALLENGE_STYLE_TIERS.get(tier, "")
                 if challenge_directive:
                     directives.append(challenge_directive)
-                    challenge_handled = True
 
             # Rank remaining cognitive dims by salience
             scored: List[tuple] = []

@@ -97,7 +97,6 @@ def _get_recent_iterations(topic: str, limit: int) -> List[Dict]:
     """Fetch recent ACT loop iterations from cortex_iterations."""
     try:
         from services.database_service import get_shared_db_service
-        from services.time_utils import parse_utc
         db = get_shared_db_service()
         with db.connection() as conn:
             cursor = conn.cursor()

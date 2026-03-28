@@ -8,7 +8,7 @@ Event handlers translate events into existing RQ queue enqueue operations.
 import json
 import time
 import logging
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List
 from services.memory_client import MemoryClientService
 
 # Event type constants

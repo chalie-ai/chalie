@@ -19,9 +19,7 @@ Filter bubble prevention:
 """
 
 import logging
-import time
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional
+from typing import List
 
 logger = logging.getLogger(__name__)
 

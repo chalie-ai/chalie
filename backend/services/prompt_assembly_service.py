@@ -18,8 +18,6 @@ of the WS3 decomposition.  The :class:`FrontalCortexService` facade delegates
 all prompt-assembly calls here.
 """
 
-import re
-import json
 import logging
 from typing import Optional
 
@@ -842,7 +840,7 @@ class PromptAssemblyService:
         if not skills:
             return ''
         from services.innate_skills import get_skill_handler
-        import importlib, inspect
+        import inspect
         parts = []
         for skill in skills:
             handler = get_skill_handler(skill)

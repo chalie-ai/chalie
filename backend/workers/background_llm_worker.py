@@ -25,7 +25,6 @@ import time
 import random
 import logging
 import concurrent.futures
-from typing import Optional
 
 from services.memory_client import MemoryClientService
 from services.llm_service import create_refreshable_llm_service, RateLimitError

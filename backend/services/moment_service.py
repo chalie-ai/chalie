@@ -15,7 +15,6 @@ Side effects preserved:
 
 import json
 import logging
-import struct
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 

@@ -13,7 +13,7 @@ Responsibility: Episode analysis and concept extraction (SRP).
 
 import logging
 import json
-from typing import Dict, List, Optional
+from typing import Optional
 from services.config_service import ConfigService
 
 

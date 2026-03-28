@@ -3,7 +3,7 @@
 import base64
 import logging
 import secrets
-from typing import Optional, Any
+from typing import Optional
 
 from services.database_service import text
 

@@ -14,13 +14,12 @@ Thread safety: one RLock per keyspace.
 TTL management: lazy eviction on read + background reaper every 60s.
 """
 
-import json
 import logging
 import re
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 try:
     from sortedcontainers import SortedList

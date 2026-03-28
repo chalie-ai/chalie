@@ -334,7 +334,7 @@ def _handle_history(service, params: dict) -> str:
         _SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
         since = parse_utc(since_str)
         if since == _SENTINEL:
-            return f"[LIST] Invalid 'since' format. Use ISO 8601 (e.g. '2026-01-01T00:00:00Z')."
+            return "[LIST] Invalid 'since' format. Use ISO 8601 (e.g. '2026-01-01T00:00:00Z')."
 
     events = service.get_history(name, since=since, limit=30)
     if not events:

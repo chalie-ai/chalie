@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import List
 
 from services.memory_client import MemoryClientService
 
@@ -154,7 +154,6 @@ class SelfModelService:
 
         for item in noteworthy:
             signal = item["signal"]
-            severity = item["severity"]
             lines.append(f"- {signal}")
 
             # Map signals to behavioral directives

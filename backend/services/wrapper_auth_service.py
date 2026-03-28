@@ -23,7 +23,7 @@ import uuid
 from typing import Optional
 
 from services.database_service import get_shared_db_service
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 

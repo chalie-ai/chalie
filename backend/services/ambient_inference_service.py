@@ -11,7 +11,7 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 from services.memory_client import MemoryClientService
 
@@ -417,7 +417,6 @@ class AmbientInferenceService:
 
         # Calculate gap from last response to now (approximation since
         # we're measuring at heartbeat time, not actual next message time)
-        now_ms = int(ctx.get("behavioral", {}).get("session_duration_ms", 0))
         gap_s = (time.time() * 1000 - last_response_at) / 1000
 
         if gap_s < rushed_gap:

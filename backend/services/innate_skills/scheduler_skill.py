@@ -7,7 +7,7 @@ All DB access via get_shared_db_service() (lazy import inside function).
 
 import uuid
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 

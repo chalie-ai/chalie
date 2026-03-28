@@ -195,8 +195,8 @@ if __name__ == "__main__":
     Logger.start()
 
     # Deferred imports
-    from services import PromptQueue, DatabaseService, SchemaService
-    from workers import digest_worker, episodic_memory_worker, semantic_consolidation_worker, rest_api_worker
+    from services import SchemaService
+    from workers import rest_api_worker
     from services.config_service import ConfigService
     from services.idle_consolidation_service import idle_consolidation_process
     from services.decay_engine_service import decay_engine_worker
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     from services.scheduler_service import scheduler_worker
     from services.autobiography_service import autobiography_synthesis_worker
     from workers.persistent_task_worker import persistent_task_worker
-    from workers.document_worker import process_document_job, document_purge_worker
+    from workers.document_worker import document_purge_worker
 
     # Ensure encryption key
     from services.encryption_key_service import get_encryption_key
@@ -222,8 +222,7 @@ if __name__ == "__main__":
         logging.warning(f"[System] Embedding model preload failed: {e}")
 
     # Initialize SQLite database
-    from services.database_service import get_shared_db_service, get_db_path
-    from services.config_service import ConfigService
+    from services.database_service import get_shared_db_service
 
     episodic_config = ConfigService.resolve_agent_config("episodic-memory")
     embedding_dimensions = episodic_config.get('embedding_dimensions', 768)

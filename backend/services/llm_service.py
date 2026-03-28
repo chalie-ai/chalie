@@ -8,7 +8,6 @@ Usage:
     text = response.text
 """
 
-import os
 import time
 import logging
 from dataclasses import dataclass

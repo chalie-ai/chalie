@@ -634,7 +634,6 @@ class CommunicateAction(AutonomousAction):
             second_raw, second_score = raw_members[-2]
             self.store.zrem(deferred_key, second_raw)
             try:
-                second = json.loads(second_raw)
                 candidates_key = _key('candidates')
                 self.store.zadd(candidates_key, {second_raw: second_score})
                 self.store.expire(candidates_key, 1800)

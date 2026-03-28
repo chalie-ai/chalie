@@ -14,13 +14,10 @@ import logging
 import os
 import secrets
 import shutil
-import struct
-import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from services.database_service import DictCursor
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)

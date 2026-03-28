@@ -21,10 +21,8 @@ All location-dependent polls are silently skipped when no fingerprint exists.
 import json
 import logging
 import threading
-import time
 import urllib.request
 import urllib.error
-from datetime import timezone
 from typing import Optional, Tuple
 
 from services.config_service import ConfigService

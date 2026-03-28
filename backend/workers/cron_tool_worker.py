@@ -43,7 +43,6 @@ class CronToolWorker:
         self.trust = tool_config.get("trust", "trusted")
         manifest = tool_config.get("manifest", {})
         self._auth = manifest.get("auth", {})
-        output_config = manifest.get("output", {})
         self.tool_dir = tool_config["dir"]
         self.timeout = manifest.get("constraints", {}).get("timeout_seconds", 9)
 

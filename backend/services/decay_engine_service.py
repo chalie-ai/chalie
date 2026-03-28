@@ -10,7 +10,6 @@ import math
 import logging
 from typing import Optional
 
-from .memory_client import MemoryClientService
 from .config_service import ConfigService
 
 try:

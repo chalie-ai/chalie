@@ -17,7 +17,6 @@ Design principles:
 import json
 import logging
 import threading
-import time
 from typing import Optional
 
 from services.time_utils import utc_now

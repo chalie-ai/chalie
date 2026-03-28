@@ -6,7 +6,6 @@ Actions: list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate
 
 import json
 import logging
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOALS SKILL]"

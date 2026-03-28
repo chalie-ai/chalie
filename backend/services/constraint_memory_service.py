@@ -12,7 +12,7 @@ considered but couldn't do.
 import json
 import logging
 from collections import Counter
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from services.memory_client import MemoryClientService
 

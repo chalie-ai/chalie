@@ -8,7 +8,7 @@ import time
 import re
 from datetime import datetime, timezone
 from services.time_utils import utc_now
-from services import ConfigService, DatabaseService, EpisodicService, SalienceService
+from services import ConfigService, EpisodicService, SalienceService
 from services.llm_service import create_llm_service
 from services.thread_conversation_service import ThreadConversationService
 import logging
@@ -201,9 +201,6 @@ def episodic_memory_worker(job_data: dict) -> str:
 
         # Generate embedding for episode (gist + intent + outcome + emotion)
         logging.debug("Generating embedding for episode")
-        embedding_model = config.get('embedding_model', 'nomic-embed-text')
-        embedding_dimensions = config.get('embedding_dimensions', 256)
-
         # Construct rich embedding text
         intent = episode_data.get('intent', {})
         emotion = episode_data.get('emotion', {})

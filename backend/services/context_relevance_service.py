@@ -16,7 +16,7 @@ Seven layers applied in order:
 
 import json
 import logging
-from typing import Dict, Set, Optional, List
+from typing import Dict, Optional, List
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

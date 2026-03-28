@@ -120,7 +120,7 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
 
     # DDG auto-fallback if all providers returned empty
     if not results and 'ddg' not in providers_used:
-        logger.info(f'[SEARCH] all providers empty, falling back to DDG')
+        logger.info('[SEARCH] all providers empty, falling back to DDG')
         results = fetch_ddg_fallback(query, limit)
         if results:
             providers_used.append('ddg')

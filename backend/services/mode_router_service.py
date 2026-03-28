@@ -18,9 +18,8 @@ A small LLM tie-breaker handles ambiguous cases when top-2 scores are within mar
 
 import re
 import time
-import json
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -362,18 +361,12 @@ class ModeRouterService:
         warmth = signals['context_warmth']
         has_q = signals['has_question_mark']
         interrog = signals['interrogative_words']
-        greeting = signals['greeting_pattern']
-        feedback = signals['explicit_feedback']
-        density = signals['information_density']
         implicit_ref = signals['implicit_reference']
-        wm_turns = signals['working_memory_turns']
-        is_new = signals['is_new_topic']
         token_count = signals['prompt_token_count']
 
         # Derived signals
         is_question = has_q or interrog
         is_cold = warmth < 0.3
-        is_warm = warmth > 0.6
         is_empty = token_count == 0
 
         w = self.weights

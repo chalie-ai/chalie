@@ -15,7 +15,6 @@ wake resumes from the last checkpoint.
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from services.time_utils import utc_now
 

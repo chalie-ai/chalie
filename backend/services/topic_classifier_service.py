@@ -12,10 +12,9 @@ import time
 import uuid
 import numpy as np
 from datetime import datetime, timezone
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict
 
 from services.database_service import get_shared_db_service
-from services.config_service import ConfigService
 from services.embedding_service import EmbeddingService
 
 

@@ -2,7 +2,6 @@ from .config_service import ConfigService
 from .ollama_service import OllamaService
 from .memory_client import MemoryClientService
 from .prompt_queue import PromptQueue
-from .worker_base import WorkerBase
 from .frontal_cortex_service import FrontalCortexService
 from .orchestrator_service import OrchestratorService
 from .world_state_service import WorldStateService
@@ -16,7 +15,6 @@ from .session_service import SessionService
 __all__ = [
     'ConfigService', 'OllamaService',
     'MemoryClientService', 'PromptQueue',
-    'WorkerBase',
     'FrontalCortexService', 'OrchestratorService',
     'WorldStateService', 'DatabaseService',
     'SchemaService', 'EpisodicService',

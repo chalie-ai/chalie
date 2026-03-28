@@ -19,8 +19,6 @@ import hashlib
 import json
 import logging
 import re
-import struct
-import time
 from collections import defaultdict
 from typing import Optional
 

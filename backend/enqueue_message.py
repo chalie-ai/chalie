@@ -16,7 +16,7 @@ def enqueue_message(message, metadata=None):
     queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
     queue.enqueue(message, metadata=metadata)
 
-    print(f"Enqueued message to prompt-queue")
+    print("Enqueued message to prompt-queue")
     print(f"  Message: {message[:50]}...")
 
 

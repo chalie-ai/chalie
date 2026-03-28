@@ -14,12 +14,8 @@ Cost metadata is appended to every result.
 
 import json
 import logging
-import re
-import subprocess
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -239,13 +235,8 @@ class _CronToolWorker:
 
                 # --- Legacy output routing (backward compat: no "output" field) ---
                 result_text = ""
-                result_html = None
-                result_title = None
-
                 if isinstance(result, dict):
                     result_text = result.get("text", "")
-                    result_html = result.get("html")
-                    result_title = result.get("title")
                     if not result.get("notify", True):
                         _log.debug(f"[TOOL CRON] {self.tool_name}: notify=false, skipping enqueue")
                         continue
@@ -597,13 +588,11 @@ class ToolRegistryService:
         # Extract text and html from formalized contract output
         result_text = ""
         result_html = None
-        result_title = None
         result_error = None
 
         if isinstance(result, dict):
             result_text = result.get("text", "")
             result_html = result.get("html")
-            result_title = result.get("title")
             result_error = result.get("error")
             # Fallback: if runner didn't set "text", convert dict to readable text
             if not result_text:

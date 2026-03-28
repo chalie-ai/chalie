@@ -8,7 +8,6 @@ the others.
 """
 
 import logging
-from typing import Optional
 
 from services.time_utils import utc_now, parse_utc
 

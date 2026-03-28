@@ -881,7 +881,7 @@ def _print_report(result: BenchmarkResult):
     print(f"  Detection time: {result.detect_time_s:.4f}s")
 
     print(f"\n  {'─' * 40}")
-    print(f"  EXACT MATCH")
+    print("  EXACT MATCH")
     print(f"  {'─' * 40}")
     print(f"  TP: {result.exact_tp}  FP: {result.exact_fp}  FN: {result.exact_fn}")
     print(f"  Precision: {result.exact_precision:.3f}")
@@ -897,7 +897,7 @@ def _print_report(result: BenchmarkResult):
     print(f"  F1:        {result.tolerant_f1:.3f}")
 
     print(f"\n  {'─' * 40}")
-    print(f"  PER-SEGMENT DETAIL")
+    print("  PER-SEGMENT DETAIL")
     print(f"  {'─' * 40}")
     print(f"  {'Segment':<30} {'Expect':>6} {'Fired':>6} {'Result':>8}")
     print(f"  {'─' * 54}")
@@ -1141,7 +1141,7 @@ def _print_comparison(results: Dict[str, BenchmarkResult]):
 
     # Per-segment comparison
     print(f"\n  {'─' * 74}")
-    print(f"  PER-SEGMENT RESULTS")
+    print("  PER-SEGMENT RESULTS")
     print(f"  {'─' * 74}")
 
     header_names = list(results.keys())

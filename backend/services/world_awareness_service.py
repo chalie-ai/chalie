@@ -5,10 +5,8 @@ Derives user interests from traits and topic frequency, queries the news tool,
 and feeds results into world state. Zero LLM calls.
 """
 
-import json
 import logging
 import time
-from typing import Optional
 
 import numpy as np
 
