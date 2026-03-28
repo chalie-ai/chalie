@@ -148,21 +148,68 @@ def test_ingest_incremental():
 
 # --- classify_email ---
 
-def _item(addr="a@b.com", subj="Hi", unsub=False, reply_to=""):
-    return {"has_unsubscribe": unsub, "from_addr": addr, "subject": subj, "in_reply_to": reply_to}
+import numpy as np
+
+def _item(addr="a@b.com", subj="Hi", unsub=False, reply_to="", from_name=""):
+    return {
+        "has_unsubscribe": unsub, "from_addr": addr,
+        "subject": subj, "in_reply_to": reply_to, "from_name": from_name,
+    }
+
+
+# Orthogonal unit vectors for deterministic mock anchors
+_V_NOISE = np.array([1.0, 0.0, 0.0])
+_V_ACTION = np.array([0.0, 1.0, 0.0])
+_V_INFO = np.array([0.0, 0.0, 1.0])
+
+
+def _route_embedding(text):
+    """Map email text to a triage vector based on keywords."""
+    t = text.lower()
+    if any(w in t for w in ("invoice", "urgent", "deadline", "confirm", "approve")):
+        return _V_ACTION
+    if any(w in t for w in ("newsletter", "notification", "promo", "digest")):
+        return _V_NOISE
+    return _V_INFO
+
+
+@pytest.fixture
+def _mock_email_classify():
+    """Full embedding mock: anchors + keyword-routed vectors."""
+    import capabilities.imap_capability.capability as cap_mod
+    old = cap_mod._anchor_cache
+    cap_mod._anchor_cache = {
+        "noise": _V_NOISE, "actionable": _V_ACTION, "informational": _V_INFO,
+    }
+    mock_svc = MagicMock()
+    mock_svc.generate_embedding_np.side_effect = _route_embedding
+    with patch("services.embedding_service.get_embedding_service", return_value=mock_svc):
+        yield mock_svc
+    cap_mod._anchor_cache = old
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("item,expected", [
     (_item(unsub=True), "noise"),
-    (_item(addr="noreply@github.com"), "noise"),
-    (_item(addr="newsletter@co.com"), "noise"),
     (_item(reply_to="<prev@ex>"), "actionable"),
-    (_item(subj="Please confirm"), "actionable"),
-    (_item(subj="Invoice #123"), "actionable"),
-    (_item(addr="colleague@work.com", subj="Meeting notes"), "informational"),
 ])
-def test_classify_email(item, expected):
+def test_classify_email_fast_paths(item, expected):
+    """Protocol-level fast paths bypass embeddings entirely."""
+    from capabilities.imap_capability.capability import classify_email
+    assert classify_email(item) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("item,expected", [
+    (_item(addr="noreply@github.com", subj="New notification"), "noise"),
+    (_item(subj="Weekly Newsletter Digest"), "noise"),
+    (_item(subj="Invoice #123 Payment Due"), "actionable"),
+    (_item(subj="Please confirm your attendance"), "actionable"),
+    (_item(addr="colleague@work.com", subj="Meeting notes"), "informational"),
+    (_item(subj="Project status update"), "informational"),
+])
+def test_classify_email_embedding(item, expected, _mock_email_classify):
+    """Embedding path classifies by cosine similarity to anchors."""
     from capabilities.imap_capability.capability import classify_email
     assert classify_email(item) == expected
 
@@ -180,7 +227,7 @@ def test_understand_empty_returns_empty():
 
 
 @pytest.mark.unit
-def test_understand_classifies_without_storing():
+def test_understand_classifies_without_storing(_mock_email_classify):
     cap = _make()
     items = [
         _email_item(),
@@ -261,7 +308,7 @@ def test_get_tools_returns_all_tools():
 
 
 @pytest.mark.unit
-def test_search_by_sender():
+def test_search_by_sender(_mock_email_classify):
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     mc = _mock_imap_client(_SEARCH_EMAILS)
@@ -273,7 +320,7 @@ def test_search_by_sender():
 
 
 @pytest.mark.unit
-def test_search_by_subject():
+def test_search_by_subject(_mock_email_classify):
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     mc = _mock_imap_client(_SEARCH_EMAILS)
@@ -284,7 +331,7 @@ def test_search_by_subject():
 
 
 @pytest.mark.unit
-def test_search_by_keyword():
+def test_search_by_keyword(_mock_email_classify):
     """keyword param maps to IMAP TEXT criterion for full-text body search."""
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
@@ -296,7 +343,7 @@ def test_search_by_keyword():
 
 
 @pytest.mark.unit
-def test_search_by_date_from():
+def test_search_by_date_from(_mock_email_classify):
     """date_from param maps to IMAP SINCE criterion with DD-Mon-YYYY format."""
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
@@ -308,7 +355,7 @@ def test_search_by_date_from():
 
 
 @pytest.mark.unit
-def test_search_by_date_to():
+def test_search_by_date_to(_mock_email_classify):
     """date_to param maps to IMAP BEFORE criterion with DD-Mon-YYYY format."""
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
@@ -320,7 +367,7 @@ def test_search_by_date_to():
 
 
 @pytest.mark.unit
-def test_search_combined_criteria():
+def test_search_combined_criteria(_mock_email_classify):
     """Multiple params combine into a single IMAP criteria list."""
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
@@ -335,7 +382,7 @@ def test_search_combined_criteria():
 
 
 @pytest.mark.unit
-def test_search_by_triage():
+def test_search_by_triage(_mock_email_classify):
     """Triage filtering happens client-side after IMAP fetch."""
     cap = _make()
     # Only return the actionable email (Invoice has "invoice" in subject)
@@ -347,7 +394,7 @@ def test_search_by_triage():
 
 
 @pytest.mark.unit
-def test_search_with_limit():
+def test_search_with_limit(_mock_email_classify):
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     mc = _mock_imap_client(_SEARCH_EMAILS)
@@ -388,7 +435,7 @@ _HINT_EMAILS = {
 
 
 @pytest.mark.unit
-def test_inject_inbox_hint_calls_world_state():
+def test_inject_inbox_hint_calls_world_state(_mock_email_classify):
     cap = _make()
     mc = _mock_imap_client(_HINT_EMAILS)
     ws_mock = MagicMock()
@@ -402,7 +449,7 @@ def test_inject_inbox_hint_calls_world_state():
 
 
 @pytest.mark.unit
-def test_inject_inbox_hint_content_has_counts():
+def test_inject_inbox_hint_content_has_counts(_mock_email_classify):
     cap = _make()
     mc = _mock_imap_client(_HINT_EMAILS)
     ws_mock = MagicMock()
@@ -416,7 +463,7 @@ def test_inject_inbox_hint_content_has_counts():
 
 
 @pytest.mark.unit
-def test_inject_inbox_hint_high_activation_when_actionable():
+def test_inject_inbox_hint_high_activation_when_actionable(_mock_email_classify):
     cap = _make()
     mc = _mock_imap_client(_HINT_EMAILS)
     ws_mock = MagicMock()
