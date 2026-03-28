@@ -352,3 +352,36 @@ class TestCapabilitiesAPI:
             assert resp.status_code == 401, (
                 f"GET /api/capabilities/caldav/status expected 401, got {resp.status_code}"
             )
+
+
+@pytest.mark.unit
+class TestEmailToCaldavProvider:
+    """Tests for email_to_caldav_provider mapping in provider_autodiscovery."""
+
+    def test_gmail_maps_to_google(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("user@gmail.com") == "google"
+
+    def test_googlemail_maps_to_google(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("user@googlemail.com") == "google"
+
+    def test_icloud_maps_to_apple(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("user@icloud.com") == "apple"
+
+    def test_fastmail_maps_to_fastmail(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("user@fastmail.com") == "fastmail"
+
+    def test_unknown_domain_returns_none(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("user@yahoo.com") is None
+
+    def test_empty_email_returns_none(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("") is None
+
+    def test_no_at_returns_none(self):
+        from capabilities.provider_autodiscovery import email_to_caldav_provider
+        assert email_to_caldav_provider("nope") is None

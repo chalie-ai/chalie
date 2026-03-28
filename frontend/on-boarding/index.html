@@ -117,6 +117,38 @@
             </div>
         </div>
 
+        <div id="capabilitiesPhase" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h1>Connect Your Life</h1>
+                    <p>The more I see, the more I can help. Enter your email and app password to connect your calendar and inbox.</p>
+                </div>
+
+                <div id="capAutoStatus" style="display: none;" class="cap-auto-status"></div>
+
+                <form id="capForm">
+                    <div class="form-group">
+                        <label>Email Address</label>
+                        <input type="email" id="capEmail" placeholder="you@gmail.com" required>
+                    </div>
+                    <div id="capProviderInfo" style="display: none;" class="provider-info"></div>
+                    <div class="form-group">
+                        <label>App Password</label>
+                        <input type="password" id="capPassword" placeholder="Your app-specific password" required>
+                    </div>
+                    <div id="capProgress" style="display: none;" class="cap-progress">
+                        <div class="cap-step" id="capStepImap">Connecting email...</div>
+                        <div class="cap-step" id="capStepCaldav">Connecting calendar...</div>
+                    </div>
+                    <div id="capError" style="display: none;" class="status-err"></div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary" id="capConnectBtn">Connect</button>
+                        <button type="button" class="btn btn-secondary" id="capSkipBtn">Skip for now</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div id="completionPhase" style="display: none;">
             <div class="card">
                 <div class="card-header">

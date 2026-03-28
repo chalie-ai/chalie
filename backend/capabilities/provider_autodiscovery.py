@@ -118,3 +118,24 @@ def discover_email_settings(email: str) -> EmailProviderSettings | None:
 def list_supported_providers() -> list[str]:
     """Return a sorted, deduplicated list of supported provider names."""
     return sorted({s.provider_name for s in PROVIDERS.values()})
+
+
+# -- Email domain → CalDAV provider mapping --------------------------------
+
+_CALDAV_PROVIDERS: dict[str, str] = {
+    "gmail.com": "google", "googlemail.com": "google",
+    "icloud.com": "apple", "me.com": "apple", "mac.com": "apple",
+    "fastmail.com": "fastmail", "fastmail.fm": "fastmail",
+}
+
+
+def email_to_caldav_provider(email: str) -> str | None:
+    """Map an email address to a CalDAV provider name.
+
+    Returns ``None`` for domains without a known hosted CalDAV service
+    (e.g. self-hosted Nextcloud, Synology, or unsupported providers).
+    """
+    if not email or "@" not in email:
+        return None
+    domain = email.rsplit("@", 1)[-1].strip().lower()
+    return _CALDAV_PROVIDERS.get(domain)
