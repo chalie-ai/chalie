@@ -143,6 +143,7 @@ class ImapCapability(AbstractCapability):
             c.login(e, pw)
             c.logout()
             self._connected = True
+            self._ensure_sync_registration()
             return True
         except Exception:
             self._connected = False
@@ -150,6 +151,72 @@ class ImapCapability(AbstractCapability):
 
     def disconnect(self):
         self._connected = False
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE scheduled_items SET status='cancelled' "
+                    "WHERE source='imap' AND status='pending'"
+                )
+                conn.commit()
+        except Exception as exc:
+            logger.warning("[imap] disconnect cleanup: %s", exc)
+
+    def _ensure_sync_registration(self):
+        """Register IMAP sync handler + create recurring system scheduled_item."""
+        try:
+            from services.scheduler_service import register_system_handler
+            register_system_handler('imap:sync', self.monitor)
+
+            from services.database_service import get_shared_db_service
+            import uuid
+            db = get_shared_db_service()
+            now = utc_now()
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                # Recurring sync item (every 15 minutes)
+                cursor.execute(
+                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
+                    ('system:imap:sync',),
+                )
+                if not cursor.fetchone():
+                    cursor.execute(
+                        """INSERT INTO scheduled_items
+                           (id, item_type, message, due_at, recurrence, status,
+                            topic, source, external_uid, hidden, created_at)
+                         VALUES (?, 'system', 'IMAP email sync', ?, 'interval:15',
+                                 'pending', 'imap:sync', 'imap', 'system:imap:sync',
+                                 1, ?)""",
+                        (uuid.uuid4().hex[:8], now.isoformat(), now.isoformat()),
+                    )
+
+                # Daily email digest prompt
+                cursor.execute(
+                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
+                    ('imap:daily-digest',),
+                )
+                if not cursor.fetchone():
+                    # Schedule for 8am tomorrow
+                    tomorrow_8am = (now + timedelta(days=1)).replace(
+                        hour=8, minute=0, second=0, microsecond=0,
+                    )
+                    cursor.execute(
+                        """INSERT INTO scheduled_items
+                           (id, item_type, message, due_at, recurrence, status,
+                            topic, source, external_uid, hidden, created_at, is_prompt)
+                         VALUES (?, 'prompt',
+                                 'Summarize today''s email activity: highlight actionable items, key threads, and notable senders. Keep it brief.',
+                                 ?, 'daily', 'pending', 'email', 'imap',
+                                 'imap:daily-digest', 1, ?, 1)""",
+                        (uuid.uuid4().hex[:8], tomorrow_8am.isoformat(), now.isoformat()),
+                    )
+
+                conn.commit()
+            logger.info("[imap] Sync handler registered + scheduled_items ensured")
+        except Exception as exc:
+            logger.warning("[imap] _ensure_sync_registration: %s", exc)
 
     def _open_client(self):
         """Open and return an authenticated IMAPClient, or None."""
@@ -239,16 +306,80 @@ class ImapCapability(AbstractCapability):
 
     def monitor(self):
         """Fetch new headers and run triage + knowledge storage."""
+        if not self.is_connected():
+            self.connect()
+        if not self.is_connected():
+            return
         items = self.ingest()
         if items:
             self.understand(items)
+        self._inject_inbox_hint()
+
+    # ------------------------------------------------------------------
+    # World-state hint
+    # ------------------------------------------------------------------
+
+    def _inject_inbox_hint(self) -> None:
+        """Push a compact inbox summary into WorldStateService.
+
+        Mirrors CalDAV's ``_inject_schedule_hint`` pattern: query recent
+        email facts from KnowledgeService, bucket by triage category,
+        and write a one-line hint via ``notify_external_signal``.
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            from services.knowledge_service import KnowledgeService
+
+            ks = KnowledgeService(get_shared_db_service())
+            facts = ks.get_by_kind("fact", entity="email", limit=200)
+            if not facts:
+                return
+
+            counts: dict[str, int] = {}
+            top_actionable: str = ""
+            for f in facts:
+                d = f.get("data") or {}
+                cat = d.get("triage", "informational")
+                counts[cat] = counts.get(cat, 0) + 1
+                if cat == "actionable" and not top_actionable:
+                    top_actionable = d.get("from_name") or d.get("from_addr", "")
+
+            actionable = counts.get("actionable", 0)
+            informational = counts.get("informational", 0)
+            if actionable == 0 and informational == 0:
+                return
+
+            parts = []
+            if actionable:
+                part = f"{actionable} actionable"
+                if top_actionable:
+                    part += f" (top: {top_actionable})"
+                parts.append(part)
+            if informational:
+                parts.append(f"{informational} informational")
+            noise = counts.get("noise", 0)
+            if noise:
+                parts.append(f"{noise} noise (filtered)")
+            hint = f"Inbox: {', '.join(parts)}."
+
+            from services.world_state_service import WorldStateService
+
+            WorldStateService().notify_external_signal(
+                signal_type="capability:imap",
+                source="imap",
+                content=hint,
+                activation_energy=0.8 if actionable else 0.4,
+            )
+            logger.info("[imap] Injected inbox hint: %s", hint)
+        except Exception as exc:
+            logger.error("[imap] _inject_inbox_hint failed: %s", exc)
 
     def act(self, action, params):
         return {"error": f"'{action}' not implemented"}
 
     def get_tools(self):
         """Return IMAP tool definitions for dynamic registration."""
-        capability = self  # noqa: F841 — captured by closure
+        capability = self
 
         def _search_execute(topic, params, config=None, telemetry=None):
             """Search ingested email headers by sender, subject, or triage."""

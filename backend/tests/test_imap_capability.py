@@ -341,3 +341,80 @@ def test_search_error_resilience():
     with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
         result = handler("t1", {})
     assert "error" in result
+
+
+# --- _inject_inbox_hint ---
+
+@pytest.mark.unit
+def test_inject_inbox_hint_calls_world_state():
+    cap = _make()
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    ws_mock = MagicMock()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+         patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+        cap._inject_inbox_hint()
+    ws_mock.notify_external_signal.assert_called_once()
+    call_kw = ws_mock.notify_external_signal.call_args
+    assert call_kw.kwargs["signal_type"] == "capability:imap"
+    assert call_kw.kwargs["source"] == "imap"
+
+
+@pytest.mark.unit
+def test_inject_inbox_hint_content_has_counts():
+    cap = _make()
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    ws_mock = MagicMock()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+         patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+        cap._inject_inbox_hint()
+    content = ws_mock.notify_external_signal.call_args.kwargs["content"]
+    assert "2 actionable" in content
+    assert "1 informational" in content
+    assert "Sarah" in content  # top actionable sender
+
+
+@pytest.mark.unit
+def test_inject_inbox_hint_high_activation_when_actionable():
+    cap = _make()
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    ws_mock = MagicMock()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+         patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+        cap._inject_inbox_hint()
+    assert ws_mock.notify_external_signal.call_args.kwargs["activation_energy"] == 0.8
+
+
+@pytest.mark.unit
+def test_inject_inbox_hint_skips_when_empty():
+    cap = _make()
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = []
+    ws_mock = MagicMock()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+         patch("services.world_state_service.WorldStateService", return_value=ws_mock):
+        cap._inject_inbox_hint()
+    ws_mock.notify_external_signal.assert_not_called()
+
+
+@pytest.mark.unit
+def test_inject_inbox_hint_survives_exception():
+    cap = _make()
+    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
+        cap._inject_inbox_hint()  # should not raise
+
+
+@pytest.mark.unit
+def test_monitor_calls_inject_inbox_hint():
+    cap = _make()
+    cap._connected = True
+    with patch.object(cap, "ingest", return_value=[]), \
+         patch.object(cap, "_inject_inbox_hint") as hint_mock:
+        cap.monitor()
+    hint_mock.assert_called_once()
