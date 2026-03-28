@@ -130,6 +130,54 @@ def _make_date_utc(d: object) -> "_dt_module.datetime":
     return parse_utc(d)
 
 
+def _format_event_line(event: dict) -> str:
+    """Format a single event dict as a compact one-line summary.
+
+    Args:
+        event: Parsed event dict from :meth:`CaldavCapability._parse_caldav_event`.
+
+    Returns:
+        str: Single-line summary.
+    """
+    start_str = event['dtstart'].strftime('%H:%M')
+    end = event.get('dtend')
+    time_part = "all-day" if event.get('all_day') else (
+        f"{start_str}\u2013{end.strftime('%H:%M')}" if end else start_str
+    )
+    cal = event.get('calendar_name')
+    loc = event.get('location')
+    n = len(event.get('attendees') or [])
+    return " ".join(filter(None, [
+        time_part,
+        event.get('summary', 'Event'),
+        f"[{cal}]" if cal else "",
+        f"@ {loc}" if loc else "",
+        f"({n} attendees)" if n else "",
+    ]))
+
+
+def _format_schedule_hint(upcoming: list, max_events: int = 5) -> str:
+    """Build a structured schedule hint from upcoming events.
+
+    Args:
+        upcoming: Sorted list of parsed event dicts (soonest first).
+        max_events: Maximum number of events to include.
+
+    Returns:
+        str: Multi-line hint suitable for LLM context injection.
+    """
+    if not upcoming:
+        return "No upcoming events in the next 24 hours."
+
+    shown = upcoming[:max_events]
+    lines = [_format_event_line(e) for e in shown]
+    total = len(upcoming)
+    remaining = total - len(shown)
+    if remaining > 0:
+        lines.append(f"(+{remaining} more)")
+    return f"Next 24h ({total} events):\n" + "\n".join(lines)
+
+
 def _humanize_rrule(rrule_str: str, dtstart: "_dt_module.datetime", summary: str) -> str:
     """Build a concise human-readable recurrence pattern description.
 
@@ -917,20 +965,21 @@ class CaldavCapability(AbstractCapability):
         except Exception as exc:  # noqa: BLE001
             logger.debug("[caldav] _emit_calendar_events() failed: %s", exc)
 
-    def _inject_schedule_hint(self, events: list, now: "_dt_module.datetime") -> None:
-        """Build a schedule hint and inject it into world state.
+    # Maximum number of events included in the schedule hint.
+    _HINT_MAX_EVENTS = 5
 
-        Collects events starting within the next 24 hours, formats them as a
-        comma-separated time/title list (≤280 characters total), and pushes the
-        result to :class:`~services.world_state_service.WorldStateService` via
+    def _inject_schedule_hint(self, events: list, now: "_dt_module.datetime") -> None:
+        """Build a structured schedule hint and inject it into world state.
+
+        Selects up to :attr:`_HINT_MAX_EVENTS` events starting within the next
+        24 hours and formats each as a one-line structured summary including
+        calendar name, location, attendee count, and duration.  The hint is
+        pushed to :class:`~services.world_state_service.WorldStateService` via
         :meth:`~services.world_state_service.WorldStateService.notify_external_signal`.
 
         Args:
             events: Parsed event dicts from :meth:`_parse_caldav_event`.
             now:    Current UTC datetime used as the hint window start.
-
-        Returns:
-            None
         """
         try:
             horizon = now + timedelta(hours=24)
@@ -938,16 +987,7 @@ class CaldavCapability(AbstractCapability):
                 [e for e in events if now <= e.get('dtstart', now) < horizon],
                 key=lambda e: e['dtstart'],
             )
-            if upcoming:
-                parts = []
-                for e in upcoming:
-                    time_str = e['dtstart'].strftime('%H:%M UTC')
-                    parts.append(f"{time_str} {e.get('summary', 'Event')}")
-                hint = "Next 24h: " + "; ".join(parts)
-                if len(hint) > 280:
-                    hint = hint[:277] + "..."
-            else:
-                hint = "No upcoming events in the next 24 hours."
+            hint = _format_schedule_hint(upcoming, self._HINT_MAX_EVENTS)
 
             from services.world_state_service import WorldStateService
 
@@ -957,7 +997,8 @@ class CaldavCapability(AbstractCapability):
                 content=hint,
                 activation_energy=0.7,
             )
-            logger.info("[caldav] Injected schedule hint (%d chars).", len(hint))
+            logger.info("[caldav] Injected schedule hint (%d events, %d chars).",
+                        min(len(upcoming), self._HINT_MAX_EVENTS), len(hint))
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "[caldav] _inject_schedule_hint() failed: %s", exc, exc_info=True

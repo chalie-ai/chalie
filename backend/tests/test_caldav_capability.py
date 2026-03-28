@@ -472,3 +472,82 @@ class TestCaldavCapability:
         assert entity_val == "calendar", (
             f"Expected entity='calendar', got entity={entity_val!r}"
         )
+
+
+# -----------------------------------------------------------------------
+# Schedule hint formatting
+# -----------------------------------------------------------------------
+
+
+class TestFormatScheduleHint:
+    """Tests for :func:`_format_event_line` and :func:`_format_schedule_hint`."""
+
+    @staticmethod
+    def _make_event(**overrides):
+        base = {
+            'uid': 'evt-1', 'summary': 'Team standup',
+            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
+            'location': None, 'attendees': [], 'recurrence': None,
+            'all_day': False, 'calendar_name': 'Work',
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.unit
+    def test_event_line_includes_time_title_calendar(self):
+        from capabilities.caldav_capability.capability import _format_event_line
+
+        line = _format_event_line(self._make_event())
+        assert "09:00" in line and "09:30" in line
+        assert "Team standup" in line and "[Work]" in line
+        # all-day replaces time range
+        assert "all-day" in _format_event_line(self._make_event(all_day=True))
+
+    @pytest.mark.unit
+    def test_event_line_optional_fields(self):
+        from capabilities.caldav_capability.capability import _format_event_line
+
+        full = _format_event_line(self._make_event(
+            location="Room 42", attendees=["a@b.com", "c@d.com"],
+        ))
+        assert "@ Room 42" in full and "(2 attendees)" in full
+        # single attendee still uses plural
+        assert "(1 attendees)" in _format_event_line(
+            self._make_event(attendees=["a@b.com"]))
+        # no optional fields
+        bare = _format_event_line(
+            self._make_event(location=None, attendees=[], calendar_name=None))
+        assert "@" not in bare and "attendee" not in bare and "[" not in bare
+
+    @pytest.mark.unit
+    def test_hint_empty_and_single(self):
+        from capabilities.caldav_capability.capability import _format_schedule_hint
+
+        assert _format_schedule_hint([]) == "No upcoming events in the next 24 hours."
+        hint = _format_schedule_hint([self._make_event()])
+        assert "Next 24h (1 events):" in hint and "Team standup" in hint
+
+    @pytest.mark.unit
+    def test_hint_caps_at_max_events(self):
+        from capabilities.caldav_capability.capability import _format_schedule_hint
+
+        events = [
+            self._make_event(
+                uid=f"evt-{i}", summary=f"Meeting {i}",
+                dtstart=datetime.datetime(2026, 3, 28, 8 + i, 0, tzinfo=_UTC),
+                dtend=datetime.datetime(2026, 3, 28, 8 + i, 30, tzinfo=_UTC),
+            ) for i in range(8)
+        ]
+        hint = _format_schedule_hint(events, max_events=5)
+        assert "(8 events)" in hint and "Meeting 4" in hint
+        assert "Meeting 5" not in hint and "(+3 more)" in hint
+
+    @pytest.mark.unit
+    def test_hint_rich_event(self):
+        from capabilities.caldav_capability.capability import _format_schedule_hint
+
+        hint = _format_schedule_hint([self._make_event(
+            location="HQ", attendees=["a@b.com", "c@d.com"],
+        )])
+        assert "[Work]" in hint and "@ HQ" in hint and "(2 attendees)" in hint
