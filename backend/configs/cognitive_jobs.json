@@ -97,12 +97,6 @@
       "caps": { "reasoning": "medium", "structured": "medium", "creativity": "low", "classification": "none", "vision": "none" }
     },
     {
-      "id": "document-classification",
-      "name": "Document Classification",
-      "desc": "Classifies documents into categories, projects, and dates for automatic organisation.",
-      "caps": { "reasoning": "low", "structured": "high", "creativity": "none", "classification": "high", "vision": "none" }
-    },
-    {
       "id": "compaction",
       "name": "Compaction",
       "desc": "Compresses older conversation turns into dense summaries preserving facts, decisions, and preferences.",
