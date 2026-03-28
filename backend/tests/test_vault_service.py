@@ -480,7 +480,7 @@ class TestVaultService:
         vault.unlock("pw")
 
         junk = b"\xde\xad\xbe\xef" * 20
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             vault.decrypt(junk)
 
     def test_decrypt_rejects_fernet_token_directly(self, vault_db):
@@ -501,8 +501,8 @@ class TestVaultService:
         with patch.object(VaultService, "_run_legacy_migration"):
             vault.unlock("pw")
 
-        # Fernet token must NOT decrypt — there is no fallback path
-        with pytest.raises(Exception):
+        # Fernet token must NOT decrypt — no fallback path
+        with pytest.raises(ValueError):
             vault.decrypt(fernet_token)
 
     # ------------------------------------------------------------------
