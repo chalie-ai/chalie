@@ -488,7 +488,10 @@ class VaultService:
                 row = cursor.fetchone()
                 cursor.close()
         except Exception:
-            return  # Table doesn't exist — fresh install, nothing to migrate
+            # Table doesn't exist — check for v0.1.0 .key file before giving up
+            row = self._migrate_legacy_key_file()
+            if row is None:
+                return  # Truly fresh install, nothing to migrate
 
         if row is None:
             return  # Already migrated on a previous boot
@@ -542,6 +545,43 @@ class VaultService:
 
         logger.info("[Vault] Legacy migration complete — %d row(s) re-encrypted, "
                     "encryption_keys row deleted", total)
+
+    def _migrate_legacy_key_file(self) -> Optional[tuple]:
+        """Migrate a v0.1.0 ``.key`` file into ``encryption_keys`` so the
+        Fernet migration can proceed.  Returns the row tuple or None."""
+        import os
+        from pathlib import Path
+
+        db_path = os.environ.get("CHALIE_DB_PATH")
+        if db_path:
+            key_path = Path(db_path).resolve().parent / ".key"
+        else:
+            key_path = Path(__file__).resolve().parent.parent / "data" / ".key"
+
+        if not key_path.exists():
+            return None
+
+        try:
+            key_value = key_path.read_text().strip()
+            if not key_value:
+                return None
+        except Exception:
+            return None
+
+        logger.info("[Vault] Found legacy .key file at %s — seeding encryption_keys table", key_path)
+        with self._db.connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS encryption_keys (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    key_value TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute(
+                "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
+                (key_value,),
+            )
+        return (key_value,)
 
     def _load_vault_config(self) -> Optional[dict]:
         """Read the singleton ``vault_config`` row (id=1) from the database.

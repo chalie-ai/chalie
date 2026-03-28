@@ -397,12 +397,12 @@ class TestAuthAPI:
             assert "error" in data
             assert "invalid" in data["error"].lower()
 
-    def test_login_vault_uninitialized_still_succeeds(self, client, auth_db):
-        """POST /auth/login succeeds with vault_state 'locked' when vault is uninitialised.
+    def test_login_vault_uninitialized_auto_initializes(self, client, auth_db):
+        """POST /auth/login auto-initializes the vault for existing users upgrading.
 
-        When ``vault.unlock()`` raises ``RuntimeError`` (no ``vault_config`` row),
-        the login should still succeed because the password hash was verified.
-        The response vault_state is ``"locked"`` and a warning is logged.
+        When ``vault.get_state()`` returns ``"uninitialized"``, login calls
+        ``initialize(password)`` before ``unlock(password)`` so existing users
+        get a working vault on first login after the upgrade.
         """
         test_password = "securepassword123"
         auth_db.execute(
@@ -411,12 +411,11 @@ class TestAuthAPI:
         )
         auth_db.commit()
 
-        # vault.unlock() raises RuntimeError — vault never initialised
-        mock_vault = MagicMock()
-        mock_vault.unlock.side_effect = RuntimeError("vault_config is empty")
-
+        mock_vault = _make_vault_mock(unlocked=False, unlock_returns=True)
+        # get_state returns "uninitialized" (from unlocked=False in _make_vault_mock)
         with patch('services.auth_session_service.create_session'), \
-             patch('services.vault_service.get_vault_service', return_value=mock_vault):
+             patch('services.vault_service.get_vault_service', return_value=mock_vault), \
+             patch('api.user_auth._reconnect_capabilities'):
             response = client.post(
                 '/auth/login',
                 json={"username": "admin", "password": test_password},
@@ -426,7 +425,9 @@ class TestAuthAPI:
             assert response.status_code == 200
             data = response.get_json()
             assert data["ok"] is True
-            assert data.get("vault_state") == "locked"
+            assert data.get("vault_state") == "unlocked"
+            mock_vault.initialize.assert_called_once_with(test_password)
+            mock_vault.unlock.assert_called_once_with(test_password)
 
     # ------------------------------------------------------------------
     # POST /auth/logout

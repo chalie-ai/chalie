@@ -208,25 +208,24 @@ def login():
             if not row or not check_password_hash(row[0], password):
                 return jsonify({"error": "Invalid credentials"}), 401
 
-        # Unlock the vault so encrypted credentials are accessible
+        # Unlock the vault so encrypted credentials are accessible.
+        # Existing users upgrading from pre-vault versions won't have a
+        # vault_config row yet — initialize it on first login using the
+        # password we just verified against the hash.
         vault = get_vault_service()
         vault_state = "locked"
         try:
+            if vault.get_state() == "uninitialized":
+                logger.info("[Auth] Vault uninitialized — auto-initializing for existing user")
+                vault.initialize(password)
             unlocked = vault.unlock(password)
             if not unlocked:
-                # vault.unlock() returns False for wrong password / corrupted vault_config.
-                # Since the password hash matched above this indicates a vault inconsistency.
                 logger.warning("[Auth] vault.unlock() returned False despite correct password")
                 return jsonify({"error": "Invalid credentials"}), 401
             vault_state = "unlocked"
-            # Post-unlock hook: reconnect capabilities that need decrypted credentials
             _reconnect_capabilities()
-        except RuntimeError as exc:
-            # vault_config row absent — vault never initialised (pre-migration or error).
-            # Allow login to succeed but report the sealed state so the client can prompt.
-            logger.warning(
-                "[Auth] Vault not initialised during login — vault remains sealed: %s", exc
-            )
+        except Exception as exc:
+            logger.error("[Auth] Vault unlock failed during login: %s", exc)
 
         # Create session and set cookie
         resp = make_response(jsonify({"ok": True, "vault_state": vault_state}), 200)
