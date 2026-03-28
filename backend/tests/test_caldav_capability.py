@@ -750,3 +750,109 @@ class TestDailyDigest:
         import json
         payload = json.loads(store.rpush.call_args[0][1])
         assert "No upcoming events" in payload['prompt']
+
+
+class TestConflictAlert:
+    """Tests for :meth:`CaldavCapability._maybe_send_conflict_alert`."""
+
+    @staticmethod
+    def _make_event(**overrides):
+        base = {
+            'uid': 'evt-1', 'summary': 'Meeting A',
+            'dtstart': datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+            'dtend': datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC),
+            'location': None, 'attendees': [], 'recurrence': None,
+            'all_day': False, 'calendar_name': 'Work',
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_conflict_alert_fires_for_overlapping_events(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = None  # not alerted yet
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
+        ev_a = self._make_event(uid='a', summary='Design Review',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
+        ev_b = self._make_event(uid='b', summary='Sprint Planning',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
+        result = cap._maybe_send_conflict_alert([ev_a, ev_b], now)
+        assert result == 1
+        store.rpush.assert_called_once()
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        assert "CALENDAR CONFLICT" in payload['prompt']
+        assert "Design Review" in payload['prompt']
+        assert "Sprint Planning" in payload['prompt']
+        store.setex.assert_called_once()
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_conflict_alert_deduped(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = "1"  # already alerted
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
+        ev_a = self._make_event(uid='a',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
+        ev_b = self._make_event(uid='b',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
+        result = cap._maybe_send_conflict_alert([ev_a, ev_b], now)
+        assert result == 0
+        store.rpush.assert_not_called()
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("label,now_hour,ev_a_kw,ev_b_kw", [
+        ("non_overlapping", 12,
+         dict(uid='a', dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+              dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC)),
+         dict(uid='b', dtstart=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC),
+              dtend=datetime.datetime(2026, 3, 28, 17, 0, tzinfo=_UTC))),
+        ("past_events", 16,
+         dict(uid='a', dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+              dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC)),
+         dict(uid='b', dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
+              dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))),
+        ("all_day_excluded", 12,
+         dict(uid='a', all_day=True, dtstart=datetime.datetime(2026, 3, 28, 0, 0, tzinfo=_UTC),
+              dtend=datetime.datetime(2026, 3, 29, 0, 0, tzinfo=_UTC)),
+         dict(uid='b', dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+              dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))),
+    ], ids=["non_overlapping", "past_events", "all_day_excluded"])
+    def test_no_alert_cases(self, label, now_hour, ev_a_kw, ev_b_kw):
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, now_hour, 0, tzinfo=_UTC)
+        result = cap._maybe_send_conflict_alert(
+            [self._make_event(**ev_a_kw), self._make_event(**ev_b_kw)], now)
+        assert result == 0
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_conflict_alert_uid_order_independent(self, mock_mcs):
+        """Dedup key is canonicalized — UID order doesn't matter."""
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
+        ev_a = self._make_event(uid='z-uid',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
+        ev_b = self._make_event(uid='a-uid',
+                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
+                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
+        cap._maybe_send_conflict_alert([ev_a, ev_b], now)
+        # Dedup key should use sorted UIDs: a-uid:z-uid
+        flag_key = store.setex.call_args[0][0]
+        assert "a-uid:z-uid" in flag_key

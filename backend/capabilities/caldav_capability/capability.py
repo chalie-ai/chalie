@@ -130,6 +130,30 @@ def _make_date_utc(d: object) -> "_dt_module.datetime":
     return parse_utc(d)
 
 
+def _events_overlap(a: dict, b: dict) -> bool:
+    """Return True if two event time ranges overlap."""
+    return max(a['dtstart'], b['dtstart']) < min(a['dtend'], b['dtend'])
+
+
+def _find_overlap_pairs(events: list, now: "_dt_module.datetime") -> list:
+    """Return overlap pairs as ``(ev_a, ev_b, canon_key)`` tuples.
+
+    Filters to upcoming, non-all-day events with valid UIDs and detects
+    time overlaps.  The ``canon_key`` is ``'{uid_a}:{uid_b}'`` with UIDs
+    sorted for order-independent deduplication.
+    """
+    from itertools import combinations
+    upcoming = [
+        e for e in events
+        if e.get('dtstart') and e.get('uid') and e['dtstart'] >= now and not e.get('all_day')
+    ]
+    return [
+        (a, b, ":".join(sorted([a['uid'], b['uid']])))
+        for a, b in combinations(upcoming, 2)
+        if a['uid'] != b['uid'] and _events_overlap(a, b)
+    ]
+
+
 def _format_event_line(event: dict) -> str:
     """Format a single event dict as a compact one-line summary.
 
@@ -591,6 +615,9 @@ class CaldavCapability(AbstractCapability):
 
         # --- Daily schedule digest (once per UTC calendar day) ---
         self._maybe_send_daily_digest(all_events, now)
+
+        # --- Conflict alerts (once per overlapping pair) ---
+        self._maybe_send_conflict_alert(all_events, now)
 
         logger.info(
             "[caldav] ingest() complete — %d events fetched.", len(all_events)
@@ -1158,6 +1185,68 @@ class CaldavCapability(AbstractCapability):
         except Exception as exc:  # noqa: BLE001
             logger.debug("[caldav] _maybe_send_daily_digest() failed: %s", exc)
             return False
+
+    # Conflict alert: deduped per overlapping pair, 48-hour TTL.
+    _CONFLICT_ALERT_KEY_PREFIX = "caldav:conflict_alerted:"
+    _CONFLICT_ALERT_TTL_SECONDS = 48 * 3600  # 48 hours
+
+    def _maybe_send_conflict_alert(self, events: list, now: "_dt_module.datetime") -> int:
+        """Push a proactive alert for each pair of overlapping future events.
+
+        Reuses the same overlap logic as :meth:`_store_conflict_facts` but
+        instead of writing knowledge facts, pushes a prompt-queue message so the
+        user is notified.  Each conflict pair is alerted at most once (deduped
+        via a MemoryStore key with a 48-hour TTL).
+
+        Args:
+            events: Parsed event dicts from :meth:`_parse_caldav_event`.
+            now:    Current UTC datetime; events before this are skipped.
+
+        Returns:
+            int: Number of conflict alerts enqueued.
+        """
+        pairs = _find_overlap_pairs(events, now)
+        if not pairs:
+            return 0
+
+        try:
+            from services.memory_client import MemoryClientService
+            import json as _json
+
+            store = MemoryClientService.create_connection()
+            sent = 0
+
+            for ev_a, ev_b, canon_key in pairs:
+                flag_key = f"{self._CONFLICT_ALERT_KEY_PREFIX}{canon_key}"
+                if store.get(flag_key):
+                    continue
+
+                store.rpush('prompt-queue', _json.dumps({
+                    'prompt': (
+                        "[CALENDAR CONFLICT]\n"
+                        f"These two events overlap:\n"
+                        f"  1. {_format_event_line(ev_a)}\n"
+                        f"  2. {_format_event_line(ev_b)}\n\n"
+                        "Alert the user about this scheduling conflict. "
+                        "Be concise — mention both events and ask if they'd "
+                        "like to reschedule one."
+                    ),
+                    'metadata': {
+                        'type': 'proactive_drift',
+                        'source': 'calendar_conflict',
+                        'topic': 'proactive',
+                    },
+                }))
+                store.setex(flag_key, self._CONFLICT_ALERT_TTL_SECONDS, "1")
+                sent += 1
+                logger.info(
+                    "[caldav] Conflict alert: '%s' overlaps '%s'.",
+                    ev_a.get('summary', '?'), ev_b.get('summary', '?'),
+                )
+            return sent
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[caldav] _maybe_send_conflict_alert() failed: %s", exc)
+            return 0
 
     # Maximum number of events included in the schedule hint.
     _HINT_MAX_EVENTS = 5
