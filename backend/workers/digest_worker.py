@@ -209,7 +209,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
         import threading
 
         if len(prompt_message) > 300:
-            logger.debug("[TraitExtraction] Skipping — message too long (%d chars), likely pasted content", len(prompt_message))
+            logging.debug("[TraitExtraction] Skipping — message too long (%d chars), likely pasted content", len(prompt_message))
             return
 
         def _extract_traits():
