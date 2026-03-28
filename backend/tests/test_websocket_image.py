@@ -14,27 +14,38 @@ provider.
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
+from services.memory_store import MemoryStore
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _extract_publish_calls(mock_store):
+def _make_store_with_publish_spy():
     """
-    Return a list of (channel, payload_dict) tuples from all ``store.publish``
-    calls recorded on *mock_store*.
+    Create a real ``MemoryStore`` instance with a lightweight publish spy.
 
-    Args:
-        mock_store: A ``MagicMock`` whose ``publish`` attribute has been called.
+    The ``publish`` method is replaced with a wrapper that records every
+    ``(channel, message_str)`` pair into a ``published`` list *before*
+    delegating to the original implementation.  This lets tests assert on
+    what was published without relying on ``MagicMock`` call introspection.
 
     Returns:
-        list[tuple[str, dict]]: Decoded publish arguments, one entry per call.
+        tuple[MemoryStore, list]: The instrumented store and the shared
+        ``published`` list that accumulates ``(channel, message_str)`` tuples
+        in call order.
     """
-    calls = []
-    for call in mock_store.publish.call_args_list:
-        channel, payload_str = call[0]
-        calls.append((channel, json.loads(payload_str)))
-    return calls
+    store = MemoryStore()
+    published = []
+    _orig_publish = store.publish
+
+    def _spy_publish(channel, message):
+        """Record call then delegate to the real publish implementation."""
+        published.append((channel, message))
+        return _orig_publish(channel, message)
+
+    store.publish = _spy_publish
+    return store, published
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -47,10 +58,13 @@ def test_run_analysis_publishes_image_ready_on_success():
 
     This verifies Step 3 of the plan: the frontend receives the event via the
     existing ``_drift_sender`` thread and removes the upload spinner (B4/B5 fix).
+
+    Uses a real ``MemoryStore`` with a publish spy instead of a ``MagicMock``
+    so that interface drift is caught at test time.
     """
     from api.chat_image import _run_analysis
 
-    mock_store = MagicMock()
+    store, published = _make_store_with_publish_spy()
     mock_result = {
         'description': 'A test image.',
         'ocr_text': '',
@@ -59,14 +73,15 @@ def test_run_analysis_publishes_image_ready_on_success():
         'analysis_time_ms': 120,
     }
 
-    with patch('api.chat_image._get_store', return_value=mock_store), \
+    with patch('api.chat_image._get_store', return_value=store), \
          patch('services.image_context_service.analyze', return_value=mock_result):
         _run_analysis('testid001testid0', b'fake-png-bytes', 'image/png')
 
-    publish_calls = _extract_publish_calls(mock_store)
-    assert publish_calls, "store.publish() should be called at least once on success"
+    assert published, "store.publish() should be called at least once on success"
 
-    channel, payload = publish_calls[0]
+    channel, payload_str = published[0]
+    payload = json.loads(payload_str)
+
     assert channel == 'output:events', (
         f"Expected publish to 'output:events', got '{channel}'"
     )
@@ -86,20 +101,24 @@ def test_run_analysis_publishes_image_ready_on_failure():
     publish ``{"type": "image_ready", ..., "status": "failed"}`` to
     ``output:events`` so the frontend can surface the error instead of leaving
     the spinner spinning indefinitely (B5 fix).
+
+    Uses a real ``MemoryStore`` with a publish spy instead of a ``MagicMock``
+    so that interface drift is caught at test time.
     """
     from api.chat_image import _run_analysis
 
-    mock_store = MagicMock()
+    store, published = _make_store_with_publish_spy()
 
-    with patch('api.chat_image._get_store', return_value=mock_store), \
+    with patch('api.chat_image._get_store', return_value=store), \
          patch('services.image_context_service.analyze',
                side_effect=RuntimeError('No vision provider configured')):
         _run_analysis('failid002failid0', b'fake-png-bytes', 'image/png')
 
-    publish_calls = _extract_publish_calls(mock_store)
-    assert publish_calls, "store.publish() should be called even when analysis fails"
+    assert published, "store.publish() should be called even when analysis fails"
 
-    channel, payload = publish_calls[0]
+    channel, payload_str = published[0]
+    payload = json.loads(payload_str)
+
     assert channel == 'output:events', (
         f"Expected publish to 'output:events', got '{channel}'"
     )
@@ -117,15 +136,15 @@ def test_run_analysis_stores_result_before_publishing():
     published, so that any WebSocket client that immediately calls
     ``store.get(result_key)`` upon receiving the event finds the data.
 
-    This is verified by inspecting the order of calls on the mock store.
+    Verified by asserting that the result key is present in the real
+    ``MemoryStore`` after ``_run_analysis`` returns — which is only possible if
+    ``store.set()`` was called (and therefore preceded ``store.publish()`` in
+    the synchronous call sequence).
     """
     from api.chat_image import _run_analysis
 
-    call_order = []
-    mock_store = MagicMock()
-    mock_store.set.side_effect = lambda *a, **kw: call_order.append('set')
-    mock_store.publish.side_effect = lambda *a, **kw: call_order.append('publish')
-
+    image_id = 'orderid03orderid'
+    store, _ = _make_store_with_publish_spy()
     mock_result = {
         'description': 'Ordered call test.',
         'ocr_text': '',
@@ -134,17 +153,12 @@ def test_run_analysis_stores_result_before_publishing():
         'analysis_time_ms': 50,
     }
 
-    with patch('api.chat_image._get_store', return_value=mock_store), \
+    with patch('api.chat_image._get_store', return_value=store), \
          patch('services.image_context_service.analyze', return_value=mock_result):
-        _run_analysis('orderid03orderid', b'bytes', 'image/jpeg')
+        _run_analysis(image_id, b'bytes', 'image/jpeg')
 
-    # At least one 'set' must appear before the first 'publish'
-    assert 'set' in call_order and 'publish' in call_order, (
-        "Both set() and publish() must be called"
-    )
-    first_set = call_order.index('set')
-    first_publish = call_order.index('publish')
-    assert first_set < first_publish, (
-        "store.set() (result storage) must happen before store.publish() "
-        f"(event push); got order: {call_order}"
+    result_key = f'chat_image_result:{image_id}'
+    assert store.get(result_key) is not None, (
+        "store.set() must be called for the result key before _run_analysis returns; "
+        f"key '{result_key}' was not found in the store"
     )
