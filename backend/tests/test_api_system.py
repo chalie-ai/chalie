@@ -106,13 +106,19 @@ class TestSystemAPI:
 
     def test_system_status_returns_expected_keys(self, client, db):
         """GET /system/status returns status, memory, storage, queues top-level keys."""
-        mock_store = MagicMock()
-        mock_store.ping.return_value = True
-        mock_store.keys.return_value = ['k1', 'k2']
-        mock_store.llen.return_value = 5
-        mock_store.get.return_value = '2026-02-26T10:00:00'
+        store = MemoryStore()
+        # Seed 2 keys for each memory namespace so counts == 2.
+        for ns in ('working_memory', 'gist_index', 'fact_index'):
+            store.set(f'{ns}:a', 'x')
+            store.set(f'{ns}:b', 'x')
+        # Seed queues with 5 items each so llen == 5.
+        for _ in range(5):
+            store.rpush('prompt-queue', 'x')
+            store.rpush('output-queue', 'x')
+        # Seed the last-run timestamp so get() returns a non-None value.
+        store.set('cognitive_drift:last_run', '2026-02-26T10:00:00')
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/system/status')
 
         assert resp.status_code == 200
@@ -131,12 +137,13 @@ class TestSystemAPI:
 
     def test_system_status_degraded_when_store_fails(self, client, db):
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
-        mock_store = MagicMock()
-        mock_store.ping.side_effect = ConnectionError('store unreachable')
-        mock_store.llen.return_value = 0
-        mock_store.get.return_value = None
+        # Category C (error-path): keep MagicMock to simulate a broken store.
+        broken_store = MagicMock()
+        broken_store.ping.side_effect = ConnectionError('store unreachable')
+        broken_store.llen.return_value = 0
+        broken_store.get.return_value = None
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=broken_store):
             resp = client.get('/system/status')
 
         assert resp.status_code == 200
@@ -174,16 +181,16 @@ class TestSystemAPI:
             )
         db.commit()
 
-        mock_store = MagicMock()
-        mock_store.keys.side_effect = lambda pattern: {
-            'working_memory:*': ['wm:t1', 'wm:t2'],
-            'facts:*': [],
-        }.get(pattern, [])
-        mock_store.llen.side_effect = lambda key: {
-            'wm:t1': 3, 'wm:t2': 5, 'prompt-queue': 0, 'output-queue': 0,
-        }.get(key, 0)
+        store = MemoryStore()
+        # Seed 2 working-memory lists matching the 'working_memory:*' pattern,
+        # with 3 and 5 entries respectively (total 8 turns).
+        for _ in range(3):
+            store.rpush('working_memory:t1', 'x')
+        for _ in range(5):
+            store.rpush('working_memory:t2', 'x')
+        # No facts:* keys → service falls back to traits count (8).
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             resp = client.get('/system/observability/memory')
 
         assert resp.status_code == 200

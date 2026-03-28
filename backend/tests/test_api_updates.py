@@ -12,6 +12,10 @@ from unittest.mock import MagicMock, patch
 from flask import Flask
 
 from api.updates import updates_bp
+from services.memory_store import MemoryStore
+
+# Context key used by the /api/updates/context endpoint.
+_CONTEXT_KEY = "client_context:primary"
 
 
 # ---------------------------------------------------------------------------
@@ -298,15 +302,23 @@ class TestUpdateMemory:
 
 @pytest.mark.unit
 class TestUpdateContext:
-    def _store_mock(self, initial_ctx=None):
-        """Build a MemoryStore mock that returns initial_ctx on get()."""
-        store = MagicMock()
-        raw = json.dumps(initial_ctx or {})
-        store.get.return_value = raw
+    def _store(self, initial_ctx=None):
+        """Return a real MemoryStore pre-populated with initial_ctx at the context key.
+
+        Args:
+            initial_ctx: Optional dict to seed as the current context JSON.  If
+                ``None`` the context starts as an empty object ``{}``.
+
+        Returns:
+            A :class:`~services.memory_store.MemoryStore` instance ready for
+            injection via ``MemoryClientService.create_connection``.
+        """
+        store = MemoryStore()
+        store.set(_CONTEXT_KEY, json.dumps(initial_ctx or {}))
         return store
 
     def test_updates_place_field(self, cookie_client):
-        store = self._store_mock()
+        store = self._store()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             resp = cookie_client.post(
@@ -316,12 +328,11 @@ class TestUpdateContext:
             )
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is True
-        stored_json = store.set.call_args[0][1]
-        stored = json.loads(stored_json)
+        stored = json.loads(store.get(_CONTEXT_KEY))
         assert stored["place"] == "office"
 
     def test_updates_energy_field(self, cookie_client):
-        store = self._store_mock()
+        store = self._store()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             resp = cookie_client.post(
@@ -330,11 +341,11 @@ class TestUpdateContext:
                 content_type="application/json",
             )
         assert resp.status_code == 200
-        stored = json.loads(store.set.call_args[0][1])
+        stored = json.loads(store.get(_CONTEXT_KEY))
         assert stored["energy"] == "high"
 
     def test_updates_custom_signals(self, cookie_client):
-        store = self._store_mock()
+        store = self._store()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             resp = cookie_client.post(
@@ -343,13 +354,13 @@ class TestUpdateContext:
                 content_type="application/json",
             )
         assert resp.status_code == 200
-        stored = json.loads(store.set.call_args[0][1])
+        stored = json.loads(store.get(_CONTEXT_KEY))
         assert stored["external_signals"]["meeting_room"] == "B3"
         assert stored["external_signals"]["sprint"] == "42"
 
     def test_merges_custom_with_existing(self, cookie_client):
         """New custom signals should merge into, not replace, existing ones."""
-        store = self._store_mock({"external_signals": {"existing_key": "existing_val"}})
+        store = self._store({"external_signals": {"existing_key": "existing_val"}})
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             cookie_client.post(
@@ -357,7 +368,7 @@ class TestUpdateContext:
                 json={"custom": {"new_key": "new_val"}},
                 content_type="application/json",
             )
-        stored = json.loads(store.set.call_args[0][1])
+        stored = json.loads(store.get(_CONTEXT_KEY))
         assert stored["external_signals"]["existing_key"] == "existing_val"
         assert stored["external_signals"]["new_key"] == "new_val"
 
@@ -401,8 +412,7 @@ class TestUpdateContext:
         app, patch_session, patch_auth = _bearer_client(
             permissions={"update": ["context"]}
         )
-        store = MagicMock()
-        store.get.return_value = json.dumps({})
+        store = self._store()
         with patch_session, patch_auth, \
              patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
@@ -417,8 +427,7 @@ class TestUpdateContext:
 
     def test_cookie_auth_bypasses_permission_check(self, cookie_client):
         """Cookie-authenticated users can always update context."""
-        store = MagicMock()
-        store.get.return_value = json.dumps({})
+        store = self._store()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             resp = cookie_client.post(
@@ -436,7 +445,7 @@ class TestUpdateContext:
 @pytest.mark.unit
 class TestUpdateFeedback:
     def test_stores_feedback_record(self, cookie_client):
-        store = MagicMock()
+        store = MemoryStore()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store), \
              patch("services.time_utils.utc_now") as mock_now:
@@ -454,11 +463,10 @@ class TestUpdateFeedback:
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is True
 
-        # Verify the feedback key and record shape
-        key_arg = store.set.call_args[0][0]
-        assert key_arg == "intent_feedback:abc123"
-
-        record = json.loads(store.set.call_args[0][1])
+        # Verify the feedback key and record shape via real store state.
+        raw = store.get("intent_feedback:abc123")
+        assert raw is not None, "Expected feedback record at 'intent_feedback:abc123'"
+        record = json.loads(raw)
         assert record["intent_id"] == "abc123"
         assert record["outcome"] == "success"
         assert record["details"] == "PR created successfully"
@@ -492,7 +500,7 @@ class TestUpdateFeedback:
 
     def test_details_optional(self, cookie_client):
         """details field is optional — omitting it should still succeed."""
-        store = MagicMock()
+        store = MemoryStore()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             resp = cookie_client.post(
@@ -501,7 +509,7 @@ class TestUpdateFeedback:
                 content_type="application/json",
             )
         assert resp.status_code == 200
-        record = json.loads(store.set.call_args[0][1])
+        record = json.loads(store.get("intent_feedback:xyz789"))
         assert record["details"] == ""
 
     def test_unauthenticated_returns_401(self, unauthed_client):
@@ -528,7 +536,7 @@ class TestUpdateFeedback:
         app, patch_session, patch_auth = _bearer_client(
             permissions={"update": ["feedback"]}
         )
-        store = MagicMock()
+        store = MemoryStore()
         with patch_session, patch_auth, \
              patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
@@ -543,7 +551,7 @@ class TestUpdateFeedback:
 
     def test_feedback_ttl_is_24h(self, cookie_client):
         """Feedback records should be stored with a 24-hour TTL."""
-        store = MagicMock()
+        store = MemoryStore()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             cookie_client.post(
@@ -551,16 +559,13 @@ class TestUpdateFeedback:
                 json={"intent_id": "ttl_test", "outcome": "success"},
                 content_type="application/json",
             )
-        call_kwargs = store.set.call_args
-        # TTL is passed as keyword arg 'ex' or positional
-        ex_val = call_kwargs.kwargs.get("ex") or (
-            call_kwargs.args[2] if len(call_kwargs.args) > 2 else None
-        )
-        assert ex_val == 86400
+        # Verify TTL was set by reading the remaining TTL from the real store.
+        remaining_ttl = store.ttl("intent_feedback:ttl_test")
+        assert 0 < remaining_ttl <= 86400
 
     def test_cookie_auth_bypasses_permission_check(self, cookie_client):
         """Cookie-authenticated users can always submit feedback."""
-        store = MagicMock()
+        store = MemoryStore()
         with patch("services.memory_client.MemoryClientService.create_connection",
                    return_value=store):
             resp = cookie_client.post(

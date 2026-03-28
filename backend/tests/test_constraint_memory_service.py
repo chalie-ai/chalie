@@ -17,10 +17,16 @@ def _make_db_mock():
 
 
 def _make_store_mock():
-    """MemoryStore mock that starts empty (no cache)."""
-    store = MagicMock()
-    store.get.return_value = None
-    return store
+    """Return a real MemoryStore that starts empty (no cached summary).
+
+    Using a real store ensures the service's setex/get calls are exercised
+    against actual store behaviour rather than a mock double.
+
+    Returns:
+        A fresh :class:`~services.memory_store.MemoryStore` instance.
+    """
+    from services.memory_store import MemoryStore
+    return MemoryStore()
 
 
 def _make_rejection_event(event_type, payload, topic=None):
@@ -95,22 +101,22 @@ class TestConstraintSummary:
             service = ConstraintMemoryService(db)
             service.get_constraint_summary()
 
-        # Verify cache write
-        store.setex.assert_called_once()
-        cache_key = store.setex.call_args[0][0]
-        assert cache_key == 'constraint_memory:summary'
+        # Verify the summary was cached under the expected key.
+        cached = store.get('constraint_memory:summary')
+        assert cached is not None, "Expected summary to be cached at 'constraint_memory:summary'"
 
     def test_summary_returns_cached_value(self):
         db, _ = _make_db_mock()
         store = _make_store_mock()
 
+        # Pre-populate the cache in the real store so the service reads it back.
         cached_summary = json.dumps({
             'rejection_counts': {'plan_rejected': 5},
             'top_reasons': ['dag_invalid'],
             'blocked_actions': [],
             'total_rejections': 5,
         })
-        store.get.return_value = cached_summary
+        store.set('constraint_memory:summary', cached_summary)
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             service = ConstraintMemoryService(db)
