@@ -254,6 +254,11 @@ class AbstractCapability(ABC):
             self.monitor()
             self._error_count = 0
             self._last_error = None
+            try:
+                from capabilities.first_look import maybe_send_first_look
+                maybe_send_first_look()
+            except Exception:
+                pass
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
