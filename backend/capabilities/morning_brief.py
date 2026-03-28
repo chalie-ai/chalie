@@ -33,9 +33,15 @@ def maybe_send_morning_brief(calendar_events: list, now) -> bool:
             return False
 
         cal = _build_calendar_section(calendar_events, now)
+        b2b = _build_back_to_back_section(calendar_events, now)
         email = _read_cached_inbox_hint(store)
 
-        body = f"{cal}\n\n{email}" if email else cal
+        sections = [cal]
+        if b2b:
+            sections.append(b2b)
+        if email:
+            sections.append(email)
+        body = "\n\n".join(sections)
         instruction = (
             "Give the user a concise morning briefing. "
             "Cover their schedule (conflicts, back-to-back, free blocks)"
@@ -80,6 +86,21 @@ def _build_calendar_section(events: list, now) -> str:
     if remaining > 0:
         lines.append(f"(+{remaining} more)")
     return f"Schedule ({len(todays)} events):\n" + "\n".join(lines)
+
+
+def _build_back_to_back_section(events: list, now) -> str:
+    """Detect tight transitions (<5min gap) and format as a brief section."""
+    from capabilities.caldav_capability.capability import _find_back_to_back_pairs
+
+    pairs = _find_back_to_back_pairs(events, now)
+    if not pairs:
+        return ""
+    lines = [
+        f"  {a.get('summary', 'Event')} \u2192 "
+        f"{b.get('summary', 'Event')} ({gap}min gap)"
+        for a, b, gap, _ in pairs
+    ]
+    return f"Tight transitions ({len(pairs)}):\n" + "\n".join(lines)
 
 
 def _read_cached_inbox_hint(store) -> str:

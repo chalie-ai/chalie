@@ -154,6 +154,31 @@ def _find_overlap_pairs(events: list, now: "_dt_module.datetime") -> list:
     ]
 
 
+_BACK_TO_BACK_GAP = timedelta(minutes=5)
+
+
+def _find_back_to_back_pairs(events: list, now: "_dt_module.datetime") -> list:
+    """Return consecutive event pairs with gap < 5 minutes.
+
+    Returns ``(ev_a, ev_b, gap_minutes, canon_key)`` tuples.
+    """
+    threshold = _BACK_TO_BACK_GAP.total_seconds() / 60
+    upcoming = sorted(
+        [e for e in events
+         if (e.get('dtstart') and e.get('dtend') and e.get('uid')
+             and e['dtstart'] >= now and not e.get('all_day'))],
+        key=lambda e: e['dtstart'],
+    )
+    pairs = []
+    for i in range(len(upcoming) - 1):
+        a, b = upcoming[i], upcoming[i + 1]
+        gap = (b['dtstart'] - a['dtend']).total_seconds() / 60
+        if a['uid'] != b['uid'] and 0 <= gap < threshold:
+            canon = ":".join(sorted([a['uid'], b['uid']]))
+            pairs.append((a, b, round(gap), canon))
+    return pairs
+
+
 def _format_event_line(event: dict) -> str:
     """Format a single event dict as a compact one-line summary.
 
@@ -913,6 +938,26 @@ class CaldavCapability(AbstractCapability):
                         logger.debug(
                             "[caldav] signal emit failed: %s", exc,
                         )
+
+                # Back-to-back detection (< 5 min gap)
+                b2b = _find_back_to_back_pairs(events, now)
+                for ev_a, ev_b, gap_min, canon_key in b2b:
+                    b2b_uid = f"caldav:b2b:{canon_key}"
+                    b2b_msg = (
+                        f"Tight transition ({gap_min}min gap): "
+                        f"\"{ev_a.get('summary', 'Event')}\" \u2192 "
+                        f"\"{ev_b.get('summary', 'Event')}\""
+                    )
+                    cursor.execute(
+                        """INSERT OR IGNORE INTO scheduled_items
+                           (id, item_type, message, due_at, status, topic,
+                            source, external_uid, hidden, created_at)
+                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
+                                 'caldav', ?, 0, ?)""",
+                        (uuid.uuid4().hex[:8], b2b_msg,
+                         ev_a.get('dtend', now).isoformat(),
+                         b2b_uid, now.isoformat()),
+                    )
 
                 # Daily digest (recurring prompt, hidden)
                 cursor.execute(

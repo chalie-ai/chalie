@@ -61,6 +61,31 @@ class TestMorningBriefFusion:
         assert "Inbox" not in payload['prompt']
 
     @pytest.mark.unit
+    @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
+    @patch('services.memory_client.MemoryClientService')
+    def test_back_to_back_included_in_brief(self, mock_mcs, _mock_hint):
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        from capabilities.morning_brief import maybe_send_morning_brief
+        now = datetime.datetime(2026, 3, 28, 6, 0, tzinfo=_UTC)
+        events = [
+            _make_event(uid='a', summary='Standup',
+                        dtstart=datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+                        dtend=datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC)),
+            _make_event(uid='b', summary='Design Review',
+                        dtstart=datetime.datetime(2026, 3, 28, 9, 32, tzinfo=_UTC),
+                        dtend=datetime.datetime(2026, 3, 28, 10, 0, tzinfo=_UTC)),
+        ]
+        result = maybe_send_morning_brief(events, now)
+
+        assert result is True
+        payload = json.loads(store.rpush.call_args[0][1])
+        prompt = payload['prompt']
+        assert "Tight transitions" in prompt and "Standup" in prompt
+
+    @pytest.mark.unit
     def test_inbox_hint_reads_imap_signal(self):
         store = MagicMock()
         store.lrange.return_value = [
