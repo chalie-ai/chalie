@@ -366,7 +366,8 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group_id, due_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid) WHERE external_uid IS NOT NULL;
+-- idx_scheduled_items_external_uid created by _optional_columns migration
+-- (existing databases need ALTER TABLE ADD COLUMN before the index)
 
 -- ────────────────────────────────────────────────────────────────
 -- AUTOBIOGRAPHY — user narrative synthesis
