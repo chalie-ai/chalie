@@ -498,8 +498,11 @@ class VaultService:
                 cursor.execute("SELECT key_value FROM encryption_keys WHERE id = 1")
                 row = cursor.fetchone()
                 cursor.close()
-        except Exception:
-            # Table doesn't exist — check for v0.1.0 .key file before giving up
+        except Exception as exc:
+            # Likely: table doesn't exist. Check for v0.1.0 .key file.
+            logger.debug(
+                "[Vault] encryption_keys lookup failed: %s", exc,
+            )
             row = self._migrate_legacy_key_file()
             if row is None:
                 return  # Truly fresh install, nothing to migrate
