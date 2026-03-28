@@ -35,7 +35,7 @@ class CredentialVault:
 
         Args:
             account_id:       ID of the owning account row.
-            domain:           Site domain the credential belongs to (e.g. ``"github.com"``).
+            domain:           Site domain (e.g. ``"github.com"``).
             label:            Human-readable identifier for this credential.
             credential_type:  One of ``"password"``, ``"cookie"``, or ``"header"``.
             data:             Arbitrary dict of credential fields to protect.
