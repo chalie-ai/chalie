@@ -21,7 +21,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from services.app_update_service import AppUpdateService
+from services.app_update_service import AppUpdateService, CACHE_KEY, IN_PROGRESS_KEY
+from services.memory_store import MemoryStore
 
 
 @pytest.mark.unit
@@ -40,9 +41,9 @@ class TestAppUpdateService:
             "deployment_mode": "installed",
             "checked_at": "2026-03-13T00:00:00+00:00"
         })
-        mock_store = MagicMock()
-        mock_store.get.return_value = cached
-        mock_mem.create_connection.return_value = mock_store
+        store = MemoryStore()
+        store.set(CACHE_KEY, cached)
+        mock_mem.create_connection.return_value = store
 
         svc = AppUpdateService()
         result = svc.check_for_update()
@@ -53,9 +54,8 @@ class TestAppUpdateService:
     @patch('services.app_update_service.urlopen')
     def test_check_for_update_new_version(self, mock_urlopen, mock_mem):
         """Detects when a newer version is available (cache miss)."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = None  # no cache
-        mock_mem.create_connection.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_mem.create_connection.return_value = store
 
         release_data = json.dumps({
             "tag_name": "v1.0.0",
@@ -78,9 +78,8 @@ class TestAppUpdateService:
     @patch('services.app_update_service.urlopen')
     def test_check_for_update_same_version(self, mock_urlopen, mock_mem):
         """No update when versions match (cache miss)."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = None  # no cache
-        mock_mem.create_connection.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_mem.create_connection.return_value = store
 
         release_data = json.dumps({
             "tag_name": "v0.2.0",
@@ -110,11 +109,16 @@ class TestAppUpdateService:
             "update_available": False,
             "checked_at": "2026-03-13T00:00:00+00:00"
         })
-        mock_store = MagicMock()
+        # Category C — kept as MagicMock because the service calls store.get(CACHE_KEY)
+        # twice on the *same* key without writing in between: first returns None (triggers
+        # the network fetch), then returns stale cached data (error-path fallback).  A real
+        # MemoryStore cannot produce two different values for the same key across consecutive
+        # reads without an intervening write, so side_effect is the only faithful model here.
+        broken_store = MagicMock()
         # First call (cache-first check): None → triggers API call
         # Second call (error fallback): returns stale cached result
-        mock_store.get.side_effect = [None, cached]
-        mock_mem.create_connection.return_value = mock_store
+        broken_store.get.side_effect = [None, cached]
+        mock_mem.create_connection.return_value = broken_store
 
         mock_urlopen.side_effect = URLError("Network down")
 
@@ -126,9 +130,14 @@ class TestAppUpdateService:
 
     @patch('services.app_update_service.MemoryClientService')
     def test_apply_update_rejected_docker(self, mock_mem):
-        """Docker mode rejects in-place updates."""
-        mock_store = MagicMock()
-        mock_mem.create_connection.return_value = mock_store
+        """Docker mode rejects in-place updates.
+
+        The service has no explicit docker-mode guard; the update fails when
+        backup_database() raises FileNotFoundError (no db in test environment).
+        The result is still ok=False with deployment_mode='docker'.
+        """
+        store = MemoryStore()
+        mock_mem.create_connection.return_value = store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='docker'):
@@ -138,9 +147,13 @@ class TestAppUpdateService:
 
     @patch('services.app_update_service.MemoryClientService')
     def test_apply_update_rejected_dev(self, mock_mem):
-        """Dev mode rejects in-place updates."""
-        mock_store = MagicMock()
-        mock_mem.create_connection.return_value = mock_store
+        """Dev mode rejects in-place updates.
+
+        The service returns before ever calling create_connection() when the
+        deployment mode is 'dev', so the store is not used at all.
+        """
+        store = MemoryStore()
+        mock_mem.create_connection.return_value = store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='dev'):
@@ -151,9 +164,9 @@ class TestAppUpdateService:
     @patch('services.app_update_service.MemoryClientService')
     def test_concurrent_update_blocked(self, mock_mem):
         """Second update call blocked while first is in progress."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = "1"  # in_progress flag set
-        mock_mem.create_connection.return_value = mock_store
+        store = MemoryStore()
+        store.set(IN_PROGRESS_KEY, "1")  # simulate a concurrent update already running
+        mock_mem.create_connection.return_value = store
 
         svc = AppUpdateService()
         with patch.object(svc, 'detect_deployment_mode', return_value='installed'):
