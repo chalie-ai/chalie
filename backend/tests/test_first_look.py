@@ -9,14 +9,13 @@ import pytest
 
 from capabilities.first_look import (
     _build_calendar_snapshot,
-    _read_inbox_snapshot,
     maybe_send_first_look,
 )
 from services.time_utils import utc_now
 
 
 @pytest.mark.unit
-@patch("capabilities.first_look.load_capabilities")
+@patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService.create_connection")
 def test_first_look_skips(mock_conn, mock_load):
     """Already-sent flag or single capability → skip."""
@@ -37,7 +36,7 @@ def test_first_look_skips(mock_conn, mock_load):
 @pytest.mark.unit
 @patch("capabilities.first_look._read_inbox_snapshot", return_value="Inbox: 3 actionable")
 @patch("capabilities.first_look._build_calendar_snapshot", return_value="Calendar (2 upcoming):\n- ev1")
-@patch("capabilities.first_look.load_capabilities")
+@patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService.create_connection")
 def test_first_look_enqueues(mock_conn, mock_load, mock_cal, mock_inbox):
     """Both connected with data → enqueues prompt and sets flag."""
@@ -55,9 +54,6 @@ def test_first_look_enqueues(mock_conn, mock_load, mock_cal, mock_inbox):
     assert "Calendar (2 upcoming)" in pushed["prompt"]
     assert "Inbox: 3 actionable" in pushed["prompt"]
     store.setex.assert_called_once()
-
-    # Inbox hint is also verified within the prompt
-    assert _read_inbox_snapshot(store) == "Inbox: 3 actionable"
 
 
 @pytest.mark.unit
