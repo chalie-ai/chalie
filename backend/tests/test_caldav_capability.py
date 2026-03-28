@@ -787,7 +787,7 @@ class TestAttendeeContext:
 
 
 class TestDailyDigest:
-    """Tests for :meth:`CaldavCapability._maybe_send_daily_digest`."""
+    """Tests for the fused morning brief (replaces CalDAV-only daily digest)."""
 
     @staticmethod
     def _make_event(**overrides):
@@ -802,51 +802,52 @@ class TestDailyDigest:
         return base
 
     @pytest.mark.unit
+    @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
     @patch('services.memory_client.MemoryClientService')
-    def test_digest_fires_first_time_today(self, mock_mcs):
+    def test_digest_fires_first_time_today(self, mock_mcs, _mock_hint):
         store = MagicMock()
-        store.get.return_value = None  # no digest yet today
+        store.get.return_value = None
         mock_mcs.create_connection.return_value = store
 
-        cap = _make_capability()
+        from capabilities.morning_brief import maybe_send_morning_brief
         now = datetime.datetime(2026, 3, 28, 6, 0, tzinfo=_UTC)
-        result = cap._maybe_send_daily_digest([self._make_event()], now)
+        result = maybe_send_morning_brief([self._make_event()], now)
         assert result is True
         store.rpush.assert_called_once()
         import json
         payload = json.loads(store.rpush.call_args[0][1])
-        assert "DAILY CALENDAR DIGEST" in payload['prompt']
+        assert "MORNING BRIEF" in payload['prompt']
         assert "Team standup" in payload['prompt']
-        store.setex.assert_called_once_with("caldav:digest:2026-03-28", 86400, "1")
+        store.setex.assert_called_once_with("morning_brief:2026-03-28", 86400, "1")
 
     @pytest.mark.unit
     @patch('services.memory_client.MemoryClientService')
     def test_digest_skips_if_already_sent(self, mock_mcs):
         store = MagicMock()
-        store.get.return_value = "1"  # digest already sent today
+        store.get.return_value = "1"
         mock_mcs.create_connection.return_value = store
 
-        cap = _make_capability()
+        from capabilities.morning_brief import maybe_send_morning_brief
         now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
-        result = cap._maybe_send_daily_digest([self._make_event()], now)
+        result = maybe_send_morning_brief([self._make_event()], now)
         assert result is False
         store.rpush.assert_not_called()
 
     @pytest.mark.unit
+    @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
     @patch('services.memory_client.MemoryClientService')
-    def test_digest_with_empty_day(self, mock_mcs):
+    def test_digest_with_empty_day(self, mock_mcs, _mock_hint):
         store = MagicMock()
         store.get.return_value = None
         mock_mcs.create_connection.return_value = store
 
-        cap = _make_capability()
+        from capabilities.morning_brief import maybe_send_morning_brief
         now = datetime.datetime(2026, 3, 28, 6, 0, tzinfo=_UTC)
-        # No events today — digest should still fire with "no events" message
-        result = cap._maybe_send_daily_digest([], now)
+        result = maybe_send_morning_brief([], now)
         assert result is True
         import json
         payload = json.loads(store.rpush.call_args[0][1])
-        assert "No upcoming events" in payload['prompt']
+        assert "No events today" in payload['prompt']
 
 
 class TestConflictAlert:

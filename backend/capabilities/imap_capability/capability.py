@@ -192,27 +192,6 @@ class ImapCapability(AbstractCapability):
                         (uuid.uuid4().hex[:8], now.isoformat(), now.isoformat()),
                     )
 
-                # Daily email digest prompt
-                cursor.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
-                    ('imap:daily-digest',),
-                )
-                if not cursor.fetchone():
-                    # Schedule for 8am tomorrow
-                    tomorrow_8am = (now + timedelta(days=1)).replace(
-                        hour=8, minute=0, second=0, microsecond=0,
-                    )
-                    cursor.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status,
-                            topic, source, external_uid, hidden, created_at, is_prompt)
-                         VALUES (?, 'prompt',
-                                 'Summarize today''s email activity: highlight actionable items, key threads, and notable senders. Keep it brief.',
-                                 ?, 'daily', 'pending', 'email', 'imap',
-                                 'imap:daily-digest', 1, ?, 1)""",
-                        (uuid.uuid4().hex[:8], tomorrow_8am.isoformat(), now.isoformat()),
-                    )
-
                 conn.commit()
             logger.info("[imap] Sync handler registered + scheduled_items ensured")
         except Exception as exc:

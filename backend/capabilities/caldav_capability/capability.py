@@ -635,8 +635,9 @@ class CaldavCapability(AbstractCapability):
         # --- Upcoming-event alerts (once per event UID) ---
         self._maybe_send_upcoming_alerts(all_events, now)
 
-        # --- Daily schedule digest (once per UTC calendar day) ---
-        self._maybe_send_daily_digest(all_events, now)
+        # --- Fused morning brief (once per UTC calendar day) ---
+        from capabilities.morning_brief import maybe_send_morning_brief
+        maybe_send_morning_brief(all_events, now)
 
         # --- Conflict alerts (once per overlapping pair) ---
         self._maybe_send_conflict_alert(all_events, now)
@@ -1185,66 +1186,6 @@ class CaldavCapability(AbstractCapability):
         except Exception as exc:
             logger.debug("[caldav] _maybe_send_upcoming_alerts() failed: %s", exc)
             return 0
-
-    # Daily digest: one per UTC calendar day, deduped via MemoryStore key.
-    _DIGEST_KEY_PREFIX = "caldav:digest:"
-    _DIGEST_TTL_SECONDS = 24 * 3600  # 24 hours
-    _DIGEST_MAX_EVENTS = 10
-
-    def _maybe_send_daily_digest(self, events: list, now: "_dt_module.datetime") -> bool:
-        """Push a once-per-day full schedule digest via prompt-queue.
-
-        Fires on the first ingest cycle of each UTC calendar day.  Subsequent
-        calls on the same date are no-ops (deduped via a MemoryStore key with
-        24-hour TTL).
-
-        Args:
-            events: Parsed event dicts from :meth:`_parse_caldav_event`.
-            now:    Current UTC datetime.
-
-        Returns:
-            bool: ``True`` if a digest was enqueued, ``False`` otherwise.
-        """
-        try:
-            from services.memory_client import MemoryClientService
-            import json as _json
-
-            date_key = now.strftime("%Y-%m-%d")
-            flag_key = f"{self._DIGEST_KEY_PREFIX}{date_key}"
-
-            store = MemoryClientService.create_connection()
-            if store.get(flag_key):
-                return False
-
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            today_end = today_start + timedelta(hours=24)
-            todays = sorted(
-                [e for e in events if e.get('dtstart') and today_start <= e['dtstart'] < today_end],
-                key=lambda e: e['dtstart'],
-            )
-
-            hint = _format_schedule_hint(todays, max_events=self._DIGEST_MAX_EVENTS)
-
-            store.rpush('prompt-queue', _json.dumps({
-                'prompt': (
-                    "[DAILY CALENDAR DIGEST]\n"
-                    f"{hint}\n\n"
-                    "Give the user a concise morning-style briefing of their day. "
-                    "Mention any conflicts, back-to-back meetings, or large free blocks. "
-                    "Keep it warm and brief — 3-4 sentences max."
-                ),
-                'metadata': {
-                    'type': 'proactive_drift',
-                    'source': 'calendar_digest',
-                    'topic': 'proactive',
-                },
-            }))
-            store.setex(flag_key, self._DIGEST_TTL_SECONDS, "1")
-            logger.info("[caldav] Daily digest enqueued for %s.", date_key)
-            return True
-        except Exception as exc:
-            logger.debug("[caldav] _maybe_send_daily_digest() failed: %s", exc)
-            return False
 
     # Conflict alert: deduped per overlapping pair, 48-hour TTL.
     _CONFLICT_ALERT_KEY_PREFIX = "caldav:conflict_alerted:"
