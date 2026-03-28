@@ -106,10 +106,11 @@ class TestRouteCognitiveSignalCallable:
     def test_called_with_new_knowledge_dict(self):
         """Function accepts dict with signal_type, payload, source_id."""
         from services.goal_signal_service import route_cognitive_signal
+        from services.memory_store import MemoryStore
 
         mock_ecology = MagicMock()
         mock_ecology.find_matching_goals.return_value = []
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         signal = {
             'signal_type': 'new_knowledge',
@@ -118,7 +119,7 @@ class TestRouteCognitiveSignalCallable:
         }
 
         with patch('services.goal_ecology_service.GoalEcologyService', return_value=mock_ecology), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             route_cognitive_signal(signal)  # Should not raise
 
     def test_called_with_matching_goal_routes_evidence(self):

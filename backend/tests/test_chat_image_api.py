@@ -12,6 +12,8 @@ import zlib
 import pytest
 from unittest.mock import patch, MagicMock, call
 
+from services.memory_store import MemoryStore
+
 
 @pytest.fixture
 def app():
@@ -59,24 +61,6 @@ def sample_png():
     idat = _chunk(b'IDAT', zlib.compress(raw_data))
     iend = _chunk(b'IEND', b'')
     return signature + ihdr + idat + iend
-
-
-@pytest.fixture
-def mock_store():
-    """MemoryStore mock that behaves like a dict with TTL support."""
-    store = {}
-
-    class FakeStore:
-        def get(self, key):
-            return store.get(key)
-        def set(self, key, value, ex=None):
-            store[key] = value
-        def exists(self, key):
-            return key in store
-        def publish(self, channel, message):
-            pass  # no-op for tests
-
-    return FakeStore()
 
 
 @pytest.fixture
@@ -365,18 +349,11 @@ def test_analysis_updates_document_to_ready(mock_doc_service):
         'analysis_time_ms': 42,
     }
 
-    store_data = {}
+    analysis_store = MemoryStore()
 
-    class FakeStore:
-        def get(self, key): return store_data.get(key)
-        def set(self, key, value, ex=None): store_data[key] = value
-        def exists(self, key): return key in store_data
-        def publish(self, channel, message): pass
-
-    with patch('api.chat_image._get_store', return_value=FakeStore()), \
+    with patch('api.chat_image._get_store', return_value=analysis_store), \
          patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
-         patch('services.image_context_service.analyze', return_value=fake_result), \
-         patch('api.chat_image._get_store', return_value=FakeStore()):
+         patch('services.image_context_service.analyze', return_value=fake_result):
         from api.chat_image import _run_analysis
         _run_analysis(image_id, image_bytes, mime_type)
 
@@ -399,15 +376,9 @@ def test_analysis_updates_document_to_failed_on_error(mock_doc_service):
     image_bytes = b'fake'
     mime_type = 'image/png'
 
-    store_data = {}
+    analysis_store = MemoryStore()
 
-    class FakeStore:
-        def get(self, key): return store_data.get(key)
-        def set(self, key, value, ex=None): store_data[key] = value
-        def exists(self, key): return key in store_data
-        def publish(self, channel, message): pass
-
-    with patch('api.chat_image._get_store', return_value=FakeStore()), \
+    with patch('api.chat_image._get_store', return_value=analysis_store), \
          patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
          patch('services.image_context_service.analyze', side_effect=RuntimeError('no provider')):
         from api.chat_image import _run_analysis

@@ -13,7 +13,7 @@ Coverage:
     5.  ``ingest()`` returns ``[]`` when the capability is not connected.
     6.  ``ingest()`` returns dicts containing all 9 required event keys.
     7.  ``ingest()`` sets ``all_day=True`` for events with date-only ``DTSTART``.
-    8.  ``get_tools()`` returns exactly 5 dicts each with ``name`` and ``handler`` keys.
+    8.  ``get_tools()`` returns exactly 6 dicts each with ``name`` and ``handler`` keys.
     9.  Every tool handler returns a dict with an ``error`` key when not connected.
     10. ``ingest()`` calls ``KnowledgeService.store`` with ``kind='fact'``,
         ``entity='calendar'``.
@@ -355,11 +355,11 @@ class TestCaldavCapability:
         assert events[0]["all_day"] is True
 
     # ------------------------------------------------------------------
-    # Test 8 — get_tools returns 5 tools
+    # Test 8 — get_tools returns 6 tools
     # ------------------------------------------------------------------
 
     def test_get_tools_returns_five_tools(self):
-        """``get_tools()`` must return a list of exactly 5 tool definition dicts.
+        """``get_tools()`` must return a list of exactly 6 tool definition dicts..
 
         Each dict must have at minimum the keys ``name`` (str) and
         ``handler`` (callable), confirming that the tool definitions are
@@ -369,7 +369,7 @@ class TestCaldavCapability:
         tools = cap.get_tools()
 
         assert isinstance(tools, list), "get_tools() must return a list"
-        assert len(tools) == 5, f"Expected 5 tools, got {len(tools)}"
+        assert len(tools) == 6, f"Expected 6 tools, got {len(tools)}"
         for tool in tools:
             assert "name" in tool, f"Tool missing 'name' key: {tool}"
             assert "handler" in tool, f"Tool missing 'handler' key: {tool}"
@@ -384,7 +384,7 @@ class TestCaldavCapability:
     def test_tool_handler_returns_error_when_not_connected(self):
         """Every tool handler must return a dict with an ``error`` key when not connected.
 
-        Iterates all 5 handlers returned by ``get_tools()`` and calls each
+        Iterates all 6 handlers returned by ``get_tools()`` and calls each
         with minimal arguments (``topic=""``, ``params={}``).  The
         capability is in its default disconnected state.  Asserts that every
         result is a dict containing the ``"error"`` key.
@@ -393,7 +393,7 @@ class TestCaldavCapability:
         assert cap.is_connected() is False
 
         tools = cap.get_tools()
-        assert len(tools) == 5, "Prerequisite: get_tools() must return 5 tools"
+        assert len(tools) == 6, "Prerequisite: get_tools() must return 6 tools"
 
         for tool in tools:
             result = tool["handler"](topic="", params={})

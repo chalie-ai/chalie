@@ -6,6 +6,8 @@ import pytest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+from services.memory_store import MemoryStore
+
 from services.goal_signal_service import (
     extract_and_route_signals,
     route_cognitive_signal,
@@ -245,18 +247,19 @@ class TestSignalExtraction:
         mock_ecology = MagicMock()
         mock_ecology.find_matching_goals.return_value = []
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         classification = {'intent_type': 'statement'}
 
         with patch('services.goal_ecology_service.GoalEcologyService', return_value=mock_ecology), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             signals = extract_and_route_signals(
                 'general', 'The weather is absolutely beautiful today', classification
             )
 
-        # Should store unmatched signal for pattern detection
-        mock_store.setex.assert_called_once()
+        # Should store unmatched signal for pattern detection — assert on store state
+        stored_keys = store.keys("goal:unmatched:*")
+        assert len(stored_keys) == 1
 
 
 class TestCognitiveSignalRouting:
@@ -282,16 +285,18 @@ class TestCognitiveSignalRouting:
         mock_ecology = MagicMock()
         mock_ecology.find_matching_goals.return_value = []
 
-        mock_store = MagicMock()
+        store = MemoryStore()
 
         with patch('services.goal_ecology_service.GoalEcologyService', return_value=mock_ecology), \
-             patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+             patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             route_cognitive_signal({
                 'signal_type': 'novel_observation',
                 'payload': {'content': 'Interesting pattern about user behavior'},
             })
 
-        mock_store.setex.assert_called_once()
+        # Should store unmatched signal for pattern detection — assert on store state
+        stored_keys = store.keys("goal:unmatched:*")
+        assert len(stored_keys) == 1
 
     def test_route_with_dataclass_like_object(self):
         """Should handle objects with signal_type attribute."""

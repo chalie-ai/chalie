@@ -7,8 +7,9 @@ routing text responses through SSE channels or the drift stream.
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 
+from services.memory_store import MemoryStore
 from services.output_service import OutputService
 
 
@@ -17,12 +18,42 @@ class TestOutputService:
 
     @pytest.fixture
     def mock_store(self):
-        """Isolated mock MemoryStore — no real connections."""
-        return MagicMock()
+        """
+        Real MemoryStore instance with a spy wrapping ``publish``.
+
+        The spy records every ``(channel, message)`` pair in ``store._published``
+        so tests can assert on which channels received payloads without relying
+        on mock call-history APIs.  All other operations (``set``, ``get``,
+        ``rpush``, ``brpop``, ``delete``, etc.) hit the real in-memory store so
+        state assertions work correctly.
+
+        Yields:
+            MemoryStore: Configured store instance with ``_published`` attribute.
+        """
+        store = MemoryStore()
+        published = []
+        _real_publish = store.publish
+
+        def spy_publish(ch, msg):
+            """Record ``(channel, message)`` then delegate to the real publish."""
+            published.append((ch, msg))
+            return _real_publish(ch, msg)
+
+        store.publish = spy_publish
+        store._published = published
+        return store
 
     @pytest.fixture
     def service(self, mock_store):
-        """Create OutputService with mocked MemoryStore and config."""
+        """
+        Create OutputService with a real MemoryStore and stubbed config.
+
+        Args:
+            mock_store: Real MemoryStore (with publish spy) injected by fixture.
+
+        Returns:
+            OutputService: Fully initialised service instance.
+        """
         connections = {
             "memory": {
                 "topics": {"output_queue": "output-queue"},
@@ -44,8 +75,7 @@ class TestOutputService:
         metadata = {"uuid": "abc-123", "source": "user"}
         service.enqueue_text("topic-1", "Hello", "UNIFIED", 0.9, 0.5, metadata)
 
-        publish_calls = mock_store.publish.call_args_list
-        channels = [c[0][0] for c in publish_calls]
+        channels = [ch for ch, _ in mock_store._published]
         assert "sse:abc-123" in channels
 
     def test_enqueue_text_with_sse_uuid_does_not_publish_to_output_events(self, service, mock_store):
@@ -53,8 +83,7 @@ class TestOutputService:
         metadata = {"uuid": "abc-123", "source": "user"}
         service.enqueue_text("topic-1", "Hello", "UNIFIED", 0.9, 0.5, metadata)
 
-        publish_calls = mock_store.publish.call_args_list
-        channels = [c[0][0] for c in publish_calls]
+        channels = [ch for ch, _ in mock_store._published]
         assert "output:events" not in channels
 
     def test_enqueue_text_without_sse_uuid_publishes_to_output_events(self, service, mock_store):
@@ -62,8 +91,7 @@ class TestOutputService:
         metadata = {"source": "proactive_drift"}
         service.enqueue_text("topic-1", "Drift thought", "UNIFIED", 0.8, 0.3, metadata)
 
-        publish_calls = mock_store.publish.call_args_list
-        channels = [c[0][0] for c in publish_calls]
+        channels = [ch for ch, _ in mock_store._published]
         assert "output:events" in channels
 
     def test_enqueue_text_without_sse_uuid_buffers_to_notifications(self, service, mock_store):
@@ -73,21 +101,17 @@ class TestOutputService:
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("topic-1", "Drift", "UNIFIED", 0.8, 0.3, metadata)
 
-        rpush_calls = mock_store.rpush.call_args_list
-        keys = [c[0][0] for c in rpush_calls]
-        assert "notifications:recent" in keys
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) > 0
 
     def test_enqueue_text_stores_output_with_setex(self, service, mock_store):
         """Output is persisted in MemoryStore under output:{id} with setex."""
         metadata = {"uuid": "xyz-789"}
         output_id = service.enqueue_text("t", "msg", "UNIFIED", 0.9, 0.1, metadata)
 
-        setex_calls = mock_store.setex.call_args_list
-        assert len(setex_calls) == 1
-        key, ttl, data = setex_calls[0][0]
-        assert key == f"output:{output_id}"
-        assert ttl == 3600
-        parsed = json.loads(data)
+        raw = mock_store.get(f"output:{output_id}")
+        assert raw is not None
+        parsed = json.loads(raw)
         assert parsed["type"] == "TEXT"
         assert parsed["topic"] == "t"
 
@@ -95,8 +119,8 @@ class TestOutputService:
         """The stored output key has a 3600-second (1 hour) TTL."""
         output_id = service.enqueue_text("t", "msg", "UNIFIED", 0.9, 0.1, {"uuid": "u"})
 
-        _key, ttl, _data = mock_store.setex.call_args[0]
-        assert ttl == 3600
+        ttl_val = mock_store.ttl(f"output:{output_id}")
+        assert 3590 <= ttl_val <= 3600
 
     # ------------------------------------------------------------------ #
     # enqueue_proactive
@@ -107,8 +131,7 @@ class TestOutputService:
         with patch('api.push.send_push_to_all'):
             service.enqueue_proactive("thread-42", "Progress update")
 
-        publish_calls = mock_store.publish.call_args_list
-        channels = [c[0][0] for c in publish_calls]
+        channels = [ch for ch, _ in mock_store._published]
         assert "output:events" in channels
 
     def test_enqueue_proactive_persistent_task_maps_to_task_event(self, service, mock_store):
@@ -116,9 +139,9 @@ class TestOutputService:
         with patch('api.push.send_push_to_all'):
             service.enqueue_proactive("thread-42", "Progress", source='persistent_task')
 
-        for c in mock_store.publish.call_args_list:
-            if c[0][0] == "output:events":
-                payload = json.loads(c[0][1])
+        for ch, msg in mock_store._published:
+            if ch == "output:events":
+                payload = json.loads(msg)
                 assert payload["type"] == "task"
                 return
         pytest.fail("No publish to output:events found")
@@ -128,9 +151,9 @@ class TestOutputService:
         with patch('api.push.send_push_to_all'):
             service.enqueue_proactive("thread-42", "Done!")
 
-        for c in mock_store.publish.call_args_list:
-            if c[0][0] == "output:events":
-                payload = json.loads(c[0][1])
+        for ch, msg in mock_store._published:
+            if ch == "output:events":
+                payload = json.loads(msg)
                 assert payload["type"] == "task"
                 return
         pytest.fail("No publish to output:events found")
@@ -147,9 +170,8 @@ class TestOutputService:
         with patch('api.push.send_push_to_all'):
             service.enqueue_proactive("thread-42", "Update")
 
-        rpush_calls = mock_store.rpush.call_args_list
-        keys = [c[0][0] for c in rpush_calls]
-        assert "notifications:recent" in keys
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) > 0
 
     # ------------------------------------------------------------------ #
     # source_type_map coverage
@@ -161,9 +183,9 @@ class TestOutputService:
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("t", "msg", "UNIFIED", 1.0, 0.0, metadata)
 
-        for c in mock_store.publish.call_args_list:
-            if c[0][0] == "output:events":
-                payload = json.loads(c[0][1])
+        for ch, msg in mock_store._published:
+            if ch == "output:events":
+                payload = json.loads(msg)
                 assert payload["type"] == "task"
                 return
         pytest.fail("No publish to output:events found")
@@ -180,38 +202,37 @@ class TestOutputService:
             "topic": "t",
             "metadata": {"actions": ["search"]},
         }
-        mock_store.brpop.return_value = ("output-queue", "out-1")
-        mock_store.get.return_value = json.dumps(output_data)
+        mock_store.set("output:out-1", json.dumps(output_data))
+        mock_store.rpush("output-queue", "out-1")
 
-        result = service.dequeue(output_type="ACT", timeout=5)
+        result = service.dequeue(output_type="ACT", timeout=1)
 
         assert result is not None
         assert result["id"] == "out-1"
         assert result["type"] == "ACT"
-        mock_store.brpop.assert_called_once_with("output-queue", 5)
 
     def test_dequeue_requeues_mismatched_type(self, service, mock_store):
         """When dequeued output type does not match, it is re-queued via lpush."""
-        text_output = json.dumps({"id": "out-2", "type": "TEXT", "topic": "t", "metadata": {}})
-        act_output = json.dumps({"id": "out-3", "type": "ACT", "topic": "t", "metadata": {}})
+        text_output = {"id": "out-2", "type": "TEXT", "topic": "t", "metadata": {}}
+        act_output = {"id": "out-3", "type": "ACT", "topic": "t", "metadata": {}}
 
-        # First brpop returns TEXT (wrong type), second returns ACT (correct)
-        mock_store.brpop.side_effect = [
-            ("output-queue", "out-2"),
-            ("output-queue", "out-3"),
-        ]
-        mock_store.get.side_effect = [text_output, act_output]
+        # rpush appends to the right; brpop pops from the right.
+        # Push out-3 first so out-2 sits at the right end and is popped first.
+        mock_store.set("output:out-2", json.dumps(text_output))
+        mock_store.set("output:out-3", json.dumps(act_output))
+        mock_store.rpush("output-queue", "out-3")
+        mock_store.rpush("output-queue", "out-2")
 
         result = service.dequeue(output_type="ACT", timeout=1)
 
         assert result["type"] == "ACT"
-        # The TEXT output should have been re-queued
-        mock_store.lpush.assert_called_once_with("output-queue", "out-2")
+        # out-2 (TEXT) must have been re-queued back onto the list
+        queued = mock_store.lrange("output-queue", 0, -1)
+        assert "out-2" in queued
 
     def test_dequeue_returns_none_on_timeout(self, service, mock_store):
         """When brpop times out (returns None), dequeue returns None."""
-        mock_store.brpop.return_value = None
-
+        # Empty queue — brpop will exhaust the timeout and return None
         result = service.dequeue(output_type="ACT", timeout=1)
         assert result is None
 
@@ -220,10 +241,10 @@ class TestOutputService:
     # ------------------------------------------------------------------ #
 
     def test_delete_output_calls_store_delete(self, service, mock_store):
-        """delete_output calls store.delete with the correct key."""
-        mock_store.delete.return_value = 1
+        """delete_output removes the output key from the store."""
+        mock_store.set("output:dead-uuid-42", json.dumps({"id": "dead-uuid-42"}))
         service.delete_output("dead-uuid-42")
-        mock_store.delete.assert_called_once_with("output:dead-uuid-42")
+        assert mock_store.get("output:dead-uuid-42") is None
 
     # ------------------------------------------------------------------ #
     # notifications:recent trimming
@@ -233,16 +254,12 @@ class TestOutputService:
         """After rpush to notifications:recent, ltrim keeps only the last 200."""
         metadata = {"source": "proactive_drift"}
 
+        # Pre-populate with 250 items so the trim is verifiable by state
+        for i in range(250):
+            mock_store.rpush("notifications:recent", f"old-item-{i}")
+
         with patch('api.push.send_push_to_all'):
             service.enqueue_text("t", "msg", "UNIFIED", 0.8, 0.2, metadata)
 
-        ltrim_calls = mock_store.ltrim.call_args_list
-        assert len(ltrim_calls) >= 1
-        # Verify the trim retains the last 200 entries
-        for c in ltrim_calls:
-            if c[0][0] == "notifications:recent":
-                assert c[0][1] == -200
-                assert c[0][2] == -1
-                break
-        else:
-            pytest.fail("ltrim was not called on notifications:recent")
+        recent = mock_store.lrange("notifications:recent", 0, -1)
+        assert len(recent) <= 200

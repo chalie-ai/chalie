@@ -1011,9 +1011,11 @@ def _run_adaptive(messages, embeddings) -> BenchmarkResult:
     tracker = CentroidTracker()
 
     with patch('services.adaptive_boundary_detector.MemoryClientService') as mock_cls:
-        mock_store = MagicMock()
-        mock_cls.create_connection.return_value = mock_store
-        mock_store.get.return_value = None
+        # benchmark_store: intentional MagicMock — benchmarks must not incur real store I/O overhead.
+        # See refactor plan: this is a documented exception.
+        benchmark_store = MagicMock()
+        mock_cls.create_connection.return_value = benchmark_store
+        benchmark_store.get.return_value = None
 
         detector = AdaptiveBoundaryDetector(thread_id="benchmark")
         predictions = []

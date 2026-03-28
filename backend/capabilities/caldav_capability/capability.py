@@ -1290,34 +1290,10 @@ class CaldavCapability(AbstractCapability):
     def get_tools(self) -> list:
         """Return CalDAV tool definitions for dynamic registration.
 
-        Builds and returns a list of exactly 5 tool definition dicts — one per
-        CalDAV action.  Each dict follows the schema used in
-        :data:`~services.tool_library_service.TOOL_METADATA` and includes a
-        ``handler`` key that holds a closure bound to this capability instance.
-
-        Handler contract
-        ~~~~~~~~~~~~~~~~
-        Every handler has the signature::
-
-            execute(topic: str, params: dict,
-                    config: dict = None, telemetry: dict = None) -> dict
-
-        All handlers return ``{'error': 'Not connected'}`` immediately when
-        :meth:`is_connected` is ``False``.  Any other exception is caught and
-        returned as ``{'error': str(exc)}``.
-
-        Tools
-        ~~~~~
-        - ``caldav_list_events``  — ingest events and return a filtered list
-        - ``caldav_get_event``    — fetch a single event by UID
-        - ``caldav_create_event`` — create a new VEVENT on the server
-        - ``caldav_update_event`` — update an existing event by UID
-        - ``caldav_delete_event`` — delete an event by UID
-
-        Returns:
-            list[dict]: Exactly 5 tool definition dicts, each containing
-            ``name``, ``description``, ``parameters``, ``returns``,
-            ``constraints``, and ``handler``.
+        Returns a list of 6 tool definition dicts.  Each has ``name``,
+        ``description``, ``parameters``, ``returns``, ``constraints``,
+        and ``handler`` (closure bound to this instance).  Handlers
+        return ``{'error': 'Not connected'}`` when disconnected.
         """
         capability = self  # capture for closures
 
@@ -1844,6 +1820,100 @@ class CaldavCapability(AbstractCapability):
                 return {"error": str(exc)}
 
         # ------------------------------------------------------------------
+        # caldav_find_free_slots
+        # ------------------------------------------------------------------
+        def _find_free_slots_execute(
+            topic: str, params: dict,
+            config: dict = None, telemetry: dict = None,
+        ) -> dict:
+            """Find available time windows between busy blocks."""
+            if not capability.is_connected():
+                return {"error": "Not connected"}
+            try:
+                # Read events from knowledge store (same as list_events)
+                try:
+                    from services.database_service import get_shared_db_service
+                    from services.knowledge_service import KnowledgeService
+                    import json as _json
+                    ks = KnowledgeService(get_shared_db_service())
+                    events = []
+                    for fact in ks.search(entity='calendar', kind='fact', limit=200):
+                        if not fact.get('key', '').startswith('event:'):
+                            continue
+                        data = fact.get('data')
+                        if isinstance(data, str):
+                            try:
+                                data = _json.loads(data)
+                            except (ValueError, TypeError):
+                                continue
+                        if not isinstance(data, dict):
+                            continue
+                        for f in ('dtstart', 'dtend'):
+                            v = data.get(f)
+                            if isinstance(v, str):
+                                try:
+                                    data[f] = parse_utc(v)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        events.append(data)
+                except Exception:  # noqa: BLE001
+                    events = capability.ingest()
+
+                now = utc_now()
+                dt_from = parse_utc(params["date_from"]) if params.get("date_from") else now.replace(hour=0, minute=0, second=0, microsecond=0)
+                dt_to = parse_utc(params["date_to"]) if params.get("date_to") else dt_from + timedelta(days=7)
+                min_td = timedelta(minutes=int(params.get("min_duration_minutes", 30)))
+                wh_s = int(params.get("working_hours_start", 8))
+                wh_e = int(params.get("working_hours_end", 18))
+
+                # Collect busy intervals (skip all-day events)
+                busy = sorted(
+                    (e['dtstart'], e['dtend']) for e in events
+                    if not e.get('all_day') and e.get('dtstart') and e.get('dtend')
+                    and e['dtend'] > dt_from and e['dtstart'] < dt_to
+                )
+
+                slots = []
+                cur_day = dt_from
+                while cur_day < dt_to:
+                    ds = cur_day.replace(hour=wh_s, minute=0, second=0, microsecond=0)
+                    de = cur_day.replace(hour=wh_e, minute=0, second=0, microsecond=0)
+                    if de <= now:
+                        cur_day += timedelta(days=1)
+                        continue
+                    if ds < now:
+                        ds = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+
+                    # Clamp busy blocks to this day's working hours
+                    day_busy = sorted(
+                        (max(s, ds), min(e, de)) for s, e in busy
+                        if e > ds and s < de
+                    )
+
+                    cursor = ds
+                    for ev_s, ev_e in day_busy:
+                        gap = ev_s - cursor
+                        if ev_s > cursor and gap >= min_td:
+                            slots.append({"date": cur_day.strftime("%Y-%m-%d"),
+                                          "start": cursor.isoformat(),
+                                          "end": ev_s.isoformat(),
+                                          "duration_minutes": int(gap.total_seconds() // 60)})
+                        cursor = max(cursor, ev_e)
+
+                    gap = de - cursor
+                    if cursor < de and gap >= min_td:
+                        slots.append({"date": cur_day.strftime("%Y-%m-%d"),
+                                      "start": cursor.isoformat(),
+                                      "end": de.isoformat(),
+                                      "duration_minutes": int(gap.total_seconds() // 60)})
+                    cur_day += timedelta(days=1)
+
+                return {"slots": slots, "count": len(slots)}
+            except Exception as exc:  # noqa: BLE001
+                logger.error("[caldav] caldav_find_free_slots failed: %s", exc)
+                return {"error": str(exc)}
+
+        # ------------------------------------------------------------------
         # Assemble and return tool definition list
         # ------------------------------------------------------------------
         return [
@@ -2094,5 +2164,33 @@ class CaldavCapability(AbstractCapability):
                 },
                 "constraints": {"timeout_seconds": 30},
                 "handler": _delete_event_execute,
+            },
+            {
+                "name": "caldav_find_free_slots",
+                "description": (
+                    "Find available time slots in the calendar for scheduling. "
+                    "Returns free windows within working hours. Use for "
+                    "'when am I free?' queries."
+                ),
+                "parameters": {
+                    "date_from": {"type": "string", "required": False,
+                                  "description": "ISO 8601 UTC range start (default: today)."},
+                    "date_to": {"type": "string", "required": False,
+                                "description": "ISO 8601 UTC range end (default: +7 days)."},
+                    "min_duration_minutes": {"type": "integer", "required": False,
+                                             "description": "Minimum slot length (default: 30)."},
+                    "working_hours_start": {"type": "integer", "required": False,
+                                            "description": "Hour 0-23 (default: 8)."},
+                    "working_hours_end": {"type": "integer", "required": False,
+                                          "description": "Hour 0-23 (default: 18)."},
+                },
+                "returns": {
+                    "slots": {"type": "array",
+                              "description": "Free slot dicts: date, start, end, duration_minutes."},
+                    "count": {"type": "integer", "description": "Number of free slots."},
+                    "error": {"type": "string", "description": "Error message on failure."},
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _find_free_slots_execute,
             },
         ]

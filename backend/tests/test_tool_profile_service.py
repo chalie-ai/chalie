@@ -3,8 +3,14 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch, call
 
-from services.tool_profile_service import ToolProfileService, _compute_manifest_hash, MAX_SCENARIOS
+from services.tool_profile_service import (
+    ToolProfileService,
+    _compute_manifest_hash,
+    MAX_SCENARIOS,
+    TRIAGE_SUMMARIES_CACHE_KEY,
+)
 from services.database_service import get_shared_db_service
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 
@@ -139,9 +145,9 @@ class TestGetFullProfile:
 class TestGetTriageSummaries:
     @patch('services.tool_profile_service.ToolProfileService._get_store')
     def test_returns_cached_value(self, mock_get_store, db):
-        mock_store = MagicMock()
-        mock_store.get.return_value = "## Cached Summaries\n- tool: does stuff"
-        mock_get_store.return_value = mock_store
+        store = MemoryStore()
+        store.set(TRIAGE_SUMMARIES_CACHE_KEY, "## Cached Summaries\n- tool: does stuff")
+        mock_get_store.return_value = store
 
         svc = ToolProfileService(get_shared_db_service())
         result = svc.get_triage_summaries()
@@ -149,9 +155,8 @@ class TestGetTriageSummaries:
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
     def test_builds_from_db_when_cache_miss(self, mock_get_store, db):
-        mock_store = MagicMock()
-        mock_store.get.return_value = None  # Cache miss
-        mock_get_store.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_get_store.return_value = store
 
         _seed_profile(db, 'duckduckgo_search',
                       tool_type='tool',
@@ -175,9 +180,8 @@ class TestGetTriageSummaries:
     @patch('services.tool_profile_service.ToolProfileService._get_store')
     def test_skills_not_in_triage_summaries(self, mock_get_store, db):
         """Skills should not appear in triage summaries -- they're always available."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-        mock_get_store.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_get_store.return_value = store
 
         _seed_profile(db, 'recall', tool_type='skill',
                       short_summary='Search memory', domain='Innate Skill')
@@ -195,9 +199,8 @@ class TestManifestFallback:
     @patch('services.tool_profile_service.ToolProfileService._get_store')
     def test_empty_db_falls_back_to_manifest(self, mock_get_store, db):
         """When DB has no tool rows, triage summaries come from manifests."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = None  # Cache miss
-        mock_get_store.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_get_store.return_value = store
 
         svc = ToolProfileService(get_shared_db_service())
 
@@ -225,9 +228,8 @@ class TestManifestFallback:
     @patch('services.tool_profile_service.ToolProfileService._get_store')
     def test_db_exception_falls_back_to_manifest(self, mock_get_store, db):
         """When DB fetch raises, triage summaries come from manifests."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-        mock_get_store.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_get_store.return_value = store
 
         svc = ToolProfileService(get_shared_db_service())
 
@@ -259,9 +261,8 @@ class TestManifestFallback:
     @patch('services.tool_profile_service.ToolProfileService._get_store')
     def test_only_skills_in_db_falls_back_to_manifest(self, mock_get_store, db):
         """When DB only has skill rows (no tools), manifest fallback triggers."""
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-        mock_get_store.return_value = mock_store
+        store = MemoryStore()  # empty store → cache miss
+        mock_get_store.return_value = store
 
         _seed_profile(db, 'recall', tool_type='skill',
                       short_summary='Search memory', domain='Innate Skill')

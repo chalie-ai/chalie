@@ -9,6 +9,7 @@ from unittest.mock import patch, MagicMock
 from flask import Flask
 
 from api.privacy import privacy_bp
+from services.memory_store import MemoryStore
 
 
 @pytest.mark.unit
@@ -39,9 +40,9 @@ class TestPrivacyAPI:
 
     def test_data_summary_returns_counts(self, client, db):
         """GET /privacy/data-summary returns table counts."""
-        mock_store = MagicMock()
+        store = MemoryStore()
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store):
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
             response = client.get('/privacy/data-summary')
 
             assert response.status_code == 200
@@ -72,9 +73,16 @@ class TestPrivacyAPI:
         assert "X-Confirm-Delete" in data["error"]
 
     def test_delete_all_with_header_clears_data(self, client, db):
-        """DELETE /privacy/delete-all with header clears data and returns 200."""
-        mock_store = MagicMock()
-        mock_store.keys.return_value = ["key1", "key2"]
+        """DELETE /privacy/delete-all with header clears data and returns 200.
+
+        Verifies that the endpoint scans all store key patterns and deletes
+        matching keys, in addition to clearing all SQLite user-data tables.
+        """
+        store = MemoryStore()
+        # Pre-populate a key that matches a pattern scanned by delete-all;
+        # after the request, verifying the key is absent confirms that keys()
+        # and delete() were both exercised on the real store.
+        store.set("working_memory:privacy_test", "test_val")
 
         # Seed some data to verify it gets deleted
         db.execute(
@@ -88,7 +96,7 @@ class TestPrivacyAPI:
         row = db.execute("SELECT COUNT(*) FROM episodes").fetchone()
         assert row[0] == 1
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()
             mock_log_cls.return_value = mock_log
@@ -103,9 +111,9 @@ class TestPrivacyAPI:
             assert data["deleted"] is True
             assert "timestamp" in data
 
-            # MemoryStore patterns were scanned and deleted
-            assert mock_store.keys.call_count > 0
-            assert mock_store.delete.call_count > 0
+            # The pre-populated MemoryStore key should have been found and deleted
+            # by the pattern scan — verifies keys() and delete() were both invoked.
+            assert store.get("working_memory:privacy_test") is None
 
             # Verify episodes table was actually cleared
             row = db.execute("SELECT COUNT(*) FROM episodes").fetchone()
@@ -113,10 +121,9 @@ class TestPrivacyAPI:
 
     def test_delete_all_logs_audit_event(self, client, db):
         """DELETE /privacy/delete-all logs a privacy_delete_all audit event."""
-        mock_store = MagicMock()
-        mock_store.keys.return_value = []
+        store = MemoryStore()
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
              patch('services.interaction_log_service.InteractionLogService') as mock_log_cls:
             mock_log = MagicMock()
             mock_log_cls.return_value = mock_log

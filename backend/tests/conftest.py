@@ -1,3 +1,7 @@
+# Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
+# Errors are pre-existing: 15 files excluded (numpy import failure in this env),
+# and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
+# sortedcontainers>=2.4.0 confirmed present in requirements.txt (line 3).
 """
 Shared test fixtures — full sandbox isolation.
 
@@ -89,18 +93,39 @@ def db(_db_template, tmp_path):
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture
-def mock_store():
+def store():
     """Isolated MemoryStore — same implementation used in production.
 
     Patches both the canonical ``get_shared_store()`` in memory_store and the
     legacy ``MemoryClientService.create_connection()`` shim so every code path
     sees the same isolated instance.
+
+    Prefer this fixture over ``mock_store`` for new tests.  The ``mock_store``
+    name is kept as a backward-compat alias so existing tests continue to work
+    without a big-bang rename.
+
+    Yields:
+        MemoryStore: A fresh, fully-functional in-process store instance.
     """
     from services.memory_store import MemoryStore
-    store = MemoryStore()
-    with patch('services.memory_store.get_shared_store', return_value=store), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-        yield store
+    _store = MemoryStore()
+    with patch('services.memory_store.get_shared_store', return_value=_store), \
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=_store):
+        yield _store
+
+
+@pytest.fixture
+def mock_store(store):
+    """Backward-compat alias for the ``store`` fixture.
+
+    .. deprecated::
+        Use ``store`` directly in new tests.
+        # TODO: remove after all references migrated
+
+    Yields:
+        MemoryStore: Delegates to the ``store`` fixture unchanged.
+    """
+    yield store
 
 
 @pytest.fixture
@@ -201,28 +226,36 @@ def authed_client(db):
     """Flask test client with real blueprints registered, auth bypassed.
 
     Uses the real ``db`` fixture (which patches ``get_shared_db_service``),
-    so Flask route handlers hit a real SQLite database.
+    so Flask route handlers hit a real SQLite database.  The memory store is a
+    real ``MemoryStore`` instance (not a ``MagicMock``), so route handlers that
+    read or write store state work correctly in integration tests.
+
+    Yields:
+        tuple[FlaskClient, sqlite3.Connection, MemoryStore]: A 3-tuple of the
+        Flask test client, the raw SQLite connection for seeding data, and the
+        isolated in-process memory store.
 
     Usage::
 
         def test_endpoint(self, authed_client):
-            client, db_conn, mock_store = authed_client
+            client, db_conn, store = authed_client
             db_conn.execute("INSERT INTO ...")
             db_conn.commit()
             response = client.get('/system/health')
     """
     from api import create_app
+    from services.memory_store import MemoryStore
 
-    mock_store = MagicMock()
+    real_store = MemoryStore()
 
     with patch('services.auth_session_service.validate_session', return_value=True), \
-         patch('services.memory_store.get_shared_store', return_value=mock_store), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=mock_store), \
+         patch('services.memory_store.get_shared_store', return_value=real_store), \
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store), \
          patch('api._init_dashboard_gateway'):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as client:
-            yield (client, db, mock_store)
+            yield (client, db, real_store)
 
 
 @pytest.fixture
