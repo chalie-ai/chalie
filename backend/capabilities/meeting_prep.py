@@ -61,6 +61,8 @@ def maybe_send_meeting_prep(now=None) -> bool:
                     f"[PRE-MEETING BRIEF]\n{brief}\n\n"
                     f"Brief the user about their meeting in ~{mins} minutes. "
                     "Highlight attendees and relevant recent email context. "
+                    "If there are emails needing reply, emphasize those — "
+                    "the user should know before walking into the meeting. "
                     "3-5 sentences max. Do NOT mention 'CalDAV' or 'IMAP'."
                 ),
                 "metadata": {
@@ -101,6 +103,7 @@ def _build_brief(summary, dtstart, location, attendees, now):
         if fn:
             since = (now - timedelta(days=_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
             lines = []
+            needs_reply = []
             for p in resolved:
                 params = {"sender": p["email"],
                           "date_from": since, "limit": 3}
@@ -108,6 +111,20 @@ def _build_brief(summary, dtstart, location, attendees, now):
                 for e in hits:
                     subj = e.get("subject", "?")
                     lines.append(f"- From {p['name']}: \"{subj}\"")
+
+                # Unanswered emails from this attendee
+                unans = fn(None, {"sender": p["email"], "date_from": since,
+                                  "unanswered": True, "limit": 3}
+                           ).get("emails", [])
+                for e in unans:
+                    subj = e.get("subject", "?")
+                    needs_reply.append(
+                        f"- {p['name']}: \"{subj}\" ({e.get('date', '')[:10]})")
+
             if lines:
                 parts.append("\nRecent emails:\n" + "\n".join(lines))
+            if needs_reply:
+                parts.append(
+                    "\nNeeds reply (you haven't responded):\n"
+                    + "\n".join(needs_reply))
     return "\n".join(parts)
