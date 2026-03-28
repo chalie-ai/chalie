@@ -3,18 +3,18 @@ Capability base — abstract base class for all capability plugins.
 
 Every capability plugin must subclass :class:`AbstractCapability` and implement
 all abstract methods defining the four-phase cognitive pipeline
-(ingest/understand/monitor/act) plus lifecycle methods.  The concrete helper methods handle credential
-encryption / storage so individual capabilities don't need to deal with
-cryptographic details.
+(ingest/understand/monitor/act) plus lifecycle methods.  The concrete helper
+methods handle credential encryption / storage so individual capabilities don't
+need to deal with cryptographic details.
 
 Credential storage
 ------------------
 Credentials are stored in the ``tool_configs`` table via
 :class:`~services.tool_config_service.ToolConfigService`.  Values are encrypted
-with `Fernet <https://cryptography.io/en/latest/fernet/>`_ symmetric encryption
-before being written; the Fernet key is derived from the application-wide
-encryption key returned by
-:func:`~services.encryption_key_service.get_encryption_key`.
+with AES-256-GCM via :class:`~services.vault_service.VaultService` before being
+written; the vault must be unlocked (via
+:meth:`~services.vault_service.VaultService.unlock`) before any credential
+operations can succeed.
 
 Lazy imports
 ------------
@@ -22,34 +22,10 @@ All service imports are performed *inside* method bodies rather than at module
 level to prevent circular-import issues during early application boot.
 """
 
-import base64
-import hashlib
 import logging
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
-
-
-def _make_fernet():
-    """Build and return a :class:`cryptography.fernet.Fernet` instance.
-
-    The Fernet key is derived by taking the first 32 bytes of the application
-    encryption key (UTF-8 encoded), left-padding with ``b'='`` if shorter than
-    32 bytes, then base64-url-encoding the result to produce the 44-byte key
-    string that Fernet expects.
-
-    Imports are intentionally deferred to avoid circular dependencies during
-    application boot.
-
-    Returns:
-        cryptography.fernet.Fernet: A ready-to-use Fernet cipher instance.
-    """
-    from cryptography.fernet import Fernet
-    from services.encryption_key_service import get_encryption_key
-
-    key_bytes = hashlib.sha256(get_encryption_key().encode()).digest()
-    fernet_key = base64.urlsafe_b64encode(key_bytes)
-    return Fernet(fernet_key)
 
 
 def _get_tool_config_service():
@@ -293,10 +269,15 @@ class AbstractCapability(ABC):
     # ------------------------------------------------------------------
 
     def store_credential(self, key: str, value: str) -> None:
-        """Encrypt *value* with Fernet and persist it in ``tool_configs``.
+        """Encrypt *value* with AES-256-GCM via VaultService and persist it in ``tool_configs``.
 
         The credential is stored under ``tool_name = self.get_id()`` and
-        ``config_key = key``.
+        ``config_key = key``.  The encrypted blob is base64-encoded before
+        being written so it can be safely stored as a text column.
+
+        The vault must be unlocked before calling this method; if it is sealed
+        a :exc:`~services.vault_service.VaultLockedError` is raised and
+        propagated to the caller.
 
         Args:
             key:   Config key, e.g. ``"caldav:password"``.
@@ -304,10 +285,18 @@ class AbstractCapability(ABC):
 
         Returns:
             None
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the vault has
+                not yet been unlocked via
+                :meth:`~services.vault_service.VaultService.unlock`.
+            Exception: Any other cryptography or database error is re-raised
+                after logging.
         """
         try:
-            fernet = _make_fernet()
-            encrypted = fernet.encrypt(value.encode()).decode()
+            import base64
+            from services.vault_service import get_vault_service
+            encrypted = base64.b64encode(get_vault_service().encrypt_str(value)).decode()
             svc = _get_tool_config_service()
             svc.set_tool_config(self.get_id(), {key: encrypted})
         except Exception as exc:
@@ -319,16 +308,20 @@ class AbstractCapability(ABC):
             raise
 
     def load_credential(self, key: str) -> str | None:
-        """Load and decrypt a stored credential.
+        """Load and AES-256-GCM–decrypt a stored credential via VaultService.
 
-        Returns ``None`` if the key is absent or decryption fails (e.g. key
-        rotation has invalidated the ciphertext).
+        Returns ``None`` if the key is absent, the vault is locked, or
+        decryption fails (e.g. the vault has been re-initialised and the DEK
+        has rotated).
+
+        The stored value is expected to be a base64-encoded blob as written by
+        :meth:`store_credential`.
 
         Args:
             key: Config key, e.g. ``"caldav:password"``.
 
         Returns:
-            str | None: Decrypted plaintext value, or ``None``.
+            str | None: Decrypted plaintext value, or ``None`` on any failure.
         """
         try:
             svc = _get_tool_config_service()
@@ -336,8 +329,16 @@ class AbstractCapability(ABC):
             encrypted = config.get(key)
             if encrypted is None:
                 return None
-            fernet = _make_fernet()
-            return fernet.decrypt(encrypted.encode()).decode()
+            import base64
+            from services.vault_service import get_vault_service, VaultLockedError
+            raw = base64.b64decode(encrypted.encode())
+            return get_vault_service().decrypt_str(raw)
+        except VaultLockedError as exc:
+            logger.warning(
+                "[%s] load_credential(%r) failed — vault is locked (returning None): %s",
+                self.get_id(), key, exc,
+            )
+            return None
         except Exception as exc:
             logger.warning(
                 "[%s] load_credential(%r) failed (returning None): %s",
