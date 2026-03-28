@@ -15,15 +15,18 @@ from services.idle_consolidation_service import (
     _CONSTRAINT_CONSOLIDATION_KEY,
     _CONSTRAINT_CONSOLIDATION_COOLDOWN,
 )
+from services.memory_store import MemoryStore
 
 
 @pytest.fixture
 def idle_mock_store():
-    """Mock MemoryStore for idle consolidation tests."""
-    store = MagicMock()
-    store.get.return_value = None
-    store.llen.return_value = 0
-    return store
+    """Real MemoryStore for idle consolidation tests.
+
+    Uses a fresh in-memory store so tests interact with genuine
+    MemoryStore semantics (get returns None for missing keys, llen
+    returns 0 for non-existent lists) instead of a shapeless mock.
+    """
+    return MemoryStore()
 
 
 @pytest.fixture
@@ -47,13 +50,20 @@ class TestConstraintConsolidation:
     """Tests for _consolidate_constraints()."""
 
     def test_skips_when_on_cooldown(self, service, idle_mock_store):
-        """Should skip consolidation when cooldown flag exists."""
-        idle_mock_store.get.return_value = str(int(time.time()))
+        """Should skip consolidation when cooldown flag exists.
+
+        Pre-populates the cooldown key with no TTL (``set`` instead of
+        ``setex``).  After the service returns early, ``ttl`` must still
+        report -1 (no expiry), proving ``setex`` was never called by the
+        service path that runs when NOT on cooldown.
+        """
+        idle_mock_store.set(_CONSTRAINT_CONSOLIDATION_KEY, str(int(time.time())))
 
         service._consolidate_constraints()
 
-        # Should check cooldown key
-        idle_mock_store.get.assert_called_with(_CONSTRAINT_CONSOLIDATION_KEY)
+        # Service returned early — the key must still carry no expiry
+        # (we used .set with no TTL; if setex had run it would be > 0)
+        assert idle_mock_store.ttl(_CONSTRAINT_CONSOLIDATION_KEY) == -1
 
     def test_no_significant_patterns(self, service, idle_mock_store):
         """Should set cooldown when no patterns have 10+ rejections."""
@@ -63,14 +73,15 @@ class TestConstraintConsolidation:
         ]
         mock_episodic = MagicMock()
 
+        # The code path for below-threshold patterns never reaches
+        # get_embedding_service, so no embedding_service patch is needed.
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
-             patch('services.embedding_service.get_embedding_service'):
+             patch('services.episodic_service.EpisodicService', return_value=mock_episodic):
             service._consolidate_constraints()
 
-        # Cooldown should be set
-        idle_mock_store.setex.assert_called()
+        # Cooldown flag must be written to the store
+        assert idle_mock_store.get(_CONSTRAINT_CONSOLIDATION_KEY) is not None
         # No episodes should be created
         mock_episodic.store_episode.assert_not_called()
 
@@ -89,13 +100,19 @@ class TestConstraintConsolidation:
         mock_emb_svc = MagicMock()
         mock_emb_svc.generate_embedding.return_value = [0.1] * 384
 
+        # services.embedding_service uses numpy C-extensions that cannot be
+        # loaded in this sandbox, so we inject a fake module into sys.modules
+        # directly rather than using patch() which would trigger the import.
+        mock_emb_module = MagicMock()
+        mock_emb_module.get_embedding_service.return_value = mock_emb_svc
+
         mock_episodic = MagicMock()
         mock_episodic.store_episode.return_value = 'ep-123'
 
-        with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
+        with patch.dict('sys.modules', {'services.embedding_service': mock_emb_module}), \
+             patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
              patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
-             patch('services.embedding_service.get_embedding_service', return_value=mock_emb_svc), \
              patch.object(IdleConsolidationService, '_find_similar_constraint_episode', return_value=None):
             service._consolidate_constraints()
 
@@ -126,14 +143,17 @@ class TestConstraintConsolidation:
         mock_emb_svc = MagicMock()
         mock_emb_svc.generate_embedding.return_value = [0.1] * 384
 
+        mock_emb_module = MagicMock()
+        mock_emb_module.get_embedding_service.return_value = mock_emb_svc
+
         mock_episodic = MagicMock()
 
         existing = {'id': 'ep-existing', 'gist': 'old constraint', 'similarity': 0.92}
 
-        with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
+        with patch.dict('sys.modules', {'services.embedding_service': mock_emb_module}), \
+             patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service') as mock_get_db, \
              patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
-             patch('services.embedding_service.get_embedding_service', return_value=mock_emb_svc), \
              patch.object(IdleConsolidationService, '_find_similar_constraint_episode', return_value=existing), \
              patch.object(IdleConsolidationService, '_boost_episode_activation') as mock_boost:
             service._consolidate_constraints()
@@ -167,10 +187,13 @@ class TestConstraintConsolidation:
                 return None  # suggest -> new
             return {'id': 'ep-old', 'gist': 'old', 'similarity': 0.90}  # nurture -> dup
 
-        with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
+        mock_emb_module = MagicMock()
+        mock_emb_module.get_embedding_service.return_value = mock_emb_svc
+
+        with patch.dict('sys.modules', {'services.embedding_service': mock_emb_module}), \
+             patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
              patch('services.episodic_service.EpisodicService', return_value=mock_episodic), \
-             patch('services.embedding_service.get_embedding_service', return_value=mock_emb_svc), \
              patch.object(IdleConsolidationService, '_find_similar_constraint_episode', side_effect=find_similar_side_effect), \
              patch.object(IdleConsolidationService, '_boost_episode_activation') as mock_boost:
             service._consolidate_constraints()
@@ -184,25 +207,29 @@ class TestConstraintConsolidation:
         mock_cms = MagicMock()
         mock_cms.get_blocked_action_patterns.return_value = []
 
+        # patterns=[] → significant=[] → code returns before embedding_service is used
         with patch('services.constraint_memory_service.ConstraintMemoryService', return_value=mock_cms), \
              patch('services.database_service.get_shared_db_service'), \
-             patch('services.episodic_service.EpisodicService'), \
-             patch('services.embedding_service.get_embedding_service'):
+             patch('services.episodic_service.EpisodicService'):
             service._consolidate_constraints()
 
-        # setex should be called with the cooldown key and TTL
-        calls = [
-            c for c in idle_mock_store.setex.call_args_list
-            if c[0][0] == _CONSTRAINT_CONSOLIDATION_KEY
-        ]
-        assert len(calls) >= 1
-        assert calls[0][0][1] == _CONSTRAINT_CONSOLIDATION_COOLDOWN
+        # Cooldown key must exist and carry the expected TTL
+        assert idle_mock_store.get(_CONSTRAINT_CONSOLIDATION_KEY) is not None
+        assert 0 < idle_mock_store.ttl(_CONSTRAINT_CONSOLIDATION_KEY) <= _CONSTRAINT_CONSOLIDATION_COOLDOWN
 
     def test_trigger_consolidation_calls_constraint_consolidation(self, service, idle_mock_store):
-        """_trigger_consolidation should call _consolidate_constraints."""
-        with patch.object(service, '_consolidate_constraints') as mock_cc, \
-             patch('services.prompt_queue.PromptQueue'), \
-             patch('workers.semantic_consolidation_worker.semantic_consolidation_worker'):
+        """_trigger_consolidation should call _consolidate_constraints.
+
+        ``workers`` package imports numpy (via digest_worker) which cannot be
+        loaded in this sandbox, so we inject fake worker modules into
+        sys.modules before the patch() resolver runs.
+        """
+        fake_worker_module = MagicMock()
+        with patch.dict('sys.modules', {
+                'workers.semantic_consolidation_worker': fake_worker_module,
+             }), \
+             patch.object(service, '_consolidate_constraints') as mock_cc, \
+             patch('services.prompt_queue.PromptQueue'):
             service._trigger_consolidation()
 
         mock_cc.assert_called_once()
