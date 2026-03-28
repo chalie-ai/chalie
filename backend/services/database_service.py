@@ -557,7 +557,8 @@ class DatabaseService:
                 # Scheduler — external source integration columns
                 ("scheduled_items", "source", "TEXT", None),
                 ("scheduled_items", "external_uid", "TEXT",
-                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid) WHERE external_uid IS NOT NULL"),
+                 ["DROP INDEX IF EXISTS idx_scheduled_items_external_uid",
+                  "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid)"]),
                 ("scheduled_items", "metadata", "TEXT DEFAULT '{}'", None),
                 ("scheduled_items", "hidden", "INTEGER DEFAULT 0", None),
             ]
@@ -572,7 +573,9 @@ class DatabaseService:
                     logger.info(f"Added column {table}.{col}")
                 # Always try to create the index (idempotent)
                 if extra and extra[0]:
-                    cursor.execute(extra[0])
+                    stmts = extra[0] if isinstance(extra[0], list) else [extra[0]]
+                    for stmt in stmts:
+                        cursor.execute(stmt)
 
             # Data migration: populate providers.models from providers.model where NULL
             cursor.execute("UPDATE providers SET models = json_array(model) WHERE models IS NULL AND model IS NOT NULL")
