@@ -334,8 +334,7 @@ class SemanticConsolidationService:
             if not results:
                 return None
 
-            # Pick best match — apply similarity threshold from config
-            similarity_threshold = self.config.get('similarity_threshold', 0.5)
+            # Pick best match
             for r in results:
                 # RRF score is not directly comparable to cosine sim, but higher is better.
                 # Use a heuristic: RRF > 0.01 is roughly equivalent to strong match.

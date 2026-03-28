@@ -385,7 +385,7 @@ class ClientContextService:
         """Check if the user just returned from an extended absence."""
         return bool(self._store.get(REENTRY_KEY))
 
-    def get_timezone_offset(self) -> 'Optional[int]':
+    def get_timezone_offset(self) -> int | None:
         """Return the user's UTC offset in minutes, derived from the stored IANA timezone.
 
         Positive values mean east of UTC (e.g. UTC+2 → 120).

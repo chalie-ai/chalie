@@ -344,8 +344,6 @@ class SituationModelService:
             "updated_at": utc_now().isoformat(),
         }
         try:
-            from services.world_state_service import WorldStateService
-            svc = WorldStateService()
             # Use cached model items to avoid heavy DB queries on every message
             store = self._get_store()
             raw = store.get("world_model:items")

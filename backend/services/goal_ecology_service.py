@@ -35,7 +35,7 @@ try:
         GOAL_LIFECYCLE,
     )
     _TELEMETRY_AVAILABLE = True
-except Exception as e:  # pragma: no cover
+except Exception:  # pragma: no cover
     _TELEMETRY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)

@@ -442,12 +442,10 @@ class ThreadService:
         with existing threads after a MemoryStore reset (restart / TTL expiry).
         """
         try:
-            close_conn = False
             if conn is None:
                 from services.database_service import get_shared_db_service
                 db = get_shared_db_service()
                 conn = db.connection().__enter__()
-                close_conn = True
 
             cursor = conn.cursor()
             cursor.execute(

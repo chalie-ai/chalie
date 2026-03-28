@@ -246,25 +246,7 @@ def episodic_memory_worker(job_data: dict) -> str:
             tracker.increment_episode_count()
             tracker.record_episode_salience(salience_float)
 
-            should_trigger, trigger_reason = tracker.should_trigger_consolidation(salience_float)
-            if should_trigger:
-                from services.config_service import ConfigService as _CS
-                _sem_config = _CS.connections()
-                _sem_queue_name = _sem_config.get("memory", {}).get("queues", {}).get(
-                    "semantic_consolidation_queue", {}
-                ).get("name", "semantic_consolidation_queue")
-                _sem_store = MemoryClientService.create_connection(decode_responses=False)
-                _sem_queue = Queue(_sem_queue_name, connection=_sem_store)
-                _sem_queue.enqueue(
-                    'workers.semantic_consolidation_worker.semantic_consolidation_worker',
-                    {
-                        "type": "batch_consolidation",
-                        "trigger": trigger_reason,
-                        "timestamp": time.time(),
-                    }
-                )
-                tracker.reset_episode_count()
-                logging.info(f"[EPISODIC] Enqueued semantic consolidation (trigger={trigger_reason})")
+            tracker.should_trigger_consolidation(salience_float)
         except Exception as tracker_err:
             logging.warning(f"[EPISODIC] Consolidation tracker error (non-fatal): {tracker_err}")
 
