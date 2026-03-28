@@ -250,19 +250,21 @@ def _fake_facts():
 
 
 @pytest.mark.unit
-def test_get_tools_returns_search_tool():
+def test_get_tools_returns_both_tools():
     cap = _make()
     tools = cap.get_tools()
-    assert len(tools) == 1
-    assert tools[0]["name"] == "imap_search_email"
-    assert "handler" in tools[0]
-    assert "parameters" in tools[0]
+    names = [t["name"] for t in tools]
+    assert "imap_send_email" in names
+    assert "imap_search_email" in names
+    for t in tools:
+        assert "handler" in t
+        assert "parameters" in t
 
 
 @pytest.mark.unit
 def test_search_by_sender():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     ks_mock = MagicMock()
     ks_mock.get_by_kind.return_value = _fake_facts()
     with patch("services.database_service.get_shared_db_service"), \
@@ -275,7 +277,7 @@ def test_search_by_sender():
 @pytest.mark.unit
 def test_search_by_subject():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     ks_mock = MagicMock()
     ks_mock.get_by_kind.return_value = _fake_facts()
     with patch("services.database_service.get_shared_db_service"), \
@@ -288,7 +290,7 @@ def test_search_by_subject():
 @pytest.mark.unit
 def test_search_by_triage():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     ks_mock = MagicMock()
     ks_mock.get_by_kind.return_value = _fake_facts()
     with patch("services.database_service.get_shared_db_service"), \
@@ -300,7 +302,7 @@ def test_search_by_triage():
 @pytest.mark.unit
 def test_search_with_limit():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     ks_mock = MagicMock()
     ks_mock.get_by_kind.return_value = _fake_facts()
     with patch("services.database_service.get_shared_db_service"), \
@@ -312,7 +314,7 @@ def test_search_with_limit():
 @pytest.mark.unit
 def test_search_no_results():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     ks_mock = MagicMock()
     ks_mock.get_by_kind.return_value = _fake_facts()
     with patch("services.database_service.get_shared_db_service"), \
@@ -325,7 +327,7 @@ def test_search_no_results():
 @pytest.mark.unit
 def test_search_combined_filters():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     ks_mock = MagicMock()
     ks_mock.get_by_kind.return_value = _fake_facts()
     with patch("services.database_service.get_shared_db_service"), \
@@ -337,7 +339,7 @@ def test_search_combined_filters():
 @pytest.mark.unit
 def test_search_error_resilience():
     cap = _make()
-    handler = cap.get_tools()[0]["handler"]
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
     with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
         result = handler("t1", {})
     assert "error" in result
@@ -512,3 +514,139 @@ def test_monitor_skips_greeting_when_empty():
          patch.object(cap, "_inject_inbox_hint"):
         cap.monitor()
     greet.assert_not_called()
+
+
+# --- SMTP send ---
+
+_SMTP_CREDS = {
+    **_CREDS,
+    "smtp:host": "smtp.gmail.com", "smtp:port": "465", "smtp:tls": "1",
+}
+
+
+@pytest.mark.unit
+def test_configure_stores_smtp_settings():
+    """configure() persists SMTP host/port/tls from autodiscovery."""
+    cap = _make()
+    stored = {}
+    with patch.object(cap, "store_credential", side_effect=lambda k, v: stored.__setitem__(k, v)), \
+         patch.object(cap, "connect", return_value=True):
+        cap.configure({"email": "u@gmail.com", "password": "pw"})
+    assert stored["smtp:host"] == "smtp.gmail.com"
+    assert stored["smtp:port"] == "465"
+    assert stored["smtp:tls"] == "1"
+
+
+@pytest.mark.unit
+def test_open_smtp_ssl():
+    """_open_smtp() uses SMTP_SSL when tls=1."""
+    cap = _make()
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch("smtplib.SMTP_SSL", return_value=smtp_mock) as ssl_cls:
+        conn = cap._open_smtp()
+    ssl_cls.assert_called_once_with("smtp.gmail.com", 465, timeout=30)
+    smtp_mock.login.assert_called_once_with("u@gmail.com", "pw")
+    assert conn is smtp_mock
+
+
+@pytest.mark.unit
+def test_open_smtp_starttls():
+    """_open_smtp() uses SMTP + starttls when tls=0."""
+    cap = _make()
+    creds = {**_SMTP_CREDS, "smtp:port": "587", "smtp:tls": "0"}
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=creds.get), \
+         patch("smtplib.SMTP", return_value=smtp_mock) as plain_cls:
+        conn = cap._open_smtp()
+    plain_cls.assert_called_once_with("smtp.gmail.com", 587, timeout=30)
+    smtp_mock.starttls.assert_called_once()
+    smtp_mock.login.assert_called_once()
+    assert conn is smtp_mock
+
+
+@pytest.mark.unit
+def test_open_smtp_returns_none_on_failure():
+    """_open_smtp() returns None on connection failure."""
+    cap = _make()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch("smtplib.SMTP_SSL", side_effect=Exception("refused")):
+        assert cap._open_smtp() is None
+
+
+@pytest.mark.unit
+def test_send_email_success():
+    """_send_email() sends and returns success dict."""
+    cap = _make()
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch.object(cap, "_open_smtp", return_value=smtp_mock):
+        result = cap._send_email("bob@test.com", "Hi Bob", "Hello there")
+    assert result["success"] is True
+    assert result["to"] == "bob@test.com"
+    smtp_mock.send_message.assert_called_once()
+    smtp_mock.quit.assert_called_once()
+
+
+@pytest.mark.unit
+def test_send_email_reply_headers():
+    """_send_email() sets In-Reply-To and References for replies."""
+    cap = _make()
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch.object(cap, "_open_smtp", return_value=smtp_mock):
+        cap._send_email("bob@test.com", "Re: Hi", "Reply body",
+                        in_reply_to="<orig@example.com>")
+    sent_msg = smtp_mock.send_message.call_args[0][0]
+    assert sent_msg["In-Reply-To"] == "<orig@example.com>"
+    assert sent_msg["References"] == "<orig@example.com>"
+
+
+@pytest.mark.unit
+def test_send_email_smtp_failure():
+    """_send_email() returns error when SMTP connection fails."""
+    cap = _make()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch.object(cap, "_open_smtp", return_value=None):
+        result = cap._send_email("bob@test.com", "Hi", "Body")
+    assert "error" in result
+
+
+@pytest.mark.unit
+def test_send_tool_validates_required_fields():
+    """imap_send_email tool rejects missing to/subject/body."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_send_email")["handler"]
+    assert "error" in handler("t1", {"to": "bob@test.com", "subject": "Hi"})
+    assert "error" in handler("t1", {"to": "bob@test.com", "body": "text"})
+    assert "error" in handler("t1", {"subject": "Hi", "body": "text"})
+
+
+@pytest.mark.unit
+def test_send_tool_calls_send_email():
+    """imap_send_email tool delegates to _send_email."""
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_send_email")["handler"]
+    smtp_mock = MagicMock()
+    with patch.object(cap, "load_credential", side_effect=_SMTP_CREDS.get), \
+         patch.object(cap, "_open_smtp", return_value=smtp_mock):
+        result = handler("t1", {"to": "bob@test.com", "subject": "Hi", "body": "Hello"})
+    assert result["success"] is True
+
+
+@pytest.mark.unit
+def test_act_routes_send_email():
+    """act('send_email', ...) delegates to _send_email."""
+    cap = _make()
+    with patch.object(cap, "_send_email", return_value={"success": True}) as m:
+        result = cap.act("send_email", {"to": "a@b.com", "subject": "s", "body": "b"})
+    m.assert_called_once()
+    assert result["success"] is True
+
+
+@pytest.mark.unit
+def test_act_unknown_action():
+    """act() returns error for unknown actions."""
+    cap = _make()
+    result = cap.act("delete_everything", {})
+    assert "error" in result

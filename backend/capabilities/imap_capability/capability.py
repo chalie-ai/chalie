@@ -29,6 +29,9 @@ _K_HOST = "imap:host"
 _K_PORT = "imap:port"
 _K_TLS = "imap:tls"
 _K_WATERMARK = "imap:last_uid"
+_K_SMTP_HOST = "smtp:host"
+_K_SMTP_PORT = "smtp:port"
+_K_SMTP_TLS = "smtp:tls"
 
 _INITIAL_DAYS = 7
 
@@ -125,6 +128,9 @@ class ImapCapability(AbstractCapability):
         self.store_credential(_K_HOST, s.imap.host)
         self.store_credential(_K_PORT, str(s.imap.port))
         self.store_credential(_K_TLS, str(int(s.imap.tls)))
+        self.store_credential(_K_SMTP_HOST, s.smtp.host)
+        self.store_credential(_K_SMTP_PORT, str(s.smtp.port))
+        self.store_credential(_K_SMTP_TLS, str(int(s.smtp.tls)))
         if not self.connect():
             self.delete_credentials()
             raise ValueError("[imap] Connection test failed")
@@ -410,7 +416,73 @@ class ImapCapability(AbstractCapability):
         except Exception as exc:
             logger.error("[imap] _inject_inbox_hint failed: %s", exc)
 
+    # ------------------------------------------------------------------
+    # SMTP send
+    # ------------------------------------------------------------------
+
+    def _open_smtp(self):
+        """Open and return an authenticated SMTP connection, or None."""
+        import smtplib
+
+        host = self.load_credential(_K_SMTP_HOST)
+        port = self.load_credential(_K_SMTP_PORT)
+        email_addr = self.load_credential(_K_EMAIL)
+        pw = self.load_credential(_K_PW)
+        use_ssl = self.load_credential(_K_SMTP_TLS) == "1"
+        if not all([host, port, email_addr, pw]):
+            return None
+        try:
+            if use_ssl:
+                conn = smtplib.SMTP_SSL(host, int(port), timeout=30)
+            else:
+                conn = smtplib.SMTP(host, int(port), timeout=30)
+                conn.starttls()
+            conn.login(email_addr, pw)
+            return conn
+        except Exception as exc:
+            logger.error("[imap] _open_smtp: %s", exc)
+            return None
+
+    def _send_email(self, to: str, subject: str, body: str,
+                    in_reply_to: str = "") -> dict:
+        """Send an email via SMTP. Returns dict with success or error."""
+        from email.mime.text import MIMEText
+
+        sender = self.load_credential(_K_EMAIL)
+        if not sender:
+            return {"error": "No email configured"}
+
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["From"] = sender
+        msg["To"] = to
+        msg["Subject"] = subject
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+            msg["References"] = in_reply_to
+
+        conn = self._open_smtp()
+        if not conn:
+            return {"error": "Failed to connect to SMTP server"}
+        try:
+            conn.send_message(msg)
+            return {"success": True, "to": to, "subject": subject}
+        except Exception as exc:
+            logger.error("[imap] _send_email: %s", exc)
+            return {"error": str(exc)}
+        finally:
+            try:
+                conn.quit()
+            except Exception:
+                pass
+
     def act(self, action, params):
+        if action == "send_email":
+            return self._send_email(
+                to=params.get("to", ""),
+                subject=params.get("subject", ""),
+                body=params.get("body", ""),
+                in_reply_to=params.get("in_reply_to", ""),
+            )
         return {"error": f"'{action}' not implemented"}
 
     def get_tools(self):
@@ -460,7 +532,60 @@ class ImapCapability(AbstractCapability):
                 logger.error("[imap] imap_search_email failed: %s", exc)
                 return {"error": str(exc)}
 
+        def _send_execute(topic, params, config=None, telemetry=None):
+            """Send or reply to an email via SMTP."""
+            to = (params.get("to") or "").strip()
+            subject = (params.get("subject") or "").strip()
+            body = (params.get("body") or "").strip()
+            if not to or not subject or not body:
+                return {"error": "to, subject, and body are required"}
+            return capability._send_email(
+                to=to, subject=subject, body=body,
+                in_reply_to=params.get("in_reply_to", ""),
+            )
+
         return [
+            {
+                "name": "imap_send_email",
+                "description": (
+                    "Send or reply to an email. Provide recipient address, "
+                    "subject, and plain-text body. For replies, include "
+                    "in_reply_to with the original Message-ID to thread correctly."
+                ),
+                "parameters": {
+                    "to": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Recipient email address.",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Email subject line.",
+                    },
+                    "body": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Plain-text email body.",
+                    },
+                    "in_reply_to": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Message-ID of the email being replied to. "
+                            "Sets In-Reply-To and References headers for threading."
+                        ),
+                    },
+                },
+                "returns": {
+                    "success": {"type": "boolean", "description": "True if sent."},
+                    "to": {"type": "string", "description": "Recipient address."},
+                    "subject": {"type": "string", "description": "Subject sent."},
+                    "error": {"type": "string", "description": "Error message if failed."},
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _send_execute,
+            },
             {
                 "name": "imap_search_email",
                 "description": (
