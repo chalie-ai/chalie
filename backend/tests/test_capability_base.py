@@ -17,7 +17,6 @@ I/O (database interactions are mocked via in-process helpers).
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,22 +28,50 @@ import yaml
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_fernet_with_known_key():
-    """Return a :class:`cryptography.fernet.Fernet` instance keyed with a
-    deterministic 32-byte secret.
+class _MockVaultService:
+    """In-memory stand-in for :class:`services.vault_service.VaultService`.
 
-    The key is ``b'A' * 32`` (URL-safe base64-encoded to form a valid Fernet
-    key).  Used in tests that exercise the encrypt/decrypt round-trip without
-    touching the application's real encryption key service.
+    Uses AES-256-GCM with a deterministic 32-byte test key so that
+    ``store_credential`` / ``load_credential`` round-trips work correctly
+    during tests without requiring a real database or registered user.
 
-    Returns:
-        cryptography.fernet.Fernet: A ready-to-use Fernet cipher.
+    Methods mirror the public surface called by the credential helpers.
     """
-    from cryptography.fernet import Fernet
 
-    raw = b"A" * 32
-    fernet_key = base64.urlsafe_b64encode(raw)
-    return Fernet(fernet_key)
+    def __init__(self) -> None:
+        """Initialise the mock vault with a fixed 32-byte test key."""
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        self._key = b"T" * 32  # deterministic test key
+        self._aesgcm = AESGCM(self._key)
+
+    def encrypt_str(self, s: str) -> bytes:
+        """UTF-8–encode *s* and encrypt with AES-256-GCM.
+
+        Args:
+            s: Plaintext string to encrypt.
+
+        Returns:
+            bytes: ``nonce (12 B) + ciphertext + tag (16 B)``.
+        """
+        import os
+        nonce = os.urandom(12)
+        ciphertext_tag = self._aesgcm.encrypt(nonce, s.encode("utf-8"), None)
+        return nonce + ciphertext_tag
+
+    def decrypt_str(self, blob: bytes) -> str:
+        """Decrypt *blob* and UTF-8–decode the result.
+
+        Args:
+            blob: Encrypted blob as produced by :meth:`encrypt_str`.
+
+        Returns:
+            str: Decrypted plaintext string.
+        """
+        nonce = blob[:12]
+        ciphertext_tag = blob[12:]
+        plaintext = self._aesgcm.decrypt(nonce, ciphertext_tag, None)
+        return plaintext.decode("utf-8")
 
 
 class _InMemoryToolConfigService:
@@ -221,18 +248,26 @@ class TestAbstractCapability:
         assert cap.is_connected() is False
 
     def test_store_and_load_credential_roundtrip(self):
-        """``store_credential`` followed by ``load_credential`` must return the original value.
+        """``store_credential`` followed by ``load_credential`` must
+        return the original value.
 
-        The test patches ``capabilities.base._make_fernet`` to return a
-        deterministic Fernet instance and ``capabilities.base._get_tool_config_service``
-        to return an in-memory service, ensuring no real encryption key service
-        or database is involved.
+        Patches ``services.vault_service.get_vault_service`` to return a
+        deterministic in-memory vault mock and
+        ``capabilities.base._get_tool_config_service`` to return an in-memory
+        service, ensuring no real database or unlocked vault is required.
         """
         mem_svc = _InMemoryToolConfigService()
+        mock_vault = _MockVaultService()
 
-        with patch("capabilities.base._make_fernet", side_effect=_make_fernet_with_known_key), \
-             patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-
+        vault_patch = patch(
+            "services.vault_service.get_vault_service",
+            return_value=mock_vault,
+        )
+        cfg_patch = patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        )
+        with vault_patch, cfg_patch:
             cap = _MinimalCapability._build()
             cap.store_credential("username", "alice")
             result = cap.load_credential("username")
@@ -246,10 +281,17 @@ class TestAbstractCapability:
         calls, simulating the absence of any stored credential.
         """
         mem_svc = _InMemoryToolConfigService()
+        mock_vault = _MockVaultService()
 
-        with patch("capabilities.base._make_fernet", side_effect=_make_fernet_with_known_key), \
-             patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-
+        vault_patch = patch(
+            "services.vault_service.get_vault_service",
+            return_value=mock_vault,
+        )
+        cfg_patch = patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        )
+        with vault_patch, cfg_patch:
             cap = _MinimalCapability._build()
             result = cap.load_credential("missing")
 
@@ -272,7 +314,12 @@ class TestHealthTracking:
     def test_health_details_defaults(self):
         """Fresh capability has zero errors and no last_error."""
         cap = _MinimalCapability._build()
-        assert cap.health_details() == {"connected": False, "error_count": 0, "last_error": None}
+        expected = {
+            "connected": False,
+            "error_count": 0,
+            "last_error": None,
+        }
+        assert cap.health_details() == expected
 
     def test_run_monitor_success_resets_and_persists(self):
         """Successful monitor() resets error count and persists zero."""
@@ -288,15 +335,28 @@ class TestHealthTracking:
     def test_run_monitor_increments_on_failure(self):
         """Failed monitor() increments error count and records the error."""
         cap = _make_health_cap(ConnectionError("server unreachable"))
-        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+        mem_svc = _InMemoryToolConfigService()
+        with patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        ):
             cap.run_monitor()
-        assert cap.health_details() == {"connected": True, "error_count": 1, "last_error": "server unreachable"}
+        expected = {
+            "connected": True,
+            "error_count": 1,
+            "last_error": "server unreachable",
+        }
+        assert cap.health_details() == expected
 
     def test_run_monitor_auto_disconnects_after_threshold(self):
         """Capability auto-disconnects after MAX_CONSECUTIVE_FAILURES."""
         cap = _make_health_cap(ConnectionError("down"))
-        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1  # one away
-        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1
+        mem_svc = _InMemoryToolConfigService()
+        with patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        ):
             cap.run_monitor()  # this pushes it over
         assert cap._connected is False
 
@@ -315,7 +375,11 @@ class TestHealthTracking:
         cap = _make_health_cap()
         cap._error_count = 3
         cap._last_error = "was broken"
-        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+        mem_svc = _InMemoryToolConfigService()
+        with patch(
+            "capabilities.base._get_tool_config_service",
+            return_value=mem_svc,
+        ):
             cap.run_monitor()
         assert cap._error_count == 0
         assert cap._connected is True

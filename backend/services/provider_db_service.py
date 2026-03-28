@@ -54,10 +54,16 @@ def compute_job_group(caps: Dict[str, str]) -> str:
 def load_jobs_for_group(group_name: str) -> List[str]:
     """Return job IDs belonging to a capability group."""
     import os
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'cognitive_jobs.json')
+    config_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        'configs', 'cognitive_jobs.json',
+    )
     with open(config_path, 'r') as f:
         all_jobs = json.load(f).get('jobs', [])
-    return [j['id'] for j in all_jobs if compute_job_group(j.get('caps', {})) == group_name]
+    return [
+        j['id'] for j in all_jobs
+        if compute_job_group(j.get('caps', {})) == group_name
+    ]
 
 
 class ProviderDbService:
@@ -70,65 +76,92 @@ class ProviderDbService:
     )
 
     def __init__(self, database_service):
+        """Initialise the service with an injected database dependency.
+
+        Args:
+            database_service: The shared database service instance used for
+                all provider table reads and writes.
+        """
         self.db = database_service
-        self._enc_key = None
 
-    def _get_enc_key(self):
-        """Lazily load encryption key from .key file."""
-        if self._enc_key is None:
-            from services.encryption_key_service import get_encryption_key
-            self._enc_key = get_encryption_key()
-        return self._enc_key
+    @staticmethod
+    def _seal_api_key(value: str) -> str:
+        """Protect *value* with the vault DEK and return a base64-encoded string.
 
-    def _encrypt(self, value: str) -> str:
-        """Encrypt a value using Fernet (symmetric, HMAC-authenticated).
+        Uses :func:`~services.vault_service.get_vault_service` to obtain the
+        process-wide :class:`~services.vault_service.VaultService` singleton.
+        The raw AES-256-GCM blob is base64-encoded so it can be stored safely
+        in the TEXT ``api_key`` column.
 
-        Requires the ``cryptography`` package (mandatory dependency).
+        Args:
+            value: Plaintext API-key string to protect.
+
+        Returns:
+            Base64-encoded ciphertext string (safe for TEXT column storage).
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the vault has
+                not been unlocked before this call.
         """
-        if value is None:
+        import base64
+        from services.vault_service import get_vault_service
+        return base64.b64encode(get_vault_service().encrypt_str(value)).decode()
+
+    @staticmethod
+    def _unseal_api_key(encrypted_val) -> Optional[str]:
+        """Reveal an API key previously protected by :meth:`_seal_api_key`.
+
+        Handles both the current base64-encoded AES-256-GCM format and the
+        legacy raw-bytes BLOB format produced by the one-time Fernet migration
+        in :meth:`~services.vault_service.VaultService._run_legacy_migration`.
+
+        When the vault is locked (e.g. the server just started and no user has
+        logged in yet), returns ``None`` instead of raising so that provider
+        list endpoints remain functional.
+
+        Args:
+            encrypted_val: Raw value from the database column — may be a
+                base64 string, raw ``bytes``, or a ``memoryview`` BLOB.
+
+        Returns:
+            Decrypted plaintext API-key string, or ``None`` when the vault is
+            locked or the column value is ``None`` / empty.
+        """
+        if not encrypted_val:
             return None
         import base64
-        import hashlib
-        from cryptography.fernet import Fernet
-        # Derive a Fernet-compatible key from the encryption key
-        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_bytes)
-        f = Fernet(fernet_key)
-        return f.encrypt(value.encode()).decode()
-
-    def _decrypt(self, value: str) -> str:
-        """Decrypt a value encrypted by _encrypt.
-
-        Handles legacy values gracefully: if Fernet decryption fails
-        (e.g. value was stored as plain base64 or plaintext before Fernet
-        was enforced), falls back to base64 decode, then returns raw value
-        so existing installations are not bricked on upgrade.
-        """
-        if value is None:
-            return None
-        import base64
-        import hashlib
-        from cryptography.fernet import Fernet
-        key_bytes = hashlib.sha256(self._get_enc_key().encode()).digest()
-        fernet_key = base64.urlsafe_b64encode(key_bytes)
-        f = Fernet(fernet_key)
+        from services.vault_service import get_vault_service, VaultLockedError
         try:
-            return f.decrypt(value.encode()).decode()
-        except Exception:
-            # Legacy fallback: try base64 decode, then return raw
-            try:
-                return base64.b64decode(value).decode()
-            except Exception:
-                return value
+            vault = get_vault_service()
+            # Raw-bytes / memoryview → migrated BLOB; pass directly to vault.
+            if isinstance(encrypted_val, (bytes, memoryview)):
+                return vault.decrypt_str(bytes(encrypted_val))
+            # String → base64-encoded new format; decode before passing.
+            return vault.decrypt_str(base64.b64decode(encrypted_val))
+        except VaultLockedError:
+            return None
 
     def _row_to_provider(self, row) -> Dict[str, Any]:
         """Convert a database row to a provider dict, decrypting api_key.
 
         Column order: id, name, platform, model, models, host, api_key,
                       dimensions, timeout, is_active, supports_vision
+
+        The ``api_key`` field is decrypted via :meth:`_unseal_api_key`.  If the
+        vault is currently locked the field is returned as ``None`` so that
+        listing and read operations still succeed before the user has logged in.
+
+        Args:
+            row: A ``sqlite3.Row`` dict-like object or a positional tuple
+                as returned by ``cursor.fetchone()`` / ``fetchall()``.
+
+        Returns:
+            Provider dict with all fields populated (``api_key`` may be
+            ``None`` when the vault is sealed).
         """
         if isinstance(row, dict):
-            api_key = self._decrypt(row['api_key']) if row.get('api_key') else None
+            raw_key = row.get('api_key')
+            api_key = self._unseal_api_key(raw_key) if raw_key else None
             default_model = row['model']
             return {
                 "id": row['id'],
@@ -144,7 +177,7 @@ class ProviderDbService:
                 "supports_vision": bool(row.get('supports_vision', 0)),
             }
         # Positional access (tuple row)
-        api_key = self._decrypt(row[6]) if row[6] else None
+        api_key = self._unseal_api_key(row[6]) if row[6] else None
         default_model = row[3]
         return {
             "id": row[0],
@@ -251,13 +284,17 @@ class ProviderDbService:
             raise ValueError("Either 'model' or 'models' is required")
 
         api_key_val = data.get("api_key")
-        encrypted_key = self._encrypt(api_key_val) if api_key_val else None
+        encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
 
         # Auto-infer vision support if not explicitly provided
         if 'supports_vision' in data:
             vision = 1 if data['supports_vision'] else 0
         else:
-            vision = 1 if _infer_vision_support(data.get('platform', ''), default_model) else 0
+            vision = (
+                1 if _infer_vision_support(
+                    data.get('platform', ''), default_model,
+                ) else 0
+            )
 
         models_json = json.dumps(models_list)
 
@@ -315,7 +352,8 @@ class ProviderDbService:
             updates.append("is_active = ?")
             params.append(1 if data["is_active"] else 0)
 
-        # Auto-infer vision support if platform or model changed and supports_vision not explicit
+        # Auto-infer vision support if platform or model changed
+        # and supports_vision not explicit
         if 'supports_vision' not in data and ('platform' in data or 'model' in data):
             current = self.get_provider_by_id(provider_id)
             if current:
@@ -330,7 +368,7 @@ class ProviderDbService:
                 updates.append("api_key = NULL")
             else:
                 updates.append("api_key = ?")
-                params.append(self._encrypt(data["api_key"]))
+                params.append(self._seal_api_key(data["api_key"]))
 
         if not updates:
             return self.get_provider_by_id(provider_id)
@@ -352,7 +390,11 @@ class ProviderDbService:
         # Check if provider is referenced by any job assignment
         assignment = self.get_job_assignment_by_provider_id(provider_id)
         if assignment:
-            raise ValueError(f"Cannot delete provider {provider_id}; it is referenced by job '{assignment['job_name']}'")
+            raise ValueError(
+                f"Cannot delete provider {provider_id}; "
+                f"it is referenced by job "
+                f"'{assignment['job_name']}'"
+            )
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -388,7 +430,9 @@ class ProviderDbService:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT job_name, provider_id, model FROM job_provider_assignments WHERE job_name = ?",
+                "SELECT job_name, provider_id, model "
+                "FROM job_provider_assignments "
+                "WHERE job_name = ?",
                 (job_name,)
             )
             row = cursor.fetchone()
@@ -401,12 +445,16 @@ class ProviderDbService:
                 "model": row[2],
             }
 
-    def get_job_assignment_by_provider_id(self, provider_id: int) -> Optional[Dict[str, Any]]:
+    def get_job_assignment_by_provider_id(
+        self, provider_id: int,
+    ) -> Optional[Dict[str, Any]]:
         """Get job assignment by provider ID (for deletion check)."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT job_name, provider_id, model FROM job_provider_assignments WHERE provider_id = ? LIMIT 1",
+                "SELECT job_name, provider_id, model "
+                "FROM job_provider_assignments "
+                "WHERE provider_id = ? LIMIT 1",
                 (provider_id,)
             )
             row = cursor.fetchone()
@@ -419,7 +467,10 @@ class ProviderDbService:
                 "model": row[2],
             }
 
-    def set_job_assignment(self, job_name: str, provider_id: int, model: Optional[str] = None) -> Dict[str, Any]:
+    def set_job_assignment(
+        self, job_name: str, provider_id: int,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Create or update a job->provider assignment with optional model override."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -437,7 +488,9 @@ class ProviderDbService:
                 )
             else:
                 cursor.execute(
-                    "INSERT INTO job_provider_assignments (job_name, provider_id, model) VALUES (?, ?, ?)",
+                    "INSERT INTO job_provider_assignments "
+                    "(job_name, provider_id, model) "
+                    "VALUES (?, ?, ?)",
                     (job_name, provider_id, model)
                 )
 
@@ -448,7 +501,10 @@ class ProviderDbService:
                 "model": model,
             }
 
-    def set_group_assignments(self, group_name: str, provider_id: int, model: Optional[str] = None) -> List[Dict[str, Any]]:
+    def set_group_assignments(
+        self, group_name: str, provider_id: int,
+        model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Batch-assign a provider+model to all jobs in a capability group.
 
         Group membership is derived from cognitive_jobs.json caps.

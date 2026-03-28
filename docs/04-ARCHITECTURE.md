@@ -195,6 +195,7 @@ Built-in cognitive skills for the ACT loop:
 - **Persistent Task Worker** — Runs eligible multi-session background tasks via bounded ACT loop (30min cycle with ±30% jitter); plan-aware execution follows step DAG when present (up to 3 steps/cycle with per-step fatigue budgets), falls back to flat loop otherwise; adaptive user surfacing at coverage milestones
 - **Document Worker** — PromptQueue worker for document processing: text extraction → metadata extraction → adaptive chunking → batch embedding → storage; 10min timeout per document
 - **Document Purge Service** — Hard-deletes documents past their 30-day soft-delete window (6h cycle)
+- **VaultService** — AES-256-GCM envelope encryption; PBKDF2-derived KEK wraps a random DEK stored in ``vault_config``; unlocked post-login; migrates legacy Fernet data on first unlock
 
 ## Data Flow Pipeline
 
@@ -395,7 +396,7 @@ No external services required. SQLite and MemoryStore are embedded — everythin
 
 - **No Telemetry**: Zero external calls except to configured LLM/voice providers
 - **Local First**: All data stored locally unless external providers configured
-- **Encryption**: API keys and provider credentials encrypted in SQLite
+- **Encryption**: AES-256-GCM envelope encryption via VaultService (password-derived KEK wraps a random DEK)
 - **CORS**: Defaults to localhost, restrict before production
 
 ## Interface Layer

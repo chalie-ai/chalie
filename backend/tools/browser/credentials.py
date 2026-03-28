@@ -1,8 +1,8 @@
 """
 Browser Credential Vault — Encrypted storage for site credentials.
 
-Credentials are encrypted with the same Fernet key used for LLM provider
-API keys (derived from the DB encryption key).  Domain-scoped: cookies for
+Credentials are encrypted with the vault DEK (AES-256-GCM) via
+:func:`~services.vault_service.get_vault_service`.  Domain-scoped: cookies for
 github.com are never injected into other domains.
 
 Credential types:
@@ -11,36 +11,12 @@ Credential types:
   - header:   custom HTTP headers injected into requests to the domain
 """
 
-import base64
-import hashlib
 import json
 import logging
 
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
-
-
-def _get_fernet():
-    """Return a Fernet instance using the shared encryption key."""
-    from services.encryption_key_service import get_encryption_key
-    from cryptography.fernet import Fernet
-    key = get_encryption_key()
-    key_bytes = hashlib.sha256(key.encode()).digest()
-    fernet_key = base64.urlsafe_b64encode(key_bytes)
-    return Fernet(fernet_key)
-
-
-def _encrypt(data: dict) -> str:
-    """Encrypt a dict to a Fernet token string."""
-    f = _get_fernet()
-    return f.encrypt(json.dumps(data).encode()).decode()
-
-
-def _decrypt(token: str) -> dict:
-    """Decrypt a Fernet token string to a dict."""
-    f = _get_fernet()
-    return json.loads(f.decrypt(token.encode()).decode())
 
 
 class CredentialVault:
@@ -51,9 +27,32 @@ class CredentialVault:
 
     def store(self, account_id: int, domain: str, label: str,
               credential_type: str, data: dict) -> int:
-        """Store or update a credential.  Returns row ID."""
+        """AES-256-GCM–encrypt *data* via VaultService and persist the credential.
+
+        The credential dict is serialised to JSON, encrypted with the vault DEK,
+        and base64-encoded so it can be stored safely in the TEXT
+        ``encrypted_data`` column.
+
+        Args:
+            account_id:       ID of the owning account row.
+            domain:           Site domain (e.g. ``"github.com"``).
+            label:            Human-readable identifier for this credential.
+            credential_type:  One of ``"password"``, ``"cookie"``, or ``"header"``.
+            data:             Arbitrary dict of credential fields to protect.
+
+        Returns:
+            The SQLite row-id of the inserted or updated ``browser_credentials`` row.
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the vault has not
+                been unlocked before this call.
+        """
+        import base64
+        from services.vault_service import get_vault_service
         now = utc_now().isoformat()
-        encrypted = _encrypt(data)
+        encrypted = base64.b64encode(
+            get_vault_service().encrypt_str(json.dumps(data))
+        ).decode()
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -74,10 +73,26 @@ class CredentialVault:
         return row_id
 
     def load(self, account_id: int, domain: str, label: str | None = None) -> list[dict]:
-        """Load credentials for a domain.  Returns decrypted data.
+        """Decrypt and return stored credentials for *domain*.
 
-        If label is None, returns all credentials for the domain.
+        Each row's ``encrypted_data`` is decoded from base64 and decrypted via
+        :class:`~services.vault_service.VaultService`.  Rows whose value is stored
+        as raw bytes (produced by the one-time legacy migration) are passed to the
+        vault directly without a base64 step.  Rows that fail decryption (locked
+        vault, corrupted data) are silently skipped and logged at WARNING level.
+
+        Args:
+            account_id: ID of the owning account row.
+            domain:     Site domain to filter by (e.g. ``"github.com"``).
+            label:      Optional label to narrow the query to a single credential.
+                        Pass ``None`` to return all credentials for *domain*.
+
+        Returns:
+            List of dicts, each containing ``id``, ``domain``, ``label``,
+            ``credential_type``, and ``data`` (the decrypted credential dict).
         """
+        import base64
+        from services.vault_service import get_vault_service
         with self.db.connection() as conn:
             cursor = conn.cursor()
             if label:
@@ -96,7 +111,15 @@ class CredentialVault:
             results = []
             for row in cursor.fetchall():
                 try:
-                    decrypted = _decrypt(row[4])
+                    vault = get_vault_service()
+                    encrypted_val = row[4]
+                    # Raw bytes / memoryview → migrated BLOB; pass directly.
+                    if isinstance(encrypted_val, (bytes, memoryview)):
+                        raw = bytes(encrypted_val)
+                    else:
+                        # String → base64-encoded new format; decode before passing.
+                        raw = base64.b64decode(encrypted_val.encode())
+                    decrypted = json.loads(vault.decrypt_str(raw))
                 except Exception as e:
                     logger.warning("[CRED VAULT] Decryption failed for %s/%s: %s",
                                    row[1], row[2], e)
