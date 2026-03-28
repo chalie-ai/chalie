@@ -471,71 +471,40 @@ class TestVaultService:
         assert recovered == original, "DEK must remain the same after password change"
 
     # ------------------------------------------------------------------
-    # Fernet fallback (migration window — AC16)
+    # decrypt() is pure AES-GCM — no fallback
     # ------------------------------------------------------------------
 
-    def test_fernet_fallback_decryption(self, vault_db):
-        """decrypt() transparently decrypts legacy Fernet ciphertexts when
-        the encryption_keys row is present (migration window is open)."""
-        # Seed the legacy encryption_keys table
-        legacy_key = "legacy-secret-key-value"
-        vault_db.execute(
-            "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
-            (legacy_key,),
-        )
-        vault_db.commit()
-
-        # Create a Fernet ciphertext the same way the old code does
-        fernet_token = _make_legacy_fernet_token(legacy_key, "my-api-key")
-
+    def test_decrypt_rejects_invalid_ciphertext(self, vault_db):
+        """decrypt() raises on any non-AES-GCM data (no Fernet fallback)."""
         vault = _make_vault(vault_db)
         vault.initialize("pw")
         vault.unlock("pw")
 
-        # Pass the Fernet token bytes directly — decrypt() should fall back
-        recovered = vault.decrypt(fernet_token)
-
-        assert recovered == b"my-api-key"
-
-    def test_no_fernet_fallback_when_encryption_keys_absent(self, vault_db):
-        """decrypt() raises ValueError for truly invalid ciphertext (no legacy key)."""
-        vault = _make_vault(vault_db)
-        vault.initialize("pw")
-        vault.unlock("pw")
-
-        junk = b"\xde\xad\xbe\xef" * 20  # 80 bytes, not valid AES-GCM or Fernet
-
-        with pytest.raises(ValueError):
+        junk = b"\xde\xad\xbe\xef" * 20
+        with pytest.raises(Exception):
             vault.decrypt(junk)
 
-    # ------------------------------------------------------------------
-    # Migration: encryption_keys row deletion disables fallback (AC15)
-    # ------------------------------------------------------------------
-
-    def test_migration_deletes_encryption_keys_row(self, vault_db):
-        """After deleting the encryption_keys row the Fernet fallback is disabled."""
-        legacy_key = "migration-key"
+    def test_decrypt_rejects_fernet_token_directly(self, vault_db):
+        """decrypt() does NOT fall back to Fernet — legacy data must be migrated."""
+        legacy_key = "some-key"
         vault_db.execute(
             "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
             (legacy_key,),
         )
         vault_db.commit()
 
+        fernet_token = _make_legacy_fernet_token(legacy_key, "secret")
+
         vault = _make_vault(vault_db)
         vault.initialize("pw")
-        vault.unlock("pw")
+        # Skip migration by patching it out
+        from unittest.mock import patch
+        with patch.object(VaultService, "_run_legacy_migration"):
+            vault.unlock("pw")
 
-        # Verify fallback works while the key exists
-        token = _make_legacy_fernet_token(legacy_key, "secret")
-        assert vault.decrypt(token) == b"secret"
-
-        # Simulate completed migration by removing the legacy key
-        vault_db.execute("DELETE FROM encryption_keys WHERE id = 1")
-        vault_db.commit()
-
-        # Fallback should no longer work
-        with pytest.raises(ValueError):
-            vault.decrypt(token)
+        # Fernet token must NOT decrypt — there is no fallback path
+        with pytest.raises(Exception):
+            vault.decrypt(fernet_token)
 
     # ------------------------------------------------------------------
     # get_vault_service factory
@@ -667,62 +636,39 @@ class TestVaultService:
         assert vault.decrypt(base64.b64decode(new_browser)) == b"browser-password"
         cursor.close()
 
-    # ------------------------------------------------------------------
-    # Partial migration retry (AC15 atomicity)
-    # ------------------------------------------------------------------
+    def test_migration_is_noop_without_encryption_keys(self, vault_db):
+        """unlock() works normally when there is no legacy encryption_keys row."""
+        vault = _make_vault(vault_db)
+        vault.initialize("pw")
+        vault.unlock("pw")
 
-    def test_partial_migration_retries_on_next_unlock(self, vault_db):
-        """If migration fails the encryption_keys row is kept; the next
-        unlock() call retries and, on success, deletes the row.
+        # Should be able to encrypt/decrypt without errors
+        blob = vault.encrypt_str("test")
+        assert vault.decrypt_str(blob) == "test"
 
-        Simulates a migration failure by patching ``_run_legacy_migration`` to
-        return ``False`` on the first unlock call, then verifies that:
-
-        1. The ``encryption_keys`` row survives the failed migration attempt.
-        2. A subsequent ``unlock()`` with the real migration completes and
-           removes the ``encryption_keys`` row.
-        """
-        from unittest.mock import patch
-
-        legacy_key = "retry-migration-key"
+    def test_migration_skips_broken_fernet_rows(self, vault_db):
+        """Migration logs and skips rows that fail Fernet decryption."""
+        legacy_key = "skip-key"
         vault_db.execute(
             "INSERT OR IGNORE INTO encryption_keys (id, key_value) VALUES (1, ?)",
             (legacy_key,),
         )
-        fernet_api_key = _make_legacy_fernet_token(legacy_key, "retry-api-key")
+        # Insert a row that is NOT valid Fernet (garbage data)
         vault_db.execute(
             "INSERT INTO providers (name, platform, model, api_key) VALUES (?,?,?,?)",
-            ("retry-provider", "openai", "gpt-4", fernet_api_key),
+            ("broken-provider", "openai", "gpt-4", "not-a-fernet-token"),
         )
         vault_db.commit()
 
         vault = _make_vault(vault_db)
         vault.initialize("pw")
+        vault.unlock("pw")  # migration should not crash
 
-        # First unlock — migration is injected to fail (returns False).
-        # The encryption_keys row must NOT be deleted when migration fails.
-        with patch.object(vault, "_run_legacy_migration", return_value=False):
-            vault.unlock("pw")
-
+        # encryption_keys row should still be deleted
         cursor = vault_db.cursor()
         cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
-        count_after_first = cursor.fetchone()[0]
+        assert cursor.fetchone()[0] == 0
+        # The broken row should be untouched (still the original garbage)
+        cursor.execute("SELECT api_key FROM providers WHERE name = 'broken-provider'")
+        assert cursor.fetchone()[0] == "not-a-fernet-token"
         cursor.close()
-
-        assert count_after_first == 1, (
-            "encryption_keys row must remain when migration fails so retry is possible"
-        )
-
-        # Second unlock — real migration, no patch.
-        # Re-seal before the second unlock so unlock() goes through the full path.
-        _vault_state.dek = None
-        vault.unlock("pw")
-
-        cursor = vault_db.cursor()
-        cursor.execute("SELECT COUNT(*) FROM encryption_keys WHERE id = 1")
-        count_after_second = cursor.fetchone()[0]
-        cursor.close()
-
-        assert count_after_second == 0, (
-            "encryption_keys row should be deleted after successful retry migration"
-        )

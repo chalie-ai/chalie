@@ -332,45 +332,27 @@ class VaultService:
         """Decrypt an encrypted blob produced by :meth:`encrypt`.
 
         Splits the blob into ``nonce || ciphertext+tag`` and decrypts with the
-        cached DEK.  If AES-GCM tag verification fails and a legacy Fernet key
-        exists in ``encryption_keys`` (migration window), falls back to Fernet
-        decryption so that not-yet-migrated rows remain readable.
+        cached DEK.  Legacy Fernet data is migrated on first unlock — this
+        method only handles AES-256-GCM.
 
         Args:
-            blob: Encrypted blob as returned by :meth:`encrypt`, or a legacy
-                Fernet token stored as UTF-8–encoded bytes.
+            blob: Encrypted blob as returned by :meth:`encrypt`.
 
         Returns:
             Decrypted plaintext bytes.
 
         Raises:
-            :exc:`VaultLockedError`:  If the vault has not been unlocked.
-            :exc:`ValueError`:        If decryption fails with both AES-GCM and
-                the Fernet fallback (tampered or unrecognised ciphertext).
+            :exc:`VaultLockedError`: If the vault has not been unlocked.
+            :exc:`ValueError`:       If decryption fails (tampered or wrong DEK).
         """
         if not self.is_unlocked():
             raise VaultLockedError("Vault is locked — call unlock() before decrypting")
-
-        from cryptography.exceptions import InvalidTag
-
-        # --- Primary path: AES-256-GCM -----------------------------------
-        if len(blob) > _NONCE_SIZE:
-            nonce = blob[:_NONCE_SIZE]
-            ciphertext_tag = blob[_NONCE_SIZE:]
-            try:
-                return _aesgcm_decrypt(_vault_state.dek, nonce, ciphertext_tag)
-            except InvalidTag:
-                pass  # Fall through to legacy Fernet path
-
-        # --- Migration-window fallback: legacy Fernet --------------------
-        fernet_plaintext = self._try_fernet_fallback(blob)
-        if fernet_plaintext is not None:
-            return fernet_plaintext
-
-        raise ValueError(
-            "[Vault] decrypt() failed — ciphertext is invalid or was not encrypted "
-            "with the current DEK and no legacy Fernet key was found"
-        )
+        nonce = blob[:_NONCE_SIZE]
+        ciphertext_tag = blob[_NONCE_SIZE:]
+        try:
+            return _aesgcm_decrypt(_vault_state.dek, nonce, ciphertext_tag)
+        except Exception as exc:
+            raise ValueError(f"Decryption failed: {exc}") from exc
 
     def encrypt_str(self, s: str) -> bytes:
         """UTF-8–encode *s* and encrypt it with :meth:`encrypt`.
@@ -484,35 +466,21 @@ class VaultService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _run_legacy_migration(self) -> bool:
-        """Re-encrypt all legacy Fernet consumer rows with the vault DEK (AC15).
+    def _run_legacy_migration(self) -> None:
+        """One-shot re-encryption of legacy Fernet data to AES-256-GCM.
 
-        Triggered automatically from :meth:`unlock` when the
-        ``encryption_keys`` table still contains a row (``id = 1``).  Each
-        consumer table is migrated inside its own transaction so a partial
-        failure leaves the already-migrated tables intact.
+        Runs on first unlock when the ``encryption_keys`` table still has a
+        row.  Reads the old Fernet key, decrypts every encrypted value across
+        the four consumer tables, re-encrypts with the vault DEK, and deletes
+        the ``encryption_keys`` row.  Rows that fail Fernet decryption were
+        already broken before migration — they are logged and skipped.
 
-        Migration targets:
-          * ``providers.api_key``  — every non-NULL row.
-          * ``settings.encrypted_value`` — rows where ``is_sensitive = 1``
-            and ``encrypted_value IS NOT NULL``.
-          * ``tool_configs.config_value`` — rows whose value Fernet-decrypts
-            successfully (other rows are left untouched).
-          * ``browser_credentials.encrypted_data`` — every non-NULL row.
-
-        After all four tables succeed the ``encryption_keys`` singleton row
-        is deleted, permanently closing the migration window.
-
-        Returns:
-            ``True``  if the migration completed and the ``encryption_keys``
-                row was deleted.
-            ``False`` if any table failed; the next :meth:`unlock` call will
-                retry automatically (Fernet fallback remains active).
+        If the ``encryption_keys`` table is absent or empty, this is a no-op.
         """
         import hashlib
         from cryptography.fernet import Fernet, InvalidToken
 
-        # ── Fetch the legacy key ──────────────────────────────────────────
+        # ── Fetch legacy key (no-op if absent) ───────────────────────────
         try:
             with self._db.connection() as conn:
                 cursor = conn.cursor()
@@ -520,133 +488,60 @@ class VaultService:
                 row = cursor.fetchone()
                 cursor.close()
         except Exception:
-            return True  # Table absent — nothing to migrate
+            return  # Table doesn't exist — fresh install, nothing to migrate
 
         if row is None:
-            return True  # Already migrated (row was deleted on a previous unlock)
+            return  # Already migrated on a previous boot
 
         raw_key: str = row[0]
         key_bytes = hashlib.sha256(raw_key.encode()).digest()
         fernet_key = base64.urlsafe_b64encode(key_bytes)
         f = Fernet(fernet_key)
 
-        def _try_fernet(val) -> Optional[bytes]:
-            """Attempt Fernet decryption; return plaintext or None on failure.
+        logger.info("[Vault] Legacy Fernet key found — migrating encrypted data to AES-256-GCM")
 
-            Args:
-                val: Raw value from DB — may be ``bytes``, ``memoryview``,
-                    or a UTF-8 string Fernet token.
-
-            Returns:
-                Plaintext bytes if decryption succeeds, ``None`` otherwise.
-            """
-            if val is None:
-                return None
-            token = bytes(val) if isinstance(val, (bytes, memoryview)) else val.encode("utf-8")
-            try:
-                return f.decrypt(token)
-            except (InvalidToken, Exception):
-                return None
-
-        # ── Helper: migrate one table ─────────────────────────────────────
-
-        def _migrate_table(
-            select_sql: str, update_sql: str, id_col: int = 0, val_col: int = 1
-        ) -> tuple:
-            """Fetch, re-encrypt, and update all rows for a single table.
-
-            All updates run inside a single transaction so an error causes
-            the whole table's changes to be rolled back.
-
-            Args:
-                select_sql:  SQL that returns (id, encrypted_value) pairs.
-                update_sql:  Parameterised UPDATE accepting ``(new_blob, id)``.
-                id_col:      Index of the ID column in the result row.
-                val_col:     Index of the encrypted-value column in the row.
-
-            Returns:
-                A ``(success: bool, migrated_count: int)`` tuple.  ``success``
-                is ``False`` only when an unexpected exception occurs; a result
-                with zero rows is still a success.
-            """
-            try:
-                with self._db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(select_sql)
-                    rows = cursor.fetchall()
-                    cursor.close()
-
-                    count = 0
-                    for r in rows:
-                        plaintext = _try_fernet(r[val_col])
-                        if plaintext is None:
-                            continue  # Not Fernet-encrypted; skip
-                        new_blob = base64.b64encode(self.encrypt(plaintext)).decode()
-                        conn.execute(update_sql, (new_blob, r[id_col]))
-                        count += 1
-
-                logger.debug("[Vault] Migration: migrated %d row(s) via %s", count, select_sql[:40])
-                return (True, count)
-            except Exception as exc:
-                logger.warning("[Vault] Migration failed for query '%s': %s", select_sql[:40], exc)
-                return (False, 0)
-
-        # ── Run per-table migrations ──────────────────────────────────────
-
-        table_results = [
-            _migrate_table(
-                "SELECT id, api_key FROM providers WHERE api_key IS NOT NULL",
-                "UPDATE providers SET api_key = ? WHERE id = ?",
-            ),
-            _migrate_table(
-                "SELECT id, encrypted_value FROM settings "
-                "WHERE is_sensitive = 1 AND encrypted_value IS NOT NULL",
-                "UPDATE settings SET encrypted_value = ? WHERE id = ?",
-            ),
-            _migrate_table(
-                "SELECT id, config_value FROM tool_configs WHERE config_value IS NOT NULL",
-                "UPDATE tool_configs SET config_value = ? WHERE id = ?",
-            ),
-            _migrate_table(
-                "SELECT id, encrypted_data FROM browser_credentials "
-                "WHERE encrypted_data IS NOT NULL",
-                "UPDATE browser_credentials SET encrypted_data = ? WHERE id = ?",
-            ),
+        # ── Migrate each table ───────────────────────────────────────────
+        _TABLES = [
+            ("SELECT id, api_key FROM providers WHERE api_key IS NOT NULL",
+             "UPDATE providers SET api_key = ? WHERE id = ?"),
+            ("SELECT id, encrypted_value FROM settings "
+             "WHERE is_sensitive = 1 AND encrypted_value IS NOT NULL",
+             "UPDATE settings SET encrypted_value = ? WHERE id = ?"),
+            ("SELECT id, config_value FROM tool_configs WHERE config_value IS NOT NULL",
+             "UPDATE tool_configs SET config_value = ? WHERE id = ?"),
+            ("SELECT id, encrypted_data FROM browser_credentials "
+             "WHERE encrypted_data IS NOT NULL",
+             "UPDATE browser_credentials SET encrypted_data = ? WHERE id = ?"),
         ]
 
-        all_succeeded = all(ok for ok, _ in table_results)
-        total_migrated = sum(cnt for _, cnt in table_results)
+        total = 0
+        for select_sql, update_sql in _TABLES:
+            try:
+                with self._db.connection() as conn:
+                    rows = conn.execute(select_sql).fetchall()
+                    for row_id, encrypted_val in rows:
+                        if encrypted_val is None:
+                            continue
+                        token = (bytes(encrypted_val) if isinstance(encrypted_val, (bytes, memoryview))
+                                 else encrypted_val.encode("utf-8"))
+                        try:
+                            plaintext = f.decrypt(token)
+                        except (InvalidToken, Exception):
+                            logger.warning("[Vault] Skipping row %s — Fernet decrypt failed "
+                                           "(was already broken)", row_id)
+                            continue
+                        new_val = base64.b64encode(self.encrypt(plaintext)).decode()
+                        conn.execute(update_sql, (new_val, row_id))
+                        total += 1
+            except Exception as exc:
+                logger.warning("[Vault] Migration query failed: %s — %s", select_sql[:50], exc)
 
-        if not all_succeeded:
-            logger.warning(
-                "[Vault] Legacy migration incomplete — will retry on next unlock. "
-                "Per-table results (success, count): %s", table_results,
-            )
-            return False
+        # ── Delete the legacy key — migration is done ────────────────────
+        with self._db.connection() as conn:
+            conn.execute("DELETE FROM encryption_keys WHERE id = 1")
 
-        # ── Close the migration window only when rows were actually migrated ──
-        # If no Fernet-encrypted rows were found (all tables empty or already
-        # using AES-GCM), keep the encryption_keys row so the fallback path
-        # remains active until real legacy data arrives and is migrated.
-        if total_migrated == 0:
-            logger.debug(
-                "[Vault] Legacy migration: no Fernet rows found — keeping migration window open"
-            )
-            return True
-
-        try:
-            with self._db.connection() as conn:
-                conn.execute("DELETE FROM encryption_keys WHERE id = 1")
-            logger.info(
-                "[Vault] Legacy Fernet migration complete (%d row(s) re-encrypted) "
-                "— encryption_keys row deleted",
-                total_migrated,
-            )
-        except Exception as exc:
-            logger.warning("[Vault] Failed to delete encryption_keys row: %s", exc)
-            return False
-
-        return True
+        logger.info("[Vault] Legacy migration complete — %d row(s) re-encrypted, "
+                    "encryption_keys row deleted", total)
 
     def _load_vault_config(self) -> Optional[dict]:
         """Read the singleton ``vault_config`` row (id=1) from the database.
@@ -667,60 +562,6 @@ class VaultService:
             row = cursor.fetchone()
             cursor.close()
         return row  # sqlite3.Row or None
-
-    def _try_fernet_fallback(self, blob: bytes) -> Optional[bytes]:
-        """Attempt to decrypt *blob* using the legacy Fernet key from the database.
-
-        This method is the *migration-window fallback* (AC16): during the
-        period between first unlock (which opens the migration window) and
-        full data re-encryption, some rows in consumer tables still contain
-        Fernet ciphertexts.  This method allows those rows to be read
-        transparently without forcing a synchronous migration on every decrypt.
-
-        The legacy Fernet key derivation mirrors the logic in
-        ``provider_db_service.ProviderDbService._decrypt``:
-        ``key = base64url(SHA256(raw_key_string))``.
-
-        Args:
-            blob: Bytes that may be a UTF-8–encoded Fernet token.
-
-        Returns:
-            Decrypted plaintext bytes if Fernet decryption succeeds,
-            ``None`` if the legacy key is absent or decryption fails.
-        """
-        import hashlib
-
-        try:
-            with self._db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT key_value FROM encryption_keys WHERE id = 1")
-                row = cursor.fetchone()
-                cursor.close()
-        except Exception:
-            return None
-
-        if row is None:
-            return None
-
-        raw_key: str = row[0]
-        try:
-            from cryptography.fernet import Fernet, InvalidToken
-
-            key_bytes = hashlib.sha256(raw_key.encode()).digest()
-            fernet_key = base64.urlsafe_b64encode(key_bytes)
-            f = Fernet(fernet_key)
-
-            # blob may be raw bytes of the UTF-8 Fernet token string
-            token = blob if isinstance(blob, bytes) else blob.encode("utf-8")
-            plaintext = f.decrypt(token)
-            logger.debug("[Vault] Fernet fallback decryption succeeded (migration window)")
-            return plaintext
-        except Exception:
-            # Also try base64 decode as a last-resort legacy path
-            try:
-                return base64.b64decode(blob)
-            except Exception:
-                return None
 
 
 # ── Module-level factory ───────────────────────────────────────────────────────
