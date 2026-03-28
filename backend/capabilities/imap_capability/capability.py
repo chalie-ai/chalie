@@ -580,6 +580,8 @@ class ImapCapability(AbstractCapability):
                         criteria.extend(["SINCE", _imap_date(date_from)])
                     if date_to:
                         criteria.extend(["BEFORE", _imap_date(date_to)])
+                    if params.get("unanswered"):
+                        criteria.append("UNANSWERED")
                     if not criteria:
                         since = (utc_now() - timedelta(days=7)).strftime("%d-%b-%Y")
                         criteria.extend(["SINCE", since])
@@ -783,6 +785,14 @@ class ImapCapability(AbstractCapability):
                         "required": False,
                         "description": (
                             "Filter by triage category: 'noise', 'informational', or 'actionable'."
+                        ),
+                    },
+                    "unanswered": {
+                        "type": "boolean",
+                        "required": False,
+                        "description": (
+                            "If true, only return emails the user has not replied to "
+                            "(IMAP \\Answered flag not set)."
                         ),
                     },
                     "limit": {
