@@ -284,14 +284,17 @@ class ImapCapability(AbstractCapability):
     def understand(self, items):
         """Classify headers via deterministic triage heuristics.
 
-        Tags each email as noise/informational/actionable. No storage —
-        raw email data lives on the IMAP server, not in Chalie's memory.
+        Tags each email as noise/informational/actionable. Also indexes
+        sender identities for cross-capability contact resolution.
         """
         if not items:
             return items
+        from capabilities.contact_resolver import index_person
         for item in items:
             item["triage"] = classify_email(item)
             item["is_thread"] = bool(item.get("in_reply_to"))
+            if item.get("from_addr"):
+                index_person(item["from_addr"], item.get("from_name"), source="imap")
         return items
 
     def monitor(self):

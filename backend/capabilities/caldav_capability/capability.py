@@ -557,6 +557,12 @@ class CaldavCapability(AbstractCapability):
                     "[caldav] Failed to fetch from calendar '%s': %s", cal_name, exc
                 )
 
+        # --- Index attendee identities for contact resolution ---
+        from capabilities.contact_resolver import index_person
+        for event in all_events:
+            for attendee in event.get("attendees", []):
+                index_person(attendee, source="caldav")
+
         # --- Upsert events to scheduler + create derivative items ---
         self._upsert_events_to_scheduler(all_events, now)
 
