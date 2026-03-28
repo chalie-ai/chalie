@@ -238,12 +238,13 @@ _SEARCH_EMAILS = {
 
 
 @pytest.mark.unit
-def test_get_tools_returns_both_tools():
+def test_get_tools_returns_all_tools():
     cap = _make()
     tools = cap.get_tools()
     names = [t["name"] for t in tools]
     assert "imap_send_email" in names
     assert "imap_search_email" in names
+    assert "imap_read_email" in names
     for t in tools:
         assert "handler" in t
         assert "parameters" in t
@@ -618,3 +619,64 @@ def test_act_unknown_action():
     cap = _make()
     result = cap.act("delete_everything", {})
     assert "error" in result
+
+
+# --- extract_body + imap_read_email ---
+
+def _build_email(body="Hello", ct="plain", headers=True):
+    """Build RFC822 email bytes with a body."""
+    msg = MIMEText(body, ct, "utf-8")
+    if headers:
+        msg["From"] = "Sarah <sarah@work.com>"
+        msg["To"] = "me@example.com"
+        msg["Subject"] = "Test email"
+        msg["Date"] = "Mon, 28 Mar 2026 10:00:00 +0000"
+        msg["Message-ID"] = "<test@example.com>"
+    return msg.as_bytes()
+
+
+@pytest.mark.unit
+def test_extract_body_plain_and_truncation():
+    from capabilities.imap_capability.capability import extract_body
+    assert "Hello world" in extract_body(_build_email("Hello world"))
+    result = extract_body(_build_email("x" * 5000), max_chars=100)
+    assert "[truncated]" in result and len(result) < 200
+
+
+@pytest.mark.unit
+def test_extract_body_multipart_and_html_fallback():
+    from capabilities.imap_capability.capability import extract_body
+    from email.mime.multipart import MIMEMultipart
+    # Multipart: prefers plain
+    msg = MIMEMultipart("alternative")
+    msg.attach(MIMEText("Plain ver", "plain", "utf-8"))
+    msg.attach(MIMEText("<p>HTML</p>", "html", "utf-8"))
+    result = extract_body(msg.as_bytes())
+    assert "Plain ver" in result and "<p>" not in result
+    # HTML-only fallback
+    msg2 = MIMEMultipart("alternative")
+    msg2.attach(MIMEText("<p>HTML <b>bold</b></p>", "html", "utf-8"))
+    result2 = extract_body(msg2.as_bytes())
+    assert "HTML bold" in result2 and "<p>" not in result2
+
+
+@pytest.mark.unit
+def test_read_tool_success():
+    cap = _make()
+    raw = _build_email("Important content here")
+    mc = MagicMock()
+    mc.fetch.return_value = {42: {b"RFC822": raw}}
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler = next(t for t in cap.get_tools() if t["name"] == "imap_read_email")["handler"]
+        result = handler("t1", {"uid": 42})
+    assert result["uid"] == 42 and "Important content here" in result["body"]
+    assert result["from_addr"] == "sarah@work.com"
+
+
+@pytest.mark.unit
+def test_read_tool_error_cases():
+    cap = _make()
+    handler = next(t for t in cap.get_tools() if t["name"] == "imap_read_email")["handler"]
+    assert "error" in handler("t1", {})  # missing uid
+    with patch.object(cap, "_open_client", return_value=None):
+        assert "error" in handler("t1", {"uid": 42})  # no connection

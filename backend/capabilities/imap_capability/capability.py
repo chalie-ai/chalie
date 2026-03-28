@@ -34,6 +34,7 @@ _K_SMTP_PORT = "smtp:port"
 _K_SMTP_TLS = "smtp:tls"
 
 _INITIAL_DAYS = 7
+_MAX_BODY_CHARS = 4000
 
 # ---------------------------------------------------------------------------
 # Deterministic triage heuristics
@@ -99,6 +100,22 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict:
         "date": _safe_date(_hdr(msg, "Date")),
         "has_unsubscribe": "List-Unsubscribe" in msg,
     }
+
+
+def extract_body(raw_bytes: bytes, max_chars: int = _MAX_BODY_CHARS) -> str:
+    """Extract plain-text body from raw RFC822 email bytes."""
+    msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
+    parts = list(msg.walk()) if msg.is_multipart() else [msg]
+    by_type: dict[str, list[str]] = {"text/plain": [], "text/html": []}
+    for p in parts:
+        ct = p.get_content_type()
+        if ct in by_type:
+            c = p.get_content()
+            if isinstance(c, str):
+                by_type[ct].append(c)
+    text = "\n".join(by_type["text/plain"]) or re.sub(
+        r"<[^>]+>", "", "\n".join(by_type["text/html"])).strip()
+    return (text[:max_chars] + "\n[truncated]") if len(text) > max_chars else text
 
 
 class ImapCapability(AbstractCapability):
@@ -526,6 +543,42 @@ class ImapCapability(AbstractCapability):
                 logger.error("[imap] imap_search_email failed: %s", exc)
                 return {"error": str(exc)}
 
+        def _read_execute(topic, params, config=None, telemetry=None):
+            """Fetch the full plain-text body of an email by UID."""
+            uid = params.get("uid")
+            if not uid:
+                return {"error": "uid is required"}
+            try:
+                uid = int(uid)
+            except (TypeError, ValueError):
+                return {"error": "uid must be an integer"}
+            client = capability._open_client()
+            if not client:
+                return {"error": "Cannot connect to email server"}
+            try:
+                client.select_folder("INBOX", readonly=True)
+                raw = client.fetch([uid], [b"RFC822"])
+                if uid not in raw:
+                    return {"error": f"Email UID {uid} not found"}
+                raw_bytes = raw[uid][b"RFC822"]
+                headers = parse_headers(uid, raw_bytes)
+                return {
+                    "uid": uid,
+                    "subject": headers.get("subject", ""),
+                    "from_name": headers.get("from_name", ""),
+                    "from_addr": headers.get("from_addr", ""),
+                    "date": headers.get("date", ""),
+                    "body": extract_body(raw_bytes),
+                }
+            except Exception as exc:
+                logger.error("[imap] imap_read_email failed: %s", exc)
+                return {"error": str(exc)}
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+
         def _send_execute(topic, params, config=None, telemetry=None):
             """Send or reply to an email via SMTP."""
             to = (params.get("to") or "").strip()
@@ -634,5 +687,31 @@ class ImapCapability(AbstractCapability):
                 },
                 "constraints": {"timeout_seconds": 30},
                 "handler": _search_execute,
+            },
+            {
+                "name": "imap_read_email",
+                "description": (
+                    "Read the full content of an email by its UID. "
+                    "Returns subject, sender, date, and plain-text body. "
+                    "Use imap_search_email first to find the UID."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "integer",
+                        "required": True,
+                        "description": "The IMAP UID of the email to read.",
+                    },
+                },
+                "returns": {
+                    "uid": {"type": "integer", "description": "Email UID."},
+                    "subject": {"type": "string", "description": "Subject line."},
+                    "from_name": {"type": "string", "description": "Sender name."},
+                    "from_addr": {"type": "string", "description": "Sender email."},
+                    "date": {"type": "string", "description": "Send date (ISO)."},
+                    "body": {"type": "string", "description": "Plain-text body."},
+                    "error": {"type": "string", "description": "Error if failed."},
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _read_execute,
             },
         ]
