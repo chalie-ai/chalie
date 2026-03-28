@@ -90,7 +90,7 @@ class TestOnboardingNudge:
         assert result == ""
 
     def test_no_nudge_when_name_already_set(self, db):
-        """No nudge when IdentityStateService already has a name value."""
+        """No trait nudge when IdentityStateService already has a name value."""
         svc = _make_service_instance()
         identity = {
             'name': {'value': 'Dylan', 'normalized': 'dylan', 'display': 'Dylan',
@@ -98,8 +98,12 @@ class TestOnboardingNudge:
                      'previous': []}
         }
 
-        # exchange_count=4: only name (min_turn=3) is eligible, but it's set → no nudge
-        with _mock_identity_and_store(identity, exchange_count=4):
+        # exchange_count=4: only name (min_turn=3) is eligible, but it's set → no trait nudge.
+        # Patch capabilities as connected so no capability nudge fires either.
+        mock_cap = MagicMock()
+        mock_cap._connected = True
+        with _mock_identity_and_store(identity, exchange_count=4), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -127,7 +131,11 @@ class TestOnboardingNudge:
             '_onboarding': {'name': {'nudged_at_turn': 3, 'attempts': 1}},
         }
 
-        with _mock_identity_and_store(identity, exchange_count=4):
+        # Patch capabilities as connected so no capability nudge fires
+        mock_cap = MagicMock()
+        mock_cap._connected = True
+        with _mock_identity_and_store(identity, exchange_count=4), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -153,7 +161,7 @@ class TestOnboardingNudge:
         assert call_arg['name']['attempts'] == 2
 
     def test_no_nudge_after_max_attempts(self, db):
-        """No nudge after max_attempts reached for all scheduled traits."""
+        """No nudge after max_attempts reached for all scheduled traits (with capability connected)."""
         svc = _make_service_instance()
         # All 9 traits in _ONBOARDING_SCHEDULE must be exhausted (attempts >= max_attempts).
         identity = {
@@ -170,7 +178,11 @@ class TestOnboardingNudge:
             },
         }
 
-        with _mock_identity_and_store(identity, exchange_count=80):
+        # Patch capabilities as connected so no capability nudge fires
+        mock_cap = MagicMock()
+        mock_cap._connected = True
+        with _mock_identity_and_store(identity, exchange_count=80), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -184,8 +196,12 @@ class TestOnboardingNudge:
         ]
 
         # exchange_count=4: name (min_turn=3) eligible but in knowledge → skipped
-        # age_range (min_turn=5) not yet eligible → no nudge at all
-        with _mock_identity_and_store({}, exchange_count=4, user_traits=user_traits):
+        # age_range (min_turn=5) not yet eligible → no trait nudge at all
+        # Patch capabilities as connected so no capability nudge fires
+        mock_cap = MagicMock()
+        mock_cap._connected = True
+        with _mock_identity_and_store({}, exchange_count=4, user_traits=user_traits), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}):
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
@@ -224,3 +240,161 @@ class TestOnboardingNudge:
             result = svc._get_onboarding_nudge("t1")
 
         assert result == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Capability Connect Nudge
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _all_traits_exhausted():
+    """Return onboarding state with all trait nudges at max_attempts."""
+    return {
+        '_onboarding': {
+            'name':                    {'nudged_at_turn': 9,  'attempts': 2},
+            'age_range':               {'nudged_at_turn': 11, 'attempts': 1},
+            'occupation':              {'nudged_at_turn': 14, 'attempts': 1},
+            'timezone':                {'nudged_at_turn': 21, 'attempts': 1},
+            'communication_preference':{'nudged_at_turn': 24, 'attempts': 1},
+            'interests':               {'nudged_at_turn': 26, 'attempts': 1},
+            'work_schedule':           {'nudged_at_turn': 28, 'attempts': 1},
+            'primary_goal':            {'nudged_at_turn': 31, 'attempts': 1},
+            'learning_style':          {'nudged_at_turn': 36, 'attempts': 1},
+        },
+    }
+
+
+class TestCapabilityConnectNudge:
+
+    def test_capability_nudge_when_no_caps_connected(self, db):
+        """Capability nudge fires when all traits exhausted and no capability connected."""
+        svc = _make_service_instance()
+        identity = _all_traits_exhausted()
+
+        mock_cap = MagicMock()
+        mock_cap._connected = False
+        mock_cap.get_id.return_value = 'caldav'
+
+        mock_tcs = MagicMock()
+        mock_tcs.get_tool_config.return_value = {}
+
+        with _mock_identity_and_store(identity, exchange_count=80) as (mock_id, _), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}), \
+             patch('services.tool_config_service.ToolConfigService', return_value=mock_tcs):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert "Onboarding note" in result
+        assert "life integrations" in result.lower() or "calendar" in result.lower()
+
+    def test_no_capability_nudge_when_cap_connected(self, db):
+        """No capability nudge when a capability is connected."""
+        svc = _make_service_instance()
+        identity = _all_traits_exhausted()
+
+        mock_cap = MagicMock()
+        mock_cap._connected = True
+
+        with _mock_identity_and_store(identity, exchange_count=80), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert result == ""
+
+    def test_no_capability_nudge_when_cap_has_stored_credentials(self, db):
+        """No capability nudge when credentials are stored (even if not connected yet)."""
+        svc = _make_service_instance()
+        identity = _all_traits_exhausted()
+
+        mock_cap = MagicMock()
+        mock_cap._connected = False
+        mock_cap.get_id.return_value = 'caldav'
+
+        mock_tcs = MagicMock()
+        mock_tcs.get_tool_config.return_value = {'caldav:username': 'user@example.com'}
+
+        with _mock_identity_and_store(identity, exchange_count=80), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}), \
+             patch('services.tool_config_service.ToolConfigService', return_value=mock_tcs):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert result == ""
+
+    def test_capability_nudge_respects_min_turn(self, db):
+        """No capability nudge before min_turn even if no capabilities connected."""
+        svc = _make_service_instance()
+
+        mock_cap = MagicMock()
+        mock_cap._connected = False
+        mock_cap.get_id.return_value = 'caldav'
+
+        mock_tcs = MagicMock()
+        mock_tcs.get_tool_config.return_value = {}
+
+        # exchange_count=2 is below both name (min_turn=3) and capability nudge (min_turn=4)
+        with _mock_identity_and_store({}, exchange_count=2), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}), \
+             patch('services.tool_config_service.ToolConfigService', return_value=mock_tcs):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert result == ""
+
+    def test_capability_nudge_respects_max_attempts(self, db):
+        """Capability nudge stops after max_attempts."""
+        svc = _make_service_instance()
+        identity = _all_traits_exhausted()
+        identity['_onboarding']['_capability_connect'] = {
+            'nudged_at_turn': 40, 'attempts': 2
+        }
+
+        mock_cap = MagicMock()
+        mock_cap._connected = False
+        mock_cap.get_id.return_value = 'caldav'
+
+        mock_tcs = MagicMock()
+        mock_tcs.get_tool_config.return_value = {}
+
+        with _mock_identity_and_store(identity, exchange_count=80), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}), \
+             patch('services.tool_config_service.ToolConfigService', return_value=mock_tcs):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert result == ""
+
+    def test_capability_nudge_respects_cooldown(self, db):
+        """Capability nudge doesn't fire during cooldown period."""
+        svc = _make_service_instance()
+        identity = _all_traits_exhausted()
+        # Nudged at turn 40, cooldown=10, so next eligible at turn 50
+        identity['_onboarding']['_capability_connect'] = {
+            'nudged_at_turn': 40, 'attempts': 1
+        }
+
+        mock_cap = MagicMock()
+        mock_cap._connected = False
+        mock_cap.get_id.return_value = 'caldav'
+
+        mock_tcs = MagicMock()
+        mock_tcs.get_tool_config.return_value = {}
+
+        with _mock_identity_and_store(identity, exchange_count=45), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}), \
+             patch('services.tool_config_service.ToolConfigService', return_value=mock_tcs):
+            result = svc._get_onboarding_nudge("t1")
+
+        assert result == ""
+
+    def test_trait_nudge_takes_priority_over_capability_nudge(self, db):
+        """Trait nudges fire before capability nudge."""
+        svc = _make_service_instance()
+
+        mock_cap = MagicMock()
+        mock_cap._connected = False
+
+        # exchange_count=5: name nudge (min_turn=3) fires since no name set
+        with _mock_identity_and_store({}, exchange_count=5) as (mock_id, _), \
+             patch('capabilities.load_capabilities', return_value={'caldav': mock_cap}):
+            result = svc._get_onboarding_nudge("t1")
+
+        # Should get name trait nudge, not capability nudge
+        assert "Onboarding note" in result
+        assert "name" in result.lower() or "called" in result.lower()

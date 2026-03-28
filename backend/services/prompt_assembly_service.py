@@ -125,6 +125,24 @@ _ONBOARDING_SCHEDULE = [
     },
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Capability connect nudge — injected when no life integrations are configured.
+# Separate from the trait schedule because it checks capability state, not
+# identity traits.
+# ─────────────────────────────────────────────────────────────────────────────
+_CAPABILITY_NUDGE = {
+    'key': '_capability_connect',
+    'min_turn': 4,
+    'cooldown_turns': 10,
+    'max_attempts': 2,
+    'hint': (
+        "No life integrations are connected yet. "
+        "Naturally mention that connecting a calendar would let you help with "
+        "scheduling, conflicts, and daily briefings. "
+        "Keep it brief and inviting — don't push."
+    ),
+}
+
 
 class PromptAssemblyService:
     """Assembles system prompts from templates and live runtime context.
@@ -715,6 +733,40 @@ class PromptAssemblyService:
                     f"attempt={nudge_info['attempts']} at turn {exchange_count}"
                 )
                 return f"\n**Onboarding note:** {entry['hint']}\n"
+
+            # ── Capability connect nudge ─────────────────────────────────
+            # If no trait nudge is due, check whether any life capability
+            # has been configured.  If not, suggest connecting one.
+            try:
+                from capabilities import load_capabilities
+                from services.tool_config_service import ToolConfigService
+
+                caps = load_capabilities()
+                any_configured = any(c._connected for c in caps.values())
+                if not any_configured:
+                    tcs = ToolConfigService(get_shared_db_service())
+                    any_configured = any(tcs.get_tool_config(c.get_id()) for c in caps.values())
+
+                if not any_configured and exchange_count >= _CAPABILITY_NUDGE['min_turn']:
+                    cap_nudge = onboarding_state.get(_CAPABILITY_NUDGE['key'], {})
+                    cap_attempts = cap_nudge.get('attempts', 0)
+                    cap_last_turn = cap_nudge.get('nudged_at_turn', 0)
+                    cooldown_ok = cap_attempts == 0 or (exchange_count - cap_last_turn) >= _CAPABILITY_NUDGE['cooldown_turns']
+
+                    if cap_attempts < _CAPABILITY_NUDGE['max_attempts'] and cooldown_ok:
+                        cap_nudge['nudged_at_turn'] = exchange_count
+                        cap_nudge['attempts'] = cap_attempts + 1
+                        onboarding_state[_CAPABILITY_NUDGE['key']] = cap_nudge
+                        identity_svc.set_onboarding_state(onboarding_state)
+
+                        logging.debug(
+                            "[FRONTAL CORTEX] Capability connect nudge "
+                            "attempt=%d at turn %d",
+                            cap_nudge['attempts'], exchange_count,
+                        )
+                        return f"\n**Onboarding note:** {_CAPABILITY_NUDGE['hint']}\n"
+            except Exception:
+                pass  # capability check is best-effort
 
             return ""
         except Exception as e:
