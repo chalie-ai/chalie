@@ -154,15 +154,16 @@ class WorldStateService:
 
                 # Scheduled items — same window as the live query
                 cursor.execute("""
-                    SELECT id, message, due_at, status, item_type, recurrence
+                    SELECT id, message, due_at, status, item_type, recurrence, metadata
                     FROM scheduled_items
-                    WHERE (status = 'pending' AND due_at <= datetime(?, '+7 days'))
-                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours'))
+                    WHERE ((status = 'pending' AND due_at <= datetime(?, '+7 days'))
+                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours')))
+                      AND COALESCE(hidden, 0) = 0
                     ORDER BY due_at ASC
                     LIMIT ?
                 """, (now.isoformat(), now.isoformat(), MAX_SCHEDULED_CANDIDATES))
                 for row in cursor.fetchall():
-                    item_id, message, due_at_str, status, item_type, recurrence = row
+                    item_id, message, due_at_str, status, item_type, recurrence, metadata = row
                     payload['scheduled_items'].append({
                         'id': item_id,
                         'message': message,
@@ -170,6 +171,7 @@ class WorldStateService:
                         'status': status,
                         'item_type': item_type,
                         'recurrence': recurrence,
+                        'metadata': metadata,
                     })
 
                 # Persistent tasks
@@ -1005,8 +1007,9 @@ class WorldStateService:
                 cursor.execute("""
                     SELECT id, message, due_at, status, item_type, recurrence
                     FROM scheduled_items
-                    WHERE (status = 'pending' AND due_at <= datetime(?, '+7 days'))
-                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours'))
+                    WHERE ((status = 'pending' AND due_at <= datetime(?, '+7 days'))
+                       OR (status = 'fired' AND last_fired_at >= datetime(?, '-24 hours')))
+                      AND COALESCE(hidden, 0) = 0
                     ORDER BY due_at ASC
                     LIMIT ?
                 """, (now.isoformat(), now.isoformat(), MAX_SCHEDULED_CANDIDATES))
@@ -1029,6 +1032,9 @@ class WorldStateService:
                     if salience >= SALIENCE_THRESHOLD:
                         if status == 'fired':
                             label = f"[DONE] {message}"
+                        elif item_type == 'event':
+                            time_str = self._relative_time(now, due_at)
+                            label = f"[CALENDAR {time_str}] {message}"
                         else:
                             time_str = self._relative_time(now, due_at)
                             recur_suffix = (

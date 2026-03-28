@@ -75,7 +75,7 @@ def load_capabilities() -> dict:
                 entry_class_name,
             )
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "Failed to load capability '%s' from %s: %s",
                 capability_id,

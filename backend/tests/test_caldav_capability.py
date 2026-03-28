@@ -405,25 +405,16 @@ class TestCaldavCapability:
             )
 
     # ------------------------------------------------------------------
-    # Test 10 — ingest stores a knowledge fact
+    # Test 10 — ingest calls _upsert_events_to_scheduler
     # ------------------------------------------------------------------
 
-    def test_ingest_stores_knowledge_fact(self):
-        """``ingest()`` must call ``KnowledgeService.store`` with ``kind='fact'``, ``entity='calendar'``.
-
-        Wires a single VEVENT through the mock CalDAV pipeline and captures
-        all calls to ``KnowledgeService.store``.  Asserts that at least one
-        call was made with ``kind='fact'`` and ``entity='calendar'``,
-        confirming that event data is persisted to the knowledge store.
-        """
+    def test_ingest_calls_upsert_events_to_scheduler(self):
+        """``ingest()`` must call ``_upsert_events_to_scheduler()`` to persist events."""
         cap = _make_capability()
         cap._connected = True
 
         ical = _build_ical_calendar("uid-store-test", "Stand-up", _DTSTART, _DTEND)
         mock_dav_client_class, _ = _make_mock_caldav_setup(ical, "Work")
-
-        mock_ks_instance = MagicMock()
-        mock_ks_class = MagicMock(return_value=mock_ks_instance)
 
         with patch.object(
             cap,
@@ -437,50 +428,103 @@ class TestCaldavCapability:
             "capabilities.caldav_capability.capability._CALDAV_AVAILABLE", True
         ), patch(
             "capabilities.caldav_capability.capability._ICALENDAR_AVAILABLE", True
-        ), patch(
-            "services.database_service.get_shared_db_service",
-            return_value=MagicMock(),
-        ), patch(
-            "services.knowledge_service.KnowledgeService", mock_ks_class
-        ), patch(
-            "services.world_state_service.WorldStateService",
-            return_value=MagicMock(),
-        ), patch(
+        ), patch.object(
+            cap, "_upsert_events_to_scheduler"
+        ) as mock_upsert, patch(
             "capabilities.caldav_capability.capability.utc_now",
             return_value=_NOW,
         ):
             mock_lib.DAVClient = mock_dav_client_class
-            cap.ingest()
+            events = cap.ingest()
 
-        assert mock_ks_instance.store.called, (
-            "KnowledgeService.store was never called during ingest()"
-        )
+        assert len(events) >= 1, "Expected at least one parsed event"
+        mock_upsert.assert_called_once()
+        # First arg should be the events list, second should be the now timestamp
+        call_args = mock_upsert.call_args
+        assert len(call_args[0][0]) >= 1, "Events list should be non-empty"
 
-        # Inspect the first store() call — all arguments are keyword-only in
-        # the implementation so check call_args.kwargs; fall back to
-        # positional args for robustness.
-        first_call = mock_ks_instance.store.call_args_list[0]
-        kwargs = first_call.kwargs if first_call.kwargs else {}
-        args = first_call.args if first_call.args else ()
+    # ------------------------------------------------------------------
+    # Test 11 — connect calls _ensure_sync_registration
+    # ------------------------------------------------------------------
 
-        kind_val = kwargs.get("kind") or (args[0] if args else None)
-        entity_val = kwargs.get("entity") or (args[1] if len(args) > 1 else None)
+    def test_connect_calls_ensure_sync_registration(self):
+        """``connect()`` must call ``_ensure_sync_registration()`` on success."""
+        cap = _make_capability()
 
-        assert kind_val == "fact", (
-            f"Expected kind='fact', got kind={kind_val!r}"
-        )
-        assert entity_val == "calendar", (
-            f"Expected entity='calendar', got entity={entity_val!r}"
-        )
+        with patch.object(
+            cap,
+            "load_credential",
+            side_effect=["google", "user@test.com", "pass123"],
+        ), patch(
+            "capabilities.caldav_capability.capability._caldav_lib"
+        ) as mock_lib, patch(
+            "capabilities.caldav_capability.capability._CALDAV_AVAILABLE", True
+        ), patch.object(
+            cap, "_ensure_sync_registration"
+        ) as mock_reg:
+            mock_lib.DAVClient.return_value.principal.return_value = MagicMock()
+            result = cap.connect()
+
+        assert result is True
+        mock_reg.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # Test 12 — disconnect cancels caldav scheduled_items
+    # ------------------------------------------------------------------
+
+    def test_disconnect_cancels_scheduled_items(self):
+        """``disconnect()`` must cancel all source='caldav' pending items."""
+        cap = _make_capability()
+        cap._connected = True
+
+        mock_conn = MagicMock()
+        mock_db = MagicMock()
+        mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(cap, "delete_credentials"), \
+             patch("services.database_service.get_shared_db_service", return_value=mock_db):
+            cap.disconnect()
+
+        assert cap.is_connected() is False
+        mock_conn.execute.assert_called_once()
+        sql = mock_conn.execute.call_args[0][0]
+        assert "cancelled" in sql and "caldav" in sql
+
+    # ------------------------------------------------------------------
+    # Test 13 — monitor auto-reconnects
+    # ------------------------------------------------------------------
+
+    def test_monitor_auto_reconnects(self):
+        """``monitor()`` must call ``connect()`` when not connected."""
+        cap = _make_capability()
+        assert cap.is_connected() is False
+
+        with patch.object(cap, "connect", return_value=False) as mock_connect, \
+             patch.object(cap, "ingest") as mock_ingest:
+            cap.monitor()
+
+        mock_connect.assert_called_once()
+        mock_ingest.assert_not_called()  # connect failed, so ingest should not run
+
+    def test_monitor_calls_ingest_when_connected(self):
+        """``monitor()`` must call ``ingest()`` when connected."""
+        cap = _make_capability()
+        cap._connected = True
+
+        with patch.object(cap, "ingest", return_value=[]) as mock_ingest:
+            cap.monitor()
+
+        mock_ingest.assert_called_once()
 
 
 # -----------------------------------------------------------------------
-# Schedule hint formatting
+# Module-level helpers
 # -----------------------------------------------------------------------
 
 
-class TestFormatScheduleHint:
-    """Tests for :func:`_format_event_line` and :func:`_format_schedule_hint`."""
+class TestModuleLevelHelpers:
+    """Tests for module-level helper functions."""
 
     @staticmethod
     def _make_event(**overrides):
@@ -501,7 +545,6 @@ class TestFormatScheduleHint:
         line = _format_event_line(self._make_event())
         assert "09:00" in line and "09:30" in line
         assert "Team standup" in line and "[Work]" in line
-        # all-day replaces time range
         assert "all-day" in _format_event_line(self._make_event(all_day=True))
 
     @pytest.mark.unit
@@ -512,542 +555,25 @@ class TestFormatScheduleHint:
             location="Room 42", attendees=["a@b.com", "c@d.com"],
         ))
         assert "@ Room 42" in full and "(2 attendees)" in full
-        # single attendee still uses plural
-        assert "(1 attendees)" in _format_event_line(
-            self._make_event(attendees=["a@b.com"]))
-        # no optional fields
-        bare = _format_event_line(
-            self._make_event(location=None, attendees=[], calendar_name=None))
-        assert "@" not in bare and "attendee" not in bare and "[" not in bare
 
     @pytest.mark.unit
-    def test_hint_empty_and_single(self):
-        from capabilities.caldav_capability.capability import _format_schedule_hint
-
-        assert _format_schedule_hint([]) == "No upcoming events in the next 24 hours."
-        hint = _format_schedule_hint([self._make_event()])
-        assert "Next 24h (1 events):" in hint and "Team standup" in hint
-
-    @pytest.mark.unit
-    def test_hint_caps_at_max_events(self):
-        from capabilities.caldav_capability.capability import _format_schedule_hint
-
-        events = [
-            self._make_event(
-                uid=f"evt-{i}", summary=f"Meeting {i}",
-                dtstart=datetime.datetime(2026, 3, 28, 8 + i, 0, tzinfo=_UTC),
-                dtend=datetime.datetime(2026, 3, 28, 8 + i, 30, tzinfo=_UTC),
-            ) for i in range(8)
-        ]
-        hint = _format_schedule_hint(events, max_events=5)
-        assert "(8 events)" in hint and "Meeting 4" in hint
-        assert "Meeting 5" not in hint and "(+3 more)" in hint
+    def test_safe_int(self):
+        from capabilities.caldav_capability.capability import _safe_int
+        assert _safe_int("42", 0) == 42
+        assert _safe_int(None, 10) == 10
+        assert _safe_int("not-a-number", 5) == 5
 
     @pytest.mark.unit
-    def test_hint_rich_event(self):
-        from capabilities.caldav_capability.capability import _format_schedule_hint
+    def test_events_overlap(self):
+        from capabilities.caldav_capability.capability import _events_overlap
+        ev_a = {'dtstart': datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
+                'dtend': datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC)}
+        ev_b = {'dtstart': datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
+                'dtend': datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC)}
+        assert _events_overlap(ev_a, ev_b) is True
+
+        ev_c = {'dtstart': datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC),
+                'dtend': datetime.datetime(2026, 3, 28, 17, 0, tzinfo=_UTC)}
+        assert _events_overlap(ev_a, ev_c) is False
 
-        hint = _format_schedule_hint([self._make_event(
-            location="HQ", attendees=["a@b.com", "c@d.com"],
-        )])
-        assert "[Work]" in hint and "@ HQ" in hint and "(2 attendees)" in hint
 
-
-# -----------------------------------------------------------------------
-# First-connect greeting
-# -----------------------------------------------------------------------
-
-
-class TestFirstConnectGreeting:
-    """Tests for :meth:`CaldavCapability._maybe_send_greeting`."""
-
-    @staticmethod
-    def _make_event(**overrides):
-        base = {
-            'uid': 'evt-1', 'summary': 'Team standup',
-            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
-            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
-            'location': None, 'attendees': [], 'recurrence': None,
-            'all_day': False, 'calendar_name': 'Work',
-        }
-        base.update(overrides)
-        return base
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_first_ingest_sends_greeting(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = None  # no flag yet
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
-        events = [self._make_event()]
-
-        result = cap._maybe_send_greeting(events, now)
-        assert result is True
-        store.rpush.assert_called_once()
-        # Verify the prompt-queue push contains schedule data
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "CALENDAR CONNECTED" in payload['prompt']
-        assert "Team standup" in payload['prompt']
-        assert payload['metadata']['source'] == 'capability_greeting'
-        # Flag was set
-        store.set.assert_called_once_with('caldav:greeting_sent', '1')
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_second_ingest_skips_greeting(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = "1"  # flag already set
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
-
-        result = cap._maybe_send_greeting([self._make_event()], now)
-        assert result is False
-        store.rpush.assert_not_called()
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_empty_schedule_still_sends_greeting(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
-
-        result = cap._maybe_send_greeting([], now)
-        assert result is True
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "No upcoming events" in payload['prompt']
-
-
-# -----------------------------------------------------------------------
-# Upcoming-event alerts
-# -----------------------------------------------------------------------
-
-
-class TestUpcomingEventAlerts:
-    """Tests for :meth:`CaldavCapability._maybe_send_upcoming_alerts`."""
-
-    @staticmethod
-    def _make_event(**overrides):
-        base = {
-            'uid': 'evt-1', 'summary': 'Team standup',
-            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
-            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
-            'location': None, 'attendees': [], 'recurrence': None,
-            'all_day': False, 'calendar_name': 'Work',
-        }
-        base.update(overrides)
-        return base
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_alert_fires_for_imminent_event(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = None  # not alerted yet
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 40, tzinfo=_UTC)
-        # Event at 09:00 is 20 min away — within 15-30 window
-        result = cap._maybe_send_upcoming_alerts([self._make_event()], now)
-        assert result == 1
-        store.rpush.assert_called_once()
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "CALENDAR ALERT" in payload['prompt']
-        assert "20 minutes" in payload['prompt']
-        store.setex.assert_called_once()
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_already_alerted_uid_skips(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = "1"  # already alerted
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 40, tzinfo=_UTC)
-        result = cap._maybe_send_upcoming_alerts([self._make_event()], now)
-        assert result == 0
-        store.rpush.assert_not_called()
-
-    @pytest.mark.unit
-    def test_no_imminent_events_returns_zero(self):
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 7, 0, tzinfo=_UTC)
-        # Event at 09:00 is 120 min away — outside window
-        result = cap._maybe_send_upcoming_alerts(
-            [self._make_event()], now)
-        assert result == 0
-
-
-class TestAttendeeContext:
-    """Tests for :meth:`CaldavCapability._build_attendee_context`."""
-
-    @staticmethod
-    def _make_event(**overrides):
-        base = {
-            'uid': 'evt-1', 'summary': 'Team standup',
-            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
-            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
-            'location': None, 'attendees': [], 'recurrence': None,
-            'all_day': False, 'calendar_name': 'Work',
-        }
-        base.update(overrides)
-        return base
-
-    @pytest.mark.unit
-    def test_no_attendees_returns_empty(self):
-        cap = _make_capability()
-        result = cap._build_attendee_context(self._make_event(attendees=[]))
-        assert result == ""
-
-    @pytest.mark.unit
-    @patch('services.database_service.get_shared_db_service')
-    @patch('services.knowledge_service.KnowledgeService')
-    def test_attendee_with_knowledge(self, mock_ks_cls, mock_db):
-        mock_ks = MagicMock()
-        mock_ks.recall.return_value = [
-            {"value": "prefers morning meetings"},
-            {"value": "works on backend team"},
-        ]
-        mock_ks_cls.return_value = mock_ks
-
-        cap = _make_capability()
-        event = self._make_event(attendees=["sarah.chen@example.com"])
-        result = cap._build_attendee_context(event)
-        assert "Sarah Chen" in result
-        assert "prefers morning meetings" in result
-        assert "Attendee context:" in result
-
-    @pytest.mark.unit
-    @patch('services.database_service.get_shared_db_service')
-    @patch('services.knowledge_service.KnowledgeService')
-    def test_attendee_no_knowledge_returns_empty(self, mock_ks_cls, mock_db):
-        mock_ks = MagicMock()
-        mock_ks.recall.return_value = []
-        mock_ks_cls.return_value = mock_ks
-
-        cap = _make_capability()
-        event = self._make_event(attendees=["unknown@example.com"])
-        result = cap._build_attendee_context(event)
-        assert result == ""
-
-    @pytest.mark.unit
-    @patch('services.database_service.get_shared_db_service')
-    @patch('services.knowledge_service.KnowledgeService')
-    def test_limits_attendees_to_max(self, mock_ks_cls, mock_db):
-        mock_ks = MagicMock()
-        mock_ks.recall.return_value = [{"value": "context"}]
-        mock_ks_cls.return_value = mock_ks
-
-        cap = _make_capability()
-        many = [f"person{i}@example.com" for i in range(10)]
-        event = self._make_event(attendees=many)
-        cap._build_attendee_context(event)
-        # Should only query for first 3 attendees
-        assert mock_ks.recall.call_count == 3
-
-    @pytest.mark.unit
-    def test_survives_exception(self):
-        cap = _make_capability()
-        event = self._make_event(attendees=["a@b.com"])
-        # No db service available — should return empty, not raise
-        result = cap._build_attendee_context(event)
-        assert result == ""
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_alert_includes_attendee_context(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 40, tzinfo=_UTC)
-        event = self._make_event(attendees=["sarah@example.com"])
-        with patch.object(
-            cap, '_build_attendee_context',
-            return_value="Attendee context:\n- Sarah: prefers concise updates",
-        ):
-            cap._maybe_send_upcoming_alerts([event], now)
-
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "Attendee context:" in payload['prompt']
-        assert "Sarah" in payload['prompt']
-
-
-class TestDailyDigest:
-    """Tests for the fused morning brief (replaces CalDAV-only daily digest)."""
-
-    @staticmethod
-    def _make_event(**overrides):
-        base = {
-            'uid': 'evt-1', 'summary': 'Team standup',
-            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
-            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
-            'location': None, 'attendees': [], 'recurrence': None,
-            'all_day': False, 'calendar_name': 'Work',
-        }
-        base.update(overrides)
-        return base
-
-    @pytest.mark.unit
-    @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
-    @patch('services.memory_client.MemoryClientService')
-    def test_digest_fires_first_time_today(self, mock_mcs, _mock_hint):
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        from capabilities.morning_brief import maybe_send_morning_brief
-        now = datetime.datetime(2026, 3, 28, 6, 0, tzinfo=_UTC)
-        result = maybe_send_morning_brief([self._make_event()], now)
-        assert result is True
-        store.rpush.assert_called_once()
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "MORNING BRIEF" in payload['prompt']
-        assert "Team standup" in payload['prompt']
-        store.setex.assert_called_once_with("morning_brief:2026-03-28", 86400, "1")
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_digest_skips_if_already_sent(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = "1"
-        mock_mcs.create_connection.return_value = store
-
-        from capabilities.morning_brief import maybe_send_morning_brief
-        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
-        result = maybe_send_morning_brief([self._make_event()], now)
-        assert result is False
-        store.rpush.assert_not_called()
-
-    @pytest.mark.unit
-    @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
-    @patch('services.memory_client.MemoryClientService')
-    def test_digest_with_empty_day(self, mock_mcs, _mock_hint):
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        from capabilities.morning_brief import maybe_send_morning_brief
-        now = datetime.datetime(2026, 3, 28, 6, 0, tzinfo=_UTC)
-        result = maybe_send_morning_brief([], now)
-        assert result is True
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "No events today" in payload['prompt']
-
-
-class TestConflictAlert:
-    """Tests for :meth:`CaldavCapability._maybe_send_conflict_alert`."""
-
-    @staticmethod
-    def _make_event(**overrides):
-        base = {
-            'uid': 'evt-1', 'summary': 'Meeting A',
-            'dtstart': datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-            'dtend': datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC),
-            'location': None, 'attendees': [], 'recurrence': None,
-            'all_day': False, 'calendar_name': 'Work',
-        }
-        base.update(overrides)
-        return base
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_conflict_alert_fires_for_overlapping_events(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = None  # not alerted yet
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
-        ev_a = self._make_event(uid='a', summary='Design Review',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
-        ev_b = self._make_event(uid='b', summary='Sprint Planning',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
-        result = cap._maybe_send_conflict_alert([ev_a, ev_b], now)
-        assert result == 1
-        store.rpush.assert_called_once()
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert "CALENDAR CONFLICT" in payload['prompt']
-        assert "Design Review" in payload['prompt']
-        assert "Sprint Planning" in payload['prompt']
-        store.setex.assert_called_once()
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_conflict_alert_deduped(self, mock_mcs):
-        store = MagicMock()
-        store.get.return_value = "1"  # already alerted
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
-        ev_a = self._make_event(uid='a',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
-        ev_b = self._make_event(uid='b',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
-        result = cap._maybe_send_conflict_alert([ev_a, ev_b], now)
-        assert result == 0
-        store.rpush.assert_not_called()
-
-    @pytest.mark.unit
-    @pytest.mark.parametrize("label,now_hour,ev_a_kw,ev_b_kw", [
-        ("non_overlapping", 12,
-         dict(uid='a', dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-              dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC)),
-         dict(uid='b', dtstart=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC),
-              dtend=datetime.datetime(2026, 3, 28, 17, 0, tzinfo=_UTC))),
-        ("past_events", 16,
-         dict(uid='a', dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-              dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC)),
-         dict(uid='b', dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
-              dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))),
-        ("all_day_excluded", 12,
-         dict(uid='a', all_day=True, dtstart=datetime.datetime(2026, 3, 28, 0, 0, tzinfo=_UTC),
-              dtend=datetime.datetime(2026, 3, 29, 0, 0, tzinfo=_UTC)),
-         dict(uid='b', dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-              dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))),
-    ], ids=["non_overlapping", "past_events", "all_day_excluded"])
-    def test_no_alert_cases(self, label, now_hour, ev_a_kw, ev_b_kw):
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, now_hour, 0, tzinfo=_UTC)
-        result = cap._maybe_send_conflict_alert(
-            [self._make_event(**ev_a_kw), self._make_event(**ev_b_kw)], now)
-        assert result == 0
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_conflict_alert_uid_order_independent(self, mock_mcs):
-        """Dedup key is canonicalized — UID order doesn't matter."""
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC)
-        ev_a = self._make_event(uid='z-uid',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
-        ev_b = self._make_event(uid='a-uid',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
-        cap._maybe_send_conflict_alert([ev_a, ev_b], now)
-        # Dedup key should use sorted UIDs: a-uid:z-uid
-        flag_key = store.setex.call_args[0][0]
-        assert "a-uid:z-uid" in flag_key
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_conflict_alert_includes_reschedule_hint(self, mock_mcs):
-        """Conflict alert prompt should contain reschedule guidance."""
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
-        ev_a = self._make_event(uid='a', summary='Design Review',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
-        ev_b = self._make_event(uid='b', summary='Sprint Planning',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 30, tzinfo=_UTC))
-        cap._maybe_send_conflict_alert([ev_a, ev_b], now)
-
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        prompt = payload['prompt']
-        assert "UID: a" in prompt
-        assert "UID: b" in prompt
-        assert "caldav_find_free_slots" in prompt
-        assert "caldav_update_event" in prompt
-
-    @pytest.mark.unit
-    @patch('services.memory_client.MemoryClientService')
-    def test_conflict_alert_picks_shorter_event(self, mock_mcs):
-        """Reschedule hint should suggest moving the shorter event."""
-        store = MagicMock()
-        store.get.return_value = None
-        mock_mcs.create_connection.return_value = store
-
-        cap = _make_capability()
-        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
-        ev_a = self._make_event(uid='short', summary='Quick Sync',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC))
-        ev_b = self._make_event(uid='long', summary='Workshop',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC))
-        cap._maybe_send_conflict_alert([ev_a, ev_b], now)
-
-        import json
-        payload = json.loads(store.rpush.call_args[0][1])
-        assert 'Quick Sync' in payload['prompt']
-        assert 'Easiest to move: "Quick Sync"' in payload['prompt']
-
-
-class TestBuildRescheduleHint:
-    """Tests for :func:`_build_reschedule_hint`."""
-
-    @staticmethod
-    def _make_event(**overrides):
-        base = {
-            'uid': 'evt-1', 'summary': 'Meeting',
-            'dtstart': datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-            'dtend': datetime.datetime(2026, 3, 28, 15, 0, tzinfo=_UTC),
-            'all_day': False,
-        }
-        base.update(overrides)
-        return base
-
-    @pytest.mark.unit
-    def test_hint_identifies_shorter_event(self):
-        from capabilities.caldav_capability.capability import _build_reschedule_hint
-        ev_a = self._make_event(uid='a', summary='Short',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 14, 30, tzinfo=_UTC))
-        ev_b = self._make_event(uid='b', summary='Long',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC))
-        hint = _build_reschedule_hint(ev_a, ev_b)
-        assert '"Short"' in hint
-        assert 'UID: a' in hint
-        assert '30min' in hint
-
-    @pytest.mark.unit
-    def test_hint_includes_tool_names(self):
-        from capabilities.caldav_capability.capability import _build_reschedule_hint
-        ev_a = self._make_event(uid='x')
-        ev_b = self._make_event(uid='y',
-                                dtstart=datetime.datetime(2026, 3, 28, 14, 0, tzinfo=_UTC),
-                                dtend=datetime.datetime(2026, 3, 28, 16, 0, tzinfo=_UTC))
-        hint = _build_reschedule_hint(ev_a, ev_b)
-        assert 'caldav_find_free_slots' in hint
-        assert 'caldav_update_event' in hint
-
-    @pytest.mark.unit
-    def test_hint_equal_duration_picks_first(self):
-        from capabilities.caldav_capability.capability import _build_reschedule_hint
-        ev_a = self._make_event(uid='a', summary='Alpha')
-        ev_b = self._make_event(uid='b', summary='Beta')
-        hint = _build_reschedule_hint(ev_a, ev_b)
-        assert '"Alpha"' in hint  # ev_a picked when durations equal

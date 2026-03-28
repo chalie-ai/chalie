@@ -238,9 +238,8 @@ def main():
     from workers.background_llm_worker import background_llm_worker
     manager.register_service("background-llm-worker", background_llm_worker)
 
-    # Capability scheduler — drives periodic ingestion for connected capability plugins
-    from services.capability_scheduler_service import capability_scheduler_worker
-    manager.register_service("capability-scheduler-service", capability_scheduler_worker)
+    # Capability sync — bootstrap connected capabilities into scheduler system handlers
+    _bootstrap_capability_sync()
 
     # Optional services (fail gracefully)
     _try_register(manager, "growth-pattern-service",
@@ -303,6 +302,27 @@ def main():
 
     # Start everything
     manager.run()
+
+
+def _bootstrap_capability_sync():
+    """Bootstrap connected capabilities into the scheduler's system handler registry.
+
+    For each capability, call connect() — it checks credentials internally and
+    registers its sync handler + ensures recurring scheduled_items exist.
+    """
+    try:
+        from capabilities import load_capabilities
+        all_caps = load_capabilities()
+        for cap_id, cap in all_caps.items():
+            try:
+                if not cap.is_connected():
+                    cap.connect()
+                if cap.is_connected():
+                    logger.info("[bootstrap] Auto-connected capability: %s", cap_id)
+            except Exception as exc:
+                logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
+    except Exception as exc:
+        logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
 
 
 def _try_register(manager, name, module_path, func_name):

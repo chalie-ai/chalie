@@ -292,7 +292,64 @@ class ImapCapability(AbstractCapability):
         items = self.ingest()
         if items:
             self.understand(items)
+            self._first_connect_greeting(items)
         self._inject_inbox_hint()
+
+    # ------------------------------------------------------------------
+    # First-connect greeting (one-time notification)
+    # ------------------------------------------------------------------
+
+    def _first_connect_greeting(self, items: list) -> None:
+        """Create a one-time greeting notification after the first email ingest.
+
+        Mirrors the CalDAV greeting pattern: checks for ``imap:greeting``
+        in ``scheduled_items`` and inserts a notification with triage counts
+        if it doesn't exist yet.
+        """
+        try:
+            import uuid
+
+            from services.database_service import get_shared_db_service
+
+            db = get_shared_db_service()
+            now = utc_now()
+            greeting_uid = "imap:greeting"
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
+                    (greeting_uid,),
+                )
+                if cursor.fetchone():
+                    return  # already greeted
+
+                counts: dict[str, int] = {}
+                for item in items:
+                    cat = item.get("triage", "informational")
+                    counts[cat] = counts.get(cat, 0) + 1
+
+                total = len(items)
+                parts = [f"Found {total} email{'s' if total != 1 else ''}"]
+                if counts.get("actionable"):
+                    parts.append(f"{counts['actionable']} actionable")
+                if counts.get("informational"):
+                    parts.append(f"{counts['informational']} informational")
+                greeting_msg = f"Email connected! {', '.join(parts)}."
+
+                cursor.execute(
+                    """INSERT INTO scheduled_items
+                       (id, item_type, message, due_at, status, topic,
+                        source, external_uid, hidden, created_at)
+                     VALUES (?, 'notification', ?, ?, 'pending', 'email',
+                             'imap', ?, 0, ?)""",
+                    (uuid.uuid4().hex[:8], greeting_msg, now.isoformat(),
+                     greeting_uid, now.isoformat()),
+                )
+                conn.commit()
+                logger.info("[imap] First-connect greeting: %s", greeting_msg)
+        except Exception as exc:
+            logger.error("[imap] _first_connect_greeting failed: %s", exc)
 
     # ------------------------------------------------------------------
     # World-state hint

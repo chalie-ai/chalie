@@ -418,3 +418,97 @@ def test_monitor_calls_inject_inbox_hint():
          patch.object(cap, "_inject_inbox_hint") as hint_mock:
         cap.monitor()
     hint_mock.assert_called_once()
+
+
+# --- _first_connect_greeting ---
+
+def _setup_greeting_db():
+    """Create an in-memory SQLite with the scheduled_items table."""
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""CREATE TABLE scheduled_items (
+        id TEXT PRIMARY KEY, item_type TEXT, message TEXT, due_at TEXT,
+        status TEXT, topic TEXT, source TEXT, external_uid TEXT,
+        hidden INTEGER, created_at TEXT, recurrence TEXT, is_prompt INTEGER
+    )""")
+    conn.commit()
+    return conn
+
+
+@pytest.mark.unit
+def test_first_connect_greeting_fires():
+    """First call creates a greeting notification."""
+    cap = _make()
+    conn = _setup_greeting_db()
+    db_mock = MagicMock()
+    db_mock.connection.return_value.__enter__ = lambda s: conn
+    db_mock.connection.return_value.__exit__ = MagicMock(return_value=False)
+    items = [
+        {"triage": "actionable", "uid": 1},
+        {"triage": "informational", "uid": 2},
+        {"triage": "noise", "uid": 3},
+    ]
+    with patch("services.database_service.get_shared_db_service", return_value=db_mock):
+        cap._first_connect_greeting(items)
+    row = conn.execute("SELECT message FROM scheduled_items WHERE external_uid = 'imap:greeting'").fetchone()
+    assert row is not None
+    assert "Email connected!" in row[0]
+    assert "1 actionable" in row[0]
+    assert "1 informational" in row[0]
+    conn.close()
+
+
+@pytest.mark.unit
+def test_first_connect_greeting_skips_duplicate():
+    """Second call does not insert a duplicate greeting."""
+    cap = _make()
+    conn = _setup_greeting_db()
+    conn.execute(
+        "INSERT INTO scheduled_items (id, item_type, message, due_at, status, "
+        "topic, source, external_uid, hidden, created_at) "
+        "VALUES ('x', 'notification', 'old', '2026-01-01', 'pending', "
+        "'email', 'imap', 'imap:greeting', 0, '2026-01-01')"
+    )
+    conn.commit()
+    db_mock = MagicMock()
+    db_mock.connection.return_value.__enter__ = lambda s: conn
+    db_mock.connection.return_value.__exit__ = MagicMock(return_value=False)
+    with patch("services.database_service.get_shared_db_service", return_value=db_mock):
+        cap._first_connect_greeting([{"triage": "actionable", "uid": 1}])
+    rows = conn.execute("SELECT COUNT(*) FROM scheduled_items WHERE external_uid = 'imap:greeting'").fetchone()
+    assert rows[0] == 1  # still just the original
+    conn.close()
+
+
+@pytest.mark.unit
+def test_first_connect_greeting_survives_exception():
+    """DB failure doesn't crash monitor()."""
+    cap = _make()
+    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
+        cap._first_connect_greeting([{"triage": "actionable", "uid": 1}])  # should not raise
+
+
+@pytest.mark.unit
+def test_monitor_calls_greeting_on_items():
+    """monitor() calls _first_connect_greeting when items are returned."""
+    cap = _make()
+    cap._connected = True
+    items = [{"uid": 1}]
+    with patch.object(cap, "ingest", return_value=items), \
+         patch.object(cap, "understand"), \
+         patch.object(cap, "_first_connect_greeting") as greet, \
+         patch.object(cap, "_inject_inbox_hint"):
+        cap.monitor()
+    greet.assert_called_once_with(items)
+
+
+@pytest.mark.unit
+def test_monitor_skips_greeting_when_empty():
+    """monitor() does NOT call _first_connect_greeting when ingest returns empty."""
+    cap = _make()
+    cap._connected = True
+    with patch.object(cap, "ingest", return_value=[]), \
+         patch.object(cap, "_first_connect_greeting") as greet, \
+         patch.object(cap, "_inject_inbox_hint"):
+        cap.monitor()
+    greet.assert_not_called()
