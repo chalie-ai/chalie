@@ -588,7 +588,11 @@ class VaultService:
             key_value = key_path.read_text().strip()
             if not key_value:
                 return None
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "[Vault] Failed to read legacy .key file %s: %s",
+                key_path, exc,
+            )
             return None
 
         logger.info(
