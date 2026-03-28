@@ -10,8 +10,8 @@ import time
 import logging
 import hashlib
 import threading
-from typing import Optional, Dict, List, Any
-from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+from datetime import datetime
 from services.database_service import text
 
 logger = logging.getLogger(__name__)
