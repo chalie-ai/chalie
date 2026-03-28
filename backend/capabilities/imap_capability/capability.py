@@ -257,37 +257,17 @@ class ImapCapability(AbstractCapability):
                 pass
 
     def understand(self, items):
-        """Classify headers and store as knowledge facts.
+        """Classify headers via deterministic triage heuristics.
 
-        Each email is tagged noise/informational/actionable via deterministic
-        heuristics, then persisted via KnowledgeService so the LLM can reason
-        about email context.
+        Tags each email as noise/informational/actionable. No storage —
+        raw email data lives on the IMAP server, not in Chalie's memory.
         """
         if not items:
             return items
-        try:
-            from services.database_service import get_shared_db_service
-            from services.knowledge_service import KnowledgeService
-
-            ks = KnowledgeService(get_shared_db_service())
-            for item in items:
-                item["triage"] = classify_email(item)
-                item["is_thread"] = bool(item.get("in_reply_to"))
-                self._store_email_fact(ks, item)
-        except Exception as exc:
-            logger.error("[imap] understand: %s", exc, exc_info=True)
+        for item in items:
+            item["triage"] = classify_email(item)
+            item["is_thread"] = bool(item.get("in_reply_to"))
         return items
-
-    @staticmethod
-    def _store_email_fact(ks, item):
-        """Persist one email header as a knowledge fact + sender relationship."""
-        key_id = item.get("message_id") or f"uid:{item['uid']}"
-        sender = item.get("from_name") or item.get("from_addr", "unknown")
-        ks.store(
-            kind="fact", entity="email", key=f"msg:{key_id}",
-            value=f"[{item['triage']}] {sender}: {item.get('subject', '')}",
-            data=item, decay_class="fast", confidence=0.7, source="imap",
-        )
 
     def monitor(self):
         """Fetch new headers and run triage + knowledge storage."""
@@ -364,27 +344,28 @@ class ImapCapability(AbstractCapability):
     def _inject_inbox_hint(self) -> None:
         """Push a compact inbox summary into WorldStateService.
 
-        Mirrors CalDAV's ``_inject_schedule_hint`` pattern: query recent
-        email facts from KnowledgeService, bucket by triage category,
-        and write a one-line hint via ``notify_external_signal``.
+        Queries the IMAP server directly for recent unseen emails,
+        classifies them, and writes a one-line hint.
         """
+        client = self._open_client()
+        if not client:
+            return
         try:
-            from services.database_service import get_shared_db_service
-            from services.knowledge_service import KnowledgeService
-
-            ks = KnowledgeService(get_shared_db_service())
-            facts = ks.get_by_kind("fact", entity="email", limit=200)
-            if not facts:
+            client.select_folder("INBOX", readonly=True)
+            since = (utc_now() - timedelta(days=3)).strftime("%d-%b-%Y")
+            uids = client.search(["UNSEEN", "SINCE", since])
+            if not uids:
                 return
 
+            raw = client.fetch(uids, [b"RFC822.HEADER"])
             counts: dict[str, int] = {}
             top_actionable: str = ""
-            for f in facts:
-                d = f.get("data") or {}
-                cat = d.get("triage", "informational")
+            for u, d in raw.items():
+                item = parse_headers(u, d[b"RFC822.HEADER"])
+                cat = classify_email(item)
                 counts[cat] = counts.get(cat, 0) + 1
                 if cat == "actionable" and not top_actionable:
-                    top_actionable = d.get("from_name") or d.get("from_addr", "")
+                    top_actionable = item.get("from_name") or item.get("from_addr", "")
 
             actionable = counts.get("actionable", 0)
             informational = counts.get("informational", 0)
@@ -399,9 +380,6 @@ class ImapCapability(AbstractCapability):
                 parts.append(part)
             if informational:
                 parts.append(f"{informational} informational")
-            noise = counts.get("noise", 0)
-            if noise:
-                parts.append(f"{noise} noise (filtered)")
             hint = f"Inbox: {', '.join(parts)}."
 
             from services.world_state_service import WorldStateService
@@ -415,6 +393,11 @@ class ImapCapability(AbstractCapability):
             logger.info("[imap] Injected inbox hint: %s", hint)
         except Exception as exc:
             logger.error("[imap] _inject_inbox_hint failed: %s", exc)
+        finally:
+            try:
+                client.logout()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # SMTP send
@@ -490,44 +473,55 @@ class ImapCapability(AbstractCapability):
         capability = self
 
         def _search_execute(topic, params, config=None, telemetry=None):
-            """Search ingested email headers by sender, subject, or triage."""
+            """Search emails directly on the IMAP server."""
             try:
-                from services.database_service import get_shared_db_service
-                from services.knowledge_service import KnowledgeService
+                client = capability._open_client()
+                if not client:
+                    return {"error": "Cannot connect to email server"}
+                try:
+                    client.select_folder("INBOX", readonly=True)
 
-                ks = KnowledgeService(get_shared_db_service())
-                facts = ks.get_by_kind("fact", entity="email", limit=200)
-
-                sender = (params.get("sender") or "").lower()
-                subject = (params.get("subject") or "").lower()
-                triage = (params.get("triage") or "").lower()
-                limit = int(params.get("limit", 20))
-
-                results = []
-                for fact in facts:
-                    d = fact.get("data") or {}
+                    criteria = []
+                    sender = (params.get("sender") or "").strip()
+                    subject = (params.get("subject") or "").strip()
                     if sender:
-                        fn = (d.get("from_name") or "").lower()
-                        fa = (d.get("from_addr") or "").lower()
-                        if sender not in fn and sender not in fa:
-                            continue
-                    if subject and subject not in (d.get("subject") or "").lower():
-                        continue
-                    if triage and d.get("triage") != triage:
-                        continue
-                    results.append({
-                        "uid": d.get("uid"),
-                        "subject": d.get("subject", ""),
-                        "from_name": d.get("from_name", ""),
-                        "from_addr": d.get("from_addr", ""),
-                        "date": d.get("date", ""),
-                        "triage": d.get("triage", ""),
-                        "is_thread": d.get("is_thread", False),
-                    })
-                    if len(results) >= limit:
-                        break
+                        criteria.extend(["FROM", sender])
+                    if subject:
+                        criteria.extend(["SUBJECT", subject])
+                    if not criteria:
+                        since = (utc_now() - timedelta(days=7)).strftime("%d-%b-%Y")
+                        criteria.extend(["SINCE", since])
 
-                return {"emails": results, "count": len(results)}
+                    uids = client.search(criteria)
+                    limit = int(params.get("limit", 20))
+                    uids = uids[-limit:] if len(uids) > limit else uids
+                    if not uids:
+                        return {"emails": [], "count": 0}
+
+                    raw = client.fetch(uids, [b"RFC822.HEADER"])
+                    triage_filter = (params.get("triage") or "").lower()
+                    results = []
+                    for u in sorted(raw.keys(), reverse=True):
+                        item = parse_headers(u, raw[u][b"RFC822.HEADER"])
+                        item["triage"] = classify_email(item)
+                        item["is_thread"] = bool(item.get("in_reply_to"))
+                        if triage_filter and item["triage"] != triage_filter:
+                            continue
+                        results.append({
+                            "uid": item["uid"],
+                            "subject": item.get("subject", ""),
+                            "from_name": item.get("from_name", ""),
+                            "from_addr": item.get("from_addr", ""),
+                            "date": item.get("date", ""),
+                            "triage": item["triage"],
+                            "is_thread": item["is_thread"],
+                        })
+                    return {"emails": results, "count": len(results)}
+                finally:
+                    try:
+                        client.logout()
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.error("[imap] imap_search_email failed: %s", exc)
                 return {"error": str(exc)}
@@ -589,9 +583,9 @@ class ImapCapability(AbstractCapability):
             {
                 "name": "imap_search_email",
                 "description": (
-                    "Search ingested email by sender name/address, subject keyword, "
+                    "Search emails directly on the mail server by sender, subject, "
                     "or triage category (noise, informational, actionable). "
-                    "Returns matching email headers from the knowledge store."
+                    "Returns live results from the inbox."
                 ),
                 "parameters": {
                     "sender": {

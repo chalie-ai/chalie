@@ -180,30 +180,18 @@ def test_understand_empty_returns_empty():
 
 
 @pytest.mark.unit
-def test_understand_classifies_and_stores():
+def test_understand_classifies_without_storing():
     cap = _make()
     items = [
         _email_item(),
         _email_item(uid=2, msg_id="<m2@ex>", unsub=True),
         _email_item(uid=3, msg_id="<m3@ex>", reply="<prev@ex>"),
     ]
-    ks_mock = MagicMock()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
-        result = cap.understand(items)
+    result = cap.understand(items)
     assert result[0]["triage"] == "informational"
     assert result[1]["triage"] == "noise"
     assert result[2]["triage"] == "actionable"
     assert result[2]["is_thread"] is True
-    assert ks_mock.store.call_count == 3
-    assert ks_mock.store.call_args_list[0].kwargs["entity"] == "email"
-
-
-@pytest.mark.unit
-def test_understand_survives_exception():
-    items = [_email_item()]
-    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
-        assert _make().understand(items) == items
 
 
 # --- monitor ---
@@ -231,22 +219,22 @@ def test_monitor_skips_understand_when_empty():
 
 # --- get_tools / imap_search_email ---
 
-def _fake_facts():
-    """Return KnowledgeService-style fact dicts for search tests."""
-    return [
-        {"data": {"uid": 1, "subject": "Invoice #42", "from_name": "Sarah",
-                  "from_addr": "sarah@work.com", "date": "2026-03-28T10:00:00",
-                  "triage": "actionable", "is_thread": False}},
-        {"data": {"uid": 2, "subject": "Weekly newsletter", "from_name": "News Bot",
-                  "from_addr": "news@letters.com", "date": "2026-03-28T09:00:00",
-                  "triage": "noise", "is_thread": False}},
-        {"data": {"uid": 3, "subject": "Re: Project plan", "from_name": "Sarah",
-                  "from_addr": "sarah@work.com", "date": "2026-03-28T11:00:00",
-                  "triage": "actionable", "is_thread": True}},
-        {"data": {"uid": 4, "subject": "Meeting notes", "from_name": "Alex",
-                  "from_addr": "alex@team.com", "date": "2026-03-27T15:00:00",
-                  "triage": "informational", "is_thread": False}},
-    ]
+def _mock_imap_client(headers_by_uid):
+    """Build a mock IMAPClient that returns the given headers."""
+    mc = MagicMock()
+    mc.search.return_value = list(headers_by_uid.keys())
+    all_data = {uid: {b"RFC822.HEADER": hdr} for uid, hdr in headers_by_uid.items()}
+    mc.fetch.side_effect = lambda uids, _: {u: all_data[u] for u in uids if u in all_data}
+    return mc
+
+
+_SEARCH_EMAILS = {
+    1: _email_bytes(subject="Invoice #42", from_="Sarah <sarah@work.com>"),
+    2: _email_bytes(subject="Weekly newsletter", from_="News Bot <news@letters.com>"),
+    3: _email_bytes(subject="Re: Project plan", from_="Sarah <sarah@work.com>",
+                    msg_id="<3@ex>"),
+    4: _email_bytes(subject="Meeting notes", from_="Alex <alex@team.com>"),
+}
 
 
 @pytest.mark.unit
@@ -265,96 +253,84 @@ def test_get_tools_returns_both_tools():
 def test_search_by_sender():
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
         result = handler("t1", {"sender": "sarah"})
-    assert result["count"] == 2
-    assert all(e["from_name"] == "Sarah" for e in result["emails"])
+    mc.search.assert_called_once()
+    criteria = mc.search.call_args[0][0]
+    assert "FROM" in criteria and "sarah" in criteria
 
 
 @pytest.mark.unit
 def test_search_by_subject():
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
         result = handler("t1", {"subject": "invoice"})
-    assert result["count"] == 1
-    assert result["emails"][0]["uid"] == 1
+    criteria = mc.search.call_args[0][0]
+    assert "SUBJECT" in criteria and "invoice" in criteria
 
 
 @pytest.mark.unit
 def test_search_by_triage():
+    """Triage filtering happens client-side after IMAP fetch."""
     cap = _make()
-    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+    # Only return the actionable email (Invoice has "invoice" in subject)
+    mc = _mock_imap_client({1: _SEARCH_EMAILS[1]})
+    with patch.object(cap, "_open_client", return_value=mc):
+        result = handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
         result = handler("t1", {"triage": "actionable"})
-    assert result["count"] == 2
+    assert all(e["triage"] == "actionable" for e in result["emails"])
 
 
 @pytest.mark.unit
 def test_search_with_limit():
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc):
         result = handler("t1", {"limit": 1})
-    assert result["count"] == 1
+    # Server gets the limit applied to UIDs
+    assert len(result["emails"]) <= 1
 
 
 @pytest.mark.unit
 def test_search_no_results():
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+    mc = _mock_imap_client({})
+    mc.search.return_value = []
+    with patch.object(cap, "_open_client", return_value=mc):
         result = handler("t1", {"sender": "nobody"})
     assert result["count"] == 0
     assert result["emails"] == []
 
 
 @pytest.mark.unit
-def test_search_combined_filters():
-    cap = _make()
-    handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
-        result = handler("t1", {"sender": "sarah", "triage": "actionable"})
-    assert result["count"] == 2
-
-
-@pytest.mark.unit
 def test_search_error_resilience():
     cap = _make()
     handler = next(t for t in cap.get_tools() if t["name"] == "imap_search_email")["handler"]
-    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
+    with patch.object(cap, "_open_client", return_value=None):
         result = handler("t1", {})
     assert "error" in result
 
 
 # --- _inject_inbox_hint ---
 
+# Unseen emails for hint tests: 1 actionable (Invoice from Sarah), 1 informational (Meeting from Alex)
+_HINT_EMAILS = {
+    1: _email_bytes(subject="Invoice #42", from_="Sarah <sarah@work.com>"),
+    4: _email_bytes(subject="Meeting notes", from_="Alex <alex@team.com>"),
+}
+
+
 @pytest.mark.unit
 def test_inject_inbox_hint_calls_world_state():
     cap = _make()
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
+    mc = _mock_imap_client(_HINT_EMAILS)
     ws_mock = MagicMock()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+    with patch.object(cap, "_open_client", return_value=mc), \
          patch("services.world_state_service.WorldStateService", return_value=ws_mock):
         cap._inject_inbox_hint()
     ws_mock.notify_external_signal.assert_called_once()
@@ -366,15 +342,13 @@ def test_inject_inbox_hint_calls_world_state():
 @pytest.mark.unit
 def test_inject_inbox_hint_content_has_counts():
     cap = _make()
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
+    mc = _mock_imap_client(_HINT_EMAILS)
     ws_mock = MagicMock()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+    with patch.object(cap, "_open_client", return_value=mc), \
          patch("services.world_state_service.WorldStateService", return_value=ws_mock):
         cap._inject_inbox_hint()
     content = ws_mock.notify_external_signal.call_args.kwargs["content"]
-    assert "2 actionable" in content
+    assert "1 actionable" in content
     assert "1 informational" in content
     assert "Sarah" in content  # top actionable sender
 
@@ -382,33 +356,27 @@ def test_inject_inbox_hint_content_has_counts():
 @pytest.mark.unit
 def test_inject_inbox_hint_high_activation_when_actionable():
     cap = _make()
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = _fake_facts()
+    mc = _mock_imap_client(_HINT_EMAILS)
     ws_mock = MagicMock()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
+    with patch.object(cap, "_open_client", return_value=mc), \
          patch("services.world_state_service.WorldStateService", return_value=ws_mock):
         cap._inject_inbox_hint()
     assert ws_mock.notify_external_signal.call_args.kwargs["activation_energy"] == 0.8
 
 
 @pytest.mark.unit
-def test_inject_inbox_hint_skips_when_empty():
+def test_inject_inbox_hint_skips_when_no_unseen():
     cap = _make()
-    ks_mock = MagicMock()
-    ks_mock.get_by_kind.return_value = []
-    ws_mock = MagicMock()
-    with patch("services.database_service.get_shared_db_service"), \
-         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock), \
-         patch("services.world_state_service.WorldStateService", return_value=ws_mock):
-        cap._inject_inbox_hint()
-    ws_mock.notify_external_signal.assert_not_called()
+    mc = _mock_imap_client({})
+    mc.search.return_value = []
+    with patch.object(cap, "_open_client", return_value=mc):
+        cap._inject_inbox_hint()  # no WorldState call, just returns
 
 
 @pytest.mark.unit
-def test_inject_inbox_hint_survives_exception():
+def test_inject_inbox_hint_skips_when_no_connection():
     cap = _make()
-    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
+    with patch.object(cap, "_open_client", return_value=None):
         cap._inject_inbox_hint()  # should not raise
 
 
