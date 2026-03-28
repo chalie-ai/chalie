@@ -625,3 +625,65 @@ class TestFirstConnectGreeting:
         import json
         payload = json.loads(store.rpush.call_args[0][1])
         assert "No upcoming events" in payload['prompt']
+
+
+# -----------------------------------------------------------------------
+# Upcoming-event alerts
+# -----------------------------------------------------------------------
+
+
+class TestUpcomingEventAlerts:
+    """Tests for :meth:`CaldavCapability._maybe_send_upcoming_alerts`."""
+
+    @staticmethod
+    def _make_event(**overrides):
+        base = {
+            'uid': 'evt-1', 'summary': 'Team standup',
+            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
+            'location': None, 'attendees': [], 'recurrence': None,
+            'all_day': False, 'calendar_name': 'Work',
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_alert_fires_for_imminent_event(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = None  # not alerted yet
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 40, tzinfo=_UTC)
+        # Event at 09:00 is 20 min away — within 15-30 window
+        result = cap._maybe_send_upcoming_alerts([self._make_event()], now)
+        assert result == 1
+        store.rpush.assert_called_once()
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        assert "CALENDAR ALERT" in payload['prompt']
+        assert "20 minutes" in payload['prompt']
+        store.setex.assert_called_once()
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_already_alerted_uid_skips(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = "1"  # already alerted
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 40, tzinfo=_UTC)
+        result = cap._maybe_send_upcoming_alerts([self._make_event()], now)
+        assert result == 0
+        store.rpush.assert_not_called()
+
+    @pytest.mark.unit
+    def test_no_imminent_events_returns_zero(self):
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 7, 0, tzinfo=_UTC)
+        # Event at 09:00 is 120 min away — outside window
+        result = cap._maybe_send_upcoming_alerts(
+            [self._make_event()], now)
+        assert result == 0

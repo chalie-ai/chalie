@@ -586,6 +586,9 @@ class CaldavCapability(AbstractCapability):
         # --- First-connect greeting (once per lifetime) ---
         self._maybe_send_greeting(all_events, now)
 
+        # --- Upcoming-event alerts (once per event UID) ---
+        self._maybe_send_upcoming_alerts(all_events, now)
+
         logger.info(
             "[caldav] ingest() complete — %d events fetched.", len(all_events)
         )
@@ -1027,6 +1030,71 @@ class CaldavCapability(AbstractCapability):
         except Exception as exc:  # noqa: BLE001
             logger.debug("[caldav] _maybe_send_greeting() failed: %s", exc)
             return False
+
+    # Alert window: events starting within this range trigger a proactive nudge.
+    _ALERT_MINUTES_MIN = 15
+    _ALERT_MINUTES_MAX = 30
+    _ALERT_KEY_PREFIX = "caldav:alerted:"
+    _ALERT_TTL_SECONDS = 48 * 3600  # 48 hours
+
+    def _maybe_send_upcoming_alerts(self, events: list, now: "_dt_module.datetime") -> int:
+        """Push a proactive alert for events starting within 15-30 minutes.
+
+        Each event UID is alerted at most once (deduped via MemoryStore key
+        with a 48-hour TTL).
+
+        Args:
+            events: Parsed event dicts from :meth:`_parse_caldav_event`.
+            now:    Current UTC datetime.
+
+        Returns:
+            int: Number of alerts enqueued.
+        """
+        try:
+            from services.memory_client import MemoryClientService
+            import json as _json
+
+            window_start = now + timedelta(minutes=self._ALERT_MINUTES_MIN)
+            window_end = now + timedelta(minutes=self._ALERT_MINUTES_MAX)
+            imminent = [
+                e for e in events
+                if e.get('dtstart') and window_start <= e['dtstart'] <= window_end
+            ]
+            if not imminent:
+                return 0
+
+            store = MemoryClientService.create_connection()
+            sent = 0
+            for event in imminent:
+                uid = event.get('uid', '')
+                flag_key = f"{self._ALERT_KEY_PREFIX}{uid}"
+                if store.get(flag_key):
+                    continue
+
+                line = _format_event_line(event)
+                mins = int((event['dtstart'] - now).total_seconds() // 60)
+                store.rpush('prompt-queue', _json.dumps({
+                    'prompt': (
+                        f"[CALENDAR ALERT]\n"
+                        f"{line}\n"
+                        f"This event starts in {mins} minutes.\n\n"
+                        f"Give the user a brief heads-up. If there's a location, "
+                        f"mention it. Be concise — one or two sentences max."
+                    ),
+                    'metadata': {
+                        'type': 'proactive_drift',
+                        'source': 'calendar_alert',
+                        'topic': 'proactive',
+                    },
+                }))
+                store.setex(flag_key, self._ALERT_TTL_SECONDS, "1")
+                sent += 1
+                logger.info("[caldav] Upcoming-event alert for '%s' in %d min.",
+                            event.get('summary', '?'), mins)
+            return sent
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[caldav] _maybe_send_upcoming_alerts() failed: %s", exc)
+            return 0
 
     # Maximum number of events included in the schedule hint.
     _HINT_MAX_EVENTS = 5
