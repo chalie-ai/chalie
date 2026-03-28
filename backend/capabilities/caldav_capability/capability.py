@@ -939,8 +939,9 @@ class CaldavCapability(AbstractCapability):
                             "[caldav] signal emit failed: %s", exc,
                         )
 
-                # Back-to-back detection (tight transitions < 5 min gap)
-                for ev_a, ev_b, gap_min, canon_key in _find_back_to_back_pairs(events, now):
+                # Back-to-back detection (< 5 min gap)
+                b2b = _find_back_to_back_pairs(events, now)
+                for ev_a, ev_b, gap_min, canon_key in b2b:
                     b2b_uid = f"caldav:b2b:{canon_key}"
                     b2b_msg = (
                         f"Tight transition ({gap_min}min gap): "

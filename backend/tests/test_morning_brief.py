@@ -82,7 +82,8 @@ class TestMorningBriefFusion:
 
         assert result is True
         payload = json.loads(store.rpush.call_args[0][1])
-        assert "Tight transitions" in payload['prompt'] and "Standup" in payload['prompt']
+        prompt = payload['prompt']
+        assert "Tight transitions" in prompt and "Standup" in prompt
 
     @pytest.mark.unit
     def test_inbox_hint_reads_imap_signal(self):
