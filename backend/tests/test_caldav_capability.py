@@ -623,3 +623,54 @@ class TestNextMorning8am:
         assert result.day == 29
 
 
+# --- Back-to-back detection tests ---
+
+class TestBackToBackPairs:
+
+    @pytest.mark.unit
+    def test_detects_tight_and_zero_gap(self):
+        """Tight gap (3min) and zero gap both detected."""
+        from capabilities.caldav_capability.capability import _find_back_to_back_pairs
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+        events = [
+            {'uid': 'a', 'summary': 'Standup',
+             'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+             'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
+             'all_day': False},
+            {'uid': 'b', 'summary': 'Design Review',
+             'dtstart': datetime.datetime(2026, 3, 28, 9, 33, tzinfo=_UTC),
+             'dtend': datetime.datetime(2026, 3, 28, 10, 0, tzinfo=_UTC),
+             'all_day': False},
+            {'uid': 'c', 'summary': 'Sync',
+             'dtstart': datetime.datetime(2026, 3, 28, 10, 0, tzinfo=_UTC),
+             'dtend': datetime.datetime(2026, 3, 28, 10, 30, tzinfo=_UTC),
+             'all_day': False},
+        ]
+        pairs = _find_back_to_back_pairs(events, now)
+        assert len(pairs) == 2
+        assert pairs[0][2] == 3  # 3 min gap a→b
+        assert pairs[1][2] == 0  # zero gap b→c
+
+    @pytest.mark.unit
+    def test_ignores_wide_gap_and_all_day(self):
+        """Wide gaps (>5min) and all-day events are excluded."""
+        from capabilities.caldav_capability.capability import _find_back_to_back_pairs
+        now = datetime.datetime(2026, 3, 28, 8, 0, tzinfo=_UTC)
+        events = [
+            {'uid': 'x', 'summary': 'Holiday',
+             'dtstart': datetime.datetime(2026, 3, 28, 0, 0, tzinfo=_UTC),
+             'dtend': datetime.datetime(2026, 3, 29, 0, 0, tzinfo=_UTC),
+             'all_day': True},
+            {'uid': 'a', 'summary': 'Standup',
+             'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+             'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
+             'all_day': False},
+            {'uid': 'b', 'summary': 'Lunch',
+             'dtstart': datetime.datetime(2026, 3, 28, 12, 0, tzinfo=_UTC),
+             'dtend': datetime.datetime(2026, 3, 28, 13, 0, tzinfo=_UTC),
+             'all_day': False},
+        ]
+        pairs = _find_back_to_back_pairs(events, now)
+        assert len(pairs) == 0
+
+
