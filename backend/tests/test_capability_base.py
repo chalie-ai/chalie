@@ -256,6 +256,71 @@ class TestAbstractCapability:
         assert result is None
 
 
+def _make_health_cap(monitor_effect=None):
+    """Build a connected stub capability with optional monitor side effect."""
+    cap = _MinimalCapability._build()
+    cap._connected = True
+    if monitor_effect is not None:
+        cap.monitor = MagicMock(side_effect=monitor_effect)
+    return cap
+
+
+@pytest.mark.unit
+class TestHealthTracking:
+    """Tests for capability health tracking via ``run_monitor()``."""
+
+    def test_health_details_defaults(self):
+        """Fresh capability has zero errors and no last_error."""
+        cap = _MinimalCapability._build()
+        assert cap.health_details() == {"connected": False, "error_count": 0, "last_error": None}
+
+    def test_run_monitor_success_resets_and_persists(self):
+        """Successful monitor() resets error count and persists zero."""
+        mem_svc = _InMemoryToolConfigService()
+        cap = _make_health_cap()
+        cap._error_count = 3
+        cap._last_error = "old"
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        assert cap._error_count == 0
+        assert mem_svc.get_tool_config("stub")["stub:error_count"] == "0"
+
+    def test_run_monitor_increments_on_failure(self):
+        """Failed monitor() increments error count and records the error."""
+        cap = _make_health_cap(ConnectionError("server unreachable"))
+        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+            cap.run_monitor()
+        assert cap.health_details() == {"connected": True, "error_count": 1, "last_error": "server unreachable"}
+
+    def test_run_monitor_auto_disconnects_after_threshold(self):
+        """Capability auto-disconnects after MAX_CONSECUTIVE_FAILURES."""
+        cap = _make_health_cap(ConnectionError("down"))
+        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1  # one away
+        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+            cap.run_monitor()  # this pushes it over
+        assert cap._connected is False
+
+    def test_run_monitor_persists_to_tool_configs(self):
+        """Error state is persisted to tool_configs after each call."""
+        mem_svc = _InMemoryToolConfigService()
+        cap = _make_health_cap(RuntimeError("timeout"))
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        stored = mem_svc.get_tool_config("stub")
+        assert stored["stub:error_count"] == "1"
+        assert stored["stub:last_error"] == "timeout"
+
+    def test_run_monitor_recovery_resets_count(self):
+        """A successful monitor() after failures resets the counter."""
+        cap = _make_health_cap()
+        cap._error_count = 3
+        cap._last_error = "was broken"
+        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()):
+            cap.run_monitor()
+        assert cap._error_count == 0
+        assert cap._connected is True
+
+
 @pytest.mark.unit
 class TestLoadCapabilities:
     """Tests for :func:`capabilities.load_capabilities`."""

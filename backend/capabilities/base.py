@@ -90,18 +90,23 @@ class AbstractCapability(ABC):
     * :meth:`act` — perform a write action on the external source
     * :meth:`get_tools` — return tool definitions for dynamic registration
 
-    Concrete helper methods for credential management and connection-state
-    tracking are provided by this base class and should not be overridden
-    unless there is a specific need.
+    Concrete helper methods for credential management, connection-state
+    tracking, and health monitoring are provided by this base class and
+    should not be overridden unless there is a specific need.
     """
+
+    MAX_CONSECUTIVE_FAILURES = 5
 
     def __init__(self) -> None:
         """Initialise base state.
 
-        Sets the internal ``_connected`` flag to ``False``.  Subclasses should
-        call ``super().__init__()`` if they define their own ``__init__``.
+        Sets the internal ``_connected`` flag to ``False`` and health
+        tracking counters to their defaults.  Subclasses should call
+        ``super().__init__()`` if they define their own ``__init__``.
         """
         self._connected: bool = False
+        self._error_count: int = 0
+        self._last_error: str | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -166,9 +171,8 @@ class AbstractCapability(ABC):
     def ingest(self) -> list:
         """Fetch and return structured data from the capability's data source.
 
-        This method is called periodically by the
-        :class:`~services.capability_scheduler_service.CapabilitySchedulerService`
-        and should be idempotent.
+        This method is called periodically by the scheduler via system
+        handler dispatch and should be idempotent.
 
         Returns:
             list[dict]: A list of structured data dicts whose schema is
@@ -226,6 +230,51 @@ class AbstractCapability(ABC):
             bool: ``True`` if the capability's data source is reachable.
         """
         return self._connected
+
+    def health_details(self) -> dict:
+        """Return detailed health information including error tracking.
+
+        Returns:
+            dict: ``{"connected": bool, "error_count": int,
+            "last_error": str | None}``.
+        """
+        return {
+            "connected": self._connected,
+            "error_count": self._error_count,
+            "last_error": self._last_error,
+        }
+
+    def run_monitor(self) -> None:
+        """Execute :meth:`monitor` with health tracking.
+
+        Resets error count on success, increments on failure, auto-disconnects
+        after :attr:`MAX_CONSECUTIVE_FAILURES`.  Persists state to tool_configs.
+        """
+        try:
+            self.monitor()
+            self._error_count = 0
+            self._last_error = None
+        except Exception as exc:
+            self._error_count += 1
+            self._last_error = str(exc)
+            logger.warning("[%s] monitor() failed (%d/%d): %s",
+                           self.get_id(), self._error_count,
+                           self.MAX_CONSECUTIVE_FAILURES, exc)
+            if self._error_count >= self.MAX_CONSECUTIVE_FAILURES:
+                self._connected = False
+        self._persist_health()
+
+    def _persist_health(self) -> None:
+        """Persist current error state to ``tool_configs``."""
+        try:
+            svc = _get_tool_config_service()
+            cap_id = self.get_id()
+            svc.set_tool_config(cap_id, {
+                f"{cap_id}:error_count": str(self._error_count),
+                f"{cap_id}:last_error": self._last_error or "",
+            })
+        except Exception:
+            pass
 
     @abstractmethod
     def get_tools(self) -> list:
