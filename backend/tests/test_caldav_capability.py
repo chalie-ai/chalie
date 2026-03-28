@@ -689,6 +689,103 @@ class TestUpcomingEventAlerts:
         assert result == 0
 
 
+class TestAttendeeContext:
+    """Tests for :meth:`CaldavCapability._build_attendee_context`."""
+
+    @staticmethod
+    def _make_event(**overrides):
+        base = {
+            'uid': 'evt-1', 'summary': 'Team standup',
+            'dtstart': datetime.datetime(2026, 3, 28, 9, 0, tzinfo=_UTC),
+            'dtend': datetime.datetime(2026, 3, 28, 9, 30, tzinfo=_UTC),
+            'location': None, 'attendees': [], 'recurrence': None,
+            'all_day': False, 'calendar_name': 'Work',
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.unit
+    def test_no_attendees_returns_empty(self):
+        cap = _make_capability()
+        result = cap._build_attendee_context(self._make_event(attendees=[]))
+        assert result == ""
+
+    @pytest.mark.unit
+    @patch('services.database_service.get_shared_db_service')
+    @patch('services.knowledge_service.KnowledgeService')
+    def test_attendee_with_knowledge(self, mock_ks_cls, mock_db):
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = [
+            {"value": "prefers morning meetings"},
+            {"value": "works on backend team"},
+        ]
+        mock_ks_cls.return_value = mock_ks
+
+        cap = _make_capability()
+        event = self._make_event(attendees=["sarah.chen@example.com"])
+        result = cap._build_attendee_context(event)
+        assert "Sarah Chen" in result
+        assert "prefers morning meetings" in result
+        assert "Attendee context:" in result
+
+    @pytest.mark.unit
+    @patch('services.database_service.get_shared_db_service')
+    @patch('services.knowledge_service.KnowledgeService')
+    def test_attendee_no_knowledge_returns_empty(self, mock_ks_cls, mock_db):
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = []
+        mock_ks_cls.return_value = mock_ks
+
+        cap = _make_capability()
+        event = self._make_event(attendees=["unknown@example.com"])
+        result = cap._build_attendee_context(event)
+        assert result == ""
+
+    @pytest.mark.unit
+    @patch('services.database_service.get_shared_db_service')
+    @patch('services.knowledge_service.KnowledgeService')
+    def test_limits_attendees_to_max(self, mock_ks_cls, mock_db):
+        mock_ks = MagicMock()
+        mock_ks.recall.return_value = [{"value": "context"}]
+        mock_ks_cls.return_value = mock_ks
+
+        cap = _make_capability()
+        many = [f"person{i}@example.com" for i in range(10)]
+        event = self._make_event(attendees=many)
+        cap._build_attendee_context(event)
+        # Should only query for first 3 attendees
+        assert mock_ks.recall.call_count == 3
+
+    @pytest.mark.unit
+    def test_survives_exception(self):
+        cap = _make_capability()
+        event = self._make_event(attendees=["a@b.com"])
+        # No db service available — should return empty, not raise
+        result = cap._build_attendee_context(event)
+        assert result == ""
+
+    @pytest.mark.unit
+    @patch('services.memory_client.MemoryClientService')
+    def test_alert_includes_attendee_context(self, mock_mcs):
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        cap = _make_capability()
+        now = datetime.datetime(2026, 3, 28, 8, 40, tzinfo=_UTC)
+        event = self._make_event(attendees=["sarah@example.com"])
+        with patch.object(
+            cap, '_build_attendee_context',
+            return_value="Attendee context:\n- Sarah: prefers concise updates",
+        ):
+            cap._maybe_send_upcoming_alerts([event], now)
+
+        import json
+        payload = json.loads(store.rpush.call_args[0][1])
+        assert "Attendee context:" in payload['prompt']
+        assert "Sarah" in payload['prompt']
+
+
 class TestDailyDigest:
     """Tests for :meth:`CaldavCapability._maybe_send_daily_digest`."""
 

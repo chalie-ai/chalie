@@ -34,7 +34,7 @@ import yaml
 
 from capabilities.base import AbstractCapability
 from capabilities.caldav_capability.providers import resolve_provider
-from services.time_utils import utc_now, parse_utc  # noqa: F401 — available for subclasses
+from services.time_utils import utc_now, parse_utc
 
 # ---------------------------------------------------------------------------
 # Optional caldav import — graceful degradation when package is absent
@@ -273,7 +273,7 @@ def _humanize_rrule(rrule_str: str, dtstart: "_dt_module.datetime", summary: str
             )
             return f"{freq}: {summary} ({days} {time_str})"
         return f"{freq}: {summary} ({time_str})"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return f"Recurring: {summary}"
 
 
@@ -609,11 +609,11 @@ class CaldavCapability(AbstractCapability):
                     try:
                         parsed = self._parse_caldav_event(raw_event, cal_name)
                         all_events.extend(parsed)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning(
                             "[caldav] Failed to parse event in '%s': %s", cal_name, exc
                         )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error(
                     "[caldav] Failed to fetch from calendar '%s': %s", cal_name, exc
                 )
@@ -713,7 +713,7 @@ class CaldavCapability(AbstractCapability):
             svc = ToolConfigService(get_shared_db_service())
             config = svc.get_tool_config(self.get_id())
             return config.get(key, default)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("[caldav] _load_config_raw(%r) failed: %s", key, exc)
             return default
 
@@ -744,7 +744,7 @@ class CaldavCapability(AbstractCapability):
                 component = raw_event.icalendar_component
                 ical_instance = _icalendar_lib.Calendar()
                 ical_instance.add_component(component)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("[caldav] Could not obtain ical instance: %s", exc)
                 return results
 
@@ -773,7 +773,7 @@ class CaldavCapability(AbstractCapability):
                 if dur_prop is not None:
                     try:
                         dtend = dtstart + dur_prop.dt
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         dtend = dtstart
                 else:
                     dtend = dtstart
@@ -801,7 +801,7 @@ class CaldavCapability(AbstractCapability):
             if rrule_prop is not None:
                 try:
                     recurrence: "str | None" = rrule_prop.to_ical().decode('utf-8')
-                except Exception:  # noqa: BLE001
+                except Exception:
                     recurrence = None
             else:
                 recurrence = None
@@ -861,7 +861,7 @@ class CaldavCapability(AbstractCapability):
                     decay_class=decay,
                     source='caldav',
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "[caldav] _store_events_as_facts() failed: %s", exc, exc_info=True
             )
@@ -914,7 +914,7 @@ class CaldavCapability(AbstractCapability):
                     decay_class='slow',
                     source='caldav',
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "[caldav] _store_recurrence_facts() failed: %s", exc, exc_info=True
             )
@@ -994,7 +994,7 @@ class CaldavCapability(AbstractCapability):
                         decay_class='fast',
                         source='caldav',
                     )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "[caldav] _store_conflict_facts() failed: %s", exc, exc_info=True
             )
@@ -1020,7 +1020,7 @@ class CaldavCapability(AbstractCapability):
                 'upcoming_events': len(upcoming),
                 'timestamp': now.isoformat(),
             })
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("[caldav] _emit_calendar_events() failed: %s", exc)
 
     _GREETING_FLAG = "caldav:greeting_sent"
@@ -1079,7 +1079,7 @@ class CaldavCapability(AbstractCapability):
             store.set(self._GREETING_FLAG, "1")
             logger.info("[caldav] First-connect greeting enqueued.")
             return True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("[caldav] _maybe_send_greeting() failed: %s", exc)
             return False
 
@@ -1088,6 +1088,39 @@ class CaldavCapability(AbstractCapability):
     _ALERT_MINUTES_MAX = 30
     _ALERT_KEY_PREFIX = "caldav:alerted:"
     _ALERT_TTL_SECONDS = 48 * 3600  # 48 hours
+    _ATTENDEE_CONTEXT_LIMIT = 3  # max attendees to enrich
+
+    @staticmethod
+    def _build_attendee_context(event: dict) -> str:
+        """Build a brief context block for event attendees from knowledge.
+
+        Queries KnowledgeService for traits, relationships, and facts related
+        to each attendee name.  Returns a compact string for prompt injection,
+        or empty string when no context is found.
+        """
+        attendees = event.get("attendees") or []
+        if not attendees:
+            return ""
+        try:
+            from services.database_service import get_shared_db_service
+            from services.knowledge_service import KnowledgeService
+
+            ks = KnowledgeService(get_shared_db_service())
+            lines: list[str] = []
+            for addr in attendees[:CaldavCapability._ATTENDEE_CONTEXT_LIMIT]:
+                # Extract display name from email address
+                name = addr.split("@")[0].replace(".", " ").replace("_", " ").title()
+                results = ks.recall(name, kinds=["trait", "relationship", "fact"], limit=3)
+                if not results:
+                    continue
+                snippets = [r.get("value", "") for r in results if r.get("value")]
+                if snippets:
+                    lines.append(f"- {name}: {'; '.join(snippets[:2])}")
+            if not lines:
+                return ""
+            return "Attendee context:\n" + "\n".join(lines)
+        except Exception:
+            return ""
 
     def _maybe_send_upcoming_alerts(self, events: list, now: "_dt_module.datetime") -> int:
         """Push a proactive alert for events starting within 15-30 minutes.
@@ -1125,14 +1158,19 @@ class CaldavCapability(AbstractCapability):
 
                 line = _format_event_line(event)
                 mins = int((event['dtstart'] - now).total_seconds() // 60)
+                context_block = self._build_attendee_context(event)
+                prompt_parts = [
+                    f"[CALENDAR ALERT]\n{line}\n"
+                    f"This event starts in {mins} minutes.",
+                ]
+                if context_block:
+                    prompt_parts.append(f"\n{context_block}")
+                prompt_parts.append(
+                    "\nGive the user a brief heads-up with any attendee context. "
+                    "If there's a location, mention it. Be concise."
+                )
                 store.rpush('prompt-queue', _json.dumps({
-                    'prompt': (
-                        f"[CALENDAR ALERT]\n"
-                        f"{line}\n"
-                        f"This event starts in {mins} minutes.\n\n"
-                        f"Give the user a brief heads-up. If there's a location, "
-                        f"mention it. Be concise — one or two sentences max."
-                    ),
+                    'prompt': "\n".join(prompt_parts),
                     'metadata': {
                         'type': 'proactive_drift',
                         'source': 'calendar_alert',
@@ -1144,7 +1182,7 @@ class CaldavCapability(AbstractCapability):
                 logger.info("[caldav] Upcoming-event alert for '%s' in %d min.",
                             event.get('summary', '?'), mins)
             return sent
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("[caldav] _maybe_send_upcoming_alerts() failed: %s", exc)
             return 0
 
@@ -1204,7 +1242,7 @@ class CaldavCapability(AbstractCapability):
             store.setex(flag_key, self._DIGEST_TTL_SECONDS, "1")
             logger.info("[caldav] Daily digest enqueued for %s.", date_key)
             return True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("[caldav] _maybe_send_daily_digest() failed: %s", exc)
             return False
 
@@ -1272,7 +1310,7 @@ class CaldavCapability(AbstractCapability):
                     ev_a.get('summary', '?'), ev_b.get('summary', '?'),
                 )
             return sent
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("[caldav] _maybe_send_conflict_alert() failed: %s", exc)
             return 0
 
@@ -1310,7 +1348,7 @@ class CaldavCapability(AbstractCapability):
             )
             logger.info("[caldav] Injected schedule hint (%d events, %d chars).",
                         min(len(upcoming), self._HINT_MAX_EVENTS), len(hint))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "[caldav] _inject_schedule_hint() failed: %s", exc, exc_info=True
             )
@@ -1439,10 +1477,10 @@ class CaldavCapability(AbstractCapability):
                                 if isinstance(val, str):
                                     try:
                                         data[field] = parse_utc(val)
-                                    except Exception:  # noqa: BLE001
+                                    except Exception:
                                         pass
                             events.append(data)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     # Fallback to live ingest if knowledge store read fails
                     events = capability.ingest()
 
@@ -1461,7 +1499,7 @@ class CaldavCapability(AbstractCapability):
                             e for e in filtered
                             if e.get("dtstart") and e["dtstart"] >= dt_from
                         ]
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass  # Ignore malformed date; return unfiltered
 
                 if date_to_raw:
@@ -1471,7 +1509,7 @@ class CaldavCapability(AbstractCapability):
                             e for e in filtered
                             if e.get("dtstart") and e["dtstart"] <= dt_to
                         ]
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                 if calendar_name_filter:
@@ -1489,7 +1527,7 @@ class CaldavCapability(AbstractCapability):
 
                 serialized = [_serialize_event(e) for e in filtered]
                 return {"events": serialized, "count": len(serialized)}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("[caldav] caldav_list_events handler failed: %s", exc)
                 return {"error": str(exc)}
 
@@ -1544,7 +1582,7 @@ class CaldavCapability(AbstractCapability):
                             "event": _serialize_event(data),
                             "source": "knowledge_store",
                         }
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass  # Fall through to direct CalDAV lookup
 
                 # --- Direct CalDAV lookup fallback ---
@@ -1564,11 +1602,11 @@ class CaldavCapability(AbstractCapability):
                                     "event": _serialize_event(parsed[0]),
                                     "source": "caldav",
                                 }
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         continue
 
                 return {"error": f"Event not found (UID: {uid})"}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("[caldav] caldav_get_event handler failed: %s", exc)
                 return {"error": str(exc)}
 
@@ -1681,7 +1719,7 @@ class CaldavCapability(AbstractCapability):
                     "dtend": dtend.isoformat(),
                     "calendar_name": cal_label,
                 }
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("[caldav] caldav_create_event handler failed: %s", exc)
                 return {"error": str(exc)}
 
@@ -1737,7 +1775,7 @@ class CaldavCapability(AbstractCapability):
                         if results:
                             found_event = results[0]
                             break
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         continue
 
                 if found_event is None:
@@ -1790,7 +1828,7 @@ class CaldavCapability(AbstractCapability):
 
                 logger.info("[caldav] Updated event uid=%s", uid)
                 return {"uid": uid, "updated": True}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("[caldav] caldav_update_event handler failed: %s", exc)
                 return {"error": str(exc)}
 
@@ -1839,11 +1877,11 @@ class CaldavCapability(AbstractCapability):
                             results[0].delete()
                             logger.info("[caldav] Deleted event uid=%s", uid)
                             return {"uid": uid, "deleted": True}
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         continue
 
                 return {"error": f"Event not found (UID: {uid})"}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("[caldav] caldav_delete_event handler failed: %s", exc)
                 return {"error": str(exc)}
 
@@ -1881,10 +1919,10 @@ class CaldavCapability(AbstractCapability):
                             if isinstance(v, str):
                                 try:
                                     data[f] = parse_utc(v)
-                                except Exception:  # noqa: BLE001
+                                except Exception:
                                     pass
                         events.append(data)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     events = capability.ingest()
 
                 now = utc_now()
@@ -1937,7 +1975,7 @@ class CaldavCapability(AbstractCapability):
                     cur_day += timedelta(days=1)
 
                 return {"slots": slots, "count": len(slots)}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("[caldav] caldav_find_free_slots failed: %s", exc)
                 return {"error": str(exc)}
 

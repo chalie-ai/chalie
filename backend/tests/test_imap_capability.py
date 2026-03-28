@@ -211,6 +211,7 @@ def test_understand_survives_exception():
 @pytest.mark.unit
 def test_monitor_calls_ingest_understand():
     cap = _make()
+    cap._connected = True
     with patch.object(cap, "ingest", return_value=[{"uid": 1}]) as ing, \
          patch.object(cap, "understand") as und:
         cap.monitor()
@@ -221,6 +222,7 @@ def test_monitor_calls_ingest_understand():
 @pytest.mark.unit
 def test_monitor_skips_understand_when_empty():
     cap = _make()
+    cap._connected = True
     with patch.object(cap, "ingest", return_value=[]), \
          patch.object(cap, "understand") as und:
         cap.monitor()
