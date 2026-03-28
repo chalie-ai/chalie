@@ -225,3 +225,117 @@ def test_monitor_skips_understand_when_empty():
          patch.object(cap, "understand") as und:
         cap.monitor()
     und.assert_not_called()
+
+
+# --- get_tools / imap_search_email ---
+
+def _fake_facts():
+    """Return KnowledgeService-style fact dicts for search tests."""
+    return [
+        {"data": {"uid": 1, "subject": "Invoice #42", "from_name": "Sarah",
+                  "from_addr": "sarah@work.com", "date": "2026-03-28T10:00:00",
+                  "triage": "actionable", "is_thread": False}},
+        {"data": {"uid": 2, "subject": "Weekly newsletter", "from_name": "News Bot",
+                  "from_addr": "news@letters.com", "date": "2026-03-28T09:00:00",
+                  "triage": "noise", "is_thread": False}},
+        {"data": {"uid": 3, "subject": "Re: Project plan", "from_name": "Sarah",
+                  "from_addr": "sarah@work.com", "date": "2026-03-28T11:00:00",
+                  "triage": "actionable", "is_thread": True}},
+        {"data": {"uid": 4, "subject": "Meeting notes", "from_name": "Alex",
+                  "from_addr": "alex@team.com", "date": "2026-03-27T15:00:00",
+                  "triage": "informational", "is_thread": False}},
+    ]
+
+
+@pytest.mark.unit
+def test_get_tools_returns_search_tool():
+    cap = _make()
+    tools = cap.get_tools()
+    assert len(tools) == 1
+    assert tools[0]["name"] == "imap_search_email"
+    assert "handler" in tools[0]
+    assert "parameters" in tools[0]
+
+
+@pytest.mark.unit
+def test_search_by_sender():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = handler("t1", {"sender": "sarah"})
+    assert result["count"] == 2
+    assert all(e["from_name"] == "Sarah" for e in result["emails"])
+
+
+@pytest.mark.unit
+def test_search_by_subject():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = handler("t1", {"subject": "invoice"})
+    assert result["count"] == 1
+    assert result["emails"][0]["uid"] == 1
+
+
+@pytest.mark.unit
+def test_search_by_triage():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = handler("t1", {"triage": "actionable"})
+    assert result["count"] == 2
+
+
+@pytest.mark.unit
+def test_search_with_limit():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = handler("t1", {"limit": 1})
+    assert result["count"] == 1
+
+
+@pytest.mark.unit
+def test_search_no_results():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = handler("t1", {"sender": "nobody"})
+    assert result["count"] == 0
+    assert result["emails"] == []
+
+
+@pytest.mark.unit
+def test_search_combined_filters():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    ks_mock = MagicMock()
+    ks_mock.get_by_kind.return_value = _fake_facts()
+    with patch("services.database_service.get_shared_db_service"), \
+         patch("services.knowledge_service.KnowledgeService", return_value=ks_mock):
+        result = handler("t1", {"sender": "sarah", "triage": "actionable"})
+    assert result["count"] == 2
+
+
+@pytest.mark.unit
+def test_search_error_resilience():
+    cap = _make()
+    handler = cap.get_tools()[0]["handler"]
+    with patch("services.database_service.get_shared_db_service", side_effect=Exception("db down")):
+        result = handler("t1", {})
+    assert "error" in result

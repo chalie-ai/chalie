@@ -247,4 +247,106 @@ class ImapCapability(AbstractCapability):
         return {"error": f"'{action}' not implemented"}
 
     def get_tools(self):
-        return []
+        """Return IMAP tool definitions for dynamic registration."""
+        capability = self  # noqa: F841 — captured by closure
+
+        def _search_execute(topic, params, config=None, telemetry=None):
+            """Search ingested email headers by sender, subject, or triage."""
+            try:
+                from services.database_service import get_shared_db_service
+                from services.knowledge_service import KnowledgeService
+
+                ks = KnowledgeService(get_shared_db_service())
+                facts = ks.get_by_kind("fact", entity="email", limit=200)
+
+                sender = (params.get("sender") or "").lower()
+                subject = (params.get("subject") or "").lower()
+                triage = (params.get("triage") or "").lower()
+                limit = int(params.get("limit", 20))
+
+                results = []
+                for fact in facts:
+                    d = fact.get("data") or {}
+                    if sender:
+                        fn = (d.get("from_name") or "").lower()
+                        fa = (d.get("from_addr") or "").lower()
+                        if sender not in fn and sender not in fa:
+                            continue
+                    if subject and subject not in (d.get("subject") or "").lower():
+                        continue
+                    if triage and d.get("triage") != triage:
+                        continue
+                    results.append({
+                        "uid": d.get("uid"),
+                        "subject": d.get("subject", ""),
+                        "from_name": d.get("from_name", ""),
+                        "from_addr": d.get("from_addr", ""),
+                        "date": d.get("date", ""),
+                        "triage": d.get("triage", ""),
+                        "is_thread": d.get("is_thread", False),
+                    })
+                    if len(results) >= limit:
+                        break
+
+                return {"emails": results, "count": len(results)}
+            except Exception as exc:
+                logger.error("[imap] imap_search_email failed: %s", exc)
+                return {"error": str(exc)}
+
+        return [
+            {
+                "name": "imap_search_email",
+                "description": (
+                    "Search ingested email by sender name/address, subject keyword, "
+                    "or triage category (noise, informational, actionable). "
+                    "Returns matching email headers from the knowledge store."
+                ),
+                "parameters": {
+                    "sender": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Filter by sender name or email address (case-insensitive substring match)."
+                        ),
+                    },
+                    "subject": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Filter by subject keyword (case-insensitive substring match)."
+                        ),
+                    },
+                    "triage": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Filter by triage category: 'noise', 'informational', or 'actionable'."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "required": False,
+                        "description": "Maximum number of results to return (default 20).",
+                    },
+                },
+                "returns": {
+                    "emails": {
+                        "type": "array",
+                        "description": (
+                            "List of email dicts with uid, subject, from_name, "
+                            "from_addr, date, triage, is_thread."
+                        ),
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of emails returned.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if the operation failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _search_execute,
+            },
+        ]
