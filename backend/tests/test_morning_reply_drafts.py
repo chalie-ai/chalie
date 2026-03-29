@@ -37,10 +37,11 @@ def _mock_imap(emails):
 
 
 @pytest.mark.unit
+@patch("capabilities.hook_dedup.is_fired", return_value=False)
 @patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService")
-def test_sends_drafts_for_recent_emails(mock_mcs, mock_caps, _q):
+def test_sends_drafts_for_recent_emails(mock_mcs, mock_caps, _q, _dedup):
     store = MagicMock()
     mock_mcs.create_connection.return_value = store
     mock_caps.return_value = {"imap": _mock_imap([_RECENT_EMAIL, _SECOND_RECENT])}
@@ -56,10 +57,57 @@ def test_sends_drafts_for_recent_emails(mock_mcs, mock_caps, _q):
 
 
 @pytest.mark.unit
+@patch("capabilities.hook_dedup.is_fired", return_value=False)
 @patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService")
-def test_skips_old_emails(mock_mcs, mock_caps, _q):
+def test_persists_uid_mapping_in_memorystore(mock_mcs, mock_caps, _q, _dedup):
+    """UID mapping must be stored so 'send 1' resolves to a real email."""
+    store = MagicMock()
+    mock_mcs.create_connection.return_value = store
+    mock_caps.return_value = {"imap": _mock_imap([_RECENT_EMAIL, _SECOND_RECENT])}
+
+    from capabilities.morning_reply_drafts import maybe_send_morning_reply_drafts
+    assert maybe_send_morning_reply_drafts(now=_NOW) is True
+
+    # Verify MemoryStore.set was called with the draft mapping
+    set_call = store.set.call_args
+    assert set_call is not None
+    key, value = set_call[0][0], set_call[0][1]
+    assert key == f"morning_drafts:{_NOW.strftime('%Y-%m-%d')}"
+    draft_map = json.loads(value)
+    assert len(draft_map) == 2
+    assert draft_map[0]["uid"] == 201
+    assert draft_map[0]["from_addr"] == "sarah@example.com"
+    assert draft_map[1]["uid"] == 203
+    assert draft_map[1]["from_addr"] == "jordan@example.com"
+
+
+@pytest.mark.unit
+@patch("capabilities.hook_dedup.is_fired", return_value=False)
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
+@patch("capabilities.load_capabilities")
+@patch("services.memory_client.MemoryClientService")
+def test_prompt_includes_uid_mapping(mock_mcs, mock_caps, _q, _dedup):
+    """The LLM prompt must contain UID refs so it can dispatch on 'send N'."""
+    store = MagicMock()
+    mock_mcs.create_connection.return_value = store
+    mock_caps.return_value = {"imap": _mock_imap([_RECENT_EMAIL])}
+
+    from capabilities.morning_reply_drafts import maybe_send_morning_reply_drafts
+    assert maybe_send_morning_reply_drafts(now=_NOW) is True
+
+    payload = json.loads(store.rpush.call_args[0][1])
+    assert "UID:201" in payload["prompt"]
+    assert "imap_draft_reply" in payload["prompt"]
+
+
+@pytest.mark.unit
+@patch("capabilities.hook_dedup.is_fired", return_value=False)
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
+@patch("capabilities.load_capabilities")
+@patch("services.memory_client.MemoryClientService")
+def test_skips_old_emails(mock_mcs, mock_caps, _q, _dedup):
     store = MagicMock()
     mock_mcs.create_connection.return_value = store
     mock_caps.return_value = {"imap": _mock_imap([_OLD_EMAIL])}
@@ -81,10 +129,11 @@ def test_dedup_and_quiet(_dedup, _q):
 
 
 @pytest.mark.unit
+@patch("capabilities.hook_dedup.is_fired", return_value=False)
 @patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService")
-def test_outside_morning_window_and_no_imap(mock_mcs, mock_caps, _q):
+def test_outside_morning_window_and_no_imap(mock_mcs, mock_caps, _q, _dedup):
     afternoon = datetime.datetime(2026, 3, 29, 15, 0, tzinfo=_UTC)
     store = MagicMock()
     mock_mcs.create_connection.return_value = store

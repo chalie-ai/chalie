@@ -61,7 +61,19 @@ def maybe_send_morning_reply_drafts(now=None) -> bool:
         ]
         body = "\n".join(lines)
 
+        # Persist index→UID mapping so "send 1" can resolve to a real email
+        draft_map = [
+            {"index": i, "uid": e["uid"], "from_addr": e["from_addr"],
+             "subject": e["subject"]}
+            for i, e in enumerate(emails, 1)
+        ]
         store = MemoryClientService.create_connection()
+        map_key = f"morning_drafts:{now.strftime('%Y-%m-%d')}"
+        store.set(map_key, json.dumps(draft_map), ex=_FLAG_TTL)
+
+        uid_ref = " | ".join(
+            f"#{d['index']}=UID:{d['uid']}" for d in draft_map
+        )
         store.rpush("prompt-queue", json.dumps({
             "prompt": (
                 f"[MORNING REPLY DRAFTS]\n"
@@ -72,7 +84,10 @@ def maybe_send_morning_reply_drafts(now=None) -> bool:
                 "Professional but concise — one sentence each. "
                 "Tell the user they can say \"send 1 and 3\" to dispatch "
                 "or \"edit 2\" to refine one. "
-                "Do NOT mention 'IMAP' or technical details."
+                "Do NOT mention 'IMAP' or technical details.\n\n"
+                f"[INTERNAL — draft UID mapping: {uid_ref}. "
+                "When the user says 'send N', use imap_draft_reply with "
+                "the corresponding UID to compose and send the reply.]"
             ),
             "metadata": {
                 "type": "proactive_drift",
@@ -112,7 +127,9 @@ def _find_actionable_emails(now) -> list[dict]:
     ).get("emails", [])
 
     return [
-        {"from": e.get("from_name", e.get("from_addr", "?")),
+        {"uid": e.get("uid"),
+         "from": e.get("from_name", e.get("from_addr", "?")),
+         "from_addr": e.get("from_addr", ""),
          "subject": e.get("subject", "(no subject)")}
         for e in raw
         if e.get("date") and parse_utc(e["date"]) >= cutoff
