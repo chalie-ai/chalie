@@ -29,13 +29,11 @@ import logging
 logger = logging.getLogger(__name__)
 from services import ConfigService, FrontalCortexService, OrchestratorService, SessionService
 from services.llm_service import create_llm_service
-from services.recent_topic_service import RecentTopicService
 from services.world_state_service import WorldStateService
 from services.working_memory_service import WorkingMemoryService
 from services.interaction_log_service import InteractionLogService
 from services.event_bus_service import EventBusService
 from services.metrics_service import MetricsService
-from services.topic_classifier_service import TopicClassifierService
 from services.mode_router_service import ModeRouterService, collect_routing_signals, compute_nlp_signals
 from services.intent_classifier_service import IntentClassifierService
 from services.thread_service import get_thread_service
@@ -46,9 +44,6 @@ from services.innate_skills.registry import ALL_SKILL_NAMES
 
 # Global session service instance (shared across worker invocations)
 _session_service = None
-
-# Global topic classifier instance (cached model per worker)
-_topic_classifier = None
 
 # Global mode router instance (shared across invocations)
 _mode_router = None
@@ -156,14 +151,6 @@ def get_session_service():
         inactivity_timeout = episodic_config.get('inactivity_timeout', 600)
         _session_service = SessionService(inactivity_timeout=inactivity_timeout)
     return _session_service
-
-
-def get_topic_classifier():
-    """Get or create global topic classifier instance (caches embedding model)."""
-    global _topic_classifier
-    if _topic_classifier is None:
-        _topic_classifier = TopicClassifierService()
-    return _topic_classifier
 
 
 def get_intent_classifier():
@@ -352,22 +339,6 @@ def load_configs():
             }
         },
     }
-
-
-def get_existing_topics_from_db() -> list:
-    """Retrieve existing topics from the topics SQLite table."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM topics ORDER BY created_at DESC LIMIT 20")
-            rows = cursor.fetchall()
-            cursor.close()
-            return [row[0] for row in rows if row[0]]
-    except Exception as e:
-        logging.debug(f"[DIGEST] Could not load existing topics from DB: {e}")
-        return []
 
 
 def calculate_context_warmth(working_memory_len: int, world_state_nonempty: bool, gists: list = None) -> float:
@@ -1174,8 +1145,7 @@ def _handle_proactive_drift(text: str, metadata: dict) -> str:
         session_service = get_session_service()
 
         # The prompt to the router is the drift thought itself
-        topic_classifier = get_topic_classifier()
-        classification_result = topic_classifier.classify(drift_gist, recent_topic=topic)
+        classification_result = {'confidence': 1.0, 'is_new_topic': False}
 
         signals = collect_routing_signals(
             text=drift_gist,
@@ -1727,7 +1697,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
 
     # Step 2a: Initialize services
     thread_conv_service = ThreadConversationService()
-    recent_topic_service = RecentTopicService(ttl_minutes=30, channel_id='default')
     world_state_service = WorldStateService()
 
     # Initialize working memory (keyed by thread_id)
@@ -1759,10 +1728,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # PHASE A: IMMEDIATE COMMIT (before any LLM call)
     # ═══════════════════════════════════════════════════════════
 
-    # Step 3: Get existing topics and determine context topic
-    existing_topics = get_existing_topics_from_db()
-    recent_topic = recent_topic_service.get_recent_topic()
-    context_topic = recent_topic or (existing_topics[0] if existing_topics else None)
+    # Step 3: Derive context topic from thread_id (thread-scoped, no classifier needed)
+    context_topic = thread_id
     source = metadata.get('source', 'unknown') if metadata else 'unknown'
 
     # Step 3a: Immediate commit - append user turn to working memory (keyed by thread_id)
@@ -1892,40 +1859,41 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # PHASE C: CLASSIFICATION + ROUTING + RESPONSE
     # ═══════════════════════════════════════════════════════════
 
-    # Step 6: Classify the prompt with deterministic embedding-based classifier
-    topic_classifier = get_topic_classifier()
-    classification_result = topic_classifier.classify(text, recent_topic=recent_topic, thread_id=thread_id)
-
-    # Extract for compatibility with handle_classification
-    classification = {
-        'topic': classification_result['topic'],
-        'confidence': int(classification_result['confidence'] * 10),
-        'similar_topic': '',
-        'topic_update': '',
-        'context_warmth': context_warmth,
-    }
-    classification_time = classification_result['classification_time']
-
-    # Reuse the embedding already computed by topic classifier — no redundant cache lookup
-    msg_embedding = classification_result.get('message_embedding')
-    if msg_embedding is not None:
+    # Step 6: Compute message embedding directly — thread_id is the topic key
+    _embed_start = time.time()
+    msg_embedding = None
+    try:
+        from services.embedding_service import EmbeddingService
+        msg_embedding = EmbeddingService().generate_embedding(text)
         try:
             from services.autonomous_actions.communicate_action import CommunicateAction
             communicate = CommunicateAction()
             communicate.record_user_interaction(message_embedding=msg_embedding)
         except Exception as e:
             logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
+    except Exception as e:
+        logging.debug(f"[DIGEST] Embedding computation failed: {e}")
+    classification_time = time.time() - _embed_start
 
+    # Use thread_id as the topic key; supply static defaults for downstream signal consumers
+    topic = thread_id
+    classification_result = {'confidence': 1.0, 'is_new_topic': False}
+    classification = {
+        'topic': topic,
+        'confidence': 10,
+        'similar_topic': '',
+        'topic_update': '',
+        'context_warmth': context_warmth,
+    }
 
     metrics.record_timing(trace_id, 'classification', classification_time * 1000)
     metrics.record_counter('classifications_total')
 
     # Step 6b: Create TopicContext — single source of truth for this message's topic identity
     from services.topic_context import TopicContext
-    topic_ctx = TopicContext.from_classification(classification_result, thread_id=thread_id)
+    topic_ctx = TopicContext(topic=topic, thread_id=thread_id, message_embedding=msg_embedding)
 
     # Step 7: Add exchange to thread conversation
-    topic = classification_result['topic']
     exchange_id = thread_conv_service.add_exchange(thread_id, topic, {
         "message": text,
         "classification_time": classification_time,
@@ -1989,9 +1957,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     except Exception as _fe:
         logging.debug(f"[DIGEST] Focus services failed: {_fe}")
 
-    # Step 8: Cache this topic as the most recent
-    recent_topic_service.set_recent_topic(topic)
-
     # Step 9: Track session and check for episode generation
     session_service = get_session_service()
     session_service.set_thread(thread_id)
@@ -1999,9 +1964,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Returning-from-silence detection — must be BEFORE track_classification()
     # updates last_activity_time so the gap is measured against prior activity.
     _session_silence = session_service.is_returning_from_silence(threshold_seconds=2700)
-    _boundary_returning = classification_result.get('just_reset_from_silence', False)
     # silence_seconds > 0 means returning; keep raw value for future tiered-warmth use
-    silence_seconds = _session_silence if _session_silence > 0 else (2700.0 if _boundary_returning else 0.0)
+    silence_seconds = _session_silence if _session_silence > 0 else 0.0
     returning_from_silence = silence_seconds > 0
     if returning_from_silence:
         logging.info(f"[DIGEST] Returning from silence: {silence_seconds:.0f}s gap detected")
