@@ -263,6 +263,13 @@ class AbstractCapability(ABC):
                 maybe_send_draft_nudge()
             except Exception as exc:
                 logger.debug("draft_nudge hook: %s", exc)
+            try:
+                from capabilities.welcome_back import (
+                    maybe_send_welcome_back,
+                )
+                maybe_send_welcome_back()
+            except Exception as exc:
+                logger.debug("welcome_back hook: %s", exc)
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
