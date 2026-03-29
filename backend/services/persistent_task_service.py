@@ -31,9 +31,6 @@ VALID_TRANSITIONS = {
     'paused': {'in_progress', 'cancelled', 'expired'},
 }
 
-# States eligible for auto-expiry
-EXPIRABLE_STATES = {'accepted', 'in_progress', 'paused'}
-
 # Limits
 MAX_ACTIVE_TASKS = 5
 DEFAULT_EXPIRY_DAYS = 14

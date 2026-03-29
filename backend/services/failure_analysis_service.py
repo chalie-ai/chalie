@@ -38,16 +38,6 @@ DEDUP_SIMILARITY_THRESHOLD = 0.85
 # Maximum number of lessons stored per action_name row.
 MAX_LESSONS_PER_ACTION = 50
 
-# Valid blame categories (mirrors the prompt schema).
-VALID_BLAME_CATEGORIES = frozenset({
-    "tool_choice",
-    "input_quality",
-    "stale_memory",
-    "wrong_assumption",
-    "external",
-    "ambiguous_goal",
-})
-
 # Error signal keywords that support an "external" blame attribution.
 _EXTERNAL_KEYWORDS = frozenset({
     "timeout", "timed out", "connection", "refused", "network",

@@ -36,9 +36,6 @@ def _strip_tool_markers(text: str) -> str:
 # Their results aren't needed for subsequent iteration reasoning.
 FIRE_AND_FORGET: frozenset = frozenset({'memorize', 'focus'})
 
-# Iteration threshold after which the soft nudge hint is injected once.
-_SOFT_NUDGE_AFTER = 10
-
 
 class ActLoopService:
     """Manages ACT loop with hard iteration cap, timeout, and repetition detection."""

@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[PROFILE ENRICHMENT]"
 
 CYCLE_INTERVAL_SECONDS = 6 * 3600  # 6 hours
-RELIABILITY_DECAY_DAYS = 30  # Decay reliability if no new data in 30 days
 
 
 from services.embedding_utils import pack_embedding as _pack_embedding

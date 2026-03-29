@@ -55,10 +55,6 @@ _INGESTION_TIMEOUT_MS = 3000
 # Maximum candidate pairs to classify per ingestion call
 _MAX_PAIRS_PER_INGESTION = 3
 
-# Anti-duplicate: how many recently-created uncertainties to check before
-# creating a new one for the same pair
-_RECENT_UNCERTAINTY_WINDOW_DAYS = 7
-
 _JSON_FENCE_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
 
 
