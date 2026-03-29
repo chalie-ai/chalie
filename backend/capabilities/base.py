@@ -66,6 +66,48 @@ def _discover_hooks() -> None:
             logger.debug("hook discovery: skip %s: %s", name, exc)
 
 
+def _drain_prompt_queue(max_items: int = 50) -> int:
+    """Drain the MemoryStore ``prompt-queue`` list and dispatch via PromptQueue.
+
+    Hooks push JSON items to the MemoryStore list with ``store.rpush``.
+    This function pops them and dispatches each to :func:`digest_worker`
+    through the working :class:`PromptQueue` thread mechanism.
+
+    Returns:
+        int: Number of items dispatched.
+    """
+    try:
+        import json
+        from services.memory_client import MemoryClientService
+        from services.prompt_queue import PromptQueue
+        from workers.digest_worker import digest_worker
+
+        store = MemoryClientService.create_connection()
+        queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
+        dispatched = 0
+
+        for _ in range(max_items):
+            raw = store.lpop("prompt-queue")
+            if raw is None:
+                break
+            try:
+                item = json.loads(raw)
+                prompt = item.get("prompt", "")
+                metadata = item.get("metadata", {})
+                if prompt:
+                    queue.enqueue(prompt, metadata=metadata)
+                    dispatched += 1
+            except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                logger.debug("prompt-queue drain: bad item: %s", exc)
+
+        if dispatched:
+            logger.info("[prompt-queue] Drained %d item(s)", dispatched)
+        return dispatched
+    except Exception as exc:
+        logger.debug("prompt-queue drain failed: %s", exc)
+        return 0
+
+
 def _get_tool_config_service():
     """Return a :class:`~services.tool_config_service.ToolConfigService` instance.
 
@@ -253,6 +295,7 @@ class AbstractCapability(ABC):
                 fn()
             except Exception as exc:
                 logger.debug("%s hook: %s", fn.__name__, exc)
+        _drain_prompt_queue()
 
     def health(self) -> bool:
         """Quick connectivity check.
