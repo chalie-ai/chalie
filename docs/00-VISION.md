@@ -4,11 +4,17 @@ This document defines what Chalie is, why it exists, and how every design decisi
 
 ---
 
-## Mission Statement
+## Vision
 
-**Chalie is a persistent cognitive runtime that amplifies any base model through vertical stacking, continuous reasoning, and accumulated memory.**
+**Chalie is a Life OS.** One persistent intelligence that sees your entire digital life, understands what matters, and handles it — so you stop managing and start living. It acts when confident, asks when uncertain, and learns from everything. Success is not measured by any single response, but by how much of your life just works without you thinking about it.
 
-Intelligence emerges not from a single powerful model, but from the **vertical stacking** of specialized models through a persistent reasoning loop — perceive, update, reason, act, reflect — that runs continuously, not per-message.
+## Core Principles
+
+1. **Judgment over activity.** Don't act unless action improves outcomes. Gate every output. Fewer high-quality actions beat many low-confidence ones.
+2. **Restraint builds trust.** Start conservative, grow with context. Silence over noise. Every token, notification, and action must earn its place.
+3. **Continuity is intelligence.** Memory with decay. Identity through compression. The persistent runtime — not any single response — is the product.
+4. **Constraints are features.** Limits force trade-offs. Capacity bounds, decay rates, and token budgets are what make intelligence emerge. Don't remove them to "improve."
+5. **See everything, show only what matters.** Ingest broadly. Understand deeply. Surface selectively. The gap between intent and done should be invisible.
 
 ### Invariants
 

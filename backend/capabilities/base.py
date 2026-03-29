@@ -27,87 +27,6 @@ from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Proactive hook registry — hooks self-register at import time
-# ---------------------------------------------------------------------------
-
-_hook_registry: list = []
-_hooks_discovered = False
-
-
-def register_hook(fn) -> None:
-    """Register a proactive hook to fire after each monitor cycle.
-
-    Hook modules call this at module level so they are automatically
-    discovered without naming them in infrastructure code.
-    """
-    if fn not in _hook_registry:
-        _hook_registry.append(fn)
-
-
-def _discover_hooks() -> None:
-    """Import capability-level modules once to trigger hook self-registration."""
-    global _hooks_discovered
-    if _hooks_discovered:
-        return
-    _hooks_discovered = True
-
-    import importlib
-    from pathlib import Path
-
-    cap_dir = Path(__file__).parent
-    for py_file in sorted(cap_dir.glob("[!_]*.py")):
-        name = py_file.stem
-        if name == "base":
-            continue
-        try:
-            importlib.import_module(f"capabilities.{name}")
-        except Exception as exc:
-            logger.debug("hook discovery: skip %s: %s", name, exc)
-
-
-def _drain_prompt_queue(max_items: int = 50) -> int:
-    """Drain the MemoryStore ``prompt-queue`` list and dispatch via PromptQueue.
-
-    Hooks push JSON items to the MemoryStore list with ``store.rpush``.
-    This function pops them and dispatches each to :func:`digest_worker`
-    through the working :class:`PromptQueue` thread mechanism.
-
-    Returns:
-        int: Number of items dispatched.
-    """
-    try:
-        import json
-        from services.memory_client import MemoryClientService
-        from services.prompt_queue import PromptQueue
-        from workers.digest_worker import digest_worker
-
-        store = MemoryClientService.create_connection()
-        queue = PromptQueue(queue_name="prompt-queue", worker_func=digest_worker)
-        dispatched = 0
-
-        for _ in range(max_items):
-            raw = store.lpop("prompt-queue")
-            if raw is None:
-                break
-            try:
-                item = json.loads(raw)
-                prompt = item.get("prompt", "")
-                metadata = item.get("metadata", {})
-                if prompt:
-                    queue.enqueue(prompt, metadata=metadata)
-                    dispatched += 1
-            except (json.JSONDecodeError, TypeError, KeyError) as exc:
-                logger.debug("prompt-queue drain: bad item: %s", exc)
-
-        if dispatched:
-            logger.info("[prompt-queue] Drained %d item(s)", dispatched)
-        return dispatched
-    except Exception as exc:
-        logger.debug("prompt-queue drain failed: %s", exc)
-        return 0
-
-
 def _get_tool_config_service():
     """Return a :class:`~services.tool_config_service.ToolConfigService` instance.
 
@@ -164,7 +83,6 @@ class AbstractCapability(ABC):
         self._error_count: int = 0
         self._last_error: str | None = None
         self._failure_alerted: bool = False
-        self._first_monitor: bool = True
         self._backoff_secs: int = 0
         self._next_retry_at = None
 
@@ -280,34 +198,11 @@ class AbstractCapability(ABC):
         """
 
     def monitor(self) -> None:
-        """Run the monitor cycle and dispatch proactive hooks.
+        """Run the monitor cycle.
 
-        Calls :meth:`_do_monitor` (the subclass implementation) followed by
-        proactive hooks.  This is the public entry point that ensures hooks
-        fire regardless of whether the caller uses ``monitor()`` or
-        ``run_monitor()``.
-
-        On the **first** call (initial sync after connect), hooks fire
-        *before* ``_do_monitor()`` as well.  This lets time-sensitive hooks
-        like ``first_look`` use data already available from other
-        capabilities without waiting for this capability's slow initial
-        fetch.  Hook dedup flags prevent double-firing.
+        Calls :meth:`_do_monitor` (the subclass implementation).
         """
-        if self._first_monitor:
-            self._first_monitor = False
-            self._dispatch_hooks()
         self._do_monitor()
-        self._dispatch_hooks()
-
-    def _dispatch_hooks(self) -> None:
-        """Fire all registered proactive hooks after a successful monitor."""
-        _discover_hooks()
-        for fn in _hook_registry:
-            try:
-                fn()
-            except Exception as exc:
-                logger.debug("%s hook: %s", fn.__name__, exc)
-        _drain_prompt_queue()
 
     def health(self) -> bool:
         """Quick connectivity check.

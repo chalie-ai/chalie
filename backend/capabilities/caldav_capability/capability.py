@@ -211,12 +211,17 @@ def _get_user_tz():
     NOTE: Returns ``None`` (not UTC) so callers like ``_next_morning_8am``
     can distinguish "no timezone configured" from "UTC configured".
     """
-    from capabilities.time_context import get_user_tz
-    from datetime import timezone as _tz
-
-    result = get_user_tz()
-    # Preserve original contract: return None when no user tz is configured
-    return None if result is _tz.utc else result
+    try:
+        from services.database_service import get_shared_db_service
+        from services.settings_service import SettingsService
+        settings = SettingsService(get_shared_db_service())
+        tz_name = settings.get("user_timezone")
+        if tz_name:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(tz_name)
+    except Exception:
+        pass
+    return None
 
 
 def _next_morning_8am() -> "_dt_module.datetime":
@@ -869,11 +874,12 @@ class CaldavCapability(AbstractCapability):
                            (id, item_type, message, due_at, status, topic,
                             source, external_uid, metadata, hidden, created_at)
                          VALUES (?, 'event', ?, ?, 'pending', 'calendar',
-                                 'caldav', ?, ?, 0, ?)
+                                 'caldav', ?, ?, 1, ?)
                          ON CONFLICT(external_uid) DO UPDATE SET
                             message=excluded.message,
                             due_at=excluded.due_at,
                             metadata=excluded.metadata,
+                            hidden=1,
                             status='pending'""",
                         (uuid.uuid4().hex[:8], message, due_at,
                          external_uid, metadata, now.isoformat()),
