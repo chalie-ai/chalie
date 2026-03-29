@@ -152,6 +152,24 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict:
     }
 
 
+def resolve_display_name(from_addr: str, from_name: str = "") -> str:
+    """Resolve a sender to a human-readable display name via contact index.
+
+    Returns the best available name: contact_resolver match > header name > email.
+    """
+    from capabilities.contact_resolver import resolve as _cr_resolve
+    addr = (from_addr or "").strip()
+    name = (from_name or "").strip()
+    if addr:
+        try:
+            matches = _cr_resolve(addr, limit=1)
+            if matches and matches[0].get("name"):
+                return matches[0]["name"]
+        except Exception as exc:
+            logger.debug("[imap] resolve_display_name(%s): %s", addr, exc)
+    return name or addr
+
+
 def extract_body(raw_bytes: bytes, max_chars: int = _MAX_BODY_CHARS) -> str:
     """Extract plain-text body from raw RFC822 email bytes."""
     msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
@@ -606,6 +624,10 @@ class ImapCapability(AbstractCapability):
                             "subject": item.get("subject", ""),
                             "from_name": item.get("from_name", ""),
                             "from_addr": item.get("from_addr", ""),
+                            "from_display": resolve_display_name(
+                                item.get("from_addr", ""),
+                                item.get("from_name", ""),
+                            ),
                             "date": item.get("date", ""),
                             "triage": item["triage"],
                             "is_thread": item["is_thread"],
@@ -644,6 +666,10 @@ class ImapCapability(AbstractCapability):
                     "subject": headers.get("subject", ""),
                     "from_name": headers.get("from_name", ""),
                     "from_addr": headers.get("from_addr", ""),
+                    "from_display": resolve_display_name(
+                        headers.get("from_addr", ""),
+                        headers.get("from_name", ""),
+                    ),
                     "date": headers.get("date", ""),
                     "body": extract_body(raw_bytes),
                 }
