@@ -26,10 +26,6 @@ venv/
 .claude/
 Claude.md
 
-# Simplify eval artifacts
-backend/.simplify_baseline.json
-backend/.simplify_test_results.xml
-
 
 # Frontend build artifacts (none currently, vanilla JS)
 node_modules/
