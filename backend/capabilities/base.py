@@ -164,6 +164,7 @@ class AbstractCapability(ABC):
         self._error_count: int = 0
         self._last_error: str | None = None
         self._failure_alerted: bool = False
+        self._first_monitor: bool = True
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -283,7 +284,16 @@ class AbstractCapability(ABC):
         proactive hooks.  This is the public entry point that ensures hooks
         fire regardless of whether the caller uses ``monitor()`` or
         ``run_monitor()``.
+
+        On the **first** call (initial sync after connect), hooks fire
+        *before* ``_do_monitor()`` as well.  This lets time-sensitive hooks
+        like ``first_look`` use data already available from other
+        capabilities without waiting for this capability's slow initial
+        fetch.  Hook dedup flags prevent double-firing.
         """
+        if self._first_monitor:
+            self._first_monitor = False
+            self._dispatch_hooks()
         self._do_monitor()
         self._dispatch_hooks()
 
