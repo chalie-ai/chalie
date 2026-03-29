@@ -344,8 +344,8 @@ class ImapCapability(AbstractCapability):
             if _owns:
                 try:
                     client.logout()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[imap] logout after ingest: %s", exc)
 
     def understand(self, items):
         """Classify headers via deterministic triage heuristics.
@@ -398,8 +398,8 @@ class ImapCapability(AbstractCapability):
         finally:
             try:
                 client.logout()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[imap] logout after monitor: %s", exc)
 
     # ------------------------------------------------------------------
     # First-connect greeting (one-time notification)
@@ -522,8 +522,8 @@ class ImapCapability(AbstractCapability):
             if _owns:
                 try:
                     client.logout()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[imap] logout after inbox_hint: %s", exc)
 
     # ------------------------------------------------------------------
     # SMTP send
