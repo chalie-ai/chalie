@@ -97,12 +97,12 @@ def classify_email(item: dict) -> str:
     """Classify an email header dict as noise, informational, or actionable.
 
     Uses embedding similarity against canonical intent anchors.
-    Deterministic fast paths for protocol-level signals bypass embeddings.
+    Only ``has_unsubscribe`` is a deterministic fast path; threaded replies
+    (``in_reply_to``) go through the embedding classifier because many
+    automated systems (newsletters, GitHub notifications) set In-Reply-To.
     """
     if item.get("has_unsubscribe"):
         return "noise"
-    if item.get("in_reply_to"):
-        return "actionable"
 
     from services.embedding_service import get_embedding_service
     svc = get_embedding_service()
