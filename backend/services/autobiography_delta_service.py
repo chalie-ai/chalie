@@ -5,7 +5,6 @@ Compares section hashes between consecutive versions to surface growth insights
 and feed stability signals back to trait reinforcement.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -14,11 +13,6 @@ from typing import Optional, Dict, Any
 from services.database_service import text
 
 logger = logging.getLogger(__name__)
-
-
-def _hash_section(text: str) -> str:
-    """SHA-256 hash of a section's text content."""
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
 
 
 def _extract_sections(narrative: str) -> Dict[str, str]:
