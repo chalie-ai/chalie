@@ -5,21 +5,9 @@ Extracted from ToolRegistryService and _CronToolWorker to eliminate
 verbatim duplication across both classes.
 """
 
-import re
 import json
 from typing import Any
 
-
-# Strip patterns: remove action-like text from tool output so the LLM
-# doesn't misinterpret tool results as action instructions.
-STRIP_PATTERNS = [
-    re.compile(r'\{[^}]*\}'),
-    re.compile(
-        r'\b(recall|memorize|associate|introspect)\s*\(',
-        re.IGNORECASE,
-    ),
-    re.compile(r'ACTION\s*:', re.IGNORECASE),
-]
 
 MAX_OUTPUT_CHARS = 3000
 
@@ -90,18 +78,6 @@ def format_tool_result(result: Any) -> str:
             lines.append(f"{key}: {value}")
 
     return "\n".join(lines)
-
-
-def sanitize_tool_output(text: str) -> str:
-    """Strip action-like patterns from tool output text.
-
-    Prevents the LLM from misinterpreting tool results as action
-    instructions (e.g. `recall(...)` appearing in web scrape results).
-    """
-    for pattern in STRIP_PATTERNS:
-        text = pattern.sub("", text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
 
 
 def build_tool_telemetry(raw_telemetry: dict) -> dict:

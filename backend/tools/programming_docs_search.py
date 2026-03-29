@@ -1046,14 +1046,6 @@ def resolve_source(language):
     return _ALIAS_MAP.get(language.strip().lower())
 
 
-def list_languages():
-    """Return list of {id, name, aliases, base_url} for all sources."""
-    return [
-        {"id": s.id, "name": s.name, "aliases": s.aliases, "base_url": s.base_url}
-        for s in _ALL_SOURCES
-    ]
-
-
 # ---------------------------------------------------------------------------
 # Main lookup
 # ---------------------------------------------------------------------------
