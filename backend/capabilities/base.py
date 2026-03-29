@@ -27,6 +27,44 @@ from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Proactive hook registry — hooks self-register at import time
+# ---------------------------------------------------------------------------
+
+_hook_registry: list = []
+_hooks_discovered = False
+
+
+def register_hook(fn) -> None:
+    """Register a proactive hook to fire after each monitor cycle.
+
+    Hook modules call this at module level so they are automatically
+    discovered without naming them in infrastructure code.
+    """
+    if fn not in _hook_registry:
+        _hook_registry.append(fn)
+
+
+def _discover_hooks() -> None:
+    """Import capability-level modules once to trigger hook self-registration."""
+    global _hooks_discovered
+    if _hooks_discovered:
+        return
+    _hooks_discovered = True
+
+    import importlib
+    from pathlib import Path
+
+    cap_dir = Path(__file__).parent
+    for py_file in sorted(cap_dir.glob("[!_]*.py")):
+        name = py_file.stem
+        if name == "base":
+            continue
+        try:
+            importlib.import_module(f"capabilities.{name}")
+        except Exception as exc:
+            logger.debug("hook discovery: skip %s: %s", name, exc)
+
 
 def _get_tool_config_service():
     """Return a :class:`~services.tool_config_service.ToolConfigService` instance.
@@ -209,49 +247,12 @@ class AbstractCapability(ABC):
 
     def _dispatch_hooks(self) -> None:
         """Fire all registered proactive hooks after a successful monitor."""
-        try:
-            from capabilities.morning_brief import maybe_send_morning_brief
-            maybe_send_morning_brief()
-        except Exception as exc:
-            logger.debug("morning_brief hook: %s", exc)
-        try:
-            from capabilities.first_look import maybe_send_first_look
-            maybe_send_first_look()
-        except Exception:
-            pass
-        try:
-            from capabilities.meeting_prep import maybe_send_meeting_prep
-            maybe_send_meeting_prep()
-        except Exception as exc:
-            logger.debug("meeting_prep hook: %s", exc)
-        try:
-            from capabilities.post_meeting_nudge import (
-                maybe_send_post_meeting_nudge,
-            )
-            maybe_send_post_meeting_nudge()
-        except Exception as exc:
-            logger.debug("post_meeting_nudge hook: %s", exc)
-        try:
-            from capabilities.evening_brief import (
-                maybe_send_evening_brief,
-            )
-            maybe_send_evening_brief()
-        except Exception as exc:
-            logger.debug("evening_brief hook: %s", exc)
-        try:
-            from capabilities.draft_nudge import (
-                maybe_send_draft_nudge,
-            )
-            maybe_send_draft_nudge()
-        except Exception as exc:
-            logger.debug("draft_nudge hook: %s", exc)
-        try:
-            from capabilities.welcome_back import (
-                maybe_send_welcome_back,
-            )
-            maybe_send_welcome_back()
-        except Exception as exc:
-            logger.debug("welcome_back hook: %s", exc)
+        _discover_hooks()
+        for fn in _hook_registry:
+            try:
+                fn()
+            except Exception as exc:
+                logger.debug("%s hook: %s", fn.__name__, exc)
 
     def health(self) -> bool:
         """Quick connectivity check.

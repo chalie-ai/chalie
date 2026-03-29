@@ -131,3 +131,7 @@ def _build_brief(summary, dtstart, location, attendees, now):
                     "\nNeeds reply (you haven't responded):\n"
                     + "\n".join(needs_reply))
     return "\n".join(parts)
+
+
+from capabilities.base import register_hook  # noqa: E402
+register_hook(maybe_send_meeting_prep)

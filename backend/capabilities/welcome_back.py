@@ -73,3 +73,7 @@ def _read_world_hints(store) -> str:
     return "\n\n".join(
         filter(None, (json.loads(r).get("content", "") for r in signals))
     )
+
+
+from capabilities.base import register_hook  # noqa: E402
+register_hook(maybe_send_welcome_back)

@@ -113,3 +113,7 @@ def _build_nudge(summary, dtend, attendees, now):
         f"Attendees: {', '.join(attendees[:5])}\n"
         "\nUnanswered emails:\n" + "\n".join(needs_reply)
     )
+
+
+from capabilities.base import register_hook  # noqa: E402
+register_hook(maybe_send_post_meeting_nudge)

@@ -108,3 +108,7 @@ def _find_stale_emails(now) -> list[dict]:
         if len(stale) >= _MAX_EMAILS:
             break
     return stale
+
+
+from capabilities.base import register_hook  # noqa: E402
+register_hook(maybe_send_draft_nudge)

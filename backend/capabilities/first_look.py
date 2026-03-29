@@ -105,3 +105,7 @@ def _read_inbox_snapshot(store) -> str:
     except Exception:
         pass
     return ""
+
+
+from capabilities.base import register_hook  # noqa: E402
+register_hook(maybe_send_first_look)

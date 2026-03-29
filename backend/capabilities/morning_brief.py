@@ -233,3 +233,7 @@ def _read_cached_inbox_hint(store) -> str:
     except Exception:
         pass
     return ""
+
+
+from capabilities.base import register_hook  # noqa: E402
+register_hook(maybe_send_morning_brief)
