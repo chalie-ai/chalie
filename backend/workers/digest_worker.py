@@ -1964,9 +1964,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Returning-from-silence detection — must be BEFORE track_classification()
     # updates last_activity_time so the gap is measured against prior activity.
     _session_silence = session_service.is_returning_from_silence(threshold_seconds=2700)
-    _boundary_returning = classification_result.get('just_reset_from_silence', False)
     # silence_seconds > 0 means returning; keep raw value for future tiered-warmth use
-    silence_seconds = _session_silence if _session_silence > 0 else (2700.0 if _boundary_returning else 0.0)
+    silence_seconds = _session_silence if _session_silence > 0 else 0.0
     returning_from_silence = silence_seconds > 0
     if returning_from_silence:
         logging.info(f"[DIGEST] Returning from silence: {silence_seconds:.0f}s gap detected")

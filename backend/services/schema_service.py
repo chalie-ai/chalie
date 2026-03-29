@@ -86,7 +86,6 @@ class SchemaService:
         """Create sqlite-vec companion virtual tables for vector columns."""
         vec_tables = [
             ("episodes_vec", self.embedding_dimensions),
-            ("topics_vec", self.embedding_dimensions),
             ("tool_capability_profiles_vec", self.embedding_dimensions),
             ("documents_vec", self.embedding_dimensions),
             ("document_chunks_vec", self.embedding_dimensions),

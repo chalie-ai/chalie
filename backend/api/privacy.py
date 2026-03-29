@@ -264,12 +264,8 @@ def delete_all():
             "tool_reflection:pending",
             "semantic_consolidation:*",
             "reflex:*",
-            "two_signal_boundary:*",
             "adaptive_fork_*",
             "adaptive_growth_*",
-
-            # Topic & routing
-            "recent_topic:*", "recent_topic",
 
             # Output & notifications
             "notifications:recent",
