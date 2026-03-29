@@ -72,8 +72,8 @@ def _user_tz():
         name = ClientContextService().get().get("timezone")
         if name:
             return ZoneInfo(name)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[evening_brief] _user_tz: %s", exc)
     return timezone.utc
 
 
