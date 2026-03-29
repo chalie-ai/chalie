@@ -526,6 +526,45 @@ class ImapCapability(AbstractCapability):
                     logger.debug("[imap] logout after inbox_hint: %s", exc)
 
     # ------------------------------------------------------------------
+    # Drafts folder discovery + IMAP APPEND
+    # ------------------------------------------------------------------
+
+    def _find_drafts_folder(self, client) -> str:
+        """Locate the Drafts folder via RFC 6154 flag, fallback 'Drafts'."""
+        try:
+            for flags, _, name in client.list_folders():
+                if b"\\Drafts" in flags:
+                    return name
+        except Exception:
+            pass
+        return "Drafts"
+
+    def _save_draft(self, client, to: str, subject: str, body: str,
+                    in_reply_to: str = "") -> dict:
+        """Compose a MIME message and APPEND it to the Drafts folder."""
+        from email.mime.text import MIMEText
+
+        sender = self.load_credential(_K_EMAIL)
+        if not sender:
+            return {"error": "No email configured"}
+
+        drafts = self._find_drafts_folder(client)
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["From"] = sender
+        msg["To"] = to
+        msg["Subject"] = subject
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+            msg["References"] = in_reply_to
+
+        client.append(drafts, msg.as_bytes(),
+                      flags=[b"\\Draft", b"\\Seen"])
+        return {
+            "success": True, "to": to, "subject": subject,
+            "folder": drafts,
+        }
+
+    # ------------------------------------------------------------------
     # SMTP send
     # ------------------------------------------------------------------
 
@@ -768,6 +807,49 @@ class ImapCapability(AbstractCapability):
                 except Exception as exc:
                     logger.debug("[imap] logout after mark_read: %s", exc)
 
+        def _draft_reply_execute(topic, params, config=None, telemetry=None):
+            """Fetch original email, compose a reply draft, save to Drafts."""
+            uid = params.get("uid")
+            body = (params.get("body") or "").strip()
+            if not uid:
+                return {"error": "uid is required"}
+            if not body:
+                return {"error": "body is required"}
+            try:
+                uid = int(uid)
+            except (TypeError, ValueError):
+                return {"error": "uid must be an integer"}
+            client = capability._open_client()
+            if not client:
+                return {"error": "Cannot connect to email server"}
+            try:
+                client.select_folder("INBOX", readonly=True)
+                raw = client.fetch([uid], [b"RFC822.HEADER"])
+                if uid not in raw:
+                    return {"error": f"Email UID {uid} not found"}
+                headers = parse_headers(uid, raw[uid][b"RFC822.HEADER"])
+                # Build reply subject
+                orig_subj = headers.get("subject", "")
+                reply_subj = orig_subj if orig_subj.lower().startswith("re:") \
+                    else f"Re: {orig_subj}"
+                # Reply-to address: use From of original
+                reply_to = headers.get("from_addr", "")
+                if not reply_to:
+                    return {"error": "Cannot determine reply address"}
+                message_id = headers.get("message_id", "")
+                return capability._save_draft(
+                    client, to=reply_to, subject=reply_subj,
+                    body=body, in_reply_to=message_id,
+                )
+            except Exception as exc:
+                logger.error("[imap] imap_draft_reply failed: %s", exc)
+                return {"error": str(exc)}
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+
         def _snooze_execute(topic, params, config=None, telemetry=None):
             """Snooze an email — schedule a re-surface nudge at a given time."""
             uid = params.get("uid")
@@ -947,6 +1029,51 @@ class ImapCapability(AbstractCapability):
                 },
                 "constraints": {"timeout_seconds": 30},
                 "handler": _send_execute,
+            },
+            {
+                "name": "imap_draft_reply",
+                "description": (
+                    "Draft a reply to an email and save it in the Drafts "
+                    "folder. The user can review and send it from their "
+                    "email client. Use when the user agrees to reply to an "
+                    "email and you want to compose the draft for them."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "integer",
+                        "required": True,
+                        "description": "IMAP UID of the email to reply to.",
+                    },
+                    "body": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Plain-text body of the reply draft.",
+                    },
+                },
+                "returns": {
+                    "success": {
+                        "type": "boolean",
+                        "description": "True if draft saved.",
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "Recipient address.",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Reply subject line.",
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Drafts folder where saved.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _draft_reply_execute,
             },
             {
                 "name": "imap_search_email",
