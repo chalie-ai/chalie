@@ -612,7 +612,7 @@ class CaldavCapability(AbstractCapability):
         """
         return items
 
-    def monitor(self) -> None:
+    def _do_monitor(self) -> None:
         """Detect calendar changes and emit signals.
 
         Called by the scheduler via system handler dispatch. Auto-reconnects

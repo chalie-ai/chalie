@@ -376,7 +376,7 @@ class ImapCapability(AbstractCapability):
             logger.debug("[imap] signal bridge emit failed: %s", exc)
         return items
 
-    def monitor(self):
+    def _do_monitor(self):
         """Fetch new headers and run triage + knowledge storage.
 
         Opens a single IMAP connection and shares it across ingest() and

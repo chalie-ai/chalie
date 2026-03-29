@@ -517,6 +517,17 @@ class TestCaldavCapability:
 
         mock_ingest.assert_called_once()
 
+    def test_monitor_dispatches_proactive_hooks(self):
+        """monitor() must call _dispatch_hooks after _do_monitor."""
+        cap = _make_capability()
+        cap._connected = True
+
+        with patch.object(cap, "ingest", return_value=[]), \
+             patch.object(cap, "_dispatch_hooks") as hooks:
+            cap.monitor()
+
+        hooks.assert_called_once()
+
 
 # -----------------------------------------------------------------------
 # Module-level helpers

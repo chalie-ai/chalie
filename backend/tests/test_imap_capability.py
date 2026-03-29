@@ -271,6 +271,20 @@ def test_monitor_skips_understand_when_empty():
     und.assert_not_called()
 
 
+@pytest.mark.unit
+def test_monitor_dispatches_proactive_hooks():
+    """monitor() must call _dispatch_hooks after _do_monitor."""
+    cap = _make()
+    cap._connected = True
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch.object(cap, "ingest", return_value=[]), \
+         patch.object(cap, "_inject_inbox_hint"), \
+         patch.object(cap, "_dispatch_hooks") as hooks:
+        cap.monitor()
+    hooks.assert_called_once()
+
+
 # --- _imap_date ---
 
 @pytest.mark.unit
