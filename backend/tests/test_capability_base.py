@@ -384,6 +384,46 @@ class TestHealthTracking:
         assert cap._error_count == 0
         assert cap._connected is True
 
+    def test_run_monitor_calls_proactive_hooks_on_success(self):
+        """Successful run_monitor() must invoke all proactive hooks.
+
+        Verifies the contract that ``run_monitor()`` (not bare ``monitor()``)
+        triggers first_look, meeting_prep, post_meeting_nudge, evening_brief,
+        draft_nudge, and welcome_back hooks after a successful monitor cycle.
+        """
+        cap = _make_health_cap()
+        hooks = {
+            "capabilities.first_look.maybe_send_first_look": MagicMock(return_value=False),
+            "capabilities.meeting_prep.maybe_send_meeting_prep": MagicMock(),
+            "capabilities.post_meeting_nudge.maybe_send_post_meeting_nudge": MagicMock(),
+            "capabilities.evening_brief.maybe_send_evening_brief": MagicMock(),
+            "capabilities.draft_nudge.maybe_send_draft_nudge": MagicMock(),
+            "capabilities.welcome_back.maybe_send_welcome_back": MagicMock(),
+        }
+        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()), \
+             patch("capabilities.first_look.maybe_send_first_look", hooks["capabilities.first_look.maybe_send_first_look"]), \
+             patch("capabilities.meeting_prep.maybe_send_meeting_prep", hooks["capabilities.meeting_prep.maybe_send_meeting_prep"]), \
+             patch("capabilities.post_meeting_nudge.maybe_send_post_meeting_nudge", hooks["capabilities.post_meeting_nudge.maybe_send_post_meeting_nudge"]), \
+             patch("capabilities.evening_brief.maybe_send_evening_brief", hooks["capabilities.evening_brief.maybe_send_evening_brief"]), \
+             patch("capabilities.draft_nudge.maybe_send_draft_nudge", hooks["capabilities.draft_nudge.maybe_send_draft_nudge"]), \
+             patch("capabilities.welcome_back.maybe_send_welcome_back", hooks["capabilities.welcome_back.maybe_send_welcome_back"]):
+            cap.run_monitor()
+        for name, mock in hooks.items():
+            assert mock.called, f"{name} was not called by run_monitor()"
+
+    def test_run_monitor_skips_hooks_on_failure(self):
+        """Failed monitor() must NOT invoke proactive hooks.
+
+        When ``monitor()`` raises, ``run_monitor()`` enters the error path.
+        Proactive hooks must not fire on a failed cycle.
+        """
+        cap = _make_health_cap(RuntimeError("sync failed"))
+        first_look = MagicMock()
+        with patch("capabilities.base._get_tool_config_service", return_value=_InMemoryToolConfigService()), \
+             patch("capabilities.first_look.maybe_send_first_look", first_look):
+            cap.run_monitor()
+        assert not first_look.called
+
 
 @pytest.mark.unit
 class TestLoadCapabilities:
