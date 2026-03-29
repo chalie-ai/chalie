@@ -750,8 +750,8 @@ class ImapCapability(AbstractCapability):
             finally:
                 try:
                     client.logout()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[imap] logout after snooze: %s", exc)
 
             subject = headers.get("subject", "")
             sender = headers.get("from_name") or headers.get("from_addr", "")
