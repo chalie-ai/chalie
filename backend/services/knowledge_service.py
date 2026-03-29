@@ -66,15 +66,6 @@ def _extract_content_words(text: str) -> list:
     return [w for w in words if w not in _STOP_WORDS and len(w) > 1]
 
 
-def _information_density(text: str) -> float:
-    """Ratio of content words to total words."""
-    all_words = re.findall(r'[a-zA-Z]{2,}', text.lower())
-    if not all_words:
-        return 0.0
-    content = [w for w in all_words if w not in _STOP_WORDS and len(w) > 1]
-    return len(content) / len(all_words)
-
-
 def _validate_trait(key: str, value: str) -> Optional[str]:
     """Validate a trait before storage. Returns rejection reason or None if valid."""
     if not key or len(key) < 2:
