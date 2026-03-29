@@ -117,5 +117,5 @@ def _user_tz():
     return get_user_tz()
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_conflict_alert)

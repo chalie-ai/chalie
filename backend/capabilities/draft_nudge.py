@@ -113,5 +113,5 @@ def _find_stale_emails(now) -> list[dict]:
     return stale
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_draft_nudge)

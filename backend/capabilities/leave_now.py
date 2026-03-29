@@ -95,5 +95,5 @@ def maybe_send_leave_now(now=None) -> bool:
         return False
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_leave_now)

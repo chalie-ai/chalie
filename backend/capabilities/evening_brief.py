@@ -129,5 +129,5 @@ def _build_unanswered_section(now) -> str:
     return f"Unanswered emails today ({len(emails)}):\n" + "\n".join(lines)
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_evening_brief)

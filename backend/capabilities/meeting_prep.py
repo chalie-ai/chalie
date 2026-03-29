@@ -133,5 +133,5 @@ def _build_brief(summary, dtstart, location, attendees, now):
     return "\n".join(parts)
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_meeting_prep)

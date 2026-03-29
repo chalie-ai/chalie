@@ -230,5 +230,5 @@ def _read_cached_inbox_hint(store) -> str:
     return ""
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_morning_brief)

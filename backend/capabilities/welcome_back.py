@@ -78,5 +78,5 @@ def _read_world_hints(store) -> str:
     )
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_welcome_back)

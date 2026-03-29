@@ -118,5 +118,5 @@ def _build_nudge(summary, dtend, attendees, now):
     )
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_post_meeting_nudge)

@@ -110,5 +110,5 @@ def _read_inbox_snapshot(store) -> str:
     return ""
 
 
-from capabilities.base import register_hook  # noqa: E402
+from capabilities.base import register_hook
 register_hook(maybe_send_first_look)
