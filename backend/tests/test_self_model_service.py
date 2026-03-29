@@ -20,17 +20,20 @@ def _make_service(db=None):
 
 
 def _populate_healthy_state(store):
-    """Set up MemoryStore to reflect a healthy system."""
+    """Set up MemoryStore to reflect a healthy system.
+
+    Seeds working-memory and FOK signals under the ``"general"`` topic key,
+    which is the hardcoded default used by ``SelfModelService._gather_epistemic``
+    now that the dynamic ``recent_topic`` look-up has been removed.
+    """
     store.setex("self_model:thread_health", 60, json.dumps({
         "alive": ["rest-api-worker", "decay-engine", "episodic-memory"],
         "dead": [],
         "total": 3,
     }))
-    store.set("recent_topic", "cooking")
-    store.expire("recent_topic", 1800)
     for i in range(3):
-        store.lpush("working_memory:cooking", json.dumps({"role": "user", "text": f"msg {i}"}))
-    store.set("fok:cooking", "3")
+        store.lpush("working_memory:general", json.dumps({"role": "user", "text": f"msg {i}"}))
+    store.set("fok:general", "3")
 
 
 def _mock_providers_assigned():
@@ -60,12 +63,15 @@ class TestGetSnapshot:
         }
 
     def test_snapshot_populates_epistemic_from_store(self, mock_store):
-        """Working memory entries and FOK in MemoryStore drive epistemic signals."""
-        mock_store.set("recent_topic", "python")
-        mock_store.expire("recent_topic", 1800)
+        """Working memory entries and FOK in MemoryStore drive epistemic signals.
+
+        Data is seeded under the ``"general"`` topic key because
+        ``_gather_epistemic`` no longer reads ``recent_topic`` from the store —
+        it uses ``"general"`` as a hardcoded default.
+        """
         for i in range(4):
-            mock_store.lpush("working_memory:python", f"turn-{i}")
-        mock_store.set("fok:python", "5")
+            mock_store.lpush("working_memory:general", f"turn-{i}")
+        mock_store.set("fok:general", "5")
 
         svc = _make_service()
         ep = svc.get_snapshot()["epistemic"]
@@ -338,12 +344,11 @@ class TestMemoryRichness:
         snap_cold = svc._refresh()
         richness_cold = svc.get_memory_richness()
 
-        # Add working memory to raise context_warmth
-        mock_store.set("recent_topic", "music")
-        mock_store.expire("recent_topic", 1800)
+        # Add working memory to raise context_warmth — seed under "general"
+        # because _gather_epistemic uses "general" as its hardcoded topic key.
         for i in range(4):
-            mock_store.lpush("working_memory:music", f"turn-{i}")
-        mock_store.set("fok:music", "5")
+            mock_store.lpush("working_memory:general", f"turn-{i}")
+        mock_store.set("fok:general", "5")
         mock_store.delete(CACHE_KEY)
 
         richness_warm = svc.get_memory_richness()

@@ -185,7 +185,7 @@ class ThreadConversationService:
         Args:
             thread_id: Thread identifier
             topic: Current topic name
-            prompt_data: Dict with message, classification_time, etc.
+            prompt_data: Dict with message, embedding_time, etc.
 
         Returns:
             exchange_id: UUID for this exchange
@@ -200,7 +200,7 @@ class ThreadConversationService:
                 "id": exchange_id,
                 "message": prompt_data.get("message", ""),
                 "time": timestamp,
-                "classification_time": prompt_data.get("classification_time", 0),
+                "embedding_time": prompt_data.get("embedding_time", 0),
             },
             "response": None,
             "steps": [],
