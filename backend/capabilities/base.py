@@ -83,6 +83,7 @@ class AbstractCapability(ABC):
         self._connected: bool = False
         self._error_count: int = 0
         self._last_error: str | None = None
+        self._failure_alerted: bool = False
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -230,6 +231,7 @@ class AbstractCapability(ABC):
             self.monitor()
             self._error_count = 0
             self._last_error = None
+            self._failure_alerted = False
             try:
                 from capabilities.first_look import maybe_send_first_look
                 maybe_send_first_look()
@@ -248,6 +250,7 @@ class AbstractCapability(ABC):
                            self.MAX_CONSECUTIVE_FAILURES, exc)
             if self._error_count >= self.MAX_CONSECUTIVE_FAILURES:
                 self._connected = False
+                self._maybe_send_failure_alert()
         self._persist_health()
 
     def _persist_health(self) -> None:
@@ -261,6 +264,53 @@ class AbstractCapability(ABC):
             })
         except Exception:
             pass
+
+    def _maybe_send_failure_alert(self) -> None:
+        """Push a user-facing alert when a capability disconnects.
+
+        Fires once per disconnection event.  Reset when monitor()
+        succeeds again (``_failure_alerted`` cleared on success path).
+        """
+        if self._failure_alerted:
+            return
+        self._failure_alerted = True
+        cap_id = self.get_id()
+        cap_name = self.get_manifest().get("name", cap_id)
+        err = self._last_error or "unknown error"
+        msg = (
+            f"{cap_name} disconnected after "
+            f"{self.MAX_CONSECUTIVE_FAILURES} failures."
+            f" Last error: {err}"
+        )
+        try:
+            from capabilities.signal_bridge import (
+                emit_capability_signal,
+            )
+            emit_capability_signal(
+                cap_id, "capability_failure", msg,
+                source=f"{cap_id}:health",
+            )
+        except Exception as exc:
+            logger.debug("failure signal emit: %s", exc)
+        try:
+            import json
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            store.rpush("prompt-queue", json.dumps({
+                "prompt": (
+                    f"[CAPABILITY ALERT] {cap_name} has "
+                    f"disconnected — {err}. "
+                    "Let the user know and suggest "
+                    "reconnecting via settings."
+                ),
+                "metadata": {
+                    "type": "proactive_drift",
+                    "source": f"capability_health:{cap_id}",
+                    "topic": "proactive",
+                },
+            }))
+        except Exception as exc:
+            logger.debug("failure alert push: %s", exc)
 
     @abstractmethod
     def get_tools(self) -> list:
