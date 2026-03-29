@@ -424,33 +424,6 @@ class BlocksRenderService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _parse_table_row(line: str) -> list[str]:
-        """Extract cell values from a GFM table row string.
-
-        The line is expected to start and end with ``|``.  Leading/trailing
-        whitespace inside each cell is stripped.
-
-        Args:
-            line: A raw table row line, e.g. ``"| foo | bar |"``.
-
-        Returns:
-            List of cell strings.
-        """
-        stripped = line.strip()
-        # Remove leading and trailing pipe, then split on remaining pipes.
-        inner = stripped[1:-1] if stripped.startswith("|") and stripped.endswith("|") else stripped
-        return [cell.strip() for cell in inner.split("|")]
-
-    @staticmethod
-    def _is_table_separator(line: str) -> bool:
-        """Return True if ``line`` is a GFM table separator row (``|---|---|``)."""
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return False
-        cells = [c.strip() for c in stripped[1:-1].split("|")]
-        return bool(cells) and all(re.match(r"^:?-{1,}:?$", c) for c in cells if c)
-
     # ------------------------------------------------------------------
     # Convenience: validate a block list (used in tests / debug)
     # ------------------------------------------------------------------
