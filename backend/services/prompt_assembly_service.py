@@ -954,30 +954,6 @@ class PromptAssemblyService:
             logging.debug(f"[FRONTAL CORTEX] Failed to fetch tool names: {e}")
             return '(none registered)'
 
-    def _get_performance_hint(self, tool_name: str) -> str:
-        """Build a compact performance hint string for a tool in the ACT prompt.
-
-        Args:
-            tool_name: Registered tool name to look up statistics for.
-
-        Returns:
-            str: Single-line performance annotation (e.g.
-            ``'[perf: reliable • 92% success • 430ms • 15 uses]'``), or
-            empty string when fewer than 3 uses have been recorded or the
-            service is unavailable.
-        """
-        try:
-            from services.tool_performance_service import ToolPerformanceService
-            stats = ToolPerformanceService().get_tool_stats(tool_name)
-            if stats.get('total', 0) < 3:
-                return ''
-            success_pct = int(stats['success_rate'] * 100)
-            avg_ms = int(stats['avg_latency'])
-            label = 'reliable' if success_pct >= 80 else 'moderate' if success_pct >= 50 else 'unreliable'
-            return f"[perf: {label} • {success_pct}% success • {avg_ms}ms • {stats['total']} uses]"
-        except Exception:
-            return ''
-
     def _get_strategy_hints(self, topic: str) -> str:
         """Build compact strategy hints from procedural memory for the ACT prompt.
 
