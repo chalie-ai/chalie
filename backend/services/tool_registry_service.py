@@ -798,13 +798,6 @@ class ToolRegistryService:
 
             logger.info(f"[TOOL REGISTRY] Removed {len(to_remove)} interface tools for interface {interface_id}")
 
-    def get_interface_id_for_tool(self, tool_name: str) -> str | None:
-        """Return the interface_id for an interface-sourced tool, or None."""
-        tool = self.tools.get(tool_name)
-        if tool and tool.get("source_type") == "interface":
-            return tool.get("interface_id")
-        return None
-
     # ── Public API ──────────────────────────────────────────────────
 
     def _is_ready(self, name: str, tool: dict) -> bool:
