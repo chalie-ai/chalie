@@ -93,7 +93,9 @@ def test_meeting_prep_includes_needs_reply(mock_db, mock_mcs, _r, mock_lc, _quie
        return_value=[{"email": "s@x.com", "name": "Sarah"}])
 @patch('services.memory_client.MemoryClientService')
 @patch('services.database_service.get_shared_db_service')
-def test_meeting_prep_no_needs_reply_when_all_answered(mock_db, mock_mcs, _r, mock_lc, _quiet):
+def test_meeting_prep_no_needs_reply_when_all_answered(
+    mock_db, mock_mcs, _r, mock_lc, _quiet,
+):
     """Brief omits 'Needs reply' section when no unanswered emails."""
     dtstart = _NOW + datetime.timedelta(minutes=15)
     meta = json.dumps({"uid": "e3", "dtstart": dtstart.isoformat(),
