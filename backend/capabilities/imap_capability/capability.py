@@ -165,8 +165,8 @@ def resolve_display_name(from_addr: str, from_name: str = "") -> str:
             matches = _cr_resolve(addr, limit=1)
             if matches and matches[0].get("name"):
                 return matches[0]["name"]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[imap] resolve_display_name(%s): %s", addr, exc)
     return name or addr
 
 
