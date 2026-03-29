@@ -271,13 +271,14 @@ def _list(topic: str, params: dict) -> str:
                     SELECT id, item_type, message, due_at, recurrence, status
                     FROM scheduled_items
                     WHERE status IN ('pending', 'fired') AND due_at BETWEEN ? AND ?
+                      AND hidden = 0
                     ORDER BY due_at ASC
                 """, (start_dt, end_dt))
             else:
                 cursor.execute("""
                     SELECT id, item_type, message, due_at, recurrence, status
                     FROM scheduled_items
-                    WHERE status = 'pending'
+                    WHERE status = 'pending' AND hidden = 0
                     ORDER BY due_at ASC
                 """)
             rows = cursor.fetchall()
@@ -382,7 +383,7 @@ def _cancel(topic: str, params: dict) -> str:
                 cursor.execute(
                     """SELECT id, item_type, message, due_at, recurrence
                        FROM scheduled_items
-                       WHERE status='pending' AND message LIKE ?
+                       WHERE status='pending' AND hidden = 0 AND message LIKE ?
                        ORDER BY due_at ASC""",
                     (pattern,)
                 )

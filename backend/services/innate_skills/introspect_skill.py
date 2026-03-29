@@ -404,7 +404,7 @@ def _reasoning_upcoming_reminders() -> str:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT message, due_at FROM scheduled_items "
-                "WHERE status = 'pending' AND due_at > datetime('now') "
+                "WHERE status = 'pending' AND due_at > datetime('now') AND hidden = 0 "
                 "ORDER BY due_at ASC LIMIT 5"
             )
             rows = cursor.fetchall()

@@ -320,6 +320,7 @@ class InteractionLogService:
                         "SELECT id, message, item_type, topic, last_fired_at "
                         "FROM scheduled_items "
                         "WHERE status = 'fired' AND last_fired_at > ? "
+                        "AND hidden = 0 "
                         "ORDER BY last_fired_at DESC LIMIT ?",
                         (since_str, sql_cap)
                     )

@@ -110,7 +110,7 @@ def _poll_and_fire():
             cursor = conn.cursor()
             overdue_threshold = (now - timedelta(minutes=5)).isoformat()
             cursor.execute(
-                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < ? AND item_type NOT IN ('event')",
+                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < ? AND item_type NOT IN ('event') AND hidden=0",
                 (overdue_threshold,)
             )
             overdue_count = cursor.fetchone()[0]
