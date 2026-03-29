@@ -280,6 +280,13 @@ class AbstractCapability(ABC):
                 maybe_send_evening_brief()
             except Exception as exc:
                 logger.debug("evening_brief hook: %s", exc)
+            try:
+                from capabilities.draft_nudge import (
+                    maybe_send_draft_nudge,
+                )
+                maybe_send_draft_nudge()
+            except Exception as exc:
+                logger.debug("draft_nudge hook: %s", exc)
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
