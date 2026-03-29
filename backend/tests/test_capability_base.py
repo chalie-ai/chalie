@@ -17,6 +17,7 @@ I/O (database interactions are mocked via in-process helpers).
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -461,6 +462,82 @@ class TestHealthTracking:
              patch("capabilities.first_look.maybe_send_first_look", first_look):
             cap.run_monitor()
         assert not first_look.called
+
+    def test_backoff_skips_monitor_during_cooldown(self):
+        """run_monitor returns immediately when backoff timer has not expired."""
+        from services.time_utils import utc_now
+        cap = _make_health_cap()
+        cap._next_retry_at = utc_now() + timedelta(minutes=5)
+        cap._do_monitor = MagicMock()
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        cap._do_monitor.assert_not_called()
+
+    def test_backoff_allows_monitor_after_expiry(self):
+        """run_monitor proceeds when backoff timer has expired."""
+        from services.time_utils import utc_now
+        cap = _make_health_cap()
+        cap._next_retry_at = utc_now() - timedelta(minutes=1)
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        assert cap._error_count == 0
+
+    def test_backoff_activated_on_max_failures(self):
+        """Reaching MAX_CONSECUTIVE_FAILURES activates exponential backoff."""
+        cap = _make_health_cap(ConnectionError("down"))
+        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        assert cap._backoff_secs == 60
+        assert cap._next_retry_at is not None
+
+    def test_backoff_doubles_on_repeated_failure(self):
+        """Each activation doubles the backoff interval."""
+        cap = _make_health_cap(ConnectionError("down"))
+        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1
+        cap._backoff_secs = 60
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        assert cap._backoff_secs == 120
+
+    def test_backoff_capped_at_max(self):
+        """Backoff never exceeds MAX_BACKOFF_SECS."""
+        cap = _make_health_cap(ConnectionError("down"))
+        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1
+        cap._backoff_secs = 1800
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        assert cap._backoff_secs == 1800
+
+    def test_success_clears_backoff(self):
+        """Successful monitor clears backoff state."""
+        from services.time_utils import utc_now
+        cap = _make_health_cap()
+        cap._backoff_secs = 120
+        cap._next_retry_at = utc_now() - timedelta(seconds=1)
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
+            cap.run_monitor()
+        assert cap._backoff_secs == 0
+        assert cap._next_retry_at is None
+
+    def test_recovery_alert_sent_after_backoff_success(self):
+        """Recovery alert fires when a degraded capability comes back online."""
+        from services.time_utils import utc_now
+        cap = _make_health_cap()
+        cap._backoff_secs = 60
+        cap._failure_alerted = True
+        cap._next_retry_at = utc_now() - timedelta(seconds=1)
+        mem_svc = _InMemoryToolConfigService()
+        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc), \
+             patch.object(cap, "_send_recovery_alert") as mock_ra:
+            cap.run_monitor()
+        mock_ra.assert_called_once()
 
 
 @pytest.mark.unit

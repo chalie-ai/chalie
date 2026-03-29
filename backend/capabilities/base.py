@@ -165,6 +165,8 @@ class AbstractCapability(ABC):
         self._last_error: str | None = None
         self._failure_alerted: bool = False
         self._first_monitor: bool = True
+        self._backoff_secs: int = 0
+        self._next_retry_at = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -333,16 +335,27 @@ class AbstractCapability(ABC):
         }
 
     def run_monitor(self) -> None:
-        """Execute :meth:`monitor` with health tracking.
+        """Execute :meth:`monitor` with health tracking and circuit breaker.
 
         Resets error count on success, increments on failure, auto-disconnects
-        after :attr:`MAX_CONSECUTIVE_FAILURES`.  Persists state to tool_configs.
+        after :attr:`MAX_CONSECUTIVE_FAILURES`.  When disconnected, applies
+        exponential backoff so dead servers are not hammered every cycle.
+        Sends a recovery alert when a degraded capability comes back online.
         """
+        if self._next_retry_at:
+            from services.time_utils import utc_now
+            if utc_now() < self._next_retry_at:
+                return
+
         try:
             self.monitor()
+            if self._backoff_secs and self._failure_alerted:
+                self._send_recovery_alert()
             self._error_count = 0
             self._last_error = None
             self._failure_alerted = False
+            self._backoff_secs = 0
+            self._next_retry_at = None
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
@@ -352,6 +365,7 @@ class AbstractCapability(ABC):
             if self._error_count >= self.MAX_CONSECUTIVE_FAILURES:
                 self._connected = False
                 self._maybe_send_failure_alert()
+                self._activate_backoff()
         self._persist_health()
 
     def _persist_health(self) -> None:
@@ -412,6 +426,43 @@ class AbstractCapability(ABC):
             }))
         except Exception as exc:
             logger.debug("failure alert push: %s", exc)
+
+    def _send_recovery_alert(self) -> None:
+        """Push a user-facing message when a degraded capability recovers."""
+        cap_id = self.get_id()
+        cap_name = self.get_manifest().get("name", cap_id)
+        try:
+            import json
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+            store.rpush("prompt-queue", json.dumps({
+                "prompt": (
+                    f"[CAPABILITY RECOVERED] {cap_name} is back "
+                    "online. Sync has resumed normally."
+                ),
+                "metadata": {
+                    "type": "proactive_drift",
+                    "source": f"capability_health:{cap_id}",
+                    "topic": "proactive",
+                },
+            }))
+        except Exception as exc:
+            logger.debug("recovery alert push: %s", exc)
+
+    INITIAL_BACKOFF_SECS = 60
+    MAX_BACKOFF_SECS = 1800
+
+    def _activate_backoff(self) -> None:
+        """Set or double the exponential backoff timer."""
+        from datetime import timedelta
+        from services.time_utils import utc_now
+
+        self._backoff_secs = min(
+            self._backoff_secs * 2 if self._backoff_secs else self.INITIAL_BACKOFF_SECS,
+            self.MAX_BACKOFF_SECS,
+        )
+        self._next_retry_at = utc_now() + timedelta(seconds=self._backoff_secs)
+        logger.info("[%s] backoff %ds", self.get_id(), self._backoff_secs)
 
     @abstractmethod
     def get_tools(self) -> list:
