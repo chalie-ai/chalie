@@ -46,8 +46,8 @@ def _get_user_tz():
         name = ClientContextService().get().get("timezone")
         if name:
             return ZoneInfo(name)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[quiet_window] _get_user_tz: %s", exc)
     return timezone.utc
 
 
@@ -57,5 +57,6 @@ def _focus_active() -> bool:
         from services.memory_client import MemoryClientService
 
         return bool(MemoryClientService.create_connection().keys("focus_session:*"))
-    except Exception:
+    except Exception as exc:
+        logger.debug("[quiet_window] _focus_active: %s", exc)
         return False
