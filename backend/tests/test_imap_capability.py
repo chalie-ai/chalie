@@ -189,14 +189,10 @@ def _mock_email_classify():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("item,expected", [
-    (_item(unsub=True), "noise"),
-    (_item(reply_to="<prev@ex>"), "actionable"),
-])
-def test_classify_email_fast_paths(item, expected):
-    """Protocol-level fast paths bypass embeddings entirely."""
+def test_classify_email_fast_path_unsubscribe():
+    """Unsubscribe header is the only deterministic fast path."""
     from capabilities.imap_capability.capability import classify_email
-    assert classify_email(item) == expected
+    assert classify_email(_item(unsub=True)) == "noise"
 
 
 @pytest.mark.unit
@@ -207,6 +203,13 @@ def test_classify_email_fast_paths(item, expected):
     (_item(subj="Please confirm your attendance"), "actionable"),
     (_item(addr="colleague@work.com", subj="Meeting notes"), "informational"),
     (_item(subj="Project status update"), "informational"),
+    # Thread replies go through embeddings — not the old in_reply_to fast path
+    (_item(reply_to="<prev@ex>", subj="Re: Weekly Newsletter Digest"), "noise"),
+    (_item(reply_to="<prev@ex>", addr="noreply@github.com",
+           subj="Re: notification"), "noise"),
+    (_item(reply_to="<prev@ex>",
+           subj="Re: Please confirm your attendance"), "actionable"),
+    (_item(reply_to="<prev@ex>", subj="Re: Project status update"), "informational"),
 ])
 def test_classify_email_embedding(item, expected, _mock_email_classify):
     """Embedding path classifies by cosine similarity to anchors."""
@@ -237,7 +240,7 @@ def test_understand_classifies_without_storing(_mock_email_classify):
     result = cap.understand(items)
     assert result[0]["triage"] == "informational"
     assert result[1]["triage"] == "noise"
-    assert result[2]["triage"] == "actionable"
+    assert result[2]["triage"] == "informational"  # thread replies use embeddings now
     assert result[2]["is_thread"] is True
 
 
