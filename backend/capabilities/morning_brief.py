@@ -23,6 +23,11 @@ def maybe_send_morning_brief(calendar_events: list, now) -> bool:
     (if available) into a single briefing prompt.  Deduped per UTC day.
     """
     try:
+        from capabilities.quiet_window import is_quiet_now
+
+        if is_quiet_now(now):
+            return False
+
         from services.memory_client import MemoryClientService
 
         date_key = now.strftime("%Y-%m-%d")

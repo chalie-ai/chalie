@@ -26,11 +26,14 @@ def maybe_send_meeting_prep(now=None) -> bool:
     Returns True if any brief was enqueued.
     """
     try:
+        from capabilities.quiet_window import is_quiet_now
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
         from services.time_utils import parse_utc, utc_now
 
         now = now or utc_now()
+        if is_quiet_now(now):
+            return False
         store = MemoryClientService.create_connection()
         cutoff = (now + timedelta(minutes=_LOOKAHEAD_MIN)).isoformat()
 

@@ -88,7 +88,9 @@ def measure_complexity():
     total_cc = 0
     per_file = {}
     for filepath, blocks in data.items():
-        file_cc = sum(b.get("complexity", 0) for b in blocks)
+        if not isinstance(blocks, list):
+            continue
+        file_cc = sum(b.get("complexity", 0) for b in blocks if isinstance(b, dict))
         total_cc += file_cc
         per_file[filepath] = file_cc
     return {"total": total_cc, "per_file": per_file}
