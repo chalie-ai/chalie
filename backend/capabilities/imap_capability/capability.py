@@ -690,7 +690,74 @@ class ImapCapability(AbstractCapability):
                 result["resolved_from"] = resolved_from
             return result
 
+        def _mark_read_execute(topic, params, config=None, telemetry=None):
+            """Mark one or more emails as read by setting the \\Seen flag."""
+            uids = params.get("uids") or params.get("uid")
+            if not uids:
+                return {"error": "uid or uids is required"}
+            if isinstance(uids, (int, str)):
+                uids = [uids]
+            try:
+                uids = [int(u) for u in uids]
+            except (TypeError, ValueError):
+                return {"error": "uids must be integers"}
+            client = capability._open_client()
+            if not client:
+                return {"error": "Cannot connect to email server"}
+            try:
+                client.select_folder("INBOX", readonly=False)
+                client.add_flags(uids, [b"\\Seen"])
+                return {"success": True, "uids": uids}
+            except Exception as exc:
+                logger.error("[imap] imap_mark_read failed: %s", exc)
+                return {"error": str(exc)}
+            finally:
+                try:
+                    client.logout()
+                except Exception as exc:
+                    logger.debug("[imap] logout after mark_read: %s", exc)
+
         return [
+            {
+                "name": "imap_mark_read",
+                "description": (
+                    "Mark one or more emails as read on the mail server by "
+                    "setting the IMAP \\Seen flag. Accepts a single UID or a "
+                    "list of UIDs. Use after reading or acting on an email so "
+                    "it no longer appears as unread."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "integer",
+                        "required": False,
+                        "description": "Single IMAP UID to mark as read.",
+                    },
+                    "uids": {
+                        "type": "array",
+                        "required": False,
+                        "description": (
+                            "List of IMAP UIDs to mark as read. "
+                            "Provide uid or uids, not both."
+                        ),
+                    },
+                },
+                "returns": {
+                    "success": {
+                        "type": "boolean",
+                        "description": "True if flags were set.",
+                    },
+                    "uids": {
+                        "type": "array",
+                        "description": "UIDs that were marked as read.",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _mark_read_execute,
+            },
             {
                 "name": "imap_send_email",
                 "description": (
