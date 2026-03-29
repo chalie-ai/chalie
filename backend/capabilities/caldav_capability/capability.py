@@ -206,16 +206,17 @@ def _format_event_line(event: dict) -> str:
 
 
 def _get_user_tz():
-    """Return the user's ZoneInfo timezone, or None if unavailable."""
-    try:
-        from zoneinfo import ZoneInfo
-        from services.client_context_service import ClientContextService
-        tz_name = ClientContextService().get().get("timezone")
-        if tz_name:
-            return ZoneInfo(tz_name)
-    except Exception as exc:
-        logger.debug("[caldav] _get_user_tz failed: %s", exc)
-    return None
+    """Return the user's ZoneInfo timezone, or None if unavailable.
+
+    NOTE: Returns ``None`` (not UTC) so callers like ``_next_morning_8am``
+    can distinguish "no timezone configured" from "UTC configured".
+    """
+    from capabilities.time_context import get_user_tz
+    from datetime import timezone as _tz
+
+    result = get_user_tz()
+    # Preserve original contract: return None when no user tz is configured
+    return None if result is _tz.utc else result
 
 
 def _next_morning_8am() -> "_dt_module.datetime":

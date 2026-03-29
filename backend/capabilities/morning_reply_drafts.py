@@ -33,7 +33,7 @@ def maybe_send_morning_reply_drafts(now=None) -> bool:
     candidate replies.  Deduped per UTC date.  Respects quiet window.
     """
     try:
-        from capabilities.morning_brief import _user_tz
+        from capabilities.time_context import get_user_tz as _user_tz
         from capabilities.quiet_window import is_quiet_now
         from services.memory_client import MemoryClientService
         from services.time_utils import utc_now

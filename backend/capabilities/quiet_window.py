@@ -10,7 +10,6 @@ never set during quiet time — the brief retries on the next monitor cycle.
 """
 
 import logging
-from datetime import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +37,8 @@ def is_quiet_now(now=None) -> bool:
 
 def _get_user_tz():
     """Return user's ZoneInfo or UTC."""
-    try:
-        from zoneinfo import ZoneInfo
-
-        from services.client_context_service import ClientContextService
-
-        name = ClientContextService().get().get("timezone")
-        if name:
-            return ZoneInfo(name)
-    except Exception as exc:
-        logger.debug("[quiet_window] _get_user_tz: %s", exc)
-    return timezone.utc
+    from capabilities.time_context import get_user_tz
+    return get_user_tz()
 
 
 def _focus_active() -> bool:

@@ -113,16 +113,8 @@ def _build_alert_body(conflict, now):
 
 def _user_tz():
     """Return user's ZoneInfo or UTC."""
-    try:
-        from zoneinfo import ZoneInfo
-
-        from services.client_context_service import ClientContextService
-        name = ClientContextService().get().get("timezone")
-        if name:
-            return ZoneInfo(name)
-    except Exception as exc:
-        logger.debug("[conflict_alert] _user_tz: %s", exc)
-    return timezone.utc
+    from capabilities.time_context import get_user_tz
+    return get_user_tz()
 
 
 from capabilities.base import register_hook  # noqa: E402
