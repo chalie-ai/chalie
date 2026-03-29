@@ -64,7 +64,7 @@ def maybe_send_morning_reply_drafts(now=None) -> bool:
         # Persist index→UID mapping so "send 1" can resolve to a real email
         draft_map = [
             {"index": i, "uid": e["uid"], "from_addr": e["from_addr"],
-             "subject": e["subject"]}
+             "subject": e["subject"], "message_id": e.get("message_id", "")}
             for i, e in enumerate(emails, 1)
         ]
         store = MemoryClientService.create_connection()
@@ -72,7 +72,9 @@ def maybe_send_morning_reply_drafts(now=None) -> bool:
         store.set(map_key, json.dumps(draft_map), ex=_FLAG_TTL)
 
         uid_ref = " | ".join(
-            f"#{d['index']}=UID:{d['uid']}" for d in draft_map
+            f"#{d['index']}=UID:{d['uid']} to:{d['from_addr']} "
+            f"subj:Re: {d['subject']} msgid:{d.get('message_id', '')}"
+            for d in draft_map
         )
         store.rpush("prompt-queue", json.dumps({
             "prompt": (
@@ -85,9 +87,11 @@ def maybe_send_morning_reply_drafts(now=None) -> bool:
                 "Tell the user they can say \"send 1 and 3\" to dispatch "
                 "or \"edit 2\" to refine one. "
                 "Do NOT mention 'IMAP' or technical details.\n\n"
-                f"[INTERNAL — draft UID mapping: {uid_ref}. "
-                "When the user says 'send N', use imap_draft_reply with "
-                "the corresponding UID to compose and send the reply.]"
+                f"[INTERNAL — draft mapping: {uid_ref}. "
+                "When the user says 'send N', call imap_send_email with "
+                "to=<from_addr>, subject=<Re: subject>, body=<your draft>, "
+                "in_reply_to=<msgid> from the mapping above. This sends "
+                "the reply directly — no Drafts folder detour.]"
             ),
             "metadata": {
                 "type": "proactive_drift",
@@ -130,7 +134,8 @@ def _find_actionable_emails(now) -> list[dict]:
         {"uid": e.get("uid"),
          "from": e.get("from_name", e.get("from_addr", "?")),
          "from_addr": e.get("from_addr", ""),
-         "subject": e.get("subject", "(no subject)")}
+         "subject": e.get("subject", "(no subject)"),
+         "message_id": e.get("message_id", "")}
         for e in raw
         if e.get("date") and parse_utc(e["date"]) >= cutoff
     ][:_MAX_EMAILS]

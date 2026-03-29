@@ -12,16 +12,19 @@ _NOW = datetime.datetime(2026, 3, 29, 8, 0, tzinfo=_UTC)
 _RECENT_EMAIL = {
     "uid": 201, "subject": "Q3 roadmap draft",
     "from_name": "Sarah Chen", "from_addr": "sarah@example.com",
+    "message_id": "<msg201@example.com>",
     "date": (_NOW - datetime.timedelta(hours=3)).isoformat(),
 }
 _OLD_EMAIL = {
     "uid": 202, "subject": "Old thread",
     "from_name": "Alex", "from_addr": "alex@example.com",
+    "message_id": "<msg202@example.com>",
     "date": (_NOW - datetime.timedelta(hours=18)).isoformat(),
 }
 _SECOND_RECENT = {
     "uid": 203, "subject": "Deployment plan",
     "from_name": "Jordan", "from_addr": "jordan@example.com",
+    "message_id": "<msg203@example.com>",
     "date": (_NOW - datetime.timedelta(hours=1)).isoformat(),
 }
 
@@ -79,8 +82,10 @@ def test_persists_uid_mapping_in_memorystore(mock_mcs, mock_caps, _q, _dedup):
     assert len(draft_map) == 2
     assert draft_map[0]["uid"] == 201
     assert draft_map[0]["from_addr"] == "sarah@example.com"
+    assert draft_map[0]["message_id"] == "<msg201@example.com>"
     assert draft_map[1]["uid"] == 203
     assert draft_map[1]["from_addr"] == "jordan@example.com"
+    assert draft_map[1]["message_id"] == "<msg203@example.com>"
 
 
 @pytest.mark.unit
@@ -99,7 +104,38 @@ def test_prompt_includes_uid_mapping(mock_mcs, mock_caps, _q, _dedup):
 
     payload = json.loads(store.rpush.call_args[0][1])
     assert "UID:201" in payload["prompt"]
-    assert "imap_draft_reply" in payload["prompt"]
+    assert "imap_send_email" in payload["prompt"]
+    assert "sarah@example.com" in payload["prompt"]
+    assert "msg201@example.com" in payload["prompt"]
+
+
+@pytest.mark.unit
+@patch("capabilities.hook_dedup.is_fired", return_value=False)
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
+@patch("capabilities.load_capabilities")
+@patch("services.memory_client.MemoryClientService")
+def test_prompt_instructs_direct_send(mock_mcs, mock_caps, _q, _dedup):
+    """The LLM prompt must instruct imap_send_email (not draft_reply)."""
+    store = MagicMock()
+    mock_mcs.create_connection.return_value = store
+    mock_caps.return_value = {"imap": _mock_imap([_RECENT_EMAIL, _SECOND_RECENT])}
+
+    from capabilities.morning_reply_drafts import maybe_send_morning_reply_drafts
+    assert maybe_send_morning_reply_drafts(now=_NOW) is True
+
+    payload = json.loads(store.rpush.call_args[0][1])
+    prompt = payload["prompt"]
+    # Must use imap_send_email, NOT imap_draft_reply
+    assert "imap_send_email" in prompt
+    assert "imap_draft_reply" not in prompt
+    # Must include to-address and message-id for each email
+    assert "to:sarah@example.com" in prompt
+    assert "to:jordan@example.com" in prompt
+    assert "msgid:<msg201@example.com>" in prompt
+    assert "msgid:<msg203@example.com>" in prompt
+    # Must include reply subjects
+    assert "Re: Q3 roadmap draft" in prompt
+    assert "Re: Deployment plan" in prompt
 
 
 @pytest.mark.unit

@@ -685,6 +685,7 @@ class ImapCapability(AbstractCapability):
                             continue
                         results.append({
                             "uid": item["uid"],
+                            "message_id": item.get("message_id", ""),
                             "subject": item.get("subject", ""),
                             "from_name": item.get("from_name", ""),
                             "from_addr": item.get("from_addr", ""),
