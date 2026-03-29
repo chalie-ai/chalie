@@ -116,11 +116,12 @@ def _build_unanswered_section(now) -> str:
     if not (cap and cap.is_connected()):
         return ""
     tools = {t["name"]: t["handler"] for t in cap.get_tools()}
-    emails = tools["imap_search_email"](
+    from capabilities.reply_sentinel import filter_replied
+    emails = filter_replied(tools["imap_search_email"](
         None,
         {"date_from": now.strftime("%Y-%m-%d"),
          "unanswered": True, "limit": _UNANSWERED_LIMIT},
-    ).get("emails", [])
+    ).get("emails", []))
     if not emails:
         return ""
     lines = [f"  - {e.get('from', '?')}: \"{e.get('subject', '?')}\""

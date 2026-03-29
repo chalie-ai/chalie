@@ -124,11 +124,12 @@ def _find_actionable_emails(now) -> list[dict]:
 
     cutoff = now - timedelta(hours=_LOOKBACK_HOURS)
     since = (now - timedelta(days=2)).strftime("%Y-%m-%d")
-    raw = search_fn(
+    from capabilities.reply_sentinel import filter_replied
+    raw = filter_replied(search_fn(
         None,
         {"date_from": since, "unanswered": True,
          "triage": "actionable", "limit": _MAX_EMAILS},
-    ).get("emails", [])
+    ).get("emails", []))
 
     return [
         {"uid": e.get("uid"),

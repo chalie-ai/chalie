@@ -90,11 +90,12 @@ def _find_stale_emails(now) -> list[dict]:
 
     cutoff = now - timedelta(hours=_IDLE_HOURS)
     since = (now - timedelta(days=2)).strftime("%Y-%m-%d")
-    emails = search_fn(
+    from capabilities.reply_sentinel import filter_replied
+    emails = filter_replied(search_fn(
         None,
         {"date_from": since, "unanswered": True,
          "triage": "actionable", "limit": _MAX_EMAILS * 2},
-    ).get("emails", [])
+    ).get("emails", []))
 
     stale = []
     for e in emails:

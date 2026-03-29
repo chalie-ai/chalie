@@ -613,6 +613,9 @@ class ImapCapability(AbstractCapability):
             return {"error": "Failed to connect to SMTP server"}
         try:
             conn.send_message(msg)
+            if in_reply_to:
+                from capabilities.reply_sentinel import mark_replied
+                mark_replied(in_reply_to)
             return {"success": True, "to": to, "subject": subject}
         except Exception as exc:
             logger.error("[imap] _send_email: %s", exc)

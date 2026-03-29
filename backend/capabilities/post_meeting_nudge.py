@@ -98,13 +98,14 @@ def _build_nudge(summary, dtend, attendees, now):
     tools = {t["name"]: t["handler"] for t in cap.get_tools()}
     fn = tools["imap_search_email"]
 
+    from capabilities.reply_sentinel import filter_replied
     since = (now - timedelta(days=_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     needs_reply = []
     for addr in attendees[:5]:
-        for e in fn(
+        for e in filter_replied(fn(
             None, {"sender": addr, "date_from": since,
                     "unanswered": True, "limit": 3},
-        ).get("emails", []):
+        ).get("emails", [])):
             needs_reply.append(
                 f"- {addr}: \"{e.get('subject', '?')}\"")
 
