@@ -31,6 +31,7 @@ VALID_SIGNAL_TYPES = frozenset({
     "new_knowledge",
     "novel_observation",
     "task_state_changed",
+    "capability_failure",
 })
 
 
