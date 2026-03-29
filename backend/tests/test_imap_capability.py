@@ -250,7 +250,9 @@ def test_understand_classifies_without_storing(_mock_email_classify):
 def test_monitor_calls_ingest_understand():
     cap = _make()
     cap._connected = True
-    with patch.object(cap, "ingest", return_value=[{"uid": 1}]) as ing, \
+    mc = MagicMock()  # shared client
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch.object(cap, "ingest", return_value=[{"uid": 1}]) as ing, \
          patch.object(cap, "understand") as und:
         cap.monitor()
     ing.assert_called_once()
@@ -261,7 +263,9 @@ def test_monitor_calls_ingest_understand():
 def test_monitor_skips_understand_when_empty():
     cap = _make()
     cap._connected = True
-    with patch.object(cap, "ingest", return_value=[]), \
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch.object(cap, "ingest", return_value=[]), \
          patch.object(cap, "understand") as und:
         cap.monitor()
     und.assert_not_called()
@@ -512,7 +516,9 @@ def test_inject_inbox_hint_skips_when_no_connection():
 def test_monitor_calls_inject_inbox_hint():
     cap = _make()
     cap._connected = True
-    with patch.object(cap, "ingest", return_value=[]), \
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch.object(cap, "ingest", return_value=[]), \
          patch.object(cap, "_inject_inbox_hint") as hint_mock:
         cap.monitor()
     hint_mock.assert_called_once()
@@ -592,7 +598,9 @@ def test_monitor_calls_greeting_on_items():
     cap = _make()
     cap._connected = True
     items = [{"uid": 1}]
-    with patch.object(cap, "ingest", return_value=items), \
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch.object(cap, "ingest", return_value=items), \
          patch.object(cap, "understand"), \
          patch.object(cap, "_first_connect_greeting") as greet, \
          patch.object(cap, "_inject_inbox_hint"):
@@ -605,7 +613,9 @@ def test_monitor_skips_greeting_when_empty():
     """monitor() does NOT call _first_connect_greeting when ingest returns empty."""
     cap = _make()
     cap._connected = True
-    with patch.object(cap, "ingest", return_value=[]), \
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch.object(cap, "ingest", return_value=[]), \
          patch.object(cap, "_first_connect_greeting") as greet, \
          patch.object(cap, "_inject_inbox_hint"):
         cap.monitor()
@@ -1182,3 +1192,56 @@ def test_read_result_includes_from_display():
          ):
         result = handler("t1", {"uid": 42})
     assert result["from_display"] == "Alice Wang"
+
+
+# --- Connection reuse in monitor() ---
+
+@pytest.mark.unit
+def test_monitor_reuses_single_connection():
+    """monitor() should open only ONE IMAP connection for ingest + inbox hint."""
+    cap = _make()
+    cap._connected = True
+    mc = MagicMock()
+    # ingest: no new UIDs → empty
+    mc.search.return_value = []
+    creds = {**_CREDS, "imap:last_uid": "0"}
+    with patch.object(cap, "load_credential", side_effect=creds.get), \
+         patch("imapclient.IMAPClient", return_value=mc) as mock_cls:
+        cap.monitor()
+    # IMAPClient constructor called exactly once (not twice)
+    assert mock_cls.call_count == 1
+    # logout called exactly once (at the end of monitor)
+    assert mc.logout.call_count == 1
+
+
+@pytest.mark.unit
+def test_ingest_standalone_opens_own_connection():
+    """ingest() without a shared client opens and closes its own."""
+    cap = _make()
+    cap._connected = True
+    mc = MagicMock()
+    mc.search.return_value = []
+    creds = {**_CREDS, "imap:last_uid": "0"}
+    with patch.object(cap, "load_credential", side_effect=creds.get), \
+         patch("imapclient.IMAPClient", return_value=mc) as mock_cls:
+        cap.ingest()
+    assert mock_cls.call_count == 1
+    assert mc.logout.call_count == 1
+
+
+@pytest.mark.unit
+def test_ingest_shared_client_does_not_logout():
+    """ingest(client=shared) must NOT logout the shared connection."""
+    cap = _make()
+    cap._connected = True
+    mc = MagicMock()
+    mc.search.return_value = [100]
+    mc.fetch.return_value = {
+        100: {b"RFC822.HEADER": _email_bytes(subject="Shared")},
+    }
+    creds = {**_CREDS, "imap:last_uid": "0"}
+    with patch.object(cap, "load_credential", side_effect=creds.get), \
+         patch.object(cap, "store_credential"):
+        results = cap.ingest(client=mc)
+    assert len(results) == 1
+    assert mc.logout.call_count == 0

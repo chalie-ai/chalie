@@ -306,13 +306,18 @@ class ImapCapability(AbstractCapability):
             logger.error("[imap] _open_client: %s", exc)
             return None
 
-    def ingest(self):
+    def ingest(self, client=None):
         """Fetch new email headers from INBOX and return normalized dicts.
 
         Uses a UID watermark for incremental fetching.  First run fetches
         the last 7 days; subsequent runs fetch only UIDs above the watermark.
+
+        If *client* is provided (e.g. from a shared session), it is reused
+        and **not** closed here.
         """
-        client = self._open_client()
+        _owns = client is None
+        if _owns:
+            client = self._open_client()
         if not client:
             return []
         try:
@@ -336,10 +341,11 @@ class ImapCapability(AbstractCapability):
             logger.error("[imap] ingest: %s", exc)
             return []
         finally:
-            try:
-                client.logout()
-            except Exception:
-                pass
+            if _owns:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
 
     def understand(self, items):
         """Classify headers via deterministic triage heuristics.
@@ -371,16 +377,29 @@ class ImapCapability(AbstractCapability):
         return items
 
     def monitor(self):
-        """Fetch new headers and run triage + knowledge storage."""
+        """Fetch new headers and run triage + knowledge storage.
+
+        Opens a single IMAP connection and shares it across ingest() and
+        _inject_inbox_hint() to avoid redundant TLS handshakes per cycle.
+        """
         if not self.is_connected():
             self.connect()
         if not self.is_connected():
             return
-        items = self.ingest()
-        if items:
-            self.understand(items)
-            self._first_connect_greeting(items)
-        self._inject_inbox_hint()
+        client = self._open_client()
+        if not client:
+            return
+        try:
+            items = self.ingest(client=client)
+            if items:
+                self.understand(items)
+                self._first_connect_greeting(items)
+            self._inject_inbox_hint(client=client)
+        finally:
+            try:
+                client.logout()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # First-connect greeting (one-time notification)
@@ -442,13 +461,18 @@ class ImapCapability(AbstractCapability):
     # World-state hint
     # ------------------------------------------------------------------
 
-    def _inject_inbox_hint(self) -> None:
+    def _inject_inbox_hint(self, client=None) -> None:
         """Push a compact inbox summary into WorldStateService.
 
         Queries the IMAP server directly for recent unseen emails,
         classifies them, and writes a one-line hint.
+
+        If *client* is provided (e.g. from a shared session), it is reused
+        and **not** closed here.
         """
-        client = self._open_client()
+        _owns = client is None
+        if _owns:
+            client = self._open_client()
         if not client:
             return
         try:
@@ -495,10 +519,11 @@ class ImapCapability(AbstractCapability):
         except Exception as exc:
             logger.error("[imap] _inject_inbox_hint failed: %s", exc)
         finally:
-            try:
-                client.logout()
-            except Exception:
-                pass
+            if _owns:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # SMTP send
