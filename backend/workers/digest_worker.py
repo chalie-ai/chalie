@@ -1873,7 +1873,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             logging.debug(f"[DIGEST] Failed to store message embedding for proactive: {e}")
     except Exception as e:
         logging.debug(f"[DIGEST] Embedding computation failed: {e}")
-    classification_time = time.time() - _embed_start
+    embedding_time = time.time() - _embed_start
 
     # Use thread_id as the topic key; supply static defaults for downstream signal consumers
     topic = thread_id
@@ -1886,8 +1886,8 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         'context_warmth': context_warmth,
     }
 
-    metrics.record_timing(trace_id, 'classification', classification_time * 1000)
-    metrics.record_counter('classifications_total')
+    metrics.record_timing(trace_id, 'embedding', embedding_time * 1000)
+    metrics.record_counter('embeddings_total')
 
     # Step 6b: Create TopicContext — single source of truth for this message's topic identity
     from services.topic_context import TopicContext
@@ -1896,7 +1896,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 7: Add exchange to thread conversation
     exchange_id = thread_conv_service.add_exchange(thread_id, topic, {
         "message": text,
-        "classification_time": classification_time,
+        "embedding_time": embedding_time,
     })
 
     # Inject exchange_id into metadata so it flows through to SSE output
@@ -1914,7 +1914,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             topic=topic,
             exchange_id=exchange_id,
             source=source,
-            metadata={'classification_time': classification_time}
+            metadata={'embedding_time': embedding_time}
         )
 
     # Step 7d: Focus auto-inference and distraction check

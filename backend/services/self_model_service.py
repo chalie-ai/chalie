@@ -206,8 +206,18 @@ class SelfModelService:
     # ── Epistemic layer ─────────────────────────────────────────
 
     def _gather_epistemic(self) -> dict:
-        """Memory warmth, recall reliability, topic depth signals."""
-        topic = self._get_active_topic()
+        """Memory warmth, recall reliability, and topic depth signals.
+
+        Uses the ``"general"`` topic key for working-memory and FOK look-ups.
+        The ``recent_topic`` MemoryStore key is no longer written by any
+        production code path (removed with the topic-classifier), so the old
+        dynamic look-up always resolved to ``"general"`` anyway — this makes
+        that default explicit and eliminates the dead ``topic_age`` field.
+
+        Returns:
+            dict: Mapping of epistemic signal names to their current values.
+        """
+        topic = "general"
 
         wm_depth = self._get_working_memory_depth(topic)
 
@@ -224,19 +234,9 @@ class SelfModelService:
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
-            "topic_age": self._get_topic_age(),
             "focus_active": self._get_focus_active(topic),
             "skill_reliability": self._get_skill_reliability(),
         }
-
-    def _get_active_topic(self) -> str:
-        """Get the current active topic from MemoryStore."""
-        try:
-            topic = self._store.get("recent_topic")
-            return topic if topic else "general"
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get active topic: {e}", exc_info=True)
-            return "general"
 
     def _get_working_memory_depth(self, topic: str) -> int:
         try:
@@ -276,23 +276,6 @@ class SelfModelService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
             return 0.0
-
-    def _get_topic_age(self) -> str:
-        """How long the current topic has been active."""
-        try:
-            ttl = self._store.ttl("recent_topic")
-            if ttl and ttl > 0:
-                age_seconds = 1800 - ttl  # recent_topic has 30min TTL
-                if age_seconds < 60:
-                    return f"{age_seconds}s"
-                elif age_seconds < 3600:
-                    return f"{age_seconds // 60}min"
-                else:
-                    return f"{age_seconds // 3600}h {(age_seconds % 3600) // 60}min"
-            return "unknown"
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get topic age: {e}", exc_info=True)
-            return "unknown"
 
     def _get_focus_active(self, topic: str) -> bool:
         try:

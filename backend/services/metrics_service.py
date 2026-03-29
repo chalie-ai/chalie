@@ -116,7 +116,7 @@ class MetricsService:
         # Collect counters
         counter_names = [
             'requests_total', 'responses_total', 'errors_total',
-            'classifications_total', 'facts_extracted',
+            'embeddings_total', 'facts_extracted',
             'memory_chunks_enqueued', 'episodes_generated'
         ]
 
@@ -127,7 +127,7 @@ class MetricsService:
 
         # Collect timing averages
         timing_operations = [
-            'classification', 'response_generation',
+            'embedding', 'response_generation',
             'fact_extraction', 'context_assembly'
         ]
 
