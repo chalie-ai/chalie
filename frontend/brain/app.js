@@ -3246,10 +3246,8 @@ const _SELF_HOSTED_PROVIDERS = new Set(['nextcloud', 'synology', 'radicale']);
 const _APP_PASSWORD_HINTS = {
     google: 'Google Account \u2192 Security \u2192 App Passwords (requires 2FA)',
     apple: 'Apple ID \u2192 Sign-In and Security \u2192 App-Specific Passwords',
-    fastmail: 'Settings \u2192 Privacy & Security \u2192 App Passwords',
-    nextcloud: 'Settings \u2192 Security \u2192 App Passwords',
-    synology: 'Standard login credentials',
-    radicale: 'Configured auth method',
+    yahoo: 'Yahoo Account \u2192 Account Security \u2192 App Passwords',
+    outlook: 'Microsoft Account \u2192 Security \u2192 App Passwords (requires 2FA)',
 };
 
 let capabilitiesData = [];

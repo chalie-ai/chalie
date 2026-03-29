@@ -370,13 +370,13 @@ class TestEmailToCaldavProvider:
         from capabilities.provider_autodiscovery import email_to_caldav_provider
         assert email_to_caldav_provider("user@icloud.com") == "apple"
 
-    def test_fastmail_maps_to_fastmail(self):
+    def test_yahoo_maps_to_yahoo(self):
         from capabilities.provider_autodiscovery import email_to_caldav_provider
-        assert email_to_caldav_provider("user@fastmail.com") == "fastmail"
+        assert email_to_caldav_provider("user@yahoo.com") == "yahoo"
 
-    def test_unknown_domain_returns_none(self):
+    def test_outlook_returns_none(self):
         from capabilities.provider_autodiscovery import email_to_caldav_provider
-        assert email_to_caldav_provider("user@yahoo.com") is None
+        assert email_to_caldav_provider("user@outlook.com") is None
 
     def test_empty_email_returns_none(self):
         from capabilities.provider_autodiscovery import email_to_caldav_provider

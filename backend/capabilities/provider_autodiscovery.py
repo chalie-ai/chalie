@@ -1,22 +1,20 @@
 """
-Shared email provider autodiscovery.
+Shared email provider autodiscovery — backward-compatibility shim.
 
-Given an email address, resolves IMAP/SMTP connection settings from a
-hard-coded registry of well-known providers.
+Delegates to :mod:`capabilities.mail_capability.providers` which is now
+the single source of truth.  This module preserves the public API so
+existing callers (tests, etc.) continue to work.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-
-@dataclass(frozen=True, slots=True)
-class ServerSettings:
-    """Connection settings for a single mail server (IMAP or SMTP)."""
-
-    host: str
-    port: int
-    tls: bool
+from capabilities.mail_capability.providers import (
+    PROVIDERS as _UNIFIED_PROVIDERS,
+    ServerSettings,
+    discover_provider,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,76 +28,18 @@ class EmailProviderSettings:
     notes: str = ""
 
 
-# -- Provider definitions (shared across domain aliases) --------------------
+# -- Build legacy PROVIDERS dict from unified registry -----------------------
 
-_GMAIL = EmailProviderSettings(
-    "Gmail",
-    ServerSettings("imap.gmail.com", 993, True),
-    ServerSettings("smtp.gmail.com", 465, True),
-    True, "Enable 2FA then create an App Password at myaccount.google.com/apppasswords",
-)
-_OUTLOOK = EmailProviderSettings(
-    "Outlook",
-    ServerSettings("outlook.office365.com", 993, True),
-    ServerSettings("smtp.office365.com", 587, False),
-    True, "Enable 2FA then create an App Password in Microsoft account security",
-)
-_ICLOUD = EmailProviderSettings(
-    "iCloud",
-    ServerSettings("imap.mail.me.com", 993, True),
-    ServerSettings("smtp.mail.me.com", 587, False),
-    True, "Generate an app-specific password at appleid.apple.com",
-)
-_FASTMAIL = EmailProviderSettings(
-    "Fastmail",
-    ServerSettings("imap.fastmail.com", 993, True),
-    ServerSettings("smtp.fastmail.com", 465, True),
-    True, "Create an App Password at Settings > Privacy & Security",
-)
-_YAHOO = EmailProviderSettings(
-    "Yahoo Mail",
-    ServerSettings("imap.mail.yahoo.com", 993, True),
-    ServerSettings("smtp.mail.yahoo.com", 465, True),
-    True, "Generate an App Password at login.yahoo.com > Account Security",
-)
-_PROTON = EmailProviderSettings(
-    "ProtonMail",
-    ServerSettings("127.0.0.1", 1143, False),
-    ServerSettings("127.0.0.1", 1025, False),
-    False, "Requires Proton Mail Bridge running locally",
-)
-_ZOHO = EmailProviderSettings(
-    "Zoho Mail",
-    ServerSettings("imap.zoho.com", 993, True),
-    ServerSettings("smtp.zoho.com", 465, True),
-    True,
-)
-_AOL = EmailProviderSettings(
-    "AOL Mail",
-    ServerSettings("imap.aol.com", 993, True),
-    ServerSettings("smtp.aol.com", 465, True),
-    True,
-)
-_GMX = EmailProviderSettings(
-    "GMX Mail",
-    ServerSettings("imap.gmx.com", 993, True),
-    ServerSettings("mail.gmx.com", 587, False),
-    False,
-)
-
-# -- Domain → settings mapping (aliases share the same object) -------------
-
-PROVIDERS: dict[str, EmailProviderSettings] = {
-    "gmail.com": _GMAIL, "googlemail.com": _GMAIL,
-    "outlook.com": _OUTLOOK, "hotmail.com": _OUTLOOK, "live.com": _OUTLOOK,
-    "icloud.com": _ICLOUD, "me.com": _ICLOUD, "mac.com": _ICLOUD,
-    "fastmail.com": _FASTMAIL, "fastmail.fm": _FASTMAIL,
-    "yahoo.com": _YAHOO, "yahoo.co.uk": _YAHOO,
-    "proton.me": _PROTON, "protonmail.com": _PROTON,
-    "zoho.com": _ZOHO,
-    "aol.com": _AOL,
-    "gmx.com": _GMX, "gmx.net": _GMX,
-}
+PROVIDERS: dict[str, EmailProviderSettings] = {}
+for _domain, _up in _UNIFIED_PROVIDERS.items():
+    if _up.imap and _up.smtp:
+        PROVIDERS[_domain] = EmailProviderSettings(
+            provider_name=_up.name,
+            imap=_up.imap,
+            smtp=_up.smtp,
+            requires_app_password=_up.requires_app_password,
+            notes=_up.notes,
+        )
 
 
 def discover_email_settings(email: str) -> EmailProviderSettings | None:
@@ -120,20 +60,19 @@ def list_supported_providers() -> list[str]:
     return sorted({s.provider_name for s in PROVIDERS.values()})
 
 
-# -- Email domain → CalDAV provider mapping --------------------------------
+# -- Email domain → CalDAV provider mapping ----------------------------------
 
-_CALDAV_PROVIDERS: dict[str, str] = {
-    "gmail.com": "google", "googlemail.com": "google",
-    "icloud.com": "apple", "me.com": "apple", "mac.com": "apple",
-    "fastmail.com": "fastmail", "fastmail.fm": "fastmail",
-}
+_CALDAV_PROVIDERS: dict[str, str] = {}
+for _domain, _up in _UNIFIED_PROVIDERS.items():
+    if _up.caldav_url:
+        _slug = _up.name.lower()
+        _CALDAV_PROVIDERS[_domain] = _slug
 
 
 def email_to_caldav_provider(email: str) -> str | None:
     """Map an email address to a CalDAV provider name.
 
-    Returns ``None`` for domains without a known hosted CalDAV service
-    (e.g. self-hosted Nextcloud, Synology, or unsupported providers).
+    Returns ``None`` for domains without CalDAV support.
     """
     if not email or "@" not in email:
         return None

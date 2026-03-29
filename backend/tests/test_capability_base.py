@@ -573,70 +573,15 @@ class TestLoadCapabilities:
 
 
 @pytest.mark.unit
-class TestProviders:
-    """Tests for :mod:`capabilities.caldav_capability.providers`."""
-
-    def test_resolve_provider_returns_none_for_unknown(self):
-        """``resolve_provider`` must return ``None`` for unrecognised names.
-
-        Verifies that querying with a provider name that is not in the
-        :data:`~capabilities.caldav_capability.providers.PROVIDERS` registry
-        returns ``None`` rather than raising.
-        """
-        from capabilities.caldav_capability.providers import resolve_provider
-
-        assert resolve_provider("nonexistent") is None
-
-    def test_resolve_provider_returns_config_for_known_provider(self):
-        """``resolve_provider('google')`` must return a config dict.
-
-        Spot-checks that the returned dict includes a ``url`` starting with
-        ``https://``, confirming that the registry entry is well-formed.
-        """
-        from capabilities.caldav_capability.providers import resolve_provider
-
-        provider = resolve_provider("google")
-        assert provider is not None
-        assert provider["url"].startswith("https://")
-
-    def test_resolve_provider_is_case_insensitive(self):
-        """``resolve_provider`` must accept mixed-case provider names.
-
-        Verifies that ``resolve_provider('Google')`` and
-        ``resolve_provider('GOOGLE')`` both resolve successfully.
-        """
-        from capabilities.caldav_capability.providers import resolve_provider
-
-        assert resolve_provider("Google") is not None
-        assert resolve_provider("GOOGLE") is not None
-
-    def test_providers_all_present(self):
-        """All 6 expected provider names must be present in :data:`PROVIDERS`.
-
-        This guards against accidental deletions from the registry and confirms
-        that the six providers documented in the manifest are all wired up.
-        """
-        from capabilities.caldav_capability.providers import PROVIDERS
-
-        expected = {"google", "apple", "fastmail", "nextcloud", "synology", "radicale"}
-        assert expected.issubset(set(PROVIDERS.keys()))
-
-
-@pytest.mark.unit
-class TestManifest:
-    """Tests for the ``caldav_capability`` manifest.yaml file."""
+class TestMailManifest:
+    """Tests for the ``mail_capability`` manifest.yaml file."""
 
     def test_manifest_loads_correctly(self):
-        """The manifest must parse successfully with required fields present.
-
-        Loads the actual ``manifest.yaml`` from the repository (no mocking
-        required as it is a static file).  Asserts that ``id == 'caldav'``
-        and that ``entry_class == 'CaldavCapability'``.
-        """
+        """The manifest must parse successfully with required fields present."""
         manifest_path = (
             Path(__file__).parent.parent
             / "capabilities"
-            / "caldav_capability"
+            / "mail_capability"
             / "manifest.yaml"
         )
         assert manifest_path.exists(), f"manifest.yaml not found at {manifest_path}"
@@ -644,5 +589,5 @@ class TestManifest:
         with manifest_path.open("r", encoding="utf-8") as fh:
             manifest = yaml.safe_load(fh)
 
-        assert manifest["id"] == "caldav"
-        assert manifest["entry_class"] == "CaldavCapability"
+        assert manifest["id"] == "mail"
+        assert manifest["entry_class"] == "MailCapability"

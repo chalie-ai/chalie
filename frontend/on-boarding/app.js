@@ -492,17 +492,16 @@ function setupCapabilityListeners() {
 }
 
 const EMAIL_PROVIDERS = {
-    'gmail.com': { name: 'Gmail', caldav: 'google', note: 'Enable 2FA then create an App Password at myaccount.google.com/apppasswords' },
-    'googlemail.com': { name: 'Gmail', caldav: 'google', note: 'Enable 2FA then create an App Password at myaccount.google.com/apppasswords' },
-    'icloud.com': { name: 'iCloud', caldav: 'apple', note: 'Generate an app-specific password at appleid.apple.com' },
-    'me.com': { name: 'iCloud', caldav: 'apple', note: 'Generate an app-specific password at appleid.apple.com' },
-    'mac.com': { name: 'iCloud', caldav: 'apple', note: 'Generate an app-specific password at appleid.apple.com' },
-    'fastmail.com': { name: 'Fastmail', caldav: 'fastmail', note: 'Create an App Password at Settings > Privacy & Security' },
-    'fastmail.fm': { name: 'Fastmail', caldav: 'fastmail', note: 'Create an App Password at Settings > Privacy & Security' },
-    'outlook.com': { name: 'Outlook', caldav: null, note: 'Enable 2FA then create an App Password in Microsoft account security' },
-    'hotmail.com': { name: 'Outlook', caldav: null, note: 'Enable 2FA then create an App Password in Microsoft account security' },
-    'live.com': { name: 'Outlook', caldav: null, note: 'Enable 2FA then create an App Password in Microsoft account security' },
-    'yahoo.com': { name: 'Yahoo Mail', caldav: null, note: 'Generate an App Password at login.yahoo.com > Account Security' },
+    'gmail.com': { name: 'Google', note: 'Enable 2FA then create an App Password at myaccount.google.com/apppasswords' },
+    'googlemail.com': { name: 'Google', note: 'Enable 2FA then create an App Password at myaccount.google.com/apppasswords' },
+    'icloud.com': { name: 'Apple', note: 'Generate an app-specific password at appleid.apple.com' },
+    'me.com': { name: 'Apple', note: 'Generate an app-specific password at appleid.apple.com' },
+    'mac.com': { name: 'Apple', note: 'Generate an app-specific password at appleid.apple.com' },
+    'outlook.com': { name: 'Outlook', note: 'Enable 2FA then create an App Password in Microsoft account security' },
+    'hotmail.com': { name: 'Outlook', note: 'Enable 2FA then create an App Password in Microsoft account security' },
+    'live.com': { name: 'Outlook', note: 'Enable 2FA then create an App Password in Microsoft account security' },
+    'yahoo.com': { name: 'Yahoo', note: 'Generate an App Password at login.yahoo.com > Account Security' },
+    'yahoo.co.uk': { name: 'Yahoo', note: 'Generate an App Password at login.yahoo.com > Account Security' },
 };
 
 function autodiscoverProvider(email) {
@@ -518,11 +517,9 @@ function autodiscoverProvider(email) {
         if (provider.note) html += ` <span class="provider-note">${provider.note}</span>`;
         infoEl.innerHTML = html;
         infoEl.style.display = '';
-        infoEl.dataset.caldavProvider = provider.caldav || '';
     } else {
-        infoEl.innerHTML = 'Provider not auto-detected. Email may still work — calendar may need manual setup in the dashboard.';
+        infoEl.innerHTML = 'Provider not recognised. Supported: Google, Apple, Outlook, Yahoo.';
         infoEl.style.display = '';
-        infoEl.dataset.caldavProvider = '';
     }
 }
 
@@ -545,63 +542,48 @@ async function connectCapabilities() {
     errorEl.style.display = 'none';
     progressEl.style.display = '';
     stepImap.className = 'cap-step active';
+    stepImap.textContent = 'Connecting...';
     stepCaldav.className = 'cap-step';
+    stepCaldav.textContent = '';
 
-    let imapOk = false;
-    let caldavOk = false;
-
-    // 1. Connect IMAP
     try {
-        const res = await apiFetch('/api/capabilities/imap/setup', {
+        const res = await apiFetch('/api/capabilities/mail/setup', {
             method: 'POST',
             body: JSON.stringify({ email, password }),
         });
         if (res.ok) {
-            imapOk = true;
+            const data = await res.json();
             stepImap.className = 'cap-step done';
-            stepImap.textContent = 'Email connected ✓';
+            stepImap.textContent = 'Connected ✓';
+            // Show per-protocol status if available
+            const statusRes = await apiFetch('/api/capabilities/mail/status');
+            if (statusRes.ok) {
+                const status = await statusRes.json();
+                const protos = status.health_details?.protocols || {};
+                const parts = [];
+                if (protos.imap) parts.push('Email');
+                if (protos.caldav) parts.push('Calendar');
+                if (protos.carddav) parts.push('Contacts');
+                if (parts.length) {
+                    stepCaldav.className = 'cap-step done';
+                    stepCaldav.textContent = parts.join(', ') + ' active';
+                }
+            }
+            showToast('Connected! Redirecting...', 'success');
+            setTimeout(() => { window.location.href = '/'; }, 1500);
         } else {
             const err = await res.json();
             stepImap.className = 'cap-step failed';
-            stepImap.textContent = `Email: ${err.error || 'Connection failed'}`;
+            stepImap.textContent = err.error || 'Connection failed';
+            errorEl.textContent = 'Could not connect. Check your app password and try again, or skip for now.';
+            errorEl.style.display = '';
+            btn.disabled = false;
+            btn.textContent = 'Retry';
         }
     } catch {
         stepImap.className = 'cap-step failed';
-        stepImap.textContent = 'Email: Network error';
-    }
-
-    // 2. Connect CalDAV (if provider known)
-    const caldavProvider = document.getElementById('capProviderInfo').dataset.caldavProvider;
-    if (caldavProvider) {
-        stepCaldav.className = 'cap-step active';
-        try {
-            const res = await apiFetch('/api/capabilities/caldav/setup', {
-                method: 'POST',
-                body: JSON.stringify({ provider: caldavProvider, username: email, password }),
-            });
-            if (res.ok) {
-                caldavOk = true;
-                stepCaldav.className = 'cap-step done';
-                stepCaldav.textContent = 'Calendar connected ✓';
-            } else {
-                const err = await res.json();
-                stepCaldav.className = 'cap-step failed';
-                stepCaldav.textContent = `Calendar: ${err.error || 'Connection failed'}`;
-            }
-        } catch {
-            stepCaldav.className = 'cap-step failed';
-            stepCaldav.textContent = 'Calendar: Network error';
-        }
-    } else {
-        stepCaldav.className = 'cap-step';
-        stepCaldav.textContent = 'Calendar: No auto-detected CalDAV provider (can set up later in dashboard)';
-    }
-
-    if (imapOk || caldavOk) {
-        showToast('Connected! Redirecting...', 'success');
-        setTimeout(() => { window.location.href = '/'; }, 1500);
-    } else {
-        errorEl.textContent = 'Could not connect. Check your app password and try again, or skip for now.';
+        stepImap.textContent = 'Network error';
+        errorEl.textContent = 'Network error — please try again.';
         errorEl.style.display = '';
         btn.disabled = false;
         btn.textContent = 'Retry';

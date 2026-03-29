@@ -23,6 +23,14 @@ def _reconnect_capabilities() -> None:
     prevents a successful login response from being returned to the client.
     """
     try:
+        # Migrate legacy imap/caldav credentials to unified mail:* keys
+        # before loading capabilities so MailCapability finds them.
+        try:
+            from capabilities.mail_capability.capability import migrate_legacy_credentials
+            migrate_legacy_credentials()
+        except Exception as exc:
+            logger.debug("[Auth] Legacy mail credential migration: %s", exc)
+
         from capabilities import load_capabilities
         from services.tool_library_service import register_tool
 
