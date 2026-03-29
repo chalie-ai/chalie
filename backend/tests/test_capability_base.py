@@ -190,7 +190,7 @@ class _MinimalCapability:
                 """No-op understand stub that returns items unchanged."""
                 return items
 
-            def monitor(self) -> None:
+            def _do_monitor(self) -> None:
                 """No-op monitor stub."""
 
             def act(self, action: str, params: dict) -> dict:
@@ -303,7 +303,7 @@ def _make_health_cap(monitor_effect=None):
     cap = _MinimalCapability._build()
     cap._connected = True
     if monitor_effect is not None:
-        cap.monitor = MagicMock(side_effect=monitor_effect)
+        cap._do_monitor = MagicMock(side_effect=monitor_effect)
     return cap
 
 
@@ -410,6 +410,44 @@ class TestHealthTracking:
             cap.run_monitor()
         for name, mock in hooks.items():
             assert mock.called, f"{name} was not called by run_monitor()"
+
+    def test_run_monitor_dispatches_hooks_exactly_once(self):
+        """Each proactive hook must fire exactly once per run_monitor() cycle.
+
+        Guards against the double-dispatch regression where hooks were
+        called both inside ``monitor()`` via ``_dispatch_hooks()`` AND
+        inline in ``run_monitor()``'s success path.
+        """
+        cap = _make_health_cap()
+        hooks = {
+            "capabilities.first_look.maybe_send_first_look": MagicMock(return_value=False),
+            "capabilities.meeting_prep.maybe_send_meeting_prep": MagicMock(),
+            "capabilities.post_meeting_nudge.maybe_send_post_meeting_nudge": MagicMock(),
+            "capabilities.evening_brief.maybe_send_evening_brief": MagicMock(),
+            "capabilities.draft_nudge.maybe_send_draft_nudge": MagicMock(),
+            "capabilities.welcome_back.maybe_send_welcome_back": MagicMock(),
+        }
+        with (
+            patch("capabilities.base._get_tool_config_service",
+                  return_value=_InMemoryToolConfigService()),
+            patch("capabilities.first_look.maybe_send_first_look",
+                  hooks["capabilities.first_look.maybe_send_first_look"]),
+            patch("capabilities.meeting_prep.maybe_send_meeting_prep",
+                  hooks["capabilities.meeting_prep.maybe_send_meeting_prep"]),
+            patch("capabilities.post_meeting_nudge.maybe_send_post_meeting_nudge",
+                  hooks["capabilities.post_meeting_nudge.maybe_send_post_meeting_nudge"]),
+            patch("capabilities.evening_brief.maybe_send_evening_brief",
+                  hooks["capabilities.evening_brief.maybe_send_evening_brief"]),
+            patch("capabilities.draft_nudge.maybe_send_draft_nudge",
+                  hooks["capabilities.draft_nudge.maybe_send_draft_nudge"]),
+            patch("capabilities.welcome_back.maybe_send_welcome_back",
+                  hooks["capabilities.welcome_back.maybe_send_welcome_back"]),
+        ):
+            cap.run_monitor()
+        for name, mock in hooks.items():
+            assert mock.call_count == 1, (
+                f"{name} called {mock.call_count} times, expected exactly 1"
+            )
 
     def test_run_monitor_skips_hooks_on_failure(self):
         """Failed monitor() must NOT invoke proactive hooks.

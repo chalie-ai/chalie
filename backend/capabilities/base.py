@@ -284,44 +284,6 @@ class AbstractCapability(ABC):
             self._error_count = 0
             self._last_error = None
             self._failure_alerted = False
-            try:
-                from capabilities.first_look import maybe_send_first_look
-                maybe_send_first_look()
-            except Exception:
-                pass
-            try:
-                from capabilities.meeting_prep import maybe_send_meeting_prep
-                maybe_send_meeting_prep()
-            except Exception as exc:
-                logger.debug("meeting_prep hook: %s", exc)
-            try:
-                from capabilities.post_meeting_nudge import (
-                    maybe_send_post_meeting_nudge,
-                )
-                maybe_send_post_meeting_nudge()
-            except Exception as exc:
-                logger.debug("post_meeting_nudge hook: %s", exc)
-            try:
-                from capabilities.evening_brief import (
-                    maybe_send_evening_brief,
-                )
-                maybe_send_evening_brief()
-            except Exception as exc:
-                logger.debug("evening_brief hook: %s", exc)
-            try:
-                from capabilities.draft_nudge import (
-                    maybe_send_draft_nudge,
-                )
-                maybe_send_draft_nudge()
-            except Exception as exc:
-                logger.debug("draft_nudge hook: %s", exc)
-            try:
-                from capabilities.welcome_back import (
-                    maybe_send_welcome_back,
-                )
-                maybe_send_welcome_back()
-            except Exception as exc:
-                logger.debug("welcome_back hook: %s", exc)
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
