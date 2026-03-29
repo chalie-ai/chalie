@@ -27,9 +27,9 @@ from utils.logger import Logger
 # which poisons sys.modules and makes every subsequent embedding call fail with
 # "maximum recursion depth exceeded".
 try:
-    import numpy
-    import torch
-    import transformers
+    import numpy  # noqa: F401 — thread-safety warm-up
+    import torch  # noqa: F401 — thread-safety warm-up
+    import transformers  # noqa: F401 — thread-safety warm-up
     # These heavy imports must complete in the main thread before any background
     # thread tries to import them. Python's import system isn't fully thread-safe
     # for complex nested imports — concurrent first-imports from multiple threads

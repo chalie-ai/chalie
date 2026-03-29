@@ -5,7 +5,7 @@ Auto-detected at import time. Tool excluded from registry if unavailable.
 """
 
 try:
-    import playwright
+    import playwright  # noqa: F401 — availability check
     AVAILABLE = True
 except ImportError:
     AVAILABLE = False
