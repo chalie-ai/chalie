@@ -954,28 +954,6 @@ class PromptAssemblyService:
             logging.debug(f"[FRONTAL CORTEX] Failed to fetch tool names: {e}")
             return '(none registered)'
 
-    def _get_available_skills(self) -> str:
-        """Get available innate skills from the dispatcher for prompt injection.
-
-        Returns innate skills list only. External tools are discovered
-        dynamically via the ``find_tools`` innate skill during ACT execution.
-
-        Returns:
-            str: Formatted available-skills string, or empty string when
-            the dispatcher is unavailable.
-        """
-        try:
-            from services.act_dispatcher_service import ActDispatcherService
-            dispatcher = ActDispatcherService()
-            innate = ["memory", "introspect", "associate", "autobiography", "focus", "list", "schedule", "persistent_task", "read", "goals"]
-            available = [s for s in innate if s in dispatcher.handlers]
-            if available:
-                return "Available skills: " + ", ".join(available)
-            return ""
-        except Exception as e:
-            logging.debug(f"Skill registry not available: {e}")
-            return ""
-
     def _get_performance_hint(self, tool_name: str) -> str:
         """Build a compact performance hint string for a tool in the ACT prompt.
 
@@ -1081,70 +1059,3 @@ class PromptAssemblyService:
             logging.debug(f"[FRONTAL CORTEX] Goal context unavailable: {e}")
             return ''
 
-    def _get_available_tools(self, selected_tools: list = None, relevant_tools: list = None) -> str:
-        """Get tool profiles for ACT prompt injection.
-
-        When *selected_tools* is provided (from
-        :class:`~services.cognitive_triage_service.CognitiveTriageService`),
-        injects full profiles for those specific tools from the
-        ``tool_capability_profiles`` table. Falls back to manifest-based
-        summaries if profiles are unavailable.
-
-        Args:
-            selected_tools: Triage-selected tool names (highest priority).
-            relevant_tools: Embedding-scored tool list used as a fallback when
-                *selected_tools* is not provided.
-
-        Returns:
-            str: Formatted tool section string, or ``'(no tools loaded)'`` when
-            the registry is unavailable.
-        """
-        try:
-            from services.tool_registry_service import ToolRegistryService
-            registry = ToolRegistryService()
-
-            # Prefer triage-selected tools (Wave 2)
-            tool_names = None
-            if selected_tools:
-                tool_names = [t for t in selected_tools if t in registry.tools]
-            elif relevant_tools:
-                tool_names = [
-                    item['name'] for item in relevant_tools
-                    if item.get('type') == 'tool' and item['name'] in registry.tools
-                ][:5]
-
-            if tool_names:
-                # Try to get rich profiles first (inject full_profile for triage-selected tools)
-                try:
-                    from services.tool_profile_service import ToolProfileService
-                    profiles = ToolProfileService().get_profiles_for_tools(tool_names)
-                    if profiles:
-                        lines = []
-                        for p in profiles:
-                            name = p.get('tool_name', '')
-                            full_profile = p.get('full_profile', '') or p.get('short_summary', '')
-                            perf_hint = self._get_performance_hint(name)
-                            suffix = f"\n{perf_hint}" if perf_hint else ''
-                            lines.append(f"### {name}\n{full_profile}{suffix}")
-                        return "\n\n".join(lines)
-                except Exception:
-                    pass
-
-                # Fallback to manifest-based summaries
-                lines = []
-                for name in tool_names:
-                    manifest = registry.tools[name]['manifest']
-                    desc = manifest.get('description', name)
-                    params = manifest.get('parameters', {})
-                    param_str = f" ({', '.join(list(params.keys()))})" if params else ""
-                    perf_hint = self._get_performance_hint(name)
-                    suffix = f" {perf_hint}" if perf_hint else ''
-                    lines.append(f"- {name}{param_str}: {desc}{suffix}")
-                return "\n".join(lines)
-
-            # No selected tools — return all registered tools
-            summaries = registry.get_tool_prompt_summaries()
-            return summaries if summaries else "(no tools loaded)"
-        except Exception as e:
-            logging.debug(f"Tool registry not available for prompt: {e}")
-            return "(no tools loaded)"
