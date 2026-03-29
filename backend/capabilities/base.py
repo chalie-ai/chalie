@@ -210,6 +210,11 @@ class AbstractCapability(ABC):
     def _dispatch_hooks(self) -> None:
         """Fire all registered proactive hooks after a successful monitor."""
         try:
+            from capabilities.morning_brief import maybe_send_morning_brief
+            maybe_send_morning_brief()
+        except Exception as exc:
+            logger.debug("morning_brief hook: %s", exc)
+        try:
             from capabilities.first_look import maybe_send_first_look
             maybe_send_first_look()
         except Exception:

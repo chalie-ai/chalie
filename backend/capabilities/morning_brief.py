@@ -1,34 +1,45 @@
 """
 Fused morning brief — unified daily digest combining calendar + email.
 
-Replaces separate CalDAV daily digest and IMAP scheduled 8am digest with
-a single prompt-queue push that summarises both capabilities.
+Self-contained: fetches today's events from ``scheduled_items`` and email
+hints from MemoryStore.  Fires once per day during the morning window
+(06:00-10:00 local).
+
+Called from :meth:`~capabilities.base.AbstractCapability._dispatch_hooks`.
 """
 
 import json
 import logging
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
 _BRIEF_KEY_PREFIX = "morning_brief:"
 _BRIEF_TTL_SECONDS = 24 * 3600
 _MAX_EVENTS = 10
+_MORNING_START = 6   # local hour (inclusive)
+_MORNING_END = 10    # local hour (exclusive)
 
 
-def maybe_send_morning_brief(calendar_events: list, now) -> bool:
+def maybe_send_morning_brief(now=None) -> bool:
     """Push a once-per-day fused morning brief via prompt-queue.
 
     Combines today's calendar schedule with the cached IMAP inbox hint
     (if available) into a single briefing prompt.  Deduped per UTC day.
+    Only fires during the morning window (06:00-10:00 local).
     """
     try:
         from capabilities.quiet_window import is_quiet_now
+        from services.memory_client import MemoryClientService
+        from services.time_utils import utc_now
 
+        now = now or utc_now()
         if is_quiet_now(now):
             return False
 
-        from services.memory_client import MemoryClientService
+        local_hour = now.astimezone(_user_tz()).hour
+        if local_hour < _MORNING_START or local_hour >= _MORNING_END:
+            return False
 
         date_key = now.strftime("%Y-%m-%d")
         flag_key = f"{_BRIEF_KEY_PREFIX}{date_key}"
@@ -37,8 +48,9 @@ def maybe_send_morning_brief(calendar_events: list, now) -> bool:
         if store.get(flag_key):
             return False
 
-        cal = _build_calendar_section(calendar_events, now)
-        b2b = _build_back_to_back_section(calendar_events, now)
+        events = _fetch_today_events(now)
+        cal = _build_calendar_section(events)
+        b2b = _build_back_to_back_section(events)
         email = _read_cached_inbox_hint(store)
 
         sections = [cal]
@@ -71,39 +83,104 @@ def maybe_send_morning_brief(calendar_events: list, now) -> bool:
         return False
 
 
-def _build_calendar_section(events: list, now) -> str:
-    """Format today's calendar events into a brief section."""
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(hours=24)
-    todays = sorted(
-        [e for e in events
-         if e.get('dtstart') and today_start <= e['dtstart'] < today_end],
-        key=lambda e: e['dtstart'],
-    )
-    if not todays:
+def _user_tz():
+    """Return user's ZoneInfo or UTC."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        from services.client_context_service import ClientContextService
+        name = ClientContextService().get().get("timezone")
+        if name:
+            return ZoneInfo(name)
+    except Exception as exc:
+        logger.debug("[morning_brief] _user_tz: %s", exc)
+    return timezone.utc
+
+
+def _fetch_today_events(now):
+    """Query scheduled_items for today's CalDAV events.
+
+    Returns a list of dicts with ``dtstart``, ``dtend``, ``summary``,
+    ``location`` — parsed from the metadata JSON column.
+    """
+    from services.database_service import get_shared_db_service
+    from services.time_utils import parse_utc
+
+    tz = _user_tz()
+    today = now.astimezone(tz).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    t_start = today.astimezone(timezone.utc).isoformat()
+    t_end = (today + timedelta(hours=24)).astimezone(
+        timezone.utc).isoformat()
+
+    with get_shared_db_service().connection() as conn:
+        rows = conn.cursor().execute(
+            "SELECT message, due_at, metadata FROM scheduled_items "
+            "WHERE source='caldav' AND item_type='event' "
+            "AND status='pending' AND due_at >= ? AND due_at < ? "
+            "ORDER BY due_at ASC",
+            (t_start, t_end),
+        ).fetchall()
+
+    events = []
+    for msg, due, meta_raw in rows:
+        meta = json.loads(meta_raw) if meta_raw else {}
+        dtstart = (parse_utc(meta["dtstart"])
+                   if meta.get("dtstart") else parse_utc(due))
+        dtend = (parse_utc(meta["dtend"])
+                 if meta.get("dtend") else None)
+        events.append({
+            'summary': msg.split(" [")[0] if " [" in msg else msg,
+            'dtstart': dtstart,
+            'dtend': dtend,
+            'location': meta.get('location'),
+        })
+    return events
+
+
+def _build_calendar_section(events):
+    """Format today's events into a brief section."""
+    if not events:
         return "Schedule: No events today."
 
-    from capabilities.caldav_capability.capability import _format_event_line
+    tz = _user_tz()
+    shown = events[:_MAX_EVENTS]
+    lines = []
+    for e in shown:
+        t = e['dtstart'].astimezone(tz).strftime('%H:%M')
+        line = f"  {t} {e.get('summary', 'Event')}"
+        if e.get('location'):
+            line += f" @ {e['location']}"
+        lines.append(line)
 
-    shown = todays[:_MAX_EVENTS]
-    lines = [_format_event_line(e) for e in shown]
-    remaining = len(todays) - len(shown)
+    remaining = len(events) - len(shown)
     if remaining > 0:
         lines.append(f"(+{remaining} more)")
-    return f"Schedule ({len(todays)} events):\n" + "\n".join(lines)
+    return f"Schedule ({len(events)} events):\n" + "\n".join(lines)
 
 
-def _build_back_to_back_section(events: list, now) -> str:
-    """Detect tight transitions (<5min gap) and format as a brief section."""
-    from capabilities.caldav_capability.capability import _find_back_to_back_pairs
+def _build_back_to_back_section(events):
+    """Detect tight transitions (<5min gap) between consecutive events."""
+    if len(events) < 2:
+        return ""
 
-    pairs = _find_back_to_back_pairs(events, now)
+    pairs = []
+    for i in range(len(events) - 1):
+        a, b = events[i], events[i + 1]
+        if a.get('dtend') and b.get('dtstart'):
+            gap = (b['dtstart'] - a['dtend']).total_seconds() / 60
+            if 0 <= gap < 5:
+                pairs.append((
+                    a.get('summary', 'Event'),
+                    b.get('summary', 'Event'),
+                    int(gap),
+                ))
+
     if not pairs:
         return ""
     lines = [
-        f"  {a.get('summary', 'Event')} \u2192 "
-        f"{b.get('summary', 'Event')} ({gap}min gap)"
-        for a, b, gap, _ in pairs
+        f"  {name_a} \u2192 {name_b} ({gap}min gap)"
+        for name_a, name_b, gap in pairs
     ]
     return f"Tight transitions ({len(pairs)}):\n" + "\n".join(lines)
 
