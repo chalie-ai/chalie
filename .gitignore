@@ -30,6 +30,9 @@ Claude.md
 backend/.simplify_baseline.json
 backend/.simplify_test_results.xml
 
+# Scripts (local only)
+scripts/
+
 # Planning docs (local only)
 plans/
 
