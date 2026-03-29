@@ -863,3 +863,74 @@ def test_read_tool_error_cases():
     assert "error" in handler("t1", {})  # missing uid
     with patch.object(cap, "_open_client", return_value=None):
         assert "error" in handler("t1", {"uid": 42})  # no connection
+
+
+# --- imap_mark_read tool ---
+
+
+@pytest.mark.unit
+def test_mark_read_single_uid():
+    """mark_read sets \\Seen flag via add_flags for a single UID."""
+    cap = _make()
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler = next(
+            t for t in cap.get_tools() if t["name"] == "imap_mark_read"
+        )["handler"]
+        result = handler("t1", {"uid": 42})
+    assert result["success"] is True
+    assert result["uids"] == [42]
+    mc.select_folder.assert_called_once_with("INBOX", readonly=False)
+    mc.add_flags.assert_called_once_with([42], [b"\\Seen"])
+    mc.logout.assert_called_once()
+
+
+@pytest.mark.unit
+def test_mark_read_multiple_uids():
+    """mark_read handles a list of UIDs."""
+    cap = _make()
+    mc = MagicMock()
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler = next(
+            t for t in cap.get_tools() if t["name"] == "imap_mark_read"
+        )["handler"]
+        result = handler("t1", {"uids": [10, 20, 30]})
+    assert result["success"] is True
+    assert result["uids"] == [10, 20, 30]
+    mc.add_flags.assert_called_once_with([10, 20, 30], [b"\\Seen"])
+
+
+@pytest.mark.unit
+def test_mark_read_error_no_uid():
+    """mark_read returns error when no uid or uids provided."""
+    cap = _make()
+    handler = next(
+        t for t in cap.get_tools() if t["name"] == "imap_mark_read"
+    )["handler"]
+    assert "error" in handler("t1", {})
+
+
+@pytest.mark.unit
+def test_mark_read_error_no_connection():
+    """mark_read returns error when IMAP connection fails."""
+    cap = _make()
+    with patch.object(cap, "_open_client", return_value=None):
+        handler = next(
+            t for t in cap.get_tools() if t["name"] == "imap_mark_read"
+        )["handler"]
+        result = handler("t1", {"uid": 42})
+    assert "error" in result
+
+
+@pytest.mark.unit
+def test_mark_read_server_error():
+    """mark_read returns error when add_flags raises."""
+    cap = _make()
+    mc = MagicMock()
+    mc.add_flags.side_effect = Exception("Server refused")
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler = next(
+            t for t in cap.get_tools() if t["name"] == "imap_mark_read"
+        )["handler"]
+        result = handler("t1", {"uid": 42})
+    assert "error" in result and "Server refused" in result["error"]
