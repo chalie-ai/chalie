@@ -66,11 +66,6 @@ def _get_provider(name: str) -> dict | None:
     return providers.get(name)
 
 
-def _all_providers() -> list:
-    """Get all enabled providers as a list of dicts."""
-    return list(_load_providers().values())
-
-
 # ── Tool entry point ─────────────────────────────────────────────────────────
 
 def execute(topic: str, params: dict, config: dict = None, telemetry: dict = None) -> dict:
