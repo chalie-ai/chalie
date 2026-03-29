@@ -24,10 +24,9 @@ def maybe_send_first_look() -> bool:
     Returns True if the briefing was enqueued, False if skipped.
     """
     try:
-        from services.memory_client import MemoryClientService
+        from capabilities.hook_dedup import is_fired
 
-        store = MemoryClientService.create_connection()
-        if store.get(_FLAG_KEY):
+        if is_fired(_FLAG_KEY):
             return False
 
         from capabilities import load_capabilities
@@ -36,6 +35,9 @@ def maybe_send_first_look() -> bool:
         connected = sum(c.is_connected() for c in caps.values())
         if connected < 2:
             return False
+
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
 
         cal = _build_calendar_snapshot()
         email = _read_inbox_snapshot(store)
@@ -57,7 +59,8 @@ def maybe_send_first_look() -> bool:
             ),
             "metadata": {"type": "proactive_drift", "source": "first_look", "topic": "proactive"},
         }))
-        store.setex(_FLAG_KEY, _FLAG_TTL, "1")
+        from capabilities.hook_dedup import mark_fired
+        mark_fired(_FLAG_KEY, _FLAG_TTL)
         logger.info("[first_look] Enqueued cross-capability welcome briefing.")
         return True
 

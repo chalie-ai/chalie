@@ -35,14 +35,15 @@ def maybe_send_draft_nudge(now=None) -> bool:
             return False
 
         flag_key = f"{_FLAG_PREFIX}{now.strftime('%Y-%m-%d')}"
-        store = MemoryClientService.create_connection()
-        if store.get(flag_key):
+        from capabilities.hook_dedup import is_fired
+        if is_fired(flag_key):
             return False
 
         stale = _find_stale_emails(now)
         if not stale:
             return False
 
+        store = MemoryClientService.create_connection()
         lines = [
             f"- {e['from']}: \"{e['subject']}\" (idle {e['hours']}h)"
             for e in stale
@@ -66,7 +67,8 @@ def maybe_send_draft_nudge(now=None) -> bool:
                 "topic": "proactive",
             },
         }))
-        store.setex(flag_key, _FLAG_TTL, "1")
+        from capabilities.hook_dedup import mark_fired
+        mark_fired(flag_key, _FLAG_TTL)
         return True
     except Exception as exc:
         logger.debug("[draft_nudge] failed: %s", exc)

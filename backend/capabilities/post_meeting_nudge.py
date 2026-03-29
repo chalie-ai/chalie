@@ -51,8 +51,9 @@ def maybe_send_post_meeting_nudge(now=None) -> bool:
             attendees = meta.get("attendees", [])
             flag = f"{_FLAG_PREFIX}{uid}"
 
+            from capabilities.hook_dedup import is_fired
             if (meta.get("all_day") or not attendees
-                    or not dtend_raw or store.get(flag)):
+                    or not dtend_raw or is_fired(flag)):
                 continue
 
             dtend = parse_utc(dtend_raw)
@@ -78,7 +79,8 @@ def maybe_send_post_meeting_nudge(now=None) -> bool:
                     "topic": "proactive", "event_uid": uid,
                 },
             }))
-            store.setex(flag, _FLAG_TTL, "1")
+            from capabilities.hook_dedup import mark_fired
+            mark_fired(flag, _FLAG_TTL)
             sent_any = True
         return sent_any
     except Exception as exc:

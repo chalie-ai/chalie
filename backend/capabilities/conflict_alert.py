@@ -43,7 +43,8 @@ def maybe_send_conflict_alert(now=None) -> bool:
         for conflict in conflicts:
             canon_key = conflict["canon_key"]
             flag_key = f"{_FLAG_PREFIX}{now.strftime('%Y-%m-%d')}:{canon_key}"
-            if store.get(flag_key):
+            from capabilities.hook_dedup import is_fired
+            if is_fired(flag_key):
                 continue
 
             body = _build_alert_body(conflict, now)
@@ -64,7 +65,8 @@ def maybe_send_conflict_alert(now=None) -> bool:
                     "canon_key": canon_key,
                 },
             }))
-            store.setex(flag_key, _FLAG_TTL, "1")
+            from capabilities.hook_dedup import mark_fired
+            mark_fired(flag_key, _FLAG_TTL)
             logger.info("[conflict_alert] Enqueued for %s.", canon_key)
             sent_any = True
         return sent_any

@@ -30,9 +30,11 @@ def maybe_send_welcome_back(now=None) -> bool:
         if is_quiet_now(now):
             return False
 
-        store = MemoryClientService.create_connection()
-        if store.get(_FLAG_KEY):
+        from capabilities.hook_dedup import is_fired
+        if is_fired(_FLAG_KEY):
             return False
+
+        store = MemoryClientService.create_connection()
 
         raw = store.get(_INTERACTION_KEY)
         if not raw:
@@ -60,7 +62,8 @@ def maybe_send_welcome_back(now=None) -> bool:
                 "topic": "proactive",
             },
         }))
-        store.setex(_FLAG_KEY, _FLAG_TTL, "1")
+        from capabilities.hook_dedup import mark_fired
+        mark_fired(_FLAG_KEY, _FLAG_TTL)
         return True
     except Exception as exc:
         logger.debug("[welcome_back] failed: %s", exc)

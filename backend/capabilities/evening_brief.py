@@ -35,8 +35,8 @@ def maybe_send_evening_brief(now=None) -> bool:
             return False
 
         flag_key = f"{_FLAG_PREFIX}{now.strftime('%Y-%m-%d')}"
-        store = MemoryClientService.create_connection()
-        if store.get(flag_key):
+        from capabilities.hook_dedup import is_fired
+        if is_fired(flag_key):
             return False
 
         cal = _build_tomorrow_section(now)
@@ -45,6 +45,7 @@ def maybe_send_evening_brief(now=None) -> bool:
         if not sections:
             return False
 
+        store = MemoryClientService.create_connection()
         hint = " and unanswered emails" if email else ""
         store.rpush("prompt-queue", json.dumps({
             "prompt": (
@@ -59,7 +60,8 @@ def maybe_send_evening_brief(now=None) -> bool:
                 "topic": "proactive",
             },
         }))
-        store.setex(flag_key, _FLAG_TTL, "1")
+        from capabilities.hook_dedup import mark_fired
+        mark_fired(flag_key, _FLAG_TTL)
         return True
     except Exception as exc:
         logger.debug("[evening_brief] failed: %s", exc)

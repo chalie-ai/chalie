@@ -43,6 +43,8 @@ def maybe_send_urgent_inbox(now=None) -> bool:
     if not urgent:
         return False
 
+    from capabilities.hook_dedup import mark_fired
+
     for email in urgent:
         store.rpush("prompt-queue", json.dumps({
             "prompt": (
@@ -62,7 +64,7 @@ def maybe_send_urgent_inbox(now=None) -> bool:
                 "uid": email["uid"],
             },
         }))
-        store.setex(f"{_FLAG_PREFIX}{email['uid']}", _FLAG_TTL, "1")
+        mark_fired(f"{_FLAG_PREFIX}{email['uid']}", _FLAG_TTL)
     return True
 
 
@@ -96,7 +98,8 @@ def _find_urgent_emails(now, store) -> list[dict]:
         date_str = e.get("date", "")
         if not date_str or parse_utc(date_str) < cutoff:
             continue
-        if store.get(f"{_FLAG_PREFIX}{uid}"):
+        from capabilities.hook_dedup import is_fired
+        if is_fired(f"{_FLAG_PREFIX}{uid}"):
             continue
         addr = e.get("from_addr", "").strip().lower()
         if not resolve(addr, limit=1):

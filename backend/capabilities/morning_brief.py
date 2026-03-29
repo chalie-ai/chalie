@@ -44,9 +44,11 @@ def maybe_send_morning_brief(now=None) -> bool:
         date_key = now.strftime("%Y-%m-%d")
         flag_key = f"{_BRIEF_KEY_PREFIX}{date_key}"
 
-        store = MemoryClientService.create_connection()
-        if store.get(flag_key):
+        from capabilities.hook_dedup import is_fired
+        if is_fired(flag_key):
             return False
+
+        store = MemoryClientService.create_connection()
 
         events = _fetch_today_events(now)
         cal = _build_calendar_section(events)
@@ -84,7 +86,8 @@ def maybe_send_morning_brief(now=None) -> bool:
                 'topic': 'proactive',
             },
         }))
-        store.setex(flag_key, _BRIEF_TTL_SECONDS, "1")
+        from capabilities.hook_dedup import mark_fired
+        mark_fired(flag_key, _BRIEF_TTL_SECONDS)
         logger.info("[morning_brief] Enqueued for %s.", date_key)
         return True
     except Exception as exc:
