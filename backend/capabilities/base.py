@@ -314,8 +314,8 @@ class AbstractCapability(ABC):
                 cap_id, "capability_failure", msg,
                 source=f"{cap_id}:health",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("failure signal emit: %s", exc)
         try:
             import json
             from services.memory_client import MemoryClientService
