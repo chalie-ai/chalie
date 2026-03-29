@@ -32,11 +32,12 @@ def _mock_conn(rows):
 
 
 @pytest.mark.unit
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService")
 @patch("services.database_service.get_shared_db_service")
 def test_nudge_fires_after_meeting_with_unanswered(
-    mock_db, mock_mcs, mock_lc,
+    mock_db, mock_mcs, mock_lc, _quiet,
 ):
     """Nudge fires when a meeting ended ~2 min ago with unanswered emails."""
     dtstart = _NOW - datetime.timedelta(minutes=32)
@@ -67,10 +68,11 @@ def test_nudge_fires_after_meeting_with_unanswered(
 
 
 @pytest.mark.unit
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("capabilities.load_capabilities")
 @patch("services.memory_client.MemoryClientService")
 @patch("services.database_service.get_shared_db_service")
-def test_nudge_skips_no_unanswered(mock_db, mock_mcs, mock_lc):
+def test_nudge_skips_no_unanswered(mock_db, mock_mcs, mock_lc, _quiet):
     """No nudge when attendees have no unanswered emails."""
     dtstart = _NOW - datetime.timedelta(minutes=32)
     dtend = _NOW - datetime.timedelta(minutes=2)
@@ -96,9 +98,10 @@ def test_nudge_skips_no_unanswered(mock_db, mock_mcs, mock_lc):
 
 
 @pytest.mark.unit
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("services.memory_client.MemoryClientService")
 @patch("services.database_service.get_shared_db_service")
-def test_nudge_skips_dedup(mock_db, mock_mcs):
+def test_nudge_skips_dedup(mock_db, mock_mcs, _quiet):
     """Nudge is skipped when dedup flag already set."""
     dtstart = _NOW - datetime.timedelta(minutes=32)
     dtend = _NOW - datetime.timedelta(minutes=2)
@@ -117,9 +120,10 @@ def test_nudge_skips_dedup(mock_db, mock_mcs):
 
 
 @pytest.mark.unit
+@patch("capabilities.quiet_window.is_quiet_now", return_value=False)
 @patch("services.memory_client.MemoryClientService")
 @patch("services.database_service.get_shared_db_service")
-def test_nudge_skips_outside_window(mock_db, mock_mcs):
+def test_nudge_skips_outside_window(mock_db, mock_mcs, _quiet):
     """Nudge is skipped when meeting ended more than 5 minutes ago."""
     dtstart = _NOW - datetime.timedelta(hours=1, minutes=30)
     dtend = _NOW - datetime.timedelta(minutes=10)
