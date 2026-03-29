@@ -1100,3 +1100,85 @@ def test_snooze_prevents_duplicate():
 
     assert result.get("error") == "duplicate"
     conn.close()
+
+
+# --- resolve_display_name ---
+
+
+@pytest.mark.unit
+def test_resolve_display_name_uses_contact_index():
+    """When contact_resolver has a match, use the resolved name."""
+    from capabilities.imap_capability.capability import resolve_display_name
+    with patch(
+        "capabilities.contact_resolver.resolve",
+        return_value=[{"email": "sarah@work.com", "name": "Sarah Chen"}],
+    ):
+        assert resolve_display_name("sarah@work.com", "Sarah") == "Sarah Chen"
+
+
+@pytest.mark.unit
+def test_resolve_display_name_falls_back_to_header_name():
+    """When contact_resolver returns nothing, fall back to the header name."""
+    from capabilities.imap_capability.capability import resolve_display_name
+    with patch("capabilities.contact_resolver.resolve", return_value=[]):
+        assert resolve_display_name("unknown@ex.com", "Bob") == "Bob"
+
+
+@pytest.mark.unit
+def test_resolve_display_name_falls_back_to_addr():
+    """When both contact_resolver and header name are empty, use the address."""
+    from capabilities.imap_capability.capability import resolve_display_name
+    with patch("capabilities.contact_resolver.resolve", return_value=[]):
+        assert resolve_display_name("raw@ex.com", "") == "raw@ex.com"
+
+
+@pytest.mark.unit
+def test_resolve_display_name_survives_exception():
+    """Exceptions in contact_resolver don't crash — graceful fallback."""
+    from capabilities.imap_capability.capability import resolve_display_name
+    with patch(
+        "capabilities.contact_resolver.resolve",
+        side_effect=RuntimeError("db error"),
+    ):
+        assert resolve_display_name("err@ex.com", "Name") == "Name"
+
+
+@pytest.mark.unit
+def test_search_results_include_from_display(_mock_email_classify):
+    """imap_search_email results include from_display enriched field."""
+    cap = _make()
+    handler = next(
+        t for t in cap.get_tools() if t["name"] == "imap_search_email"
+    )["handler"]
+    mc = _mock_imap_client(_SEARCH_EMAILS)
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch(
+             "capabilities.contact_resolver.resolve",
+             return_value=[{"email": "sarah@work.com", "name": "Sarah Chen"}],
+         ):
+        result = handler("t1", {"sender": "sarah"})
+    emails = result["emails"]
+    assert all("from_display" in e for e in emails)
+    assert emails[0]["from_display"] == "Sarah Chen"
+
+
+@pytest.mark.unit
+def test_read_result_includes_from_display():
+    """imap_read_email result includes from_display enriched field."""
+    cap = _make()
+    handler = next(
+        t for t in cap.get_tools() if t["name"] == "imap_read_email"
+    )["handler"]
+    mc = MagicMock()
+    mc.fetch.return_value = {
+        42: {b"RFC822": _email_bytes(
+            subject="Test", from_="Alice <alice@corp.com>",
+        )}
+    }
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch(
+             "capabilities.contact_resolver.resolve",
+             return_value=[{"email": "alice@corp.com", "name": "Alice Wang"}],
+         ):
+        result = handler("t1", {"uid": 42})
+    assert result["from_display"] == "Alice Wang"
