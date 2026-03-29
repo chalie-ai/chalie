@@ -714,8 +714,8 @@ class ImapCapability(AbstractCapability):
             finally:
                 try:
                     client.logout()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[imap] logout after mark_read: %s", exc)
 
         return [
             {
