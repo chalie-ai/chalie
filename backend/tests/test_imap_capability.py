@@ -934,3 +934,166 @@ def test_mark_read_server_error():
         )["handler"]
         result = handler("t1", {"uid": 42})
     assert "error" in result and "Server refused" in result["error"]
+
+
+# --- imap_snooze ---
+
+def _get_snooze_handler(cap):
+    """Return the imap_snooze tool handler from a capability instance."""
+    return next(
+        t for t in cap.get_tools() if t["name"] == "imap_snooze"
+    )["handler"]
+
+
+@pytest.mark.unit
+def test_snooze_missing_params():
+    """snooze returns error when uid or snooze_until missing."""
+    cap = _make()
+    handler = _get_snooze_handler(cap)
+    assert "error" in handler("t1", {"uid": 42})
+    assert "error" in handler("t1", {"snooze_until": "2026-04-01T09:00:00+00:00"})
+    assert "error" in handler("t1", {})
+
+
+@pytest.mark.unit
+def test_snooze_invalid_uid():
+    """snooze returns error for non-integer uid."""
+    cap = _make()
+    handler = _get_snooze_handler(cap)
+    result = handler("t1", {
+        "uid": "abc", "snooze_until": "2026-04-01T09:00:00+00:00",
+    })
+    assert "error" in result
+
+
+@pytest.mark.unit
+def test_snooze_invalid_datetime():
+    """snooze returns error for unparseable snooze_until."""
+    cap = _make()
+    handler = _get_snooze_handler(cap)
+    result = handler("t1", {"uid": 42, "snooze_until": "not-a-date"})
+    assert "error" in result and "ISO 8601" in result["error"]
+
+
+@pytest.mark.unit
+def test_snooze_no_connection():
+    """snooze returns error when IMAP connection fails."""
+    cap = _make()
+    with patch.object(cap, "_open_client", return_value=None):
+        handler = _get_snooze_handler(cap)
+        result = handler("t1", {
+            "uid": 42,
+            "snooze_until": "2026-04-01T09:00:00+00:00",
+        })
+    assert "error" in result and "Cannot connect" in result["error"]
+
+
+@pytest.mark.unit
+def test_snooze_email_not_found():
+    """snooze returns error when UID doesn't exist on server."""
+    cap = _make()
+    mc = MagicMock()
+    mc.fetch.return_value = {}
+    with patch.object(cap, "_open_client", return_value=mc):
+        handler = _get_snooze_handler(cap)
+        result = handler("t1", {
+            "uid": 999,
+            "snooze_until": "2026-04-01T09:00:00+00:00",
+        })
+    assert "error" in result and "not found" in result["error"]
+    mc.logout.assert_called_once()
+
+
+@pytest.mark.unit
+def test_snooze_creates_scheduled_item():
+    """snooze creates a prompt scheduled_item with correct fields."""
+    import sqlite3
+    cap = _make()
+    mc = MagicMock()
+    mc.fetch.return_value = {
+        42: {b"RFC822.HEADER": _email_bytes(subject="Invoice Q1")}
+    }
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""CREATE TABLE scheduled_items (
+        id TEXT PRIMARY KEY, item_type TEXT, message TEXT, due_at TEXT,
+        status TEXT, topic TEXT, source TEXT, external_uid TEXT,
+        hidden INTEGER, created_at TEXT, is_prompt INTEGER,
+        recurrence TEXT, window_start TEXT, window_end TEXT,
+        created_by_session TEXT, group_id TEXT, last_fired_at TEXT,
+        metadata TEXT)""")
+    conn.commit()
+    mock_db = MagicMock()
+    mock_db.connection.return_value.__enter__ = lambda s: conn
+    mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch("services.database_service.get_shared_db_service",
+               return_value=mock_db):
+        handler = _get_snooze_handler(cap)
+        result = handler("t1", {
+            "uid": 42,
+            "snooze_until": "2026-04-01T09:00:00+00:00",
+            "reason": "reply with Q1 numbers",
+        })
+
+    assert result["success"] is True
+    assert result["email_uid"] == 42
+    assert result["subject"] == "Invoice Q1"
+    assert "snooze_id" in result
+
+    row = conn.execute("SELECT * FROM scheduled_items").fetchone()
+    assert row is not None
+    # item_type is 'prompt'
+    assert row[1] == "prompt"
+    # source is 'imap:snooze'
+    assert row[6] == "imap:snooze"
+    # external_uid is 'snooze:42'
+    assert row[7] == "snooze:42"
+    # is_prompt is 1
+    assert row[10] == 1
+    # message contains the reason
+    assert "Q1 numbers" in row[2]
+    conn.close()
+
+
+@pytest.mark.unit
+def test_snooze_prevents_duplicate():
+    """snooze returns error if the same UID already has a pending snooze."""
+    import sqlite3
+    cap = _make()
+    mc = MagicMock()
+    mc.fetch.return_value = {
+        42: {b"RFC822.HEADER": _email_bytes(subject="Invoice")}
+    }
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""CREATE TABLE scheduled_items (
+        id TEXT PRIMARY KEY, item_type TEXT, message TEXT, due_at TEXT,
+        status TEXT, topic TEXT, source TEXT, external_uid TEXT,
+        hidden INTEGER, created_at TEXT, is_prompt INTEGER,
+        recurrence TEXT, window_start TEXT, window_end TEXT,
+        created_by_session TEXT, group_id TEXT, last_fired_at TEXT,
+        metadata TEXT)""")
+    conn.execute(
+        "INSERT INTO scheduled_items (id, item_type, message, due_at, "
+        "status, source, external_uid, is_prompt) "
+        "VALUES ('existing', 'prompt', 'msg', '2026-04-01', 'pending', "
+        "'imap:snooze', 'snooze:42', 1)"
+    )
+    conn.commit()
+    mock_db = MagicMock()
+    mock_db.connection.return_value.__enter__ = lambda s: conn
+    mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+    with patch.object(cap, "_open_client", return_value=mc), \
+         patch("services.database_service.get_shared_db_service",
+               return_value=mock_db):
+        handler = _get_snooze_handler(cap)
+        result = handler("t1", {
+            "uid": 42,
+            "snooze_until": "2026-04-02T09:00:00+00:00",
+        })
+
+    assert result.get("error") == "duplicate"
+    conn.close()

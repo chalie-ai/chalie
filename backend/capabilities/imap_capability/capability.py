@@ -717,6 +717,100 @@ class ImapCapability(AbstractCapability):
                 except Exception as exc:
                     logger.debug("[imap] logout after mark_read: %s", exc)
 
+        def _snooze_execute(topic, params, config=None, telemetry=None):
+            """Snooze an email — schedule a re-surface nudge at a given time."""
+            uid = params.get("uid")
+            snooze_until = (params.get("snooze_until") or "").strip()
+            reason = (params.get("reason") or "").strip()
+            if not uid or not snooze_until:
+                return {"error": "uid and snooze_until are required"}
+            try:
+                uid = int(uid)
+            except (TypeError, ValueError):
+                return {"error": "uid must be an integer"}
+
+            from services.time_utils import parse_utc
+            due = parse_utc(snooze_until)
+            if due.year == 1:  # datetime.min sentinel = parse failure
+                return {"error": "snooze_until must be a valid ISO 8601 datetime"}
+
+            # Fetch email headers so the nudge message is informative
+            client = capability._open_client()
+            if not client:
+                return {"error": "Cannot connect to email server"}
+            try:
+                client.select_folder("INBOX", readonly=True)
+                raw = client.fetch([uid], [b"RFC822.HEADER"])
+                if uid not in raw:
+                    return {"error": f"Email UID {uid} not found"}
+                headers = parse_headers(uid, raw[uid][b"RFC822.HEADER"])
+            except Exception as exc:
+                logger.error("[imap] imap_snooze fetch: %s", exc)
+                return {"error": str(exc)}
+            finally:
+                try:
+                    client.logout()
+                except Exception as exc:
+                    logger.debug("[imap] logout after snooze: %s", exc)
+
+            subject = headers.get("subject", "")
+            sender = headers.get("from_name") or headers.get("from_addr", "")
+
+            # Build an LLM execution prompt for when the snooze fires
+            prompt_parts = [
+                f"Snoozed email from {sender}: \"{subject}\" (UID {uid}).",
+                "Use imap_search_email with unanswered=true and "
+                f"subject=\"{subject[:60]}\" to check if this email "
+                "has been replied to.",
+                "If still unanswered, remind the user about it.",
+                "If already replied, confirm it's handled.",
+            ]
+            if reason:
+                prompt_parts.append(f"User's note: {reason}")
+            prompt_msg = " ".join(prompt_parts)
+
+            # Create a scheduled_item that fires through the LLM pipeline
+            import uuid
+            from services.database_service import get_shared_db_service
+            item_id = uuid.uuid4().hex[:8]
+            now = utc_now()
+            ext_uid = f"snooze:{uid}"
+
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                # Prevent duplicate snoozes for the same email
+                existing = conn.execute(
+                    "SELECT id FROM scheduled_items "
+                    "WHERE external_uid = ? AND status = 'pending'",
+                    (ext_uid,),
+                ).fetchone()
+                if existing:
+                    return {
+                        "error": "duplicate",
+                        "message": f"Email UID {uid} already has a pending snooze.",
+                    }
+                conn.execute(
+                    """INSERT INTO scheduled_items
+                       (id, item_type, message, due_at, status, topic,
+                        source, external_uid, hidden, created_at, is_prompt)
+                     VALUES (?, 'prompt', ?, ?, 'pending', 'email',
+                             'imap:snooze', ?, 0, ?, 1)""",
+                    (item_id, prompt_msg, due.isoformat(),
+                     ext_uid, now.isoformat()),
+                )
+                conn.commit()
+
+            logger.info("[imap] Snoozed UID %d until %s (id=%s)",
+                        uid, due.isoformat(), item_id)
+            return {
+                "success": True,
+                "snooze_id": item_id,
+                "email_uid": uid,
+                "subject": subject,
+                "sender": sender,
+                "snooze_until": due.isoformat(),
+            }
+
         return [
             {
                 "name": "imap_mark_read",
@@ -913,5 +1007,70 @@ class ImapCapability(AbstractCapability):
                 },
                 "constraints": {"timeout_seconds": 30},
                 "handler": _read_execute,
+            },
+            {
+                "name": "imap_snooze",
+                "description": (
+                    "Snooze an email — schedule a reminder to resurface it at "
+                    "a specified time. When the snooze fires, Chalie checks if "
+                    "the email has been replied to and reminds the user if not. "
+                    "Use when the user says 'remind me about this email later' "
+                    "or 'follow up on this Friday'."
+                ),
+                "parameters": {
+                    "uid": {
+                        "type": "integer",
+                        "required": True,
+                        "description": "IMAP UID of the email to snooze.",
+                    },
+                    "snooze_until": {
+                        "type": "string",
+                        "required": True,
+                        "description": (
+                            "ISO 8601 datetime when the email should "
+                            "resurface (e.g. '2026-04-01T09:00:00+00:00')."
+                        ),
+                    },
+                    "reason": {
+                        "type": "string",
+                        "required": False,
+                        "description": (
+                            "Optional note about what to do with this email "
+                            "(e.g. 'reply with Q1 numbers')."
+                        ),
+                    },
+                },
+                "returns": {
+                    "success": {
+                        "type": "boolean",
+                        "description": "True if snoozed.",
+                    },
+                    "snooze_id": {
+                        "type": "string",
+                        "description": "Scheduled item ID.",
+                    },
+                    "email_uid": {
+                        "type": "integer",
+                        "description": "Email UID.",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Email subject.",
+                    },
+                    "sender": {
+                        "type": "string",
+                        "description": "Sender name or email.",
+                    },
+                    "snooze_until": {
+                        "type": "string",
+                        "description": "Snooze datetime (ISO).",
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Error message if failed.",
+                    },
+                },
+                "constraints": {"timeout_seconds": 30},
+                "handler": _snooze_execute,
             },
         ]
