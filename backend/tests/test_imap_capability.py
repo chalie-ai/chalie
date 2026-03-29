@@ -205,8 +205,10 @@ def test_classify_email_fast_path_unsubscribe():
     (_item(subj="Project status update"), "informational"),
     # Thread replies go through embeddings — not the old in_reply_to fast path
     (_item(reply_to="<prev@ex>", subj="Re: Weekly Newsletter Digest"), "noise"),
-    (_item(reply_to="<prev@ex>", addr="noreply@github.com", subj="Re: notification"), "noise"),
-    (_item(reply_to="<prev@ex>", subj="Re: Please confirm your attendance"), "actionable"),
+    (_item(reply_to="<prev@ex>", addr="noreply@github.com",
+           subj="Re: notification"), "noise"),
+    (_item(reply_to="<prev@ex>",
+           subj="Re: Please confirm your attendance"), "actionable"),
     (_item(reply_to="<prev@ex>", subj="Re: Project status update"), "informational"),
 ])
 def test_classify_email_embedding(item, expected, _mock_email_classify):
