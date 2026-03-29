@@ -2,7 +2,6 @@
 Tools blueprint — /tools endpoints for listing tools and managing their configuration.
 """
 
-import json
 import logging
 from urllib.parse import quote as url_quote
 

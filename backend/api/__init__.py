@@ -6,7 +6,7 @@ and static file serving (replaces nginx).
 import os
 import logging
 from pathlib import Path
-from flask import Flask, send_from_directory, send_file
+from flask import Flask, send_from_directory
 from flask_cors import CORS
 
 from .auth import require_session

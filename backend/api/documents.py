@@ -512,7 +512,6 @@ def augment_document(doc_id):
             return jsonify({"error": "Field 'context' is required"}), 400
 
         # Store user context in extracted_metadata
-        import json
         metadata = doc.get('extracted_metadata') or {}
         metadata['_user_context'] = context
 

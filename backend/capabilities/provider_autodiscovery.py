@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from capabilities.mail_capability.providers import (
     PROVIDERS as _UNIFIED_PROVIDERS,
     ServerSettings,
-    discover_provider,
 )
 
 

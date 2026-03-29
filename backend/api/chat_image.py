@@ -40,7 +40,7 @@ import logging
 import os
 import threading
 
-from flask import Blueprint, jsonify, redirect, url_for, request
+from flask import Blueprint, jsonify, redirect, request
 
 from .auth import require_session
 
