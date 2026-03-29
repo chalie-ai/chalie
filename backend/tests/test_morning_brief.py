@@ -124,3 +124,65 @@ class TestMorningBriefFusion:
             datetime.datetime(2026, 3, 28, 11, 0, tzinfo=_UTC)) is False
         # MemoryClientService should NOT have been called (early exit)
         mock_mcs.create_connection.assert_not_called()
+
+
+class TestPeopleIntelligence:
+    """Test attendee resolution and unanswered email surfacing."""
+
+    @pytest.mark.unit
+    def test_people_section_resolves_attendee_names(self):
+        from capabilities.morning_brief import _build_people_section
+
+        events = [_make_event(attendees=['sarah@acme.com', 'alex@acme.com'])]
+
+        with patch('capabilities.contact_resolver.resolve') as mock_res:
+            mock_res.side_effect = lambda addr, limit=1: (
+                [{"email": addr, "name": "Sarah Chen"}]
+                if "sarah" in addr
+                else [{"email": addr, "name": "Alex Wu"}]
+            )
+            section = _build_people_section(events)
+
+        assert 'Sarah Chen' in section
+        assert 'Alex Wu' in section
+
+    @pytest.mark.unit
+    def test_people_section_empty_for_no_attendees(self):
+        from capabilities.morning_brief import _build_people_section
+
+        events = [_make_event()]
+
+        with patch('capabilities.contact_resolver.resolve',
+                   return_value=[]):
+            section = _build_people_section(events)
+
+        assert section == ""
+
+    @pytest.mark.unit
+    @patch('capabilities.morning_brief._user_tz', return_value=_UTC)
+    @patch('capabilities.quiet_window.is_quiet_now', return_value=False)
+    @patch('capabilities.morning_brief._read_cached_inbox_hint',
+           return_value='')
+    @patch('capabilities.morning_brief._build_people_section',
+           return_value='Today\'s attendees: Sarah Chen.')
+    @patch('capabilities.morning_brief._fetch_today_events')
+    @patch('services.memory_client.MemoryClientService')
+    def test_full_brief_includes_people_context(
+        self, mock_mcs, mock_fetch, _people, _hint, _quiet, _tz,
+    ):
+        mock_fetch.return_value = [
+            _make_event(attendees=['sarah@acme.com']),
+        ]
+        store = MagicMock()
+        store.get.return_value = None
+        mock_mcs.create_connection.return_value = store
+
+        from capabilities.morning_brief import maybe_send_morning_brief
+        now = datetime.datetime(2026, 3, 28, 7, 0, tzinfo=_UTC)
+        result = maybe_send_morning_brief(now)
+
+        assert result is True
+        payload = json.loads(store.rpush.call_args[0][1])
+        prompt = payload['prompt']
+        assert 'Sarah Chen' in prompt
+        assert 'who they' in prompt.lower() or 'attendees' in prompt.lower()

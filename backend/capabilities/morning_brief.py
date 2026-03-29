@@ -51,11 +51,17 @@ def maybe_send_morning_brief(now=None) -> bool:
         events = _fetch_today_events(now)
         cal = _build_calendar_section(events)
         b2b = _build_back_to_back_section(events)
+        try:
+            people = _build_people_section(events)
+        except Exception:
+            people = ""
         email = _read_cached_inbox_hint(store)
 
         sections = [cal]
         if b2b:
             sections.append(b2b)
+        if people:
+            sections.append(people)
         if email:
             sections.append(email)
         body = "\n\n".join(sections)
@@ -63,6 +69,9 @@ def maybe_send_morning_brief(now=None) -> bool:
             "Give the user a concise morning briefing. "
             "Cover their schedule (conflicts, back-to-back, free blocks)"
         )
+        if people:
+            instruction += ", mention who they're meeting"
+            instruction += " and flag unanswered emails from attendees"
         if email:
             instruction += " and email highlights"
         instruction += ". Keep it warm and brief — 4-5 sentences max."
@@ -134,6 +143,7 @@ def _fetch_today_events(now):
             'dtstart': dtstart,
             'dtend': dtend,
             'location': meta.get('location'),
+            'attendees': meta.get('attendees', []),
         })
     return events
 
@@ -183,6 +193,30 @@ def _build_back_to_back_section(events):
         for name_a, name_b, gap in pairs
     ]
     return f"Tight transitions ({len(pairs)}):\n" + "\n".join(lines)
+
+
+def _build_people_section(events) -> str:
+    """Resolve attendees across today's events into a people summary.
+
+    Returns a line listing resolved display names, or empty string
+    if no attendees are found.
+    """
+    from capabilities.contact_resolver import resolve
+
+    emails = {a.strip().lower() for e in events
+              for a in (e.get('attendees') or []) if a and "@" in str(a)}
+    if not emails:
+        return ""
+
+    names = []
+    for addr in sorted(emails):
+        hits = resolve(addr, limit=1)
+        if hits and hits[0].get("name"):
+            names.append(hits[0]["name"])
+
+    if not names:
+        return ""
+    return f"Today's attendees: {', '.join(names)}."
 
 
 def _read_cached_inbox_hint(store) -> str:
