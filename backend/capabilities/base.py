@@ -266,6 +266,13 @@ class AbstractCapability(ABC):
                 maybe_send_meeting_prep()
             except Exception as exc:
                 logger.debug("meeting_prep hook: %s", exc)
+            try:
+                from capabilities.post_meeting_nudge import (
+                    maybe_send_post_meeting_nudge,
+                )
+                maybe_send_post_meeting_nudge()
+            except Exception as exc:
+                logger.debug("post_meeting_nudge hook: %s", exc)
         except Exception as exc:
             self._error_count += 1
             self._last_error = str(exc)
