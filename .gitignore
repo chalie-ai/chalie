@@ -30,8 +30,6 @@ Claude.md
 backend/.simplify_baseline.json
 backend/.simplify_test_results.xml
 
-# Planning docs (local only)
-plans/
 
 # Frontend build artifacts (none currently, vanilla JS)
 node_modules/
