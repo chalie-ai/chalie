@@ -21,6 +21,7 @@ def _make_event(**overrides):
     return base
 
 
+@patch('capabilities.quiet_window.is_quiet_now', return_value=False)
 class TestMorningBriefFusion:
     """Test cross-capability fusion (calendar + email in one brief)."""
 
@@ -28,7 +29,7 @@ class TestMorningBriefFusion:
     @patch('capabilities.morning_brief._read_cached_inbox_hint',
            return_value='Inbox: 3 actionable (top: boss@work.com), 5 informational.')
     @patch('services.memory_client.MemoryClientService')
-    def test_fused_with_email(self, mock_mcs, _mock_hint):
+    def test_fused_with_email(self, mock_mcs, _mock_hint, _quiet):
         store = MagicMock()
         store.get.return_value = None
         mock_mcs.create_connection.return_value = store
@@ -46,7 +47,7 @@ class TestMorningBriefFusion:
     @pytest.mark.unit
     @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
     @patch('services.memory_client.MemoryClientService')
-    def test_calendar_only_when_no_email(self, mock_mcs, _mock_hint):
+    def test_calendar_only_when_no_email(self, mock_mcs, _mock_hint, _quiet):
         store = MagicMock()
         store.get.return_value = None
         mock_mcs.create_connection.return_value = store
@@ -63,7 +64,7 @@ class TestMorningBriefFusion:
     @pytest.mark.unit
     @patch('capabilities.morning_brief._read_cached_inbox_hint', return_value='')
     @patch('services.memory_client.MemoryClientService')
-    def test_back_to_back_included_in_brief(self, mock_mcs, _mock_hint):
+    def test_back_to_back_included_in_brief(self, mock_mcs, _mock_hint, _quiet):
         store = MagicMock()
         store.get.return_value = None
         mock_mcs.create_connection.return_value = store
@@ -86,7 +87,7 @@ class TestMorningBriefFusion:
         assert "Tight transitions" in prompt and "Standup" in prompt
 
     @pytest.mark.unit
-    def test_inbox_hint_reads_imap_signal(self):
+    def test_inbox_hint_reads_imap_signal(self, _quiet):
         store = MagicMock()
         store.lrange.return_value = [
             json.dumps({"source": "caldav", "content": "3 meetings"}),

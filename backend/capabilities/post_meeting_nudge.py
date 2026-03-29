@@ -23,11 +23,14 @@ _LOOKBACK_DAYS = 7
 def maybe_send_post_meeting_nudge(now=None) -> bool:
     """Check recently ended meetings; nudge about unanswered emails."""
     try:
+        from capabilities.quiet_window import is_quiet_now
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
         from services.time_utils import parse_utc, utc_now
 
         now = now or utc_now()
+        if is_quiet_now(now):
+            return False
         store = MemoryClientService.create_connection()
         lookback = (now - timedelta(hours=4)).isoformat()
 

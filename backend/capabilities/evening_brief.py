@@ -24,10 +24,13 @@ def maybe_send_evening_brief(now=None) -> bool:
     Only fires after 17:00 local.  Deduped per UTC date.
     """
     try:
+        from capabilities.quiet_window import is_quiet_now
         from services.memory_client import MemoryClientService
         from services.time_utils import utc_now
 
         now = now or utc_now()
+        if is_quiet_now(now):
+            return False
         if now.astimezone(_user_tz()).hour < _EVENING_HOUR:
             return False
 

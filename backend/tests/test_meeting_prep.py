@@ -11,12 +11,13 @@ _NOW = datetime.datetime(2026, 3, 28, 13, 45, tzinfo=_UTC)
 
 
 @pytest.mark.unit
+@patch('capabilities.quiet_window.is_quiet_now', return_value=False)
 @patch('capabilities.load_capabilities', return_value={})
 @patch('capabilities.contact_resolver.resolve',
        return_value=[{"email": "s@x.com", "name": "Sarah"}])
 @patch('services.memory_client.MemoryClientService')
 @patch('services.database_service.get_shared_db_service')
-def test_meeting_prep_sends_brief(mock_db, mock_mcs, _r, _lc):
+def test_meeting_prep_sends_brief(mock_db, mock_mcs, _r, _lc, _quiet):
     dtstart = _NOW + datetime.timedelta(minutes=15)
     meta = json.dumps({"uid": "e1", "dtstart": dtstart.isoformat(),
                         "location": "Room 3", "all_day": False,
@@ -42,12 +43,13 @@ def test_meeting_prep_sends_brief(mock_db, mock_mcs, _r, _lc):
 
 
 @pytest.mark.unit
+@patch('capabilities.quiet_window.is_quiet_now', return_value=False)
 @patch('capabilities.load_capabilities')
 @patch('capabilities.contact_resolver.resolve',
        return_value=[{"email": "s@x.com", "name": "Sarah"}])
 @patch('services.memory_client.MemoryClientService')
 @patch('services.database_service.get_shared_db_service')
-def test_meeting_prep_includes_needs_reply(mock_db, mock_mcs, _r, mock_lc):
+def test_meeting_prep_includes_needs_reply(mock_db, mock_mcs, _r, mock_lc, _quiet):
     """Brief includes 'Needs reply' when attendee has unanswered emails."""
     dtstart = _NOW + datetime.timedelta(minutes=15)
     meta = json.dumps({"uid": "e2", "dtstart": dtstart.isoformat(),
@@ -85,12 +87,15 @@ def test_meeting_prep_includes_needs_reply(mock_db, mock_mcs, _r, mock_lc):
 
 
 @pytest.mark.unit
+@patch('capabilities.quiet_window.is_quiet_now', return_value=False)
 @patch('capabilities.load_capabilities')
 @patch('capabilities.contact_resolver.resolve',
        return_value=[{"email": "s@x.com", "name": "Sarah"}])
 @patch('services.memory_client.MemoryClientService')
 @patch('services.database_service.get_shared_db_service')
-def test_meeting_prep_no_needs_reply_when_all_answered(mock_db, mock_mcs, _r, mock_lc):
+def test_meeting_prep_no_needs_reply_when_all_answered(
+    mock_db, mock_mcs, _r, mock_lc, _quiet,
+):
     """Brief omits 'Needs reply' section when no unanswered emails."""
     dtstart = _NOW + datetime.timedelta(minutes=15)
     meta = json.dumps({"uid": "e3", "dtstart": dtstart.isoformat(),
@@ -127,9 +132,10 @@ def test_meeting_prep_no_needs_reply_when_all_answered(mock_db, mock_mcs, _r, mo
 
 
 @pytest.mark.unit
+@patch('capabilities.quiet_window.is_quiet_now', return_value=False)
 @patch('services.memory_client.MemoryClientService')
 @patch('services.database_service.get_shared_db_service')
-def test_meeting_prep_skips(mock_db, mock_mcs):
+def test_meeting_prep_skips(mock_db, mock_mcs, _quiet):
     dtstart = _NOW + datetime.timedelta(minutes=15)
     meta_dedup = json.dumps({"uid": "e1", "dtstart": dtstart.isoformat(),
                               "all_day": False, "attendees": ["a@b.com"]})
