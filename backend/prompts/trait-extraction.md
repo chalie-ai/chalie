@@ -27,21 +27,34 @@ You only extract personal information the user reveals about themselves.
 - medium: Strong implication ("Been coding all day" → occupation: software_engineer)
 - low: Weak signal ("I was thinking about yoga" → interest: yoga)
 
+# Permanence Guide
+Set `"permanent": true` for facts that define who the user IS and won't change casually:
+- Name, age, birthday, gender, ethnicity, nationality
+- Occupation, education, language
+- Location (where they live, not where they're visiting)
+- Allergies, medical conditions, dietary restrictions
+- Family members, pets
+
+Set `"permanent": false` for everything else (interests, habits, current activities, preferences, goals).
+
 # Output Format
-{"traits": [{"key": "<snake_case identifier>", "value": "<concrete value>", "confidence": "high|medium|low"}]}
+{"traits": [{"key": "<snake_case identifier>", "value": "<concrete value>", "confidence": "high|medium|low", "permanent": true|false}]}
 
 # Examples
 Input: "Hey, I'm Marco, I'm a nurse based in Toronto and my cat is called Luna."
-Output: {"traits": [{"key": "name", "value": "Marco", "confidence": "high"}, {"key": "occupation", "value": "nurse", "confidence": "high"}, {"key": "location", "value": "Toronto", "confidence": "high"}, {"key": "pet_name", "value": "Luna", "confidence": "high"}]}
+Output: {"traits": [{"key": "name", "value": "Marco", "confidence": "high", "permanent": true}, {"key": "occupation", "value": "nurse", "confidence": "high", "permanent": true}, {"key": "location", "value": "Toronto", "confidence": "high", "permanent": true}, {"key": "pet_name", "value": "Luna", "confidence": "high", "permanent": true}]}
 
 Input: "Check out this transcript: Hi I'm Sarah, I'm a yoga instructor from California and I love surfing"
 Output: {"traits": []}
 
 Input: "Alice and I work as a data scientist in London"
-Output: {"traits": [{"key": "occupation", "value": "data scientist", "confidence": "high"}, {"key": "location", "value": "London", "confidence": "high"}]}
+Output: {"traits": [{"key": "occupation", "value": "data scientist", "confidence": "high", "permanent": true}, {"key": "location", "value": "London", "confidence": "high", "permanent": true}]}
+
+Input: "I'm allergic to mushrooms and I can't stand spicy food"
+Output: {"traits": [{"key": "allergy", "value": "mushrooms", "confidence": "high", "permanent": true}, {"key": "food_dislike", "value": "spicy food", "confidence": "high", "permanent": false}]}
 
 Input: "I made a new type of pizza today"
-Output: {"traits": [{"key": "interest", "value": "cooking", "confidence": "medium"}]}
+Output: {"traits": [{"key": "interest", "value": "cooking", "confidence": "medium", "permanent": false}]}
 
 # Message
 {{message}}

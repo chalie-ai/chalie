@@ -249,11 +249,6 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 traits = parsed.get('traits', [])
 
                 CONFIDENCE_MAP = {'high': 0.85, 'medium': 0.55, 'low': 0.35}
-                CORE_KEYS = {
-                    'name', 'age', 'gender', 'occupation', 'nationality', 'language',
-                    'education', 'culture_region', 'language_preference',
-                    'relationship_status', 'ethnicity', 'birthday', 'location',
-                }
 
                 db = get_shared_db_service()
                 ks = KnowledgeService(db)
@@ -268,30 +263,28 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                 def _clean_value(v: str) -> str:
                     """Strip leading/trailing stop words from an extracted value."""
                     words = v.split()
-                    # Trim stop words from both ends
                     while words and words[0].lower() in _VALUE_STRIP:
                         words.pop(0)
                     while words and words[-1].lower() in _VALUE_STRIP:
                         words.pop()
                     return ' '.join(words) if words else v
 
-                _DECAY_MAP = {'core': 'permanent', 'behavioral': 'slow'}
-
                 for trait in traits:
                     key = trait.get('key', '').lower().strip()
                     value = _clean_value(trait.get('value', '').strip())
                     conf_label = trait.get('confidence', 'low')
+                    is_permanent = trait.get('permanent', False)
 
                     if not key or not value:
                         continue
 
                     confidence = CONFIDENCE_MAP.get(conf_label, 0.35)
-                    category = 'core' if key in CORE_KEYS else 'preference'
+                    decay_class = 'permanent' if is_permanent else 'standard'
 
                     ks.store(
                         kind='trait', entity='user', key=key, value=value,
-                        data={'category': category},
-                        decay_class=_DECAY_MAP.get(category, 'standard'),
+                        data={'category': 'core' if is_permanent else 'preference'},
+                        decay_class=decay_class,
                         confidence=confidence, source='llm_extraction',
                     )
 

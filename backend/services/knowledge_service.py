@@ -133,10 +133,10 @@ class KnowledgeService:
 
     DECAY_RATES = {
         'permanent':  0.000,
-        'slow':       0.005,
-        'standard':   0.020,
-        'fast':       0.040,
-        'ephemeral':  0.100,
+        'slow':       0.002,   # ~17 days from 0.85 → floor
+        'standard':   0.005,   # ~7 days from 0.85 → floor
+        'fast':       0.015,   # ~2.5 days from 0.85 → floor
+        'ephemeral':  0.040,   # ~20 hours from 0.85 → floor
     }
 
     RELIABILITY_MULTIPLIER = {
