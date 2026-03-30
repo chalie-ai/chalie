@@ -13,7 +13,7 @@ class MemoryClientService:
     """Thin facade that delegates to the shared ``MemoryStore`` singleton."""
 
     @staticmethod
-    def create_connection(decode_responses=True):
+    def create_connection(_decode_responses=True):
         """Return the shared MemoryStore instance.
 
         Args:
