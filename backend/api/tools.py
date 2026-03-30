@@ -534,7 +534,7 @@ def oauth_callback(tool_name: str):
             f"full_url={request.url[:200]}"
         )
 
-        result = OAuthService().exchange_code(state, code)
+        OAuthService().exchange_code(state, code)
 
         from flask import redirect as flask_redirect
         return flask_redirect(f"{brain_url}?oauth_success=true&tool={tool_name}")
