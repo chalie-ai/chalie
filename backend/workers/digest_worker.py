@@ -698,14 +698,14 @@ def unified_generate(topic, text, classification, thread_conv_service,
 
 def route_and_generate(topic, text, classification, thread_conv_service, cortex_config, cortex_prompt_map,
                        mode_router, signals, metadata=None, context_warmth=1.0,
-                       pre_routing_result=None, relevant_tools=None, selected_tools=None,
+                       _pre_routing_result=None, relevant_tools=None, selected_tools=None,
                        selected_skills=None, thread_id=None, returning_from_silence=False,
                        message_embedding=None):
     """
     Thin wrapper around unified_generate() — kept for backward compatibility.
 
     Called by process_tool_dialog() and _handle_proactive_drift().
-    The mode_router and pre_routing_result parameters are accepted but unused —
+    The mode_router and _pre_routing_result parameters are accepted but unused —
     unified_generate() handles routing internally.
 
     Returns:
