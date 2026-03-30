@@ -70,7 +70,7 @@ class PromptQueue:
         t.start()
         return t  # callers that need the job reference get the thread
 
-    def consume(self, burst=False):
+    def consume(self, _burst=False):
         """No-op — threads are dispatched on enqueue(), no separate consumer needed."""
         pass
 
