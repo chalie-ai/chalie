@@ -46,7 +46,7 @@ def data_summary():
         from services.memory_client import MemoryClientService
 
         db = get_shared_db_service()
-        store = MemoryClientService.create_connection()
+        MemoryClientService.create_connection()
 
         result = {}
 
