@@ -2005,7 +2005,7 @@ def digest_worker(text: str, metadata: dict = None) -> str:
     # Step 9c: Compute memory_confidence before intent classifier
     # Use FOK + context warmth + working memory depth as density proxy
     from services.memory_client import MemoryClientService
-    store = MemoryClientService.create_connection(decode_responses=True)
+    store = MemoryClientService.create_connection()
     raw_fok = store.get(f"fok:{topic}") if topic else None
     fok = float(raw_fok) if raw_fok else 0.0
     fok_score = min(1.0, fok / 5.0)

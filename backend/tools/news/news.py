@@ -54,7 +54,7 @@ def _do_search(params: dict, config: dict) -> dict:
     articles = svc.search(query, source_ids=source_ids, limit=limit)
 
     if not articles:
-        return {"text": f"No news articles found for \"{query}\".", "title": f"News: \"{query}\"", "error": ""}
+        return {"text": f"No news articles found for \"{query}\".", "title": f"News: \"{query}\"", "error": "No news articles found", "failure_class": "external"}
 
     text = _format_articles(articles, limit)
     return {"text": text, "title": f"News: \"{query}\"", "error": ""}
@@ -97,8 +97,9 @@ def _do_digest(params: dict, config: dict, telemetry: dict) -> dict:
         lines.append(f"LOCAL — {location}")
         lines.append(_format_articles(result["local"]))
 
-    text = "\n".join(lines) if lines else "No news articles available."
-    return {"text": text, "title": "News Digest", "error": ""}
+    if not lines:
+        return {"text": "No news articles available.", "title": "News Digest", "error": "No news articles available", "failure_class": "external"}
+    return {"text": "\n".join(lines), "title": "News Digest", "error": ""}
 
 
 def _do_trending(params: dict) -> dict:
@@ -116,7 +117,7 @@ def _do_trending(params: dict) -> dict:
     clusters = svc.cluster_trending(articles, min_sources=min_sources, limit=limit)
 
     if not clusters:
-        return {"text": f"No trending stories found in {category}.", "title": f"Trending: {category}", "error": ""}
+        return {"text": f"No trending stories found in {category}.", "title": f"Trending: {category}", "error": "No trending stories found", "failure_class": "external"}
 
     text = _format_clusters(clusters)
     return {"text": text, "title": f"Trending: {category}", "error": ""}

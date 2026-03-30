@@ -81,6 +81,9 @@ def execute(topic: str, params: dict, config: dict = None, telemetry: dict = Non
         )
         return {"results": [], "count": 0, "error": str(error)[:200], "_meta": {}}
 
+    if not results:
+        return {"results": [], "count": 0, "error": "No search results found", "failure_class": "external", "_meta": {}}
+
     unique_domains = len({_domain(r["url"]) for r in results if r.get("url")})
 
     logger.info(
