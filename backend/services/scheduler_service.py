@@ -128,7 +128,7 @@ def _poll_and_fire():
                        window_start, window_end, topic, created_by_session, group_id,
                        is_prompt
                 FROM scheduled_items
-                WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event')
+                WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
                 ORDER BY due_at
                 LIMIT 100
             """, (now_iso,))

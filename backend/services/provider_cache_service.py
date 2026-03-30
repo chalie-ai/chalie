@@ -97,14 +97,29 @@ class ProviderCacheService:
             except Exception as e:
                 logger.debug(f"[ProviderCache] Could not load job assignments: {e}")
 
-            # Store in local cache — but only if we got results.
-            # An empty fetch (boot race or genuinely no providers) must NOT
-            # be cached, otherwise version 0 == 0 means we never retry.
-            if providers_dict:
+            # Check vault state — api_keys decrypt to None when vault is locked.
+            # Caching a vault-locked result would persist null api_keys until
+            # the next provider DB change, causing "requires api_key" errors.
+            vault_locked = False
+            try:
+                from services.vault_service import get_vault_service
+                vault_locked = not get_vault_service().is_unlocked()
+            except Exception:
+                pass
+
+            # Store in local cache — but only if we got results AND the vault
+            # is unlocked (so api_keys were actually decrypted).
+            # An empty fetch or a vault-locked fetch must NOT be cached so we
+            # retry on the next call.
+            if providers_dict and not vault_locked:
                 ProviderCacheService._providers = providers_dict
                 ProviderCacheService._job_assignments = job_assignments
                 ProviderCacheService._version = current_version
                 logger.debug(f"[ProviderCache] Loaded {len(providers_dict)} providers and {len(job_assignments)} job assignments from DB")
+            elif vault_locked:
+                # Reset version so next call retries once the vault is unlocked
+                ProviderCacheService._version = None
+                logger.debug("[ProviderCache] Vault locked — not caching providers, will retry on next call")
             else:
                 # Reset version so next call retries the DB fetch
                 ProviderCacheService._version = None

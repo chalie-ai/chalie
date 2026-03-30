@@ -11,13 +11,16 @@ You only extract personal information the user reveals about themselves.
 - Do NOT extract traits from QUOTED or PASTED content
 - If nothing to extract, return {"traits": []}
 
-# Value Rules
-- Values must be clean noun phrases: the entity itself, not surrounding words
-- Names: extract only the name ("Alice", not "alice and i")
-- Locations: extract the place name ("London", "Berlin")
-- Occupation: use key "occupation" for job/profession/work ("data scientist", "nurse")
-- Strip pronouns, articles, conjunctions, and filler from values
+# Value Format
+- Values MUST be atomic: a single keyword, name, or short noun phrase
+- Names: just the name → "Alice" (never "alice and i", "my friend Alice")
+- Locations: just the place → "London" (never "I live in London")
+- Occupations: just the role → "data scientist" (never "works as a data scientist")
+- Interests: just the topic → "cooking" (never "likes cooking a lot")
+- Lists: use comma-separated values when multiple → "Python, Go, Rust"
+- Strip ALL pronouns, articles, conjunctions, verbs, and filler
 - Preserve original capitalisation of proper nouns
+- If you cannot reduce the value to a clean keyword/phrase, skip it
 
 # Confidence Guide
 - high: Direct statement ("My name is Dylan", "I live in Malta")
@@ -33,6 +36,9 @@ Output: {"traits": [{"key": "name", "value": "Marco", "confidence": "high"}, {"k
 
 Input: "Check out this transcript: Hi I'm Sarah, I'm a yoga instructor from California and I love surfing"
 Output: {"traits": []}
+
+Input: "Alice and I work as a data scientist in London"
+Output: {"traits": [{"key": "occupation", "value": "data scientist", "confidence": "high"}, {"key": "location", "value": "London", "confidence": "high"}]}
 
 Input: "I made a new type of pizza today"
 Output: {"traits": [{"key": "interest", "value": "cooking", "confidence": "medium"}]}

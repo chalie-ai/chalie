@@ -384,7 +384,7 @@ class CaldavHandler:
                            (id, item_type, message, due_at, status, topic,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 0, ?)""",
+                                 'mail', ?, 1, ?)""",
                         (uuid.uuid4().hex[:8], alert_msg,
                          (dtstart - timedelta(minutes=15)).isoformat(),
                          f"caldav:{uid}:alert", now.isoformat()),
@@ -401,7 +401,7 @@ class CaldavHandler:
                            (id, item_type, message, due_at, status, topic,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 0, ?)""",
+                                 'mail', ?, 1, ?)""",
                         (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(),
                          f"caldav:conflict:{canon_key}", now.isoformat()),
                     )
@@ -426,7 +426,7 @@ class CaldavHandler:
                            (id, item_type, message, due_at, status, topic,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 0, ?)""",
+                                 'mail', ?, 1, ?)""",
                         (uuid.uuid4().hex[:8], b2b_msg,
                          ev_a.get("dtend", now).isoformat(),
                          f"caldav:b2b:{canon_key}", now.isoformat()),
@@ -461,7 +461,7 @@ class CaldavHandler:
                            (id, item_type, message, due_at, status, topic,
                             source, external_uid, hidden, created_at)
                          VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', 'caldav:greeting', 0, ?)""",
+                                 'mail', 'caldav:greeting', 1, ?)""",
                         (uuid.uuid4().hex[:8], greeting_msg,
                          now.isoformat(), now.isoformat()),
                     )
