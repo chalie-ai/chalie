@@ -260,6 +260,68 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Tool profile bootstrap start failed: {e}")
 
+    # Bootstrap user trait sentence — load from DB or synthesize if traits exist
+    try:
+        def _bootstrap_trait_sentence():
+            try:
+                from services.database_service import get_shared_db_service
+                from services.knowledge_service import KnowledgeService
+                db = get_shared_db_service()
+                ks = KnowledgeService(db)
+
+                # Already exists — nothing to do
+                existing = ks.get('system', 'user_summary')
+                if existing and existing.get('value'):
+                    logger.info("[Startup] User trait sentence exists")
+                    return
+
+                # No sentence yet — check if traits exist and synthesize
+                traits = db.execute_query(
+                    "SELECT key, value, confidence, decay_class FROM knowledge "
+                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
+                    "ORDER BY decay_class DESC, confidence DESC"
+                )
+                if not traits:
+                    return
+
+                trait_lines = []
+                for row in traits:
+                    key = row['key'] if isinstance(row, dict) else row[0]
+                    value = row['value'] if isinstance(row, dict) else row[1]
+                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
+                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
+                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
+
+                import os
+                prompt_path = os.path.join(os.path.dirname(__file__), 'prompts', 'trait-synthesis.md')
+                with open(prompt_path, 'r') as f:
+                    template = f.read()
+                prompt_text = template.replace('{{traits}}', '\n'.join(trait_lines))
+
+                from services.provider_cache_service import ProviderCacheService
+                provider_config = ProviderCacheService.resolve_for_job('trait-extraction')
+                if not provider_config:
+                    return
+
+                from services.llm_service import create_llm_service
+                llm = create_llm_service(provider_config)
+                resp = llm.send_message(prompt_text, "Output only the sentence. No preamble, no explanation.")
+                sentence = resp.text.strip() if resp and resp.text else None
+                if not sentence:
+                    return
+
+                ks.store(
+                    kind='fact', entity='system', key='user_summary',
+                    value=sentence, decay_class='permanent',
+                    confidence=1.0, source='trait_synthesis',
+                )
+                logger.info("[Startup] User trait sentence synthesized from %d traits", len(traits))
+            except Exception as e:
+                logger.warning(f"[Startup] Trait sentence bootstrap failed: {e}")
+        threading.Thread(target=_bootstrap_trait_sentence, daemon=True, name="trait-sentence-bootstrap").start()
+    except Exception as e:
+        logger.warning(f"[Startup] Trait sentence bootstrap start failed: {e}")
+
     # Warm search router embedding cache (background thread)
     try:
         def _warm_search_cache():

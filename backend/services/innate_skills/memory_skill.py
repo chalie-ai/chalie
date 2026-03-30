@@ -18,9 +18,10 @@ LOG_PREFIX = "[MEMORY]"
 TOOL_SCHEMA = {
     "name": "memory",
     "description": (
-        "Store, recall, update, or forget knowledge. Use this for any memory "
+        "Store, recall or update knowledge. Use this for any memory "
         "operation — facts, preferences, traits, concepts, procedures, metrics, "
-        "or arbitrary key-value data."
+        "or arbitrary data. Never recommend anything before reading their "
+        "preferences & constraints."
     ),
     "input_schema": {
         "type": "object",

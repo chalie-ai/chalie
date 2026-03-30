@@ -488,55 +488,29 @@ class PromptAssemblyService:
         topic: str,
         injection_threshold_override: Optional[float] = None,
     ) -> str:
-        """Get user traits formatted for prompt injection.
+        """Get the pre-synthesized user sentence for prompt injection.
 
-        Retrieves core traits (always) and contextually relevant traits
-        (by embedding similarity), capped at 8 total.
+        Returns the single natural-language sentence produced by the
+        trait-synthesis LLM call after trait extraction, cached in the
+        MemoryStore.  Returns an empty string when no sentence is available yet.
 
         Args:
-            prompt: Current user message (for contextual retrieval).
-            topic: Current conversation topic.
-            injection_threshold_override: When set, overrides the default
-                injection threshold (e.g. ``0.2`` when returning from silence).
+            prompt: Unused (kept for call-site compatibility).
+            topic: Unused (kept for call-site compatibility).
+            injection_threshold_override: Unused (kept for call-site compatibility).
 
         Returns:
-            str: Formatted user traits section, or empty string when unavailable.
+            str: ``## About the User`` section with the synthesized sentence,
+                or empty string when unavailable.
         """
         try:
-            from services.knowledge_service import KnowledgeService
             from services.database_service import get_shared_db_service
-            from services.embedding_service import get_embedding_service
-
-            db_service = get_shared_db_service()
-            ks = KnowledgeService(db_service)
-
-            # Generate embedding for contextual retrieval
-            query_embedding = None
-            try:
-                query_embedding = get_embedding_service().generate_embedding(prompt)
-            except Exception:
-                pass
-
-            traits = ks.get_traits_for_prompt(query_embedding=query_embedding)
-
-            if not traits:
+            from services.knowledge_service import KnowledgeService
+            ks = KnowledgeService(get_shared_db_service())
+            entry = ks.get('system', 'user_summary')
+            if not entry or not entry.get('value'):
                 return ""
-
-            effective_threshold = injection_threshold_override if injection_threshold_override is not None else 0.3
-
-            lines = ["## Known About the User"]
-            for t in traits:
-                if t.get('confidence', 0) < effective_threshold:
-                    continue
-                key = t.get('key', '')
-                value = t.get('value', '')
-                label = t.get('label', '')
-                if key and value:
-                    lines.append(f"- {key}: {value} {label}")
-
-            return "\n".join(lines) if len(lines) > 1 else ""
-        except ImportError:
-            return ""
+            return "## About the User\n" + entry['value']
         except Exception as e:
             logging.debug(f"User traits not available: {e}")
             return ""

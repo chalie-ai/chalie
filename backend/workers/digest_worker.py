@@ -269,6 +269,7 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                         words.pop()
                     return ' '.join(words) if words else v
 
+                stored_count = 0
                 for trait in traits:
                     key = trait.get('key', '').lower().strip()
                     value = _clean_value(trait.get('value', '').strip())
@@ -287,6 +288,10 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
                         decay_class=decay_class,
                         confidence=confidence, source='llm_extraction',
                     )
+                    stored_count += 1
+
+                if stored_count > 0:
+                    _synthesize_user_sentence(db, provider_config)
 
             except Exception as e:
                 logging.debug(f"[TRAIT_EXTRACT] Failed: {e}")
@@ -303,6 +308,54 @@ def enqueue_trait_extraction(prompt_message: str, metadata: dict = None, thread_
             except Exception as e:
                 logger.debug(f"[TRAIT_EXTRACT] Failed to load trait prompt template: {e}", exc_info=True)
                 return None
+
+        def _synthesize_user_sentence(db, provider_config) -> None:
+            """Fire a second LLM call to produce a single natural-language sentence
+            summarising ALL stored user traits, then persist it in the settings table."""
+            try:
+                import os
+
+                rows = db.execute_query(
+                    "SELECT key, value, confidence, decay_class "
+                    "FROM knowledge "
+                    "WHERE entity = 'user' AND kind = 'trait' AND deleted_at IS NULL "
+                    "ORDER BY decay_class DESC, confidence DESC"
+                )
+                if not rows:
+                    return
+
+                trait_lines = []
+                for row in rows:
+                    key = row['key'] if isinstance(row, dict) else row[0]
+                    value = row['value'] if isinstance(row, dict) else row[1]
+                    confidence = row['confidence'] if isinstance(row, dict) else row[2]
+                    decay_class = row['decay_class'] if isinstance(row, dict) else row[3]
+                    trait_lines.append(f"{key}: {value} (confidence: {confidence:.2f}, {decay_class})")
+
+                prompt_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), 'prompts', 'trait-synthesis.md'
+                )
+                with open(prompt_path, 'r') as f:
+                    template = f.read()
+                prompt_text = template.replace('{{traits}}', '\n'.join(trait_lines))
+
+                llm = create_llm_service(provider_config)
+                llm_resp = llm.send_message(
+                    prompt_text,
+                    "Output only the sentence. No preamble, no explanation."
+                )
+                sentence = llm_resp.text.strip() if llm_resp and llm_resp.text else None
+                if not sentence:
+                    return
+
+                ks.store(
+                    kind='fact', entity='system', key='user_summary',
+                    value=sentence, decay_class='permanent',
+                    confidence=1.0, source='trait_synthesis',
+                )
+                logging.debug("[TRAIT_SYNTH] Sentence stored: %s", sentence)
+            except Exception as e:
+                logging.debug("[TRAIT_SYNTH] Failed: %s", e)
 
         t = threading.Thread(target=_extract_traits, daemon=True)
         t.start()
