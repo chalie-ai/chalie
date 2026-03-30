@@ -2038,6 +2038,9 @@ def digest_worker(text: str, metadata: dict = None) -> str:
         f"complexity={intent['complexity']}, confidence={intent['confidence']:.2f}"
     )
 
+    # Step 9e: Enqueue trait extraction (fire-and-forget, daemon thread)
+    enqueue_trait_extraction(text, metadata=metadata, thread_id=thread_id)
+
     # Step 10: Unified generation (no gate, no mode routing)
     routing_result = None
     try:

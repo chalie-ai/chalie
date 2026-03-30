@@ -152,7 +152,7 @@ class TestFormatSearchResults:
     def test_format_includes_tool_name(self, mock_params):
         mock_params.return_value = "(query)"
         tools = [{
-            'tool_name': 'web_search',
+            'tool_name': 'search',
             'short_summary': 'Search the web',
             'full_profile': 'Full web search description',
             'domain': 'Research',
@@ -160,7 +160,7 @@ class TestFormatSearchResults:
             'similarity': 0.92,
         }]
         result = _format_search_results("search the internet", tools)
-        assert 'web_search' in result
+        assert 'search' in result
         assert '92%' in result
         assert 'directly' in result.lower()
 
@@ -218,21 +218,21 @@ class TestSearchIntegration:
         mock_emb_cls.return_value.generate_embedding.return_value = embedding
 
         _seed_tool_profile(
-            db, 'web_search', tool_type='tool', summary='Search the web',
+            db, 'search', tool_type='tool', summary='Search the web',
             profile='Full profile', domain='Research', effort='light',
             embedding=embedding,
         )
 
         mock_reg = _mock_registry(
-            tools={'web_search': {'manifest': {'parameters': {'query': {'required': True}}}}}
+            tools={'search': {'manifest': {'parameters': {'query': {'required': True}}}}}
         )
         mock_registry_cls.return_value = mock_reg
 
         result = handle_find_tools("topic", {"query": "search online"})
         assert isinstance(result, dict)
-        assert 'web_search' in result['text']
+        assert 'search' in result['text']
         assert 'Found 1 tool' in result['text']
-        assert 'web_search' in result['_discovered_tools']
+        assert 'search' in result['_discovered_tools']
 
     @patch(_EMB)
     def test_search_falls_back_on_embedding_failure(self, mock_emb_cls, db):

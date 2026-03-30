@@ -23,8 +23,8 @@ class TestSummarizeEvent:
 
     def test_cron_tool_executed_includes_tool_name(self):
         from services.interaction_log_service import _summarize_event
-        result = _summarize_event('cron_tool_executed', {'tool_name': 'web_search'})
-        assert 'web_search' in result
+        result = _summarize_event('cron_tool_executed', {'tool_name': 'search'})
+        assert 'search' in result
 
     def test_unknown_event_type_returns_humanized_string(self):
         from services.interaction_log_service import _summarize_event

@@ -117,14 +117,14 @@ class TestTranscriptBasedWorkingMemory:
             'id': 1,
             'role': 'tool',
             'content': 'Search results for Malta weather',
-            'tool_name': 'web_search',
+            'tool_name': 'search',
         }]
 
         with patch('services.compaction_service.get_compaction', return_value=None), \
              patch('services.transcript_service.get_recent', return_value=entries):
             result = svc._get_working_memory('thread-1', 'test-topic')
 
-        assert 'Tool (web_search):' in result
+        assert 'Tool (search):' in result
 
 
 class TestTopicContextWorkingMemory:

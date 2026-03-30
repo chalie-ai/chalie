@@ -157,7 +157,7 @@ def _good_analysis(**overrides) -> dict:
         "blame": "tool_choice",
         "root_cause": "Wrong tool selected for the task",
         "lesson": "Always verify the tool supports the required operation before invoking it.",
-        "affected_skill": "web_search",
+        "affected_skill": "search",
         "severity": "minor",
         "confidence": 0.80,
         "generalizable": True,
@@ -216,7 +216,7 @@ class TestAnalyze:
             "blame": "tool_choice",
             "root_cause": "Wrong tool selected",
             "lesson": "Verify tool capability before use.",
-            "affected_skill": "web_search",
+            "affected_skill": "search",
             "severity": "minor",
             "confidence": 0.85,
             "generalizable": True,
@@ -225,7 +225,7 @@ class TestAnalyze:
 
         failure_context = {
             "original_request": "Search for recent news",
-            "action_type": "web_search",
+            "action_type": "search",
             "action_intent": {"query": "recent news"},
             "action_result": {"status": "error", "result": "tool not found"},
             "error_signals": {"status": "error", "error_text": "tool not supported"},
@@ -362,7 +362,7 @@ class TestSanityCheck:
         """
         analysis = _good_analysis(
             blame="stale_memory",
-            affected_skill="web_search",
+            affected_skill="search",
             confidence=0.80,
         )
         error_signals = {"status": "error"}
@@ -428,7 +428,7 @@ class TestStoreLesson:
         emb_mock = _make_emb_mock({analysis["lesson"]: same_vec})
 
         with patch("services.embedding_service.get_embedding_service", return_value=emb_mock):
-            result = fas.store_lesson(analysis, "web_search")
+            result = fas.store_lesson(analysis, "search")
 
         assert result is True
 
@@ -437,7 +437,7 @@ class TestStoreLesson:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
-                ("web_search",),
+                ("search",),
             )
             row = cursor.fetchone()
             cursor.close()
@@ -468,14 +468,14 @@ class TestStoreLesson:
         analysis2 = _good_analysis(lesson=second_text, confidence=0.90)
 
         with patch("services.embedding_service.get_embedding_service", return_value=emb_mock):
-            fas.store_lesson(analysis1, "web_search")
-            fas.store_lesson(analysis2, "web_search")
+            fas.store_lesson(analysis1, "search")
+            fas.store_lesson(analysis2, "search")
 
         with fas.db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT data FROM knowledge WHERE kind = 'procedure' AND entity = 'system' AND key = ?",
-                ("web_search",),
+                ("search",),
             )
             row = cursor.fetchone()
             cursor.close()
@@ -617,7 +617,7 @@ class TestGetRelevantLessons:
             "blame": "tool_choice",
             "root_cause": "Some root cause",
             "lesson": lesson_text,
-            "affected_skill": "web_search",
+            "affected_skill": "search",
             "severity": severity,
             "confidence": 0.75,
             "generalizable": True,
@@ -631,9 +631,9 @@ class TestGetRelevantLessons:
         Lessons with ``severity='minor'`` and ``times_seen=1`` are excluded
         (below both qualifying criteria).
         """
-        _seed_lesson(fas, "web_search", self._make_lesson("Minor one-off lesson.", "minor", 1))
+        _seed_lesson(fas, "search", self._make_lesson("Minor one-off lesson.", "minor", 1))
 
-        result = fas.get_relevant_lessons("web_search")
+        result = fas.get_relevant_lessons("search")
 
         assert result == [], "Minor lessons seen only once must not be returned"
 
@@ -641,9 +641,9 @@ class TestGetRelevantLessons:
         """
         A single lesson with ``severity='major'`` qualifies even if ``times_seen=1``.
         """
-        _seed_lesson(fas, "web_search", self._make_lesson("Critical major failure.", "major", 1))
+        _seed_lesson(fas, "search", self._make_lesson("Critical major failure.", "major", 1))
 
-        result = fas.get_relevant_lessons("web_search")
+        result = fas.get_relevant_lessons("search")
 
         assert len(result) == 1
         assert result[0]["severity"] == "major"
@@ -686,9 +686,9 @@ class TestGetRelevantLessons:
         """
         ``lesson_hash`` (internal bookkeeping) must not appear in returned lesson dicts.
         """
-        _seed_lesson(fas, "web_search", self._make_lesson("Major insight.", "major", 1))
+        _seed_lesson(fas, "search", self._make_lesson("Major insight.", "major", 1))
 
-        result = fas.get_relevant_lessons("web_search")
+        result = fas.get_relevant_lessons("search")
 
         assert len(result) == 1
         assert "lesson_hash" not in result[0]
@@ -734,7 +734,7 @@ class TestGetStats:
         # Seed two action_names with different blame distributions.
         _seed_lesson(fas, "recall", _l("Recall lesson A.", "stale_memory", 3))
         _seed_lesson(fas, "recall", _l("Recall lesson B.", "stale_memory", 1))
-        _seed_lesson(fas, "web_search", _l("Web lesson.", "tool_choice", 5))
+        _seed_lesson(fas, "search", _l("Web lesson.", "tool_choice", 5))
 
         stats = fas.get_stats()
 
@@ -742,7 +742,7 @@ class TestGetStats:
         assert stats["blame_distribution"]["stale_memory"] == 2
         assert stats["blame_distribution"]["tool_choice"] == 1
         assert stats["lesson_counts_by_action"]["recall"] == 2
-        assert stats["lesson_counts_by_action"]["web_search"] == 1
+        assert stats["lesson_counts_by_action"]["search"] == 1
 
     def test_get_stats_empty_db(self, fas):
         """

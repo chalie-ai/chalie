@@ -238,11 +238,11 @@ class TestManifestFallback:
         broken_db.fetch_all.side_effect = Exception("connection refused")
 
         mock_registry = MagicMock()
-        mock_registry.get_on_demand_tools.return_value = ['web_search']
+        mock_registry.get_on_demand_tools.return_value = ['weather']
         mock_registry.tools = {
-            'web_search': {
+            'weather': {
                 'manifest': {
-                    'name': 'web_search',
+                    'name': 'weather',
                     'description': 'Search the web',
                     'documentation': "Web search tool. Use for 'search for...', 'look up...'",
                     'category': 'information_retrieval',
@@ -255,7 +255,7 @@ class TestManifestFallback:
              patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
             result = svc.get_triage_summaries()
 
-        assert 'web_search' in result
+        assert 'weather' in result
         assert '## Information Retrieval' in result
 
     @patch('services.tool_profile_service.ToolProfileService._get_store')
@@ -344,11 +344,11 @@ class TestFallbackProfile:
     def test_domain_normalizes_underscores(self, db):
         svc = ToolProfileService(get_shared_db_service())
         manifest = {
-            'name': 'web_search',
+            'name': 'weather',
             'documentation': 'Search the web',
             'category': 'information_retrieval',
         }
-        profile = svc._fallback_profile('web_search', manifest)
+        profile = svc._fallback_profile('weather', manifest)
         assert profile['domain'] == 'Information Retrieval'
 
     def test_no_documentation_yields_empty_triggers(self, db):

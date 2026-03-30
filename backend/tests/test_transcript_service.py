@@ -35,7 +35,7 @@ class TestAppend:
         with patch('services.transcript_service._embed_entry'):
             rowid = append(
                 'test-topic', 'tool', 'Search results here',
-                tool_call_id='tc_123', tool_name='web_search',
+                tool_call_id='tc_123', tool_name='search',
             )
         cursor = db.cursor()
         cursor.execute(
@@ -44,7 +44,7 @@ class TestAppend:
         )
         row = cursor.fetchone()
         assert row['tool_call_id'] == 'tc_123'
-        assert row['tool_name'] == 'web_search'
+        assert row['tool_name'] == 'search'
 
     def test_append_internal_flag(self, db):
         from services.transcript_service import append

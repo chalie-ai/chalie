@@ -199,7 +199,7 @@ class TestRunCompaction:
 
         ids = _insert_entries(db, 'test', 1)
         entries = [
-            {'id': ids[0], 'role': 'tool', 'content': 'Search results', 'tool_name': 'web_search'},
+            {'id': ids[0], 'role': 'tool', 'content': 'Search results', 'tool_name': 'search'},
         ]
 
         mock_llm = MagicMock()
@@ -209,7 +209,7 @@ class TestRunCompaction:
             _run_compaction('test', '', entries)
 
         user_message = mock_llm.send_message.call_args[0][1]
-        assert '[tool — web_search]' in user_message
+        assert '[tool — search]' in user_message
 
     def test_returns_false_on_empty_llm_response(self, db):
         from services.compaction_service import _run_compaction

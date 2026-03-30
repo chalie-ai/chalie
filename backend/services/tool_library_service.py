@@ -21,7 +21,6 @@ whenever the set of registered tools may have changed since import time.
 import threading
 
 from tools.weather import execute as _weather_execute
-from tools.web_search import execute as _web_search_execute
 from tools.code_eval import execute as _code_eval_execute
 from tools.programming_docs_search import execute as _docs_execute
 from tools.search.search import execute as _search_execute
@@ -39,7 +38,6 @@ except ImportError:
 
 TOOL_HANDLERS = {
     "weather": _weather_execute,
-    "web_search": _web_search_execute,
     "search": _search_execute,
     "code_eval": _code_eval_execute,
     "programming_docs_search": _docs_execute,
@@ -216,58 +214,6 @@ TOOL_METADATA: dict = {
         ],
     },
 
-    "web_search": {
-        "name": "web_search",
-        "description": "Deprecated — use 'search' tool instead. DuckDuckGo-only web search.",
-        "documentation": (
-            "DEPRECATED: Use the 'search' tool instead, which includes DuckDuckGo as "
-            "a fallback alongside 12 other providers with semantic routing. This tool "
-            "is kept for backward compatibility only. "
-            "Searches the web via DuckDuckGo and returns titles, snippets, URLs, "
-            "and optional images. Use for general web queries when no domain-specific "
-            "tool applies. Supports time_range filtering (day/week/month/year). "
-            "Pair with read skill to fetch full page content from promising results. "
-            "DuckDuckGo may rate-limit on burst usage — space queries."
-        ),
-        "category": "research",
-        "icon": "fa-magnifying-glass",
-        "trigger": {"type": "on_demand"},
-        "parameters": {
-            "query": {
-                "type": "string",
-                "required": True,
-                "description": "Search query",
-            },
-            "limit": {
-                "type": "integer",
-                "required": False,
-                "default": 5,
-                "description": "Number of results to return (1-8).",
-            },
-            "time_range": {
-                "type": "string",
-                "required": False,
-                "description": "Filter results by time: 'day', 'week', 'month', or 'year'.",
-            },
-        },
-        "returns": {
-            "results": {"type": "array", "description": "List of {title, snippet, url, domain}"},
-            "count": {"type": "integer"},
-            "_meta": {"type": "object", "description": "Observability fields"},
-        },
-        "constraints": {"timeout_seconds": 15},
-        "config_schema": {},
-        "output": {
-            "synthesize": True,
-            "card": {"enabled": True, "mode": "immediate", "title": "Web Search",
-                     "accent_color": "#1a8fff", "background_color": "rgba(26,143,255,0.06)"},
-        },
-        "tips": [
-            "Set time_range='day' or 'week' for recent results on fast-moving topics",
-            "Pair with read skill to fetch full content from the most relevant result",
-        ],
-    },
-
     "code_eval": {
         "name": "code_eval",
         "description": (
@@ -360,7 +306,7 @@ TOOL_METADATA: dict = {
         "tips": [
             "Use when you need exact function signatures or parameter descriptions",
             "Supports frameworks directly: django, flask, numpy, pandas, node, react, vue, laravel, spring, rails, flutter",
-            "Prefer this over web_search when you know the language/framework",
+            "Prefer this over the search tool when you know the language/framework",
         ],
     },
 

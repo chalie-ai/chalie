@@ -362,7 +362,7 @@ class TestGetProceduralHints:
 
     def test_excludes_skills_below_8_attempts(self, db):
         svc = self._make_service()
-        skills = [self._make_skill('web_search', 0.90, 5)]  # < 8 attempts
+        skills = [self._make_skill('search', 0.90, 5)]  # < 8 attempts
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = skills
 
@@ -373,14 +373,14 @@ class TestGetProceduralHints:
 
     def test_includes_skills_with_exactly_8_attempts(self, db):
         svc = self._make_service()
-        skills = [self._make_skill('web_search', 0.90, 8)]
+        skills = [self._make_skill('search', 0.90, 8)]
         mock_ks = MagicMock()
         mock_ks.get_ranked_procedures.return_value = skills
 
         with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('research')
 
-        assert 'web_search' in result
+        assert 'search' in result
 
     def test_reliable_label_above_85_percent(self, db):
         svc = self._make_service()
@@ -429,7 +429,7 @@ class TestGetProceduralHints:
     def test_includes_percentage_and_attempt_count(self, db):
         svc = self._make_service()
         mock_ks = MagicMock()
-        mock_ks.get_ranked_procedures.return_value = [self._make_skill('web_search', 0.88, 25)]
+        mock_ks.get_ranked_procedures.return_value = [self._make_skill('search', 0.88, 25)]
 
         with patch('services.knowledge_service.KnowledgeService', return_value=mock_ks):
             result = svc._get_procedural_hints('test')

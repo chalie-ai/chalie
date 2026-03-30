@@ -51,11 +51,11 @@ class TestGetPotential:
 class TestRecordOutcome:
     def test_success_boosts_potential(self, mock_store):
         """A 'success' outcome raises potential by 0.15 from the stored baseline."""
-        mock_store.set('tool_health:web_search', json.dumps({
+        mock_store.set('tool_health:search', json.dumps({
             'potential': 0.5, 'failures': 2, 'successes': 0,
         }))
         from services.tool_health_service import record_outcome
-        new = record_outcome('web_search', 'success')
+        new = record_outcome('search', 'success')
         assert new == 0.65  # 0.5 + 0.15
 
     def test_success_capped_at_1(self):

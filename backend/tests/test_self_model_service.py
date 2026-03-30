@@ -361,9 +361,9 @@ class TestCapabilityCategories:
 
     def test_tools_categorized_by_keywords(self, mock_store):
         mock_registry = MagicMock()
-        mock_registry.get_tool_names.return_value = ["web_search", "news_reader"]
+        mock_registry.get_tool_names.return_value = ["weather", "news_reader"]
         mock_registry.get_tool_full_description.side_effect = lambda name: {
-            "web_search": {
+            "weather": {
                 "documentation": "Search the web for information and find answers",
                 "description": "Web search tool",
             },
@@ -378,7 +378,7 @@ class TestCapabilityCategories:
             cats = svc._refresh()["capability"]["capability_categories"]
 
         assert "search" in cats
-        assert "web_search" in cats["search"]
+        assert "weather" in cats["search"]
         assert "news" in cats
         assert "news_reader" in cats["news"]
 

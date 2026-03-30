@@ -217,7 +217,7 @@ class TestSystemAPI:
             "reliability_score, cost_tier, avg_latency_ms, enrichment_count, "
             "triage_triggers, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ('tcp-1', 'web_search', 'docker', 'Search', 'Full search profile',
+            ('tcp-1', 'weather', 'docker', 'Search', 'Full search profile',
              'Search', 'low', 0.9, 'free', 1200, 1, '[]', '2025-01-01T00:00:00'),
         )
         db.execute(
@@ -236,7 +236,7 @@ class TestSystemAPI:
 
         # Mock the tool registry to include our two tool names so the WHERE IN filter matches
         mock_registry = MagicMock()
-        mock_registry.tools = {'web_search': {}, 'code_exec': {}}
+        mock_registry.tools = {'weather': {}, 'code_exec': {}}
 
         with patch('services.tool_performance_service.ToolPerformanceService', return_value=mock_perf), \
              patch('services.tool_registry_service.ToolRegistryService', return_value=mock_registry):
@@ -245,7 +245,7 @@ class TestSystemAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert len(data['tools']) == 2
-        assert data['tools'][0]['tool_name'] in ('web_search', 'code_exec')
+        assert data['tools'][0]['tool_name'] in ('weather', 'code_exec')
         assert 'generated_at' in data
 
     # ────────────────────────────────────────────

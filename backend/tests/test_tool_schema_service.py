@@ -99,9 +99,9 @@ class TestGetExternalToolSchemas:
     def test_converts_registered_tools(self, MockRegistry):
         mock_reg = MagicMock()
         mock_reg.tools = {
-            'web_search': {
+            'weather': {
                 'manifest': {
-                    'name': 'web_search',
+                    'name': 'weather',
                     'description': 'Search the web',
                     'parameters': {
                         'query': {'type': 'string', 'required': True, 'description': 'Search query'},
@@ -111,9 +111,9 @@ class TestGetExternalToolSchemas:
         }
         MockRegistry.return_value = mock_reg
 
-        schemas = get_external_tool_schemas(['web_search'])
+        schemas = get_external_tool_schemas(['weather'])
         assert len(schemas) == 1
-        assert schemas[0]['name'] == 'web_search'
+        assert schemas[0]['name'] == 'weather'
         assert 'query' in schemas[0]['input_schema']['properties']
 
     @patch('services.tool_registry_service.ToolRegistryService')
