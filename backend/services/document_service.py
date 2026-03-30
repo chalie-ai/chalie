@@ -736,8 +736,13 @@ class DocumentService:
                                 item['token_count'],
                             ),
                         )
+                        rowid = cursor.lastrowid
+                        # FTS5 index for full-text search
+                        cursor.execute(
+                            "INSERT INTO document_chunks_fts (rowid, content, section_title) VALUES (?, ?, ?)",
+                            (rowid, item['content'], item.get('section_title') or ''),
+                        )
                         if item['packed_emb'] is not None:
-                            rowid = cursor.lastrowid
                             cursor.execute(
                                 "INSERT INTO document_chunks_vec (rowid, embedding) VALUES (?, ?)",
                                 (rowid, item['packed_emb']),
