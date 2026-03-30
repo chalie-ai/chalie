@@ -165,8 +165,8 @@ class WorkerManager:
         ``KeyboardInterrupt`` is received, after which it ensures
         :meth:`shutdown_all` is invoked in the ``finally`` block.
         """
-        signal.signal(signal.SIGINT, lambda sig, frame: self.shutdown_all())
-        signal.signal(signal.SIGTERM, lambda sig, frame: self.shutdown_all())
+        signal.signal(signal.SIGINT, lambda sig, _frame: self.shutdown_all())
+        signal.signal(signal.SIGTERM, lambda sig, _frame: self.shutdown_all())
 
         logging.info("[Manager] Starting Worker Manager (single-process, threaded)")
         self.spawn_all_services()
