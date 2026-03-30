@@ -45,7 +45,7 @@ class _TextExtractor(HTMLParser):
         self._skip_depth = 0
         self._tag_stack = []
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag, _attrs):
         tag = tag.lower()
         self._tag_stack.append(tag)
         if tag in _STRIP_TAGS:
