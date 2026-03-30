@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS user_traits_new (
     UNIQUE(trait_key)
 );
 
+-- Use a temp trigger to detect whether 'reliability' column exists.
+-- If it does, copy it; if not, default to 'reliable'.
 INSERT INTO user_traits_new
     (id, trait_key, trait_value, category, confidence,
      reinforcement_count, last_reinforced_at, last_conflict_at, created_at, updated_at, reliability)
