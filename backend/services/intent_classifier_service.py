@@ -117,7 +117,7 @@ class IntentClassifierService:
         text: str,
         topic: str,
         context_warmth: float = 0.0,
-        fact_count: int = 0,
+        _fact_count: int = 0,
         gist_count: int = 0,
         procedural_stats: Optional[Dict] = None,
         memory_confidence: float = 1.0,
