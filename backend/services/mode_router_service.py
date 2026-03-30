@@ -257,7 +257,7 @@ class ModeRouterService:
         signals: Dict[str, Any],
         prompt_text: str,
         previous_mode: Optional[str] = None,
-        previous_router_confidence: Optional[float] = None,
+        _previous_router_confidence: Optional[float] = None,
         skip_tiebreaker: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -267,7 +267,7 @@ class ModeRouterService:
             signals: Dict from collect_routing_signals()
             prompt_text: Raw user text (for tie-breaker context)
             previous_mode: Mode from last exchange (anti-oscillation)
-            previous_router_confidence: Confidence from last routing decision
+            _previous_router_confidence: Confidence from last routing decision (unused)
             skip_tiebreaker: Skip ONNX tie-breaker even when scores are close.
                 Use for post-ACT re-routing where terminal mode is already implicit.
 
