@@ -58,7 +58,7 @@ def notifications_digest_stub():
 @stubs_bp.route('/integrations/messages', methods=['GET'])
 @stubs_bp.route('/integrations/messages/<path:subpath>', methods=['GET'])
 @require_session
-def integrations_messages_stub(subpath=None):
+def integrations_messages_stub(_subpath=None):
     """Return 501 Not Implemented for all integrations message-listing endpoints.
 
     Placeholder for future third-party messaging integration.  Accepts an
