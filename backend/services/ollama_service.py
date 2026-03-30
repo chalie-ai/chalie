@@ -245,7 +245,7 @@ class OllamaService:
             parts.append(json.dumps(tools, default=str))
         return estimate_tokens(' '.join(parts))
 
-    def generate_embedding(self, text: str, _embedding_model: str = None, target_dimensions: int = None) -> list:
+    def generate_embedding(self, text: str, _embedding_model: str = None, _target_dimensions: int = None) -> list:
         """
         Generate embedding vector via EmbeddingService (no Ollama required).
 
