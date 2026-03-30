@@ -256,7 +256,7 @@ class FailureAnalysisService:
             logger.error(f"{LOG_PREFIX} store_lesson failed for '{action_name}': {e}")
             return False
 
-    def get_relevant_lessons(self, action_name: str, action_context: str = "") -> list:
+    def get_relevant_lessons(self, action_name: str, _action_context: str = "") -> list:
         """
         Retrieve failure lessons relevant to a given action type.
 
@@ -267,7 +267,7 @@ class FailureAnalysisService:
 
         Args:
             action_name: The ``action_name`` key to look up in ``knowledge``.
-            action_context: Optional contextual string (reserved for future semantic
+            _action_context: Optional contextual string (reserved for future semantic
                 matching — not currently used for filtering).
 
         Returns:
