@@ -1,11 +1,15 @@
 ## `goals` — Goal Management
-View, confirm, complete, dismiss, mute, adjust, or narrate tracked goals.
+Create, view, confirm, complete, dismiss, mute, adjust, or narrate tracked goals.
 
 Parameters:
-- `action` (required): `"list"`, `"view"`, `"confirm"`, `"complete"`, `"dismiss"`, `"adjust"`, `"mute"`, `"unmute"`, `"narrate"`, `"cluster_confirm"`, `"cluster_dismiss"`
+- `action` (required): `"create"`, `"list"`, `"view"`, `"confirm"`, `"complete"`, `"dismiss"`, `"adjust"`, `"mute"`, `"unmute"`, `"narrate"`, `"cluster_confirm"`, `"cluster_dismiss"`
+  - `create`: Set a new goal from user's stated intention.
 - `goal_id` (required for view/confirm/complete/dismiss/adjust/mute/unmute): Goal ID
 - `urgency` (optional, adjust only): New urgency value 0.0-1.0
-- `timescale` (optional, adjust only): `"immediate"`, `"short_term"`, `"medium_term"`, `"long_term"`
+- `timescale` (optional, create/adjust): `"immediate"`, `"short_term"` (default for create), `"medium_term"`, `"long_term"`
+- `action`: `"create"` — Create a stated goal from the user's explicit intention.
+  - `description` (required): What the user wants to achieve
+  - `timescale` (optional): `"immediate"`, `"short_term"` (default), `"medium_term"`, `"long_term"`
 - `action`: `"narrate"` — No additional parameters needed. Generates a narrative synthesis of how goals have evolved.
 - `action`: `"cluster_confirm"` — Confirm a detected cluster of related goals. Creates a parent goal and links the children.
   - `goal_ids` (required): List of goal IDs in the cluster
@@ -14,6 +18,7 @@ Parameters:
   - `goal_ids` (required): List of goal IDs in the cluster
 
 Use when:
+- User explicitly states a goal ("I want to...", "my goal is...", "I need to...") — use `create`
 - User asks "what are my goals?", "what am I working on?"
 - User says "I finished X" or "I don't care about X anymore"
 - User confirms or validates an inferred goal ("yes, that's important to me")
@@ -35,6 +40,7 @@ Notes:
 
 Example invocations:
 ```json
+{"type": "goals", "action": "create", "description": "Run a half marathon", "timescale": "medium_term"}
 {"type": "goals", "action": "list"}
 {"type": "goals", "action": "view", "goal_id": "abc123"}
 {"type": "goals", "action": "complete", "goal_id": "abc123"}

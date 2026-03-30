@@ -62,7 +62,7 @@ SKILL_DESCRIPTIONS: dict = {
     'read': 'Fetch and read web page content for information gathering and research',
     'reflect': 'Synthesize recent experience into insights — what worked, what didn\'t, patterns noticed, connections formed',
     'find_tools': 'Search for registered tools and capabilities by describing what you need — discover web search, email, calendar, messaging, and other integrations on demand',
-    'goals': 'View, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
+    'goals': 'Create, view, confirm, complete, dismiss tracked goals, see accumulated evidence, or get a narrative synthesis of goal evolution',
     'rich_render': 'Returns block rendering reference for producing rich visual output (metrics, cards, charts, progress, timelines)',
     # Backward-compat aliases (for lookup only)
     'recall': 'Search memory, retrieve stored information, look up what Chalie knows about a topic or person',

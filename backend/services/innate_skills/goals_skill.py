@@ -1,7 +1,7 @@
 """
 Goals Skill — Natural language goal management via the ACT loop.
 
-Actions: list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate
+Actions: create, list, view, confirm, complete, dismiss, adjust, mute, unmute, narrate
 """
 
 import json
@@ -28,7 +28,9 @@ def handle_goals(topic: str, params: dict) -> str:
         from services.goal_ecology_service import GoalEcologyService
         ecology = GoalEcologyService()
 
-        if action == 'list':
+        if action == 'create':
+            return _handle_create(ecology, params.get('description'), params.get('timescale', 'short_term'))
+        elif action == 'list':
             return _handle_list(ecology)
         elif action == 'view':
             return _handle_view(ecology, params.get('goal_id'))
@@ -52,7 +54,7 @@ def handle_goals(topic: str, params: dict) -> str:
             return _handle_cluster_dismiss(ecology, params)
         else:
             return (
-                f"[GOALS] Unknown action: {action}. Valid: list, view, confirm, "
+                f"[GOALS] Unknown action: {action}. Valid: create, list, view, confirm, "
                 f"complete, dismiss, adjust, mute, unmute, narrate, "
                 f"cluster_confirm, cluster_dismiss"
             )
@@ -60,6 +62,37 @@ def handle_goals(topic: str, params: dict) -> str:
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Error: {e}", exc_info=True)
         return f"[GOALS] Error: {e}"
+
+
+def _handle_create(ecology, description: str, timescale: str) -> str:
+    """Create a stated goal from the user's explicit intention."""
+    if not description:
+        return "[GOALS] description required for create action"
+
+    valid_timescales = ('immediate', 'short_term', 'medium_term', 'long_term')
+    if timescale not in valid_timescales:
+        return f"[GOALS] Invalid timescale '{timescale}'. Valid: {', '.join(valid_timescales)}"
+
+    goal = ecology.create_goal(
+        description=description,
+        type='stated',
+        timescale=timescale,
+    )
+    if not goal:
+        return "[GOALS] Failed to create goal"
+
+    ecology.add_evidence(
+        goal_id=goal['id'],
+        signal_type='explicit_statement',
+        content=description,
+        source='user_stated',
+        strength=1.0,
+    )
+
+    return (
+        f"[GOALS] Goal created: {goal['description'][:120]}\n"
+        f"  timescale={timescale} | confidence={goal.get('confidence', 0):.0%} | id={goal['id']}"
+    )
 
 
 def _handle_list(ecology) -> str:
