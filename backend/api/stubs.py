@@ -23,7 +23,7 @@ def _stub_route(rule, **options):
 @stubs_bp.route('/calendar', methods=['GET'])
 @stubs_bp.route('/calendar/<path:subpath>', methods=['GET'])
 @require_session
-def calendar_stub(subpath=None):
+def calendar_stub(_subpath=None):
     """Return 501 Not Implemented for all calendar endpoints.
 
     Placeholder for future calendar integration.  Accepts an optional
@@ -62,10 +62,10 @@ def integrations_messages_stub(subpath=None):
     """Return 501 Not Implemented for all integrations message-listing endpoints.
 
     Placeholder for future third-party messaging integration.  Accepts an
-    optional ``subpath`` so nested URLs are handled without 404s.
+    optional ``_subpath`` so nested URLs are handled without 404s.
 
     Args:
-        subpath: Optional URL sub-path captured from
+        _subpath: Optional URL sub-path captured from
             ``/integrations/messages/<path:subpath>``.  Ignored at this time.
 
     Returns:
