@@ -32,7 +32,7 @@ class SchemaService:
         self.embedding_dimensions = embedding_dimensions
         self._schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
 
-    def database_exists(self, db_name: str = None) -> bool:
+    def database_exists(self, _db_name: str = None) -> bool:
         """Check whether the SQLite database file exists on disk.
 
         Args:
@@ -45,7 +45,7 @@ class SchemaService:
         """
         return os.path.exists(self.db_service.db_path)
 
-    def create_database(self, db_name: str = None):
+    def create_database(self, _db_name: str = None):
         """Create the database by running the consolidated schema.
 
         Delegates entirely to ``initialize_schema()``. SQLite creates the file
