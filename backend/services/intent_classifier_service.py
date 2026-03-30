@@ -118,7 +118,7 @@ class IntentClassifierService:
         topic: str,
         context_warmth: float = 0.0,
         _fact_count: int = 0,
-        gist_count: int = 0,
+        _gist_count: int = 0,
         procedural_stats: Optional[Dict] = None,
         memory_confidence: float = 1.0,
         working_memory_turns: int = 0,
@@ -131,7 +131,7 @@ class IntentClassifierService:
             topic: Current topic
             context_warmth: Pre-computed warmth (0-1)
             fact_count: Number of facts available
-            gist_count: Number of gists available
+            _gist_count: Number of gists available
             procedural_stats: Optional ranked skills from procedural memory
             memory_confidence: Pre-computed memory confidence score
             working_memory_turns: Number of turns in working memory
