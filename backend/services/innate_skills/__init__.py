@@ -20,7 +20,6 @@ from services.innate_skills.introspect_skill import handle_introspect
 from services.innate_skills.associate_skill import handle_associate
 from services.innate_skills.scheduler_skill import handle_scheduler
 from services.innate_skills.autobiography_skill import handle_autobiography
-from services.innate_skills.focus_skill import handle_focus
 from services.innate_skills.list_skill import handle_list
 from services.innate_skills.persistent_task_skill import handle_persistent_task
 from services.innate_skills.document_skill import handle_document
@@ -43,7 +42,6 @@ _SKILL_HANDLERS = {
     'associate': handle_associate,
     'schedule': handle_scheduler,
     'autobiography': handle_autobiography,
-    'focus': handle_focus,
     'list': handle_list,
     'persistent_task': handle_persistent_task,
     'document': handle_document,
@@ -73,7 +71,6 @@ def register_innate_skills(dispatcher) -> None:
     dispatcher.handlers["associate"] = lambda topic, action: handle_associate(topic, action)
     dispatcher.handlers["schedule"] = lambda topic, action: handle_scheduler(topic, action)
     dispatcher.handlers["autobiography"] = lambda topic, action: handle_autobiography(topic, action)
-    dispatcher.handlers["focus"] = lambda topic, action: handle_focus(topic, action)
     dispatcher.handlers["list"] = lambda topic, action: handle_list(topic, action)
     dispatcher.handlers["persistent_task"] = lambda topic, action: handle_persistent_task(topic, action)
     dispatcher.handlers["document"] = lambda topic, action: handle_document(topic, action)

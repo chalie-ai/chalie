@@ -10,6 +10,57 @@ import logging
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[GOALS SKILL]"
 
+TOOL_SCHEMA = {
+    "name": "goals",
+    "description": (
+        "Create, view, track, and manage user goals. Use when the user states an "
+        "intention, ambition, resolution, or target they want to achieve — including "
+        "learning goals, fitness goals, career goals, habits, or any aspiration. "
+        "Also use to list, complete, dismiss, or get a narrative of existing goals."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "create", "list", "view", "confirm", "complete",
+                    "dismiss", "adjust", "mute", "unmute", "narrate",
+                ],
+                "description": (
+                    "create: Track a new goal from user's stated intention. "
+                    "list: Show active goals sorted by salience. "
+                    "view: Detailed goal info with evidence timeline. "
+                    "confirm: Elevate an inferred goal to stated. "
+                    "complete: Mark goal as achieved. "
+                    "dismiss: User-initiated removal. "
+                    "adjust: Change urgency or timescale. "
+                    "mute/unmute: Toggle proactive actions. "
+                    "narrate: LLM narrative synthesis of goal evolution."
+                ),
+            },
+            "description": {
+                "type": "string",
+                "description": "For create: the goal description (what the user wants to achieve).",
+            },
+            "timescale": {
+                "type": "string",
+                "enum": ["immediate", "short_term", "medium_term", "long_term"],
+                "description": "For create/adjust: goal timescale (default: short_term).",
+            },
+            "goal_id": {
+                "type": "string",
+                "description": "For view/confirm/complete/dismiss/adjust/mute/unmute: target goal ID.",
+            },
+            "urgency": {
+                "type": "number",
+                "description": "For adjust: urgency value 0.0-1.0.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def handle_goals(topic: str, params: dict) -> str:
     """

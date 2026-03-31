@@ -401,7 +401,7 @@ class ContextAssemblyService:
 
             db = get_shared_db_service()
             ks = KnowledgeService(db)
-            concepts = ks.recall(prompt, kinds=['concept'], limit=5)
+            concepts = ks.recall(prompt, kinds=['concept', 'trait'], limit=5)
 
             if not concepts:
                 return ""

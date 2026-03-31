@@ -343,22 +343,6 @@ def _scope_reasoning_state() -> str:
 
 
 def _reasoning_focus() -> str:
-    try:
-        from services.focus_session_service import FocusSessionService
-        from services.memory_client import MemoryClientService
-
-        # Try to find the most recent active focus session by scanning known threads
-        store = MemoryClientService.create_connection()
-        thread_id = store.get('recent_thread_id') or ''
-
-        if thread_id:
-            session = FocusSessionService().get_focus(thread_id)
-            if session:
-                desc = session.get('description', '').strip()
-                if desc:
-                    return f"Currently focused on '{desc}'."
-    except Exception as e:
-        logger.debug(f'[INTROSPECT] reasoning_focus failed: {e}')
     return ''
 
 

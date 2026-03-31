@@ -93,7 +93,7 @@ def _action_render(params: dict) -> dict:
             viewport={"width": vw, "height": vh},
             user_agent=_user_agent(),
             java_script_enabled=True,
-            ignore_https_errors=False,
+            ignore_https_errors=True,
         )
         page = context.new_page()
         setup_page_security(page, dns_cache)
@@ -171,7 +171,7 @@ def _action_screenshot(params: dict) -> dict:
             viewport={"width": vw, "height": vh},
             user_agent=_user_agent(),
             java_script_enabled=True,
-            ignore_https_errors=False,
+            ignore_https_errors=True,
         )
         page = context.new_page()
         setup_page_security(page, dns_cache)
@@ -268,7 +268,7 @@ def _action_interact(params: dict) -> dict:
             viewport={"width": vw, "height": vh},
             user_agent=_user_agent(),
             java_script_enabled=True,
-            ignore_https_errors=False,
+            ignore_https_errors=True,
         )
 
         # Inject stored cookies if credential_label provided
@@ -370,7 +370,7 @@ def _action_monitor(params: dict) -> dict:
             viewport={"width": vw, "height": vh},
             user_agent=_user_agent(),
             java_script_enabled=True,
-            ignore_https_errors=False,
+            ignore_https_errors=True,
         )
         page = context.new_page()
         setup_page_security(page, dns_cache)

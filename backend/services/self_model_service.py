@@ -278,12 +278,7 @@ class SelfModelService:
             return 0.0
 
     def _get_focus_active(self, topic: str) -> bool:
-        try:
-            from services.focus_session_service import FocusSessionService
-            return FocusSessionService().get_focus(topic) is not None
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get focus active: {e}", exc_info=True)
-            return False
+        return False
 
     def _get_skill_reliability(self) -> dict:
         """Condensed skill reliability: only skills with >= 5 attempts."""

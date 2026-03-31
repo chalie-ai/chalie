@@ -18,6 +18,9 @@ import logging
 import os
 import re
 import socket
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
@@ -176,6 +179,7 @@ def _read_url(url: str, max_chars: int) -> str:
             timeout=_URL_FETCH_TIMEOUT,
             headers={'User-Agent': 'Mozilla/5.0 (compatible; Chalie/1.0; cognitive-agent)'},
             allow_redirects=True,
+            verify=False,
         )
         response.raise_for_status()
         html = response.text

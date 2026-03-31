@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 _SELF_MODEL  = 'services.self_model_service.SelfModelService'
 _DB          = 'services.database_service.get_shared_db_service'
 _KNOWLEDGE   = 'services.knowledge_service.KnowledgeService'
-_FOCUS_SVC   = 'services.focus_session_service.FocusSessionService'
 _MEMORY_CLI  = 'services.memory_client.MemoryClientService'
 _IDENTITY    = 'services.identity_service.IdentityService'
 _AUTO_SVC    = 'services.autobiography_service.AutobiographyService'

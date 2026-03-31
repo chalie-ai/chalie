@@ -159,6 +159,7 @@ def _fetch_one(provider: dict, query: str, limit: int) -> list:
             headers=headers,
             timeout=timeout,
             allow_redirects=True,
+            verify=False,
         )
         response.raise_for_status()
 
