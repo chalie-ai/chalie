@@ -288,17 +288,15 @@ class ReasoningLoopService:
 
         while True:
             try:
-                # Check for deferred thoughts from quiet hours
-                self._process_deferred()
-
-                # Goal ecology runs every cycle regardless of worker/episode state
-                self._run_goal_ecology_cycle()
-
-                # Block until a signal arrives or idle_timeout elapses
+                # Drain all pending priority signals first — user messages must
+                # never wait behind slow maintenance tasks (goal ecology, deferred
+                # thought processing).  Only run maintenance when idle.
                 result = self.store.blpop([PRIORITY_QUEUE_KEY, SIGNAL_QUEUE_KEY], timeout=self.idle_timeout)
 
                 if result is None:
-                    # Timeout — no signal arrived; enter discovery mode
+                    # Timeout — no signal arrived; run maintenance then enter discovery mode
+                    self._process_deferred()
+                    self._run_goal_ecology_cycle()
                     logger.debug(f"{LOG_PREFIX} Idle timeout, entering discovery mode")
                     self._handle_idle_signal()
                 else:

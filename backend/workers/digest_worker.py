@@ -60,6 +60,9 @@ _thread_conv_service = None
 # Global context relevance service
 _context_relevance_service = None
 
+import os
+_LOG_PROMPTS = os.environ.get('CHALIE_LOG_PROMPTS') == '1'
+
 
 def _resolve_image_contexts(image_ids: list, timeout: int = 30) -> list:
     """Resolve image IDs to analysis results from MemoryStore.
@@ -562,6 +565,31 @@ def unified_generate(topic, text, classification, thread_conv_service,
             'tables, bullet lists, links, or structured formatting. Write as you would speak.')
     else:
         system_prompt = system_prompt.replace('{{voice_mode_instruction}}', '')
+
+    # Prompt tracing — enabled via CHALIE_LOG_PROMPTS=1 env var.
+    # Logs the full assembled system prompt to interaction_log so the meta-harness
+    # can see exactly what the LLM received.
+    if _LOG_PROMPTS:
+        try:
+            from services.database_service import get_shared_db_service
+            from services.interaction_log_service import InteractionLogService
+            _log_svc = InteractionLogService(get_shared_db_service())
+            _log_svc.log_event(
+                event_type='llm_prompt',
+                payload={
+                    'system_prompt': system_prompt,
+                    'user_message': text,
+                    'skills': all_skills,
+                    'tool_count': len(native_tools),
+                },
+                topic=topic,
+                exchange_id=(metadata or {}).get('exchange_id'),
+                source='unified_generate',
+                metadata=metadata,
+                thread_id=thread_id,
+            )
+        except Exception as _lp_e:
+            logging.debug(f"[DIGEST] Prompt logging failed: {_lp_e}")
 
     first_messages = [{"role": "user", "content": text}]
 
