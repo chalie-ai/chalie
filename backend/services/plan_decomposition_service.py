@@ -490,7 +490,6 @@ class PlanDecompositionService:
             ('schedule', 'Reminders and task scheduling'),
             ('autobiography', 'Personal narrative synthesis'),
             ('list', 'List management and organization'),
-            ('focus', 'Focus session management'),
             ('persistent_task', 'Background task management'),
             ('read', 'Read content from URLs or local files (PDF, DOCX, PPTX, HTML, Markdown, text)'),
         ]

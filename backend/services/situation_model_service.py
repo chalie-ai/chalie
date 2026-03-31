@@ -184,31 +184,6 @@ class SituationModelService:
             logger.debug(f"{LOG_PREFIX} Ambient signal failed: {e}")
             return defaults
 
-    def _collect_focus(self, thread_id: Optional[str]) -> dict:
-        """Read focus session for the given thread from FocusSessionService."""
-        defaults = {
-            "active": False,
-            "topic": None,
-            "distraction": 0.0,
-            "updated_at": utc_now().isoformat(),
-        }
-        if not thread_id:
-            return defaults
-        try:
-            from services.focus_session_service import FocusSessionService
-            focus = FocusSessionService().get_focus(thread_id)
-            if not focus:
-                return defaults
-            return {
-                "active": True,
-                "topic": focus.get("topic") or focus.get("description"),
-                "distraction": 0.0,
-                "updated_at": utc_now().isoformat(),
-            }
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Focus signal failed: {e}")
-            return defaults
-
     def _collect_topic(self, thread_id: Optional[str]) -> dict:
         """Read current topic from the threads table via DatabaseService."""
         defaults = {
@@ -768,7 +743,7 @@ class SituationModelService:
         client = self._collect_client()
 
         if full:
-            focus = self._collect_focus(thread_id)
+            focus = {"active": False, "topic": None, "distraction": 0.0, "updated_at": utc_now().isoformat()}
             topic = self._collect_topic(thread_id)
             identity = self._collect_identity()
             engagement = self._collect_engagement()
@@ -779,7 +754,7 @@ class SituationModelService:
         else:
             # Lightweight heartbeat — preserve existing values from cache
             cached = self._load_cached_raw()
-            focus = cached.get("focus", self._collect_focus(None))
+            focus = cached.get("focus", {"active": False, "topic": None, "distraction": 0.0, "updated_at": now_iso})
             topic = cached.get("topic", {"name": None, "confidence": 0.5, "is_new": False, "updated_at": now_iso})
             identity = cached.get("identity", self._collect_identity())
             engagement = cached.get("engagement", self._collect_engagement())

@@ -5,13 +5,13 @@ All skill/action-type sets used across the codebase MUST be defined here.
 Do NOT define local skill sets elsewhere. Import from this module.
 
 The ground-truth skill list is the set of handler keys registered by
-register_innate_skills() in __init__.py (currently 13 skills + backward-compat aliases).
+register_innate_skills() in __init__.py (currently 12 skills + backward-compat aliases).
 """
 
 # ── Authoritative: all skills registered in register_innate_skills() ────────
 ALL_SKILL_NAMES: frozenset = frozenset({
     'memory', 'introspect', 'associate',
-    'schedule', 'autobiography', 'focus', 'list',
+    'schedule', 'autobiography', 'list',
     'persistent_task', 'document',
     'read', 'reflect', 'find_tools', 'goals',
     'rich_render',
@@ -55,7 +55,6 @@ SKILL_DESCRIPTIONS: dict = {
     'associate': 'Find related concepts, explore connections, brainstorm associations between ideas',
     'list': 'Manage named lists: add, remove, check off, or view items in shopping, to-do, and other lists',
     'schedule': 'Set reminders, schedule tasks, create appointments and recurring events',
-    'focus': 'Start and manage deep focus or work sessions, Pomodoro-style timers',
     'autobiography': 'Generate a personal autobiography or life summary based on stored memories',
     'persistent_task': 'Create, manage, track, complete, and update progress on multi-session background tasks with state machine lifecycle',
     'document': 'Search, view, and manage uploaded documents with hybrid retrieval',
@@ -76,7 +75,6 @@ SKILL_EFFORT: dict = {
     'associate': 'light',
     'list': 'trivial',
     'schedule': 'light',
-    'focus': 'trivial',
     'autobiography': 'light',
     'persistent_task': 'deep',
     'document': 'light',
@@ -97,7 +95,6 @@ SKILL_CATEGORIES: dict = {
     'associate': 'cognition',
     'list': 'productivity',
     'schedule': 'productivity',
-    'focus': 'productivity',
     'autobiography': 'identity',
     'persistent_task': 'task_management',
     'document': 'knowledge',

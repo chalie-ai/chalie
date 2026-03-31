@@ -436,13 +436,6 @@ class PromptAssemblyService:
             adaptive_directives = ''
         result = result.replace('{{adaptive_directives}}', adaptive_directives)
 
-        # Focus session (current declared or inferred focus)
-        if _include('focus'):
-            focus_context = self._get_focus_context(thread_id)
-        else:
-            focus_context = ''
-        result = result.replace('{{focus}}', focus_context)
-
         # Self-awareness (interoception — only injected when noteworthy)
         if _include('self_awareness'):
             self_awareness = self._get_self_awareness()
@@ -745,24 +738,6 @@ class PromptAssemblyService:
             return ""
         except Exception as e:
             logging.debug(f"[FRONTAL CORTEX] Onboarding nudge unavailable: {e}")
-            return ""
-
-    def _get_focus_context(self, thread_id: str = None) -> str:
-        """Get current focus session formatted for prompt injection.
-
-        Args:
-            thread_id: Thread identifier.
-
-        Returns:
-            str: Formatted focus section, or empty string when unavailable.
-        """
-        if not thread_id:
-            return ""
-        try:
-            from services.focus_session_service import FocusSessionService
-            return FocusSessionService().get_focus_for_prompt(thread_id)
-        except Exception as e:
-            logging.debug(f"Focus context not available: {e}")
             return ""
 
     def _get_adaptive_directives(self, original_prompt: str = "", thread_id: str = None) -> str:

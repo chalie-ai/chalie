@@ -48,7 +48,6 @@ class ContextRelevanceService:
         'world_state': 300,
         'active_lists': 400,
         'identity_context': 150,
-        'focus': 150,
         'communication_style': 100,
         'client_context': 200,
         'available_skills': 200,

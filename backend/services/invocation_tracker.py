@@ -21,7 +21,6 @@ _REWARD_MAP = {
     # Productivity / knowledge
     'list': lambda ok, res: 0.2 if ok else -0.1,
     'schedule': lambda ok, res: 0.2 if ok else -0.1,
-    'focus': lambda ok, res: 0.1 if ok else 0.0,
     'document': lambda ok, res: 0.2 if ok else -0.1,
     # Identity / reflection
     'autobiography': lambda ok, res: 0.1 if ok else 0.0,

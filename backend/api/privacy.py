@@ -103,7 +103,7 @@ def export_data():
 
     store_patterns = [
         "working_memory:*",
-        "identity_state:*", "focus_session:*",
+        "identity_state:*",
     ]
 
     MAX_EXPORT_ROWS = 10000
@@ -231,7 +231,6 @@ def delete_all():
 
             # Identity & context
             "identity_state:*",
-            "focus_session:*",
             "client_context:*",
             "ambient:*",
 

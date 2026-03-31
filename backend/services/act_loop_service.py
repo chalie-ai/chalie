@@ -34,7 +34,7 @@ def _strip_tool_markers(text: str) -> str:
 
 # Actions that never block the ACT loop — dispatched to background threads.
 # Their results aren't needed for subsequent iteration reasoning.
-FIRE_AND_FORGET: frozenset = frozenset({'memorize', 'focus'})
+FIRE_AND_FORGET: frozenset = frozenset({'memorize'})
 
 
 class ActLoopService:

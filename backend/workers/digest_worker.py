@@ -1963,46 +1963,6 @@ def digest_worker(text: str, metadata: dict = None) -> str:
             metadata={'embedding_time': embedding_time}
         )
 
-    # Step 7d: Focus auto-inference and distraction check
-    try:
-        from services.focus_session_service import FocusSessionService
-        focus_service = FocusSessionService()
-
-        # Count consecutive exchanges on current topic for auto-inference
-        try:
-            from services.memory_client import MemoryClientService
-            _store = MemoryClientService.create_connection()
-            _streak_key = f"topic_streak:{thread_id}"
-            _streak_raw = _store.get(_streak_key)
-            _streak_data = json.loads(_streak_raw) if _streak_raw else {}
-
-            if _streak_data.get('topic') == topic:
-                _streak_count = _streak_data.get('count', 0) + 1
-            else:
-                _streak_count = 1
-
-            _store.setex(_streak_key, 7200, json.dumps({'topic': topic, 'count': _streak_count}))
-
-            # Auto-infer focus after consecutive exchanges on same topic
-            focus_service.maybe_infer_focus(thread_id, topic, _streak_count)
-        except Exception as _se:
-            logging.debug(f"[DIGEST] Topic streak tracking failed: {_se}")
-
-        # Distraction check if focus is active and message embedding available
-        try:
-            if msg_embedding is not None:
-                distraction = focus_service.check_distraction(thread_id, msg_embedding)
-                if distraction.get('is_distraction'):
-                    logging.info(
-                        f"[DIGEST] Focus distraction detected: "
-                        f"similarity={distraction['similarity_to_focus']:.3f} "
-                        f"to '{distraction['focus_description'][:50]}'"
-                    )
-        except Exception as _de:
-            logging.debug(f"[DIGEST] Distraction check failed: {_de}")
-    except Exception as _fe:
-        logging.debug(f"[DIGEST] Focus services failed: {_fe}")
-
     # Step 9: Track session and check for episode generation
     session_service = get_session_service()
     session_service.set_thread(thread_id)

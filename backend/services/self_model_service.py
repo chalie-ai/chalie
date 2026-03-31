@@ -234,7 +234,7 @@ class SelfModelService:
             "working_memory_depth": wm_depth,
             "partial_match_signal": fok_signal,
             "recall_failure_rate": self._get_recall_failure_rate(topic),
-            "focus_active": self._get_focus_active(topic),
+            "focus_active": False,
             "skill_reliability": self._get_skill_reliability(),
         }
 
@@ -276,14 +276,6 @@ class SelfModelService:
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Failed to get recall failure rate: {e}", exc_info=True)
             return 0.0
-
-    def _get_focus_active(self, topic: str) -> bool:
-        try:
-            from services.focus_session_service import FocusSessionService
-            return FocusSessionService().get_focus(topic) is not None
-        except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Failed to get focus active: {e}", exc_info=True)
-            return False
 
     def _get_skill_reliability(self) -> dict:
         """Condensed skill reliability: only skills with >= 5 attempts."""
